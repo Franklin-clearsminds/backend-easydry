@@ -152,6 +152,11 @@ export class SyncService {
                 ? ServiceStatus.EN_PROCESO
                 : ServiceStatus.EN_ESPERA;
 
+            // Si se crea directamente como finalizado, inicializar en proceso para gatillar
+            // el descuento de insumos de forma transaccional mediante el hook oficial
+            const estadoInicial =
+              estadoFinal === ServiceStatus.FINALIZADO ? ServiceStatus.EN_PROCESO : estadoFinal;
+
             const nuevoServicio = await this.prisma.servicioLavado.create({
               data: {
                 clientUuid: mut.clientUuid,
@@ -159,7 +164,7 @@ export class SyncService {
                 modelo,
                 color: mut.data?.color?.trim(),
                 cliente: mut.data?.cliente?.trim() || mut.data?.clientName?.trim(),
-                estado: estadoFinal,
+                estado: estadoInicial,
                 bahiaId,
                 servicioCatalogoId,
                 operadorId: userId,
@@ -172,12 +177,14 @@ export class SyncService {
               },
             });
 
-            // Si se creó directamente como finalizado, invocar descuento de insumos
+            // Si se creó directamente como finalizado, invocar hook oficial de descuento de insumos
             if (estadoFinal === ServiceStatus.FINALIZADO) {
               try {
                 await this.operacionesService.update(nuevoServicio.id, {
                   id: nuevoServicio.id,
                   estado: ServiceStatus.FINALIZADO,
+                  fotoSalidaUrl: mut.data?.fotoSalidaUrl || mut.data?.evidenceOutLocalUri,
+                  observaciones: mut.data?.observaciones || mut.data?.notes,
                 });
               } catch (e: any) {
                 this.logger.warn(`Advertencia al descontar insumos de orden offline: ${e.message}`);
@@ -215,8 +222,24 @@ export class SyncService {
               throw new BadRequestException(`Servicio ${mut.clientUuid} no encontrado para actualización`);
             }
 
-            // Matriz de Resolución de Conflictos:
-            // Si el servicio en servidor fue cancelado pero el operador en campo lo finalizó físicamente:
+            // Matriz de Resolución de Conflictos y Falla Asumida (Zero-Trust):
+            // 1. Si ya estaba FINALIZADO en servidor y llega un reintento de COMPLETE
+            // (porque el 200 OK previo se perdió en el aire):
+            if (
+              existing.estado === ServiceStatus.FINALIZADO &&
+              (action === 'COMPLETE' || mut.data?.estado === 'FINALIZADO' || mut.data?.status === 'COMPLETED')
+            ) {
+              results.push({
+                mutationId: mut.mutationId,
+                clientUuid: mut.clientUuid,
+                serverAssignedId: existing.id,
+                status: 'ALREADY_EXISTS',
+                syncedAt: existing.updatedAt.toISOString(),
+              });
+              continue;
+            }
+
+            // 2. Si el servicio en servidor fue cancelado pero el operador en campo lo finalizó físicamente:
             // "Gana la Operación en Campo"
             let overrideWarning: string | null = null;
             if (existing.estado === ServiceStatus.CANCELADO && (action === 'COMPLETE' || mut.data?.estado === 'FINALIZADO')) {
@@ -499,6 +522,22 @@ export class SyncService {
 
     if (!service) {
       throw new BadRequestException(`No se encontró el servicio con clientUuid: ${body.clientUuid}`);
+    }
+
+    // Idempotencia Zero-Trust: Si la foto ya está vinculada (reintento por pérdida de 200 OK)
+    if (
+      (body.type === 'FOTO_INGRESO' && service.fotoIngresoUrl === body.fileUrl) ||
+      (body.type === 'FOTO_SALIDA' && service.fotoSalidaUrl === body.fileUrl)
+    ) {
+      return {
+        success: true,
+        status: 'ALREADY_EXISTS',
+        serviceId: service.id,
+        clientUuid: service.clientUuid,
+        type: body.type,
+        fileUrl: body.fileUrl,
+        updatedAt: service.updatedAt,
+      };
     }
 
     const dataToUpdate: any = {};
