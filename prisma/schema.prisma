@@ -1,0 +1,519 @@
+// Prisma Schema Oficial — EasyDry Enterprise
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum ServiceStatus {
+  EN_ESPERA
+  EN_PROCESO
+  FINALIZADO
+  CANCELADO
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+}
+
+// =========================================================================
+// REGIONES
+// =========================================================================
+
+model Region {
+  id          String    @id @default(uuid())
+  codigo      String    @unique // e.g. "REG-SIERRA", "REG-COSTA"
+  nombre      String    @unique // e.g. "Sierra", "Costa", "Austro"
+  descripcion String?
+  estado      Int       @default(1) // 1 activo, 0 inactivo
+
+  agencias    Agencia[]
+  usuarios    User[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([estado])
+}
+
+// =========================================================================
+// MARCAS
+// =========================================================================
+
+model Marca {
+  id        String    @id @default(uuid())
+  nombre    String    @unique
+  estado    Int       @default(1) // 1 activo, 0 inactivo
+  agencias  Agencia[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([estado])
+}
+
+// =========================================================================
+// ROLES Y USUARIOS
+// =========================================================================
+
+model Role {
+  id                String   @id @default(uuid())
+  namerol           String   @unique
+  estado            Int      @default(1) // 0 inactivo, 1 activo
+  permisos          String[] @default([])
+  fechaCreacion     DateTime @default(now())
+  fechaModificacion DateTime @updatedAt
+
+  users             User[]
+
+  @@index([namerol])
+  @@index([estado])
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  name          String
+  lastname      String
+  roleId        String
+  role          Role     @relation(fields: [roleId], references: [id])
+
+  // Agencia principal asignada (obligatorio para: LIDER_AGENCIA, APROBADOR, PULIDOR_FIJO; opcional para PULIDOR_MOVIL)
+  agenciaId     String?
+  agencia       Agencia? @relation(fields: [agenciaId], references: [id])
+
+  // Lista de agencias accesibles (para roles regionales / nacionales)
+  agenciasIds   String[] @default([])
+
+  // Región asignada (especialmente para roles como SUPERVISOR, COORD_COMERCIAL)
+  regionId      String?
+  region        Region?  @relation(fields: [regionId], references: [id])
+
+  estado        Int      @default(1) // 0 desactivo, 1 activo
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  serviciosAtendidos  ServicioLavado[]
+  stockPersonal       StockUbicacion[]
+  despachosRealizados MovimientoInventario[] @relation("DespachaMovimiento")
+  despachosRecibidos  MovimientoInventario[] @relation("RecibeMovimiento")
+  alertasEmitidas     AlertaStock[]
+  devices             SyncDevice[]
+
+  @@index([email])
+  @@index([roleId])
+  @@index([agenciaId])
+  @@index([regionId])
+  @@index([estado])
+}
+
+// =========================================================================
+// AGENCIAS Y BAHÍAS
+// =========================================================================
+
+model Agencia {
+  id           String   @id @default(uuid())
+  codigo       String   @unique  // e.g. "AGN-QNOR"
+  nombre       String             // e.g. "EasyDry Quito Norte"
+  region       String?            // Nombre textual (e.g. "Pichincha", "Sierra")
+  direccion    String?
+  telefono     String?
+  email        String?
+  numeroBahias Int      @default(0) // Capacidad máxima de bahías
+  estado       Int      @default(1) // 1 activo, 0 inactivo
+
+  // Marca franquiciadora
+  marcaId      String?
+  marca        Marca?   @relation(fields: [marcaId], references: [id])
+
+  // Región oficial
+  regionId     String?
+  regionRel    Region?  @relation(fields: [regionId], references: [id])
+
+  bahias       Bahia[]
+  usuarios     User[]
+  stocks       StockUbicacion[]
+  alertas      AlertaStock[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([region])
+  @@index([regionId])
+  @@index([estado])
+  @@index([marcaId])
+}
+
+model Bahia {
+  id        String   @id @default(uuid())
+  nombre    String   // e.g. "Bahía 01 - Express"
+  codigo    String   @unique
+  agenciaId String
+  agencia   Agencia  @relation(fields: [agenciaId], references: [id])
+  activa    Boolean  @default(true)
+  servicios ServicioLavado[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agenciaId])
+}
+
+// =========================================================================
+// CATÁLOGO DE SERVICIOS Y RECETAS
+// =========================================================================
+
+model CatalogoServicio {
+  id                Int              @id @default(autoincrement())
+  codigo            String           @unique // e.g. "SER-001"
+  nombre            String           // e.g. "Lavado Express"
+  categoria         String           // "GENERAL" | "ESPECIAL"
+  descripcion       String?
+  precio            Decimal          @default(0.0) @db.Decimal(10, 2)
+  tiempoEstimadoMin Int              @default(30)
+  servicios         ServicioLavado[]
+  recetas           RecetaInsumo[]
+}
+
+// -----------------------------------------------------------------------
+// Receta de insumos por servicio del catálogo
+// Cada línea define cuánto de un insumo consume una ejecución del servicio
+// -----------------------------------------------------------------------
+model RecetaInsumo {
+  id                 String           @id @default(uuid())
+  catalogoServicioId Int
+  catalogoServicio   CatalogoServicio @relation(fields: [catalogoServicioId], references: [id], onDelete: Cascade)
+  insumoId           String
+  insumo             Insumo           @relation(fields: [insumoId], references: [id])
+
+  // Cantidad a descontar en la unidad especificada (no necesariamente la unidad base del insumo)
+  cantidadUsada      Decimal          @db.Decimal(10, 4)
+  unidadConsumoId    String
+  unidadConsumo      UnidadMedida     @relation("UnidadConsumo", fields: [unidadConsumoId], references: [id])
+
+  // Si esOpcional=false y no hay stock suficiente → bloquea la finalización
+  esOpcional         Boolean          @default(false)
+  observacion        String?
+
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@unique([catalogoServicioId, insumoId])
+  @@index([catalogoServicioId])
+  @@index([insumoId])
+}
+
+model ServicioLavado {
+  id                 String           @id @default(uuid())
+  clientUuid         String           @unique // UUID v4 generado en SQLite por el móvil (CLAVE IDEMPOTENCIA)
+  placa              String
+  modelo             String
+  color              String?
+  cliente            String?
+  estado             ServiceStatus    @default(EN_ESPERA)
+
+  bahiaId            String
+  bahia              Bahia            @relation(fields: [bahiaId], references: [id])
+  servicioCatalogoId Int
+  catalogo           CatalogoServicio @relation(fields: [servicioCatalogoId], references: [id])
+  operadorId         String
+  operador           User             @relation(fields: [operadorId], references: [id])
+
+  fotoIngresoUrl     String?
+  fotoSalidaUrl      String?
+  observaciones      String?
+
+  horaIngreso        DateTime         @default(now())
+  horaInicio         DateTime?
+  horaSalida         DateTime?
+
+  version            Int              @default(1)
+  syncedAt           DateTime         @default(now())
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  consumos           ConsumoServicio[]
+
+  @@index([placa])
+  @@index([estado])
+  @@index([bahiaId])
+  @@index([clientUuid])
+  @@index([updatedAt])
+}
+
+// -----------------------------------------------------------------------
+// Historial de insumos descontados al finalizar un servicio
+// -----------------------------------------------------------------------
+model ConsumoServicio {
+  id               String         @id @default(uuid())
+  servicioId       String
+  servicio         ServicioLavado @relation(fields: [servicioId], references: [id], onDelete: Cascade)
+  insumoId         String
+  insumo           Insumo         @relation(fields: [insumoId], references: [id])
+
+  cantidadUsada    Decimal        @db.Decimal(10, 4)
+  stockUbicacionId String?
+  agenciaId        String?        // Agencia donde se realizó el servicio
+
+  createdAt        DateTime       @default(now())
+
+  @@index([servicioId])
+  @@index([insumoId])
+}
+
+model SyncOutboxAudit {
+  id         String   @id @default(uuid())
+  clientUuid String
+  deviceInfo String?
+  entity     String   // "ServicioLavado"
+  action     String   // "CREATE" | "UPDATE"
+  payload    Json
+  syncedAt   DateTime @default(now())
+
+  @@index([clientUuid])
+  @@index([syncedAt])
+}
+
+// =========================================================================
+// MÓDULO DE BODEGA, ENVASES, UNIDADES, INSUMOS, STOCK Y MOVIMIENTOS
+// =========================================================================
+
+// 1. Catálogo de Tipos de Envase
+model TipoEnvase {
+  id          String   @id @default(uuid())
+  codigo      String   @unique
+  nombre      String
+  descripcion String?
+  capacidad   Decimal? @db.Decimal(10, 3)
+  unidadBase  String?  // "L", "ml", "kg", "g", "u"
+  estado      Int      @default(1)
+  insumos     Insumo[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([codigo])
+  @@index([estado])
+}
+
+// 2. Catálogo de Unidades de Medida
+model UnidadMedida {
+  id             String         @id @default(uuid())
+  codigo         String         @unique
+  nombre         String
+  simbolo        String
+  tipo           String         // "VOLUMEN", "MASA", "UNITARIO"
+  factorBase     Decimal?       @db.Decimal(10, 6) // Factor a unidad base del tipo (ml=0.001, L=1, g=0.001, kg=1, u=1)
+  estado         Int            @default(1)
+  insumos        Insumo[]
+  recetasConsumo RecetaInsumo[] @relation("UnidadConsumo")
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([codigo])
+  @@index([estado])
+}
+
+// 3. Catálogo Maestro de Insumos
+model Insumo {
+  id                 String              @id @default(uuid())
+  codigoSKU          String              @unique
+  nombre             String
+  categoria          String              // "QUIMICOS_LAVADO", "CERAS_SELLADORES", "PULIMENTOS", "DESENGRASANTES", "TEXTILES", "EPP", "ACCESORIOS"
+  descripcion        String?
+
+  tipoEnvaseId       String
+  tipoEnvase         TipoEnvase          @relation(fields: [tipoEnvaseId], references: [id])
+  unidadMedidaId     String
+  unidadMedida       UnidadMedida        @relation(fields: [unidadMedidaId], references: [id])
+  contenidoNeto      Decimal             @default(1.0) @db.Decimal(10, 3)
+
+  stockMinimoBodega  Decimal             @default(10.0) @db.Decimal(10, 2)
+  stockMinimoAgencia Decimal             @default(2.0)  @db.Decimal(10, 2)
+  stockOptimoBodega  Decimal?            @db.Decimal(10, 2)
+
+  costoUnitarioUSD   Decimal             @default(0.0) @db.Decimal(10, 2)
+  proveedorPrincipal String?
+  imagenUrl          String?
+  estado             Int                 @default(1)
+
+  stocks             StockUbicacion[]
+  movimientos        MovimientoDetalle[]
+  alertas            AlertaStock[]
+  recetas            RecetaInsumo[]
+  consumos           ConsumoServicio[]
+
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([codigoSKU])
+  @@index([categoria])
+  @@index([estado])
+}
+
+// 4. Existencias Multi-Ubicación
+enum TipoUbicacionStock {
+  BODEGA_CENTRAL
+  AGENCIA
+  PULIDOR_MOVIL
+  PULIDOR_FIJO
+}
+
+model StockUbicacion {
+  id             String             @id @default(uuid())
+  insumoId       String
+  insumo         Insumo             @relation(fields: [insumoId], references: [id])
+  tipoUbicacion  TipoUbicacionStock
+
+  agenciaId      String?
+  agencia        Agencia?           @relation(fields: [agenciaId], references: [id])
+
+  pulidorId      String?
+  pulidor        User?              @relation(fields: [pulidorId], references: [id])
+
+  cantidadActual Decimal            @default(0.0) @db.Decimal(12, 3)
+  cantidadMinima Decimal            @default(0.0) @db.Decimal(12, 3)
+  updatedAt      DateTime           @updatedAt
+
+  @@index([insumoId])
+  @@index([tipoUbicacion])
+  @@index([agenciaId])
+  @@index([pulidorId])
+}
+
+// 5. Historial de Movimientos y Despachos
+enum TipoMovimientoInv {
+  COMPRA_PROVEEDOR
+  DESPACHO_AGENCIA
+  DESPACHO_PULIDOR
+  RECEPCION_CONFIRMADA
+  RECEPCION_RECHAZADA
+  CONSUMO_SERVICIO
+  AJUSTE_MERMA
+}
+
+enum EstadoDespacho {
+  PENDIENTE
+  EN_TRANSITO
+  RECIBIDO
+  RECHAZADO
+  CANCELADO
+}
+
+model MovimientoInventario {
+  id                String              @id @default(uuid())
+  numeroGuia        String              @unique
+  tipo              TipoMovimientoInv
+  estadoDespacho    EstadoDespacho      @default(EN_TRANSITO)
+
+  origenUbicacion   String
+  destinoUbicacion  String
+
+  usuarioDespachaId String
+  usuarioDespacha   User                @relation("DespachaMovimiento", fields: [usuarioDespachaId], references: [id])
+  usuarioRecibeId   String?
+  usuarioRecibe     User?               @relation("RecibeMovimiento", fields: [usuarioRecibeId], references: [id])
+
+  fechaDespacho     DateTime            @default(now())
+  fechaRecepcion    DateTime?
+  observaciones     String?
+  detalles          MovimientoDetalle[]
+
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([numeroGuia])
+  @@index([tipo])
+  @@index([estadoDespacho])
+}
+
+model MovimientoDetalle {
+  id               String               @id @default(uuid())
+  movimientoId     String
+  movimiento       MovimientoInventario @relation(fields: [movimientoId], references: [id], onDelete: Cascade)
+  insumoId         String
+  insumo           Insumo               @relation(fields: [insumoId], references: [id])
+  cantidadEnviada  Decimal              @db.Decimal(10, 3)
+  cantidadRecibida Decimal?             @db.Decimal(10, 3)
+  costoUnitarioUSD Decimal?             @db.Decimal(10, 2)
+  subtotalUSD      Decimal?             @db.Decimal(10, 2)
+}
+
+// 6. Alertas de Desabastecimiento
+enum NivelAlertaStock {
+  BAJO
+  CRITICO
+  AGOTADO
+}
+
+enum EstadoAlertaStock {
+  PENDIENTE
+  EN_PROCESO
+  DESPACHADO
+  RESUELTO
+}
+
+model AlertaStock {
+  id              String            @id @default(uuid())
+  insumoId        String
+  insumo          Insumo            @relation(fields: [insumoId], references: [id])
+  nivel           NivelAlertaStock  @default(BAJO)
+  estado          EstadoAlertaStock @default(PENDIENTE)
+
+  agenciaId       String?
+  agencia         Agencia?          @relation(fields: [agenciaId], references: [id])
+  usuarioEmisorId String
+  usuarioEmisor   User              @relation(fields: [usuarioEmisorId], references: [id])
+
+  mensaje         String?
+  stockReportado  Decimal?          @db.Decimal(10, 3)
+  fechaAtencion   DateTime?
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([estado])
+  @@index([nivel])
+  @@index([agenciaId])
+}
+
+// =========================================================================
+// 7. SUBSISTEMA DE SINCRONIZACIÓN OFFLINE (MOTOR INDUSTRIAL)
+// =========================================================================
+
+model SyncDeadLetterQueue {
+  id          String   @id @default(uuid())
+  mutationId  String   @unique
+  clientUuid  String
+  entityType  String
+  payload     Json
+  errorMotivo String
+  intentos    Int      @default(1)
+  resuelto    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([clientUuid])
+  @@index([resuelto])
+}
+
+model SyncDevice {
+  id         String   @id @default(uuid())
+  deviceId   String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  appVersion String?
+  platform   String?  // "ANDROID" | "IOS" | "WEB"
+  lastSyncAt DateTime @default(now())
+  lastIp     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@index([deviceId])
+}
+

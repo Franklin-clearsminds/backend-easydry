@@ -1,0 +1,59 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, IsInt, IsOptional, IsEnum } from 'class-validator';
+import { ServiceStatus } from '@prisma/client';
+
+export class CreateServicioDto {
+  @ApiProperty({ example: 'PDF-4589', description: 'Placa del vehículo' })
+  @IsString()
+  @IsNotEmpty()
+  placa: string;
+
+  @ApiProperty({ example: 'Toyota Rav4', description: 'Modelo del vehículo' })
+  @IsString()
+  @IsNotEmpty()
+  modelo: string;
+
+  @ApiPropertyOptional({ example: 'Blanco', description: 'Color del vehículo' })
+  @IsOptional()
+  @IsString()
+  color?: string;
+
+  @ApiPropertyOptional({ example: 'Concesionario Casabaca' })
+  @IsOptional()
+  @IsString()
+  cliente?: string;
+
+  @ApiProperty({ example: 'bahia-uuid-01' })
+  @IsString()
+  @IsNotEmpty()
+  bahiaId: string;
+
+  @ApiProperty({ example: 1 })
+  @IsInt()
+  servicioCatalogoId: number;
+
+  @ApiPropertyOptional({ enum: ServiceStatus, default: ServiceStatus.EN_ESPERA })
+  @IsOptional()
+  @IsEnum(ServiceStatus)
+  estado?: ServiceStatus;
+
+  @ApiPropertyOptional({ example: 'client-generated-uuid-v4' })
+  @IsOptional()
+  @IsString()
+  clientUuid?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fotoIngresoUrl?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fotoSalidaUrl?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
+}

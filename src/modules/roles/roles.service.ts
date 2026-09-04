@@ -1,0 +1,158 @@
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { CreateRoleDto } from './dto/create-role.dto.js';
+import { UpdateRoleDto } from './dto/update-role.dto.js';
+import { QueryRolesDto } from './dto/query-roles.dto.js';
+import { formatDateTime } from '../../common/utils/date-formatter.util.js';
+import { OFFICIAL_PERMISSIONS, OFFICIAL_PERMISSION_CODES } from './constants/permissions.constant.js';
+
+@Injectable()
+export class RolesService {
+  constructor(private prisma: PrismaService) {}
+
+  getAvailablePermissions() {
+    return {
+      total: OFFICIAL_PERMISSIONS.length,
+      codigos: OFFICIAL_PERMISSION_CODES,
+      catalogo: OFFICIAL_PERMISSIONS,
+    };
+  }
+
+  private mapRoleResponse(role: any) {
+    return {
+      id: role.id,
+      namerol: role.namerol,
+      estado: role.estado,
+      permisos: Array.isArray(role.permisos) ? role.permisos : [],
+      fechaCreacion: formatDateTime(role.fechaCreacion),
+      fechaModificacion: formatDateTime(role.fechaModificacion),
+      usuariosCount: role._count?.users ?? role.users?.length ?? 0,
+    };
+  }
+
+  async findAll(query?: QueryRolesDto) {
+    const where: any = {};
+
+    if (query?.estado !== undefined) {
+      where.estado = Number(query.estado);
+    }
+
+    if (query?.namerol) {
+      where.namerol = { contains: query.namerol.trim(), mode: 'insensitive' };
+    }
+
+    if (query?.search) {
+      const q = query.search.trim();
+      where.OR = [
+        { namerol: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    const roles = await this.prisma.role.findMany({
+      where,
+      include: {
+        _count: {
+          select: { users: true },
+        },
+      },
+      orderBy: { namerol: 'asc' },
+    });
+
+    return roles.map((r) => this.mapRoleResponse(r));
+  }
+
+  async findOne(idOrNamerol: string) {
+    const role = await this.prisma.role.findFirst({
+      where: {
+        OR: [
+          { id: idOrNamerol },
+          { namerol: idOrNamerol.trim() },
+        ],
+      },
+      include: {
+        _count: {
+          select: { users: true },
+        },
+      },
+    });
+
+    if (!role) {
+      throw new NotFoundException(`Rol con ID o namerol '${idOrNamerol}' no encontrado`);
+    }
+
+    return this.mapRoleResponse(role);
+  }
+
+  async create(createDto: CreateRoleDto) {
+    const namerolNormalized = createDto.namerol.trim().toUpperCase();
+
+    const existing = await this.prisma.role.findUnique({
+      where: { namerol: namerolNormalized },
+    });
+
+    if (existing) {
+      throw new ConflictException(`El rol con namerol '${namerolNormalized}' ya existe`);
+    }
+
+    const newRole = await this.prisma.role.create({
+      data: {
+        namerol: namerolNormalized,
+        estado: createDto.estado !== undefined ? Number(createDto.estado) : 1,
+        permisos: createDto.permisos ?? [],
+      },
+    });
+
+    return this.mapRoleResponse(newRole);
+  }
+
+  async update(updateDto: UpdateRoleDto) {
+    const { id, namerol, estado, permisos } = updateDto;
+
+    const role = await this.prisma.role.findUnique({
+      where: { id },
+    });
+
+    if (!role) {
+      throw new NotFoundException(`Rol con ID '${id}' no encontrado`);
+    }
+
+    if (role.namerol === 'SUPER_ADMIN') {
+      throw new ForbiddenException('El rol SUPER_ADMIN es inmutable por diseño del sistema; no se pueden modificar sus permisos, estado ni configuración.');
+    }
+
+    const dataToUpdate: any = {};
+
+    if (namerol) {
+      const namerolNormalized = namerol.trim().toUpperCase();
+      if (namerolNormalized !== role.namerol) {
+        const duplicate = await this.prisma.role.findUnique({
+          where: { namerol: namerolNormalized },
+        });
+        if (duplicate) {
+          throw new ConflictException(`Ya existe otro rol con el namerol '${namerolNormalized}'`);
+        }
+        dataToUpdate.namerol = namerolNormalized;
+      }
+    }
+
+    if (estado !== undefined) {
+      dataToUpdate.estado = Number(estado);
+    }
+
+    if (permisos !== undefined) {
+      dataToUpdate.permisos = permisos;
+    }
+
+    const updated = await this.prisma.role.update({
+      where: { id },
+      data: dataToUpdate,
+      include: {
+        _count: {
+          select: { users: true },
+        },
+      },
+    });
+
+    return this.mapRoleResponse(updated);
+  }
+}
