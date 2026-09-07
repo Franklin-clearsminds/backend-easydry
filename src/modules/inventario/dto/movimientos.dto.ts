@@ -80,6 +80,11 @@ export class CrearDespachoDto {
   @IsString()
   sucursalDestinoId?: string;
 
+  @ApiPropertyOptional({ description: 'Alias de sucursalDestinoId' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
   @ApiPropertyOptional({ description: 'ID del pulidor destino (si tipo=DESPACHO_PULIDOR)' })
   @IsOptional()
   @IsString()
@@ -113,6 +118,16 @@ export class ConfirmarRecepcionDto {
   @IsEnum(['RECIBIDO', 'RECHAZADO'])
   accion: 'RECIBIDO' | 'RECHAZADO';
 
+  @ApiPropertyOptional({ description: 'ID de la agencia que recibe (opcional)' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'Alias de agenciaId' })
+  @IsOptional()
+  @IsString()
+  sucursalId?: string;
+
   @ApiPropertyOptional({ description: 'Observaciones (obligatorio si se rechaza)' })
   @IsOptional()
   @IsString()
@@ -125,6 +140,17 @@ export class ConfirmarRecepcionDto {
   @IsOptional()
   @IsArray()
   cantidadesRecibidas?: { detalleId: string; cantidadRecibida: number }[];
+}
+
+export class RechazarDespachoDto {
+  @ApiProperty({ description: 'ID del movimiento de despacho a rechazar' })
+  @IsString()
+  movimientoId: string;
+
+  @ApiPropertyOptional({ description: 'Motivo técnico del rechazo' })
+  @IsOptional()
+  @IsString()
+  motivo?: string;
 }
 
 // ——— Listar movimientos ———

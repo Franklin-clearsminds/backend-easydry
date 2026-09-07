@@ -9,8 +9,9 @@ import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto, DetailEnvaseDto } fro
 import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidades.dto.js';
 import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, DetailInsumoDto } from './dto/insumos.dto.js';
 import { ListStockDto, AjusteStockDto } from './dto/stock.dto.js';
-import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, ListMovimientosDto } from './dto/movimientos.dto.js';
+import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, RechazarDespachoDto, ListMovimientosDto } from './dto/movimientos.dto.js';
 import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto } from './dto/alertas.dto.js';
+import { ListKardexDto } from './dto/kardex.dto.js';
 
 @ApiTags('Inventario & Bodega (100% POST)')
 @Controller('inventario')
@@ -165,6 +166,13 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
+  @Post('despachos/crear')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Generar despacho químico a agencia o pulidor (Ruta canónica frontend)' })
+  async crearDespachoDirecto(@Body() dto: CrearDespachoDto, @CurrentUser() user: any) {
+    return this.inventarioService.crearDespacho(dto, user.id);
+  }
+
   @Post('movimientos/despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -174,6 +182,27 @@ export class InventarioController {
   })
   async confirmarRecepcion(@Body() dto: ConfirmarRecepcionDto, @CurrentUser() user: any) {
     return this.inventarioService.confirmarRecepcion(dto, user.id);
+  }
+
+  @Post('despachos/confirmar-recepcion')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Confirmar recepción física de químicos en agencia (Ruta canónica frontend)' })
+  async confirmarRecepcionDirecto(@Body() dto: ConfirmarRecepcionDto, @CurrentUser() user: any) {
+    return this.inventarioService.confirmarRecepcion({ ...dto, accion: dto.accion || 'RECIBIDO' }, user.id);
+  }
+
+  @Post('despachos/rechazar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Rechazar despacho químico recibido en agencia (devuelve stock a Bodega)' })
+  async rechazarDespachoDirecto(@Body() dto: RechazarDespachoDto, @CurrentUser() user: any) {
+    return this.inventarioService.rechazarDespacho(dto, user.id);
+  }
+
+  @Post('despachos/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar despachos de químicos con estado (EN_TRANSITO, RECIBIDO, RECHAZADO)' })
+  async listDespachosDirecto(@Body() dto: ListMovimientosDto) {
+    return this.inventarioService.listDespachos(dto);
   }
 
   @Post('movimientos/list')
@@ -209,5 +238,17 @@ export class InventarioController {
   @ApiResponse({ status: 404, description: 'Alerta no encontrada' })
   async atenderAlerta(@Body() dto: AtenderAlertaDto) {
     return this.inventarioService.atenderAlerta(dto);
+  }
+
+  // ==============================================================
+  // KARDEX (100% POST & DATAGRID)
+  // ==============================================================
+
+  @Post('kardex/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Consultar Kardex contable y trazabilidad transaccional de insumos con DataGrid' })
+  @ApiResponse({ status: 200, description: 'Listado paginado DataGrid del Kardex de inventario' })
+  async listKardex(@Body() dto: ListKardexDto) {
+    return this.inventarioService.listKardex(dto);
   }
 }

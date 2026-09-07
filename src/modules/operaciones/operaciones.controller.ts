@@ -6,6 +6,7 @@ import { UpdateServicioDto } from './dto/update-servicio.dto.js';
 import { QueryServiciosDto } from './dto/query-servicios.dto.js';
 import { DetailServicioDto } from './dto/detail-servicio.dto.js';
 import { AsignarRecetaDto, ListRecetaDto, EliminarRecetaItemDto, SimularConsumoDto } from './dto/receta.dto.js';
+import { AprobarServicioDto, RechazarServicioDto, AprobarTodosDto } from './dto/aprobaciones.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
@@ -63,6 +64,63 @@ export class OperacionesController {
   @ApiResponse({ status: 400, description: 'Stock insuficiente para finalizar el servicio' })
   async update(@Body() updateDto: UpdateServicioDto) {
     return this.operacionesService.update(updateDto.id, updateDto);
+  }
+
+  @Post('servicios/delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Anulación / Borrado Lógico de orden de servicio (Tombstone para Sync Móvil)',
+    description: 'Marca el servicio con deletedAt: now(), estado: CANCELADO. En el siguiente sync/pull, la app móvil recibe _deleted: true y lo purga de SQLite.',
+  })
+  @ApiResponse({ status: 200, description: 'Servicio marcado como eliminado exitosamente' })
+  async delete(@Body() body: { id: string; motivo?: string; reponerInsumos?: boolean }) {
+    return this.operacionesService.softDelete(body.id, body.motivo, body.reponerInsumos !== false);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  //  APROBACIONES Y CIERRE DIARIO (GERENCIA / SUPERVISIÓN)
+  // ──────────────────────────────────────────────────────────────────
+
+  @Post('servicios/aprobar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Aprobar orden de servicio finalizada (Cierre diario por Gerencia)' })
+  @ApiResponse({ status: 200, description: 'Servicio aprobado con éxito' })
+  async aprobarServicio(
+    @Body() dto: AprobarServicioDto,
+    @CurrentUser() user: any,
+  ) {
+    const gerenteNombre = user ? `${user.name || ''} ${user.lastname || ''}`.trim() || user.email : 'Gerencia';
+    return this.operacionesService.aprobarServicio(dto.id, dto.observacion, gerenteNombre);
+  }
+
+  @Post('servicios/rechazar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Rechazar orden de servicio por inconformidad técnica o calidad' })
+  @ApiResponse({ status: 200, description: 'Servicio rechazado con motivo registrado' })
+  async rechazarServicio(
+    @Body() dto: RechazarServicioDto,
+    @CurrentUser() user: any,
+  ) {
+    const gerenteNombre = user ? `${user.name || ''} ${user.lastname || ''}`.trim() || user.email : 'Gerencia';
+    return this.operacionesService.rechazarServicio(dto.id, dto.motivo, gerenteNombre);
+  }
+
+  @Post('servicios/aprobar-todos')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Aprobación masiva de todos los servicios FINALIZADOS de una agencia (Cierre diario)' })
+  @ApiResponse({ status: 200, description: 'Conteo de servicios aprobados' })
+  async aprobarTodos(
+    @Body() dto: AprobarTodosDto,
+    @CurrentUser() user: any,
+  ) {
+    const gerenteNombre = user ? `${user.name || ''} ${user.lastname || ''}`.trim() || user.email : 'Gerencia';
+    return this.operacionesService.aprobarTodosServicios(
+      dto.agenciaId,
+      dto.sucursalId,
+      dto.fecha,
+      gerenteNombre,
+      dto.requiereFotoSalida !== false,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────

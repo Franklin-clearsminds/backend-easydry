@@ -1,8 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { ServiceStatus } from '@prisma/client';
+import { DataGridQueryDto } from '../../../common/dto/data-grid.dto.js';
 
-export class QueryServiciosDto {
+export class QueryServiciosDto extends DataGridQueryDto {
   @ApiPropertyOptional({ example: 'sucursal-uuid-01', description: 'Filtrar por ID de sucursal' })
   @IsOptional()
   @IsString()
@@ -12,9 +13,4 @@ export class QueryServiciosDto {
   @IsOptional()
   @IsEnum(ServiceStatus)
   estado?: ServiceStatus;
-
-  @ApiPropertyOptional({ example: 'PBX', description: 'Buscar por placa, modelo o nombre de cliente' })
-  @IsOptional()
-  @IsString()
-  search?: string;
 }

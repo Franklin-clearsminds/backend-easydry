@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -10,16 +10,31 @@ import {
   EliminarRecetaItemDto,
   SimularConsumoDto,
 } from './dto/receta.dto.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
+import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
 
 @Injectable()
 export class OperacionesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private notifications?: NotificationsService,
+  ) {}
 
   // ============================================================
   //  SERVICIOS DE LAVADO
   // ============================================================
 
-  async findAll(params?: { agenciaId?: string; sucursalId?: string; estado?: ServiceStatus; search?: string }) {
+  async findAll(params?: {
+    agenciaId?: string;
+    sucursalId?: string;
+    estado?: ServiceStatus;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+    sortField?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
     const where: any = {};
 
     const targetAgencia = params?.agenciaId || params?.sucursalId;
@@ -40,35 +55,48 @@ export class OperacionesService {
       ];
     }
 
-    return this.prisma.servicioLavado.findMany({
-      where,
-      include: {
-        bahia: {
-          include: {
-            agencia: {
-              select: { id: true, nombre: true, codigo: true },
-            },
-          },
-        },
-        catalogo: {
-          include: {
-            recetas: {
-              include: {
-                insumo: { select: { codigoSKU: true, nombre: true } },
-                unidadConsumo: { select: { codigo: true, simbolo: true } },
+    const page = params?.page ? Number(params.page) : 1;
+    const pageSize = params?.pageSize ? Number(params.pageSize) : 50;
+    const skip = (page - 1) * pageSize;
+    const sortField = params?.sortField || 'createdAt';
+    const sortOrder = params?.sortOrder || 'desc';
+
+    const [items, total] = await Promise.all([
+      this.prisma.servicioLavado.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { [sortField]: sortOrder },
+        include: {
+          bahia: {
+            include: {
+              agencia: {
+                select: { id: true, nombre: true, codigo: true },
               },
             },
           },
+          catalogo: {
+            include: {
+              recetas: {
+                include: {
+                  insumo: { select: { codigoSKU: true, nombre: true } },
+                  unidadConsumo: { select: { codigo: true, simbolo: true } },
+                },
+              },
+            },
+          },
+          operador: {
+            select: { id: true, name: true, lastname: true, email: true },
+          },
         },
-        operador: {
-          select: { id: true, name: true, lastname: true, email: true },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+      }),
+      this.prisma.servicioLavado.count({ where }),
+    ]);
+
+    return buildDataGridResponse(items.map(serializeServicioLavado), total, page, pageSize);
   }
 
-  async findOne(id: string) {
+  async findOneRaw(id: string) {
     const servicio = await this.prisma.servicioLavado.findFirst({
       where: {
         OR: [{ id }, { clientUuid: id }],
@@ -95,6 +123,9 @@ export class OperacionesService {
             insumo: { select: { codigoSKU: true, nombre: true } },
           },
         },
+        evidencias: {
+          orderBy: { tomadaEn: 'asc' },
+        },
       },
     });
 
@@ -105,11 +136,49 @@ export class OperacionesService {
     return servicio;
   }
 
+  async findOne(id: string) {
+    const servicio = await this.findOneRaw(id);
+    return serializeServicioLavado(servicio);
+  }
+
   async create(createDto: CreateServicioDto, operadorId: string) {
     const clientUuid = createDto.clientUuid || randomUUID();
     const now = new Date();
 
-    return this.prisma.servicioLavado.create({
+    // Control físico de Bahía: Impedir doble auto simultáneo en proceso en la misma bahía
+    if (createDto.estado === ServiceStatus.EN_PROCESO && createDto.bahiaId) {
+      const activoEnBahia = await this.prisma.servicioLavado.findFirst({
+        where: {
+          bahiaId: createDto.bahiaId,
+          estado: ServiceStatus.EN_PROCESO,
+          deletedAt: null,
+        },
+      });
+      if (activoEnBahia) {
+        throw new BadRequestException(
+          `La bahía seleccionada ya se encuentra ocupada por el vehículo ${activoEnBahia.placa}. Espere a que finalice o seleccione otra bahía disponible.`,
+        );
+      }
+    }
+
+    // Advertencia de Maquinaria Averiada o Fuera de Servicio
+    let observacionesFinales = createDto.observaciones;
+    if (createDto.bahiaId) {
+      const maquinaAveriada = await this.prisma.maquinaria.findFirst({
+        where: {
+          bahiaId: createDto.bahiaId,
+          estadoOperativo: { in: ['FUERA_DE_SERVICIO', 'DE_BAJA'] },
+        },
+      });
+      if (maquinaAveriada) {
+        const advertencia = `[ALERTA TÉCNICA: Maquinaria ${maquinaAveriada.codigo} (${maquinaAveriada.nombre}) en estado ${maquinaAveriada.estadoOperativo}]`;
+        observacionesFinales = observacionesFinales
+          ? `${observacionesFinales} | ${advertencia}`
+          : advertencia;
+      }
+    }
+
+    const created = await this.prisma.servicioLavado.create({
       data: {
         clientUuid,
         placa: createDto.placa.toUpperCase().trim(),
@@ -124,7 +193,7 @@ export class OperacionesService {
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,
         fotoIngresoUrl: createDto.fotoIngresoUrl,
         fotoSalidaUrl: createDto.fotoSalidaUrl,
-        observaciones: createDto.observaciones,
+        observaciones: observacionesFinales,
         syncedAt: now,
       },
       include: {
@@ -141,32 +210,63 @@ export class OperacionesService {
             },
           },
         },
+        operador: {
+          select: { id: true, name: true, lastname: true, email: true },
+        },
       },
     });
+
+    return serializeServicioLavado(created);
   }
 
-  async update(id: string, updateDto: UpdateServicioDto) {
-    const servicio = await this.findOne(id);
+  async update(id: string, updateDto: UpdateServicioDto, isOfflineSync: boolean = false) {
+    const servicio = await this.findOneRaw(id);
     const data: any = { ...updateDto };
     delete data.id;
+    data.version = { increment: 1 };
 
     if (updateDto.estado === ServiceStatus.FINALIZADO && !servicio.horaSalida) {
       data.horaSalida = new Date();
     }
 
-    data.version = servicio.version + 1;
+    // ──────────────────────────────────────────────────────────────────
+    // MÁQUINA DE ESTADOS IRREVERSIBLE (Anti Out-of-Order Delivery)
+    // ──────────────────────────────────────────────────────────────────
+    if (updateDto.estado && updateDto.estado !== servicio.estado) {
+      // 1. Si ya está APROBADO, no puede retroceder a ningún estado previo
+      if (servicio.estado === ServiceStatus.APROBADO) {
+        if (([ServiceStatus.EN_ESPERA, ServiceStatus.EN_PROCESO, ServiceStatus.FINALIZADO] as ServiceStatus[]).includes(updateDto.estado)) {
+          if (isOfflineSync) {
+            delete data.estado;
+          } else {
+            throw new BadRequestException('El servicio ya fue APROBADO por Gerencia y no puede retroceder de estado.');
+          }
+        }
+      }
+
+      // 2. Si ya está FINALIZADO, no puede retroceder a EN_ESPERA ni EN_PROCESO
+      if (servicio.estado === ServiceStatus.FINALIZADO) {
+        if (([ServiceStatus.EN_ESPERA, ServiceStatus.EN_PROCESO] as ServiceStatus[]).includes(updateDto.estado)) {
+          if (isOfflineSync) {
+            delete data.estado;
+          } else {
+            throw new BadRequestException('El servicio ya fue FINALIZADO y no puede retroceder a En Espera o En Proceso.');
+          }
+        }
+      }
+    }
 
     // ──────────────────────────────────────────────────────────────────
     // HOOK: Al finalizar un servicio, descontar insumos de la receta
     // ──────────────────────────────────────────────────────────────────
     if (
-      updateDto.estado === ServiceStatus.FINALIZADO &&
+      data.estado === ServiceStatus.FINALIZADO &&
       servicio.estado !== ServiceStatus.FINALIZADO
     ) {
-      await this._ejecutarConsumoInsumos(servicio);
+      await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
     }
 
-    return this.prisma.servicioLavado.update({
+    const updated = await this.prisma.servicioLavado.update({
       where: { id: servicio.id },
       data,
       include: {
@@ -174,13 +274,84 @@ export class OperacionesService {
           include: { agencia: { select: { id: true, nombre: true, codigo: true } } },
         },
         catalogo: true,
+        operador: {
+          select: { id: true, name: true, lastname: true, email: true },
+        },
         consumos: {
           include: {
             insumo: { select: { codigoSKU: true, nombre: true } },
           },
         },
+        evidencias: {
+          orderBy: { tomadaEn: 'asc' },
+        },
       },
     });
+
+    return serializeServicioLavado(updated);
+  }
+
+  async softDelete(id: string, motivo?: string, reponerInsumos: boolean = true) {
+    const servicio = await this.findOneRaw(id);
+
+    // Reversión de Insumos: Si el servicio estaba FINALIZADO y tenía consumos, reponer al inventario
+    if (servicio.estado === ServiceStatus.FINALIZADO && reponerInsumos && servicio.consumos?.length > 0) {
+      const agenciaId = servicio.bahia?.agencia?.id;
+      for (const c of servicio.consumos) {
+        const cantidadRevertir = Number(c.cantidadUsada);
+        const stockUbicacionId = c.stockUbicacionId;
+        if (cantidadRevertir <= 0 || !stockUbicacionId) continue;
+
+        await this.prisma.$transaction(async (tx) => {
+          const stock = await tx.stockUbicacion.findUnique({
+            where: { id: stockUbicacionId },
+          });
+          const stockAnterior = Number(stock?.cantidadActual ?? 0);
+          const stockPosterior = stockAnterior + cantidadRevertir;
+
+          await tx.stockUbicacion.update({
+            where: { id: stockUbicacionId },
+            data: { cantidadActual: { increment: cantidadRevertir } },
+          });
+
+          await tx.kardexMovimiento.create({
+            data: {
+              insumoId: c.insumoId,
+              ubicacionId: agenciaId || stock?.agenciaId || 'agencia',
+              tipoMovimiento: 'ANULACION_SERVICIO_REVERSA',
+              cantidad: cantidadRevertir,
+              stockAnterior,
+              stockPosterior,
+              costoUnitario: 0,
+              costoTotal: 0,
+              referenciaId: servicio.id,
+              usuarioId: servicio.operadorId,
+            },
+          });
+        });
+      }
+    }
+
+    const deleted = await this.prisma.servicioLavado.update({
+      where: { id: servicio.id },
+      data: {
+        deletedAt: new Date(),
+        estado: ServiceStatus.CANCELADO,
+        observaciones: motivo
+          ? `${servicio.observaciones || ''} | [Eliminado/Anulado]: ${motivo}`.trim()
+          : servicio.observaciones,
+        version: servicio.version + 1,
+      },
+      include: {
+        bahia: {
+          include: { agencia: true },
+        },
+        catalogo: true,
+        operador: true,
+      },
+    });
+
+    return serializeServicioLavado(deleted);
   }
 
   // ============================================================
@@ -211,7 +382,7 @@ export class OperacionesService {
     });
   }
 
-  private async _ejecutarConsumoInsumos(servicio: any) {
+  private async _ejecutarConsumoInsumos(servicio: any, isOfflineSync: boolean = false) {
     const agenciaId = servicio.bahia?.agencia?.id;
     if (!agenciaId) {
       throw new BadRequestException(
@@ -222,75 +393,143 @@ export class OperacionesService {
     const recetas = servicio.catalogo?.recetas ?? [];
     if (recetas.length === 0) return; // Sin receta → sin descuento (servicio sin insumos configurados)
 
-    // ── 1. VALIDACIÓN PREVIA: verificar stock antes de descontar cualquier cosa ──
-    const faltantes: string[] = [];
-    for (const receta of recetas) {
-      if (receta.esOpcional) continue; // Los opcionales no bloquean
+    // ── 1. VALIDACIÓN PREVIA (Sólo aplica a operaciones online en vivo) ──
+    // En sincronización offline rige la "No-Block Policy": el auto ya fue lavado en el mundo real,
+    // por lo que el stock físico manda sobre el balance virtual y no se bloquea la orden.
+    if (!isOfflineSync) {
+      const faltantes: string[] = [];
+      for (const receta of recetas) {
+        if (receta.esOpcional) continue;
 
-      const cantidadBaseNecesaria = this._convertirAUnidadBase(
-        Number(receta.cantidadUsada),
-        receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
-      );
+        const cantidadBaseNecesaria = this._convertirAUnidadBase(
+          Number(receta.cantidadUsada),
+          receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+        );
 
-      const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
-      const disponible = Number(stock?.cantidadActual ?? 0);
+        const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
+        const disponible = Number(stock?.cantidadActual ?? 0);
 
-      if (disponible < cantidadBaseNecesaria) {
-        faltantes.push(
-          `"${receta.insumo.nombre}": necesario ${cantidadBaseNecesaria.toFixed(4)} ${receta.unidadConsumo?.simbolo ?? ''}, disponible ${disponible.toFixed(4)}`,
+        if (disponible < cantidadBaseNecesaria) {
+          faltantes.push(
+            `"${receta.insumo.nombre}": necesario ${cantidadBaseNecesaria.toFixed(4)} ${receta.unidadConsumo?.simbolo ?? ''}, disponible ${disponible.toFixed(4)}`,
+          );
+        }
+      }
+
+      if (faltantes.length > 0) {
+        throw new BadRequestException(
+          `❌ Stock insuficiente en la agencia para finalizar el servicio. Insumos faltantes:\n` +
+            faltantes.map((f) => `  • ${f}`).join('\n'),
         );
       }
     }
 
-    if (faltantes.length > 0) {
-      throw new BadRequestException(
-        `❌ Stock insuficiente en la agencia para finalizar el servicio. Insumos faltantes:\n` +
-          faltantes.map((f) => `  • ${f}`).join('\n'),
-      );
-    }
-
-    // ── 2. DESCUENTO: iterar receta y descontar ──
+    // ── 2. DESCUENTO Y KARDEX ATÓMICO SERIALIZADO ──
     for (const receta of recetas) {
       const cantidadEnBase = this._convertirAUnidadBase(
         Number(receta.cantidadUsada),
         receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
       );
 
-      const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
-      const disponible = Number(stock?.cantidadActual ?? 0);
+      let nuevoStockCalculado = 0;
 
-      // Para opcionales: descontar solo lo disponible (puede quedar en 0)
-      const cantidadADescontar = receta.esOpcional
-        ? Math.min(cantidadEnBase, disponible)
-        : cantidadEnBase;
+      await this.prisma.$transaction(async (tx) => {
+        let stock = await tx.stockUbicacion.findFirst({
+          where: {
+            insumoId: receta.insumoId,
+            tipoUbicacion: 'AGENCIA',
+            agenciaId,
+          },
+        });
 
-      if (cantidadADescontar <= 0) continue;
+        if (!stock) {
+          stock = await tx.stockUbicacion.create({
+            data: {
+              insumoId: receta.insumoId,
+              tipoUbicacion: 'AGENCIA',
+              agenciaId,
+              cantidadActual: 0,
+            },
+          });
+        }
 
-      // Descontar del stock de agencia
-      if (stock) {
-        await this.prisma.stockUbicacion.update({
+        const disponible = Number(stock.cantidadActual ?? 0);
+        const cantidadADescontar =
+          receta.esOpcional && !isOfflineSync ? Math.min(cantidadEnBase, disponible) : cantidadEnBase;
+
+        if (cantidadADescontar <= 0) return;
+
+        const nuevoStock = disponible - cantidadADescontar;
+        nuevoStockCalculado = nuevoStock;
+        const costoUnit = Number(receta.insumo?.costoUnitarioUSD ?? 0);
+        const costoTotal = Number((cantidadADescontar * costoUnit).toFixed(2));
+        const tipoMovimiento =
+          nuevoStock < 0 || isOfflineSync ? 'CONSUMO_SERVICIO_OFFLINE' : 'CONSUMO_SERVICIO';
+
+        await tx.stockUbicacion.update({
           where: { id: stock.id },
           data: { cantidadActual: { decrement: cantidadADescontar } },
         });
-      }
 
-      // Registrar en historial de consumo
-      await this.prisma.consumoServicio.create({
-        data: {
-          servicioId: servicio.id,
-          insumoId: receta.insumoId,
-          cantidadUsada: cantidadADescontar,
-          stockUbicacionId: stock?.id ?? null,
-          agenciaId,
-        },
+        await tx.kardexMovimiento.create({
+          data: {
+            insumoId: receta.insumoId,
+            ubicacionId: agenciaId,
+            tipoMovimiento,
+            cantidad: -cantidadADescontar,
+            stockAnterior: disponible,
+            stockPosterior: nuevoStock,
+            costoUnitario: costoUnit,
+            costoTotal,
+            referenciaId: servicio.id,
+            usuarioId: servicio.operadorId,
+          },
+        });
+
+        await tx.consumoServicio.create({
+          data: {
+            servicioId: servicio.id,
+            insumoId: receta.insumoId,
+            cantidadUsada: cantidadADescontar,
+            stockUbicacionId: stock.id,
+            agenciaId,
+          },
+        });
       });
 
-      // ── 3. AUTO-ALERTA: si el stock baja del mínimo, generar alerta ──
-      if (stock) {
-        const nuevoStock = disponible - cantidadADescontar;
+      // ── 3. ALERTAS DE SOBREGIRO O STOCK MÍNIMO ──
+      if (nuevoStockCalculado < 0) {
+        // Sobregiro por sincronización offline
+        const alertaExistente = await this.prisma.alertaStock.findFirst({
+          where: {
+            insumoId: receta.insumoId,
+            agenciaId,
+            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          },
+        });
+        if (!alertaExistente) {
+          await this.prisma.alertaStock.create({
+            data: {
+              insumoId: receta.insumoId,
+              nivel: 'CRITICO',
+              agenciaId,
+              usuarioEmisorId: servicio.operadorId,
+              mensaje: `Sobregiro por sincronización concurrente: Stock físico menor a cero en Agencia ${agenciaId}. Insumo ${receta.insumo?.nombre || receta.insumoId}: ${nuevoStockCalculado.toFixed(3)}`,
+              stockReportado: nuevoStockCalculado,
+            },
+          });
+
+          if (this.notifications) {
+            await this.notifications.notificarAlertaStock({
+              insumoNombre: receta.insumo?.nombre || 'Insumo Químico',
+              nivel: 'CRITICO',
+              agenciaId,
+            });
+          }
+        }
+      } else {
         const minimoAgencia = Number(receta.insumo?.stockMinimoAgencia ?? 0);
-        if (nuevoStock <= minimoAgencia && nuevoStock >= 0) {
-          // Verificar si ya hay una alerta activa para este insumo+agencia
+        if (nuevoStockCalculado <= minimoAgencia) {
           const alertaExistente = await this.prisma.alertaStock.findFirst({
             where: {
               insumoId: receta.insumoId,
@@ -299,16 +538,25 @@ export class OperacionesService {
             },
           });
           if (!alertaExistente) {
+            const nivel = nuevoStockCalculado === 0 ? 'AGOTADO' : nuevoStockCalculado < minimoAgencia * 0.5 ? 'CRITICO' : 'BAJO';
             await this.prisma.alertaStock.create({
               data: {
                 insumoId: receta.insumoId,
-                nivel: nuevoStock === 0 ? 'AGOTADO' : nuevoStock < minimoAgencia * 0.5 ? 'CRITICO' : 'BAJO',
+                nivel,
                 agenciaId,
                 usuarioEmisorId: servicio.operadorId,
-                mensaje: `Stock bajo generado automáticamente al finalizar servicio ${servicio.id}. Stock actual: ${nuevoStock.toFixed(3)}`,
-                stockReportado: nuevoStock,
+                mensaje: `Stock bajo generado automáticamente al finalizar servicio ${servicio.id}. Stock actual: ${nuevoStockCalculado.toFixed(3)}`,
+                stockReportado: nuevoStockCalculado,
               },
             });
+
+            if (nivel === 'CRITICO' || nivel === 'AGOTADO') {
+              await this.notifications?.notificarAlertaStock({
+                insumoNombre: receta.insumo?.nombre || 'Insumo Químico',
+                nivel,
+                agenciaId,
+              });
+            }
           }
         }
       }
@@ -495,5 +743,137 @@ export class OperacionesService {
 
     await this.prisma.recetaInsumo.delete({ where: { id: receta.id } });
     return { ok: true, message: 'Insumo eliminado de la receta correctamente' };
+  }
+
+  // ============================================================
+  //  APROBACIONES Y CIERRE DIARIO GERENCIAL
+  // ============================================================
+
+  async aprobarServicio(id: string, observacion?: string, gerenteNombre?: string) {
+    const servicio = await this.findOneRaw(id);
+    const updated = await this.prisma.servicioLavado.update({
+      where: { id: servicio.id },
+      data: {
+        estado: ServiceStatus.APROBADO,
+        observacionGerente: observacion || servicio.observacionGerente || 'Aprobado por gerencia',
+        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
+        fechaAprobacion: new Date(),
+        version: servicio.version + 1,
+      },
+      include: {
+        bahia: {
+          include: { agencia: { select: { id: true, nombre: true, codigo: true } } },
+        },
+        catalogo: true,
+        operador: {
+          select: { id: true, name: true, lastname: true, email: true },
+        },
+        consumos: {
+          include: {
+            insumo: { select: { codigoSKU: true, nombre: true } },
+          },
+        },
+        evidencias: {
+          orderBy: { tomadaEn: 'asc' },
+        },
+      },
+    });
+
+    return serializeServicioLavado(updated);
+  }
+
+  async rechazarServicio(id: string, motivo: string, gerenteNombre?: string) {
+    const servicio = await this.findOneRaw(id);
+    const updated = await this.prisma.servicioLavado.update({
+      where: { id: servicio.id },
+      data: {
+        estado: ServiceStatus.RECHAZADO,
+        motivoRechazo: motivo,
+        observacionGerente: motivo,
+        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
+        fechaAprobacion: new Date(),
+        version: servicio.version + 1,
+      },
+      include: {
+        bahia: {
+          include: { agencia: { select: { id: true, nombre: true, codigo: true } } },
+        },
+        catalogo: true,
+        operador: {
+          select: { id: true, name: true, lastname: true, email: true },
+        },
+        consumos: {
+          include: {
+            insumo: { select: { codigoSKU: true, nombre: true } },
+          },
+        },
+        evidencias: {
+          orderBy: { tomadaEn: 'asc' },
+        },
+      },
+    });
+
+    return serializeServicioLavado(updated);
+  }
+
+  async aprobarTodosServicios(
+    agenciaId?: string,
+    sucursalId?: string,
+    fecha?: string,
+    gerenteNombre?: string,
+    requiereFotoSalida: boolean = true,
+  ) {
+    const targetAgencia = agenciaId || sucursalId;
+    const baseWhere: any = {
+      estado: ServiceStatus.FINALIZADO,
+      deletedAt: null,
+    };
+
+    if (targetAgencia) {
+      baseWhere.bahia = { agenciaId: targetAgencia };
+    }
+
+    if (fecha) {
+      const start = new Date(`${fecha}T00:00:00.000Z`);
+      const end = new Date(`${fecha}T23:59:59.999Z`);
+      baseWhere.createdAt = { gte: start, lte: end };
+    }
+
+    const whereParaAprobar: any = { ...baseWhere };
+    let omitidosSinFotoCount = 0;
+
+    if (requiereFotoSalida) {
+      whereParaAprobar.fotoSalidaUrl = { not: null };
+
+      // Contar cuántos servicios finalizados no cumplen con la foto de salida
+      omitidosSinFotoCount = await this.prisma.servicioLavado.count({
+        where: {
+          ...baseWhere,
+          fotoSalidaUrl: null,
+        },
+      });
+    }
+
+    const batchResult = await this.prisma.servicioLavado.updateMany({
+      where: whereParaAprobar,
+      data: {
+        estado: ServiceStatus.APROBADO,
+        observacionGerente: 'Aprobación masiva de cierre diario (Quality Gate)',
+        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
+        fechaAprobacion: new Date(),
+        version: { increment: 1 },
+      },
+    });
+
+    return {
+      ok: true,
+      aprobadosCount: batchResult.count,
+      omitidosSinFotoCount,
+      mensaje: `Se aprobaron exitosamente ${batchResult.count} servicios de lavado.${
+        omitidosSinFotoCount > 0
+          ? ` Se omitieron ${omitidosSinFotoCount} servicios por no contar con evidencia fotográfica de salida obligatoria.`
+          : ''
+      }`,
+    };
   }
 }

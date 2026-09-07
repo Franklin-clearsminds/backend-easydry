@@ -38,6 +38,8 @@ import {
   UpdateBahiaDto,
   ListBahiasDto,
   ToggleActivaBahiaDto,
+  AsignarOperadorBahiaDto,
+  ListHistorialAsignacionesDto,
 } from './dto/bahias.dto.js';
 import {
   AsignarUsuarioAgenciaDto,
@@ -203,6 +205,25 @@ export class AgenciasController {
   async toggleActivaBahia(@Body() dto: ToggleActivaBahiaDto, @CurrentUser() user: any) {
     this._requireAgenciaManager(user, 'modificar disponibilidad de bahías');
     return this.agenciasService.toggleActivaBahia(dto);
+  }
+
+  @Post('bahias/asignar-operador')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Asignar operador dinámico a una bahía con registro en historial (ADMIN, SUPERVISOR, LIDER)' })
+  @ApiResponse({ status: 200, description: 'Bahía actualizada con nuevo operador asignado' })
+  async asignarOperador(
+    @Body() dto: AsignarOperadorBahiaDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.agenciasService.asignarOperadorABahia(dto, userId);
+  }
+
+  @Post('bahias/historial-asignaciones')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Consultar historial de asignaciones de operadores por bahía o por operador' })
+  @ApiResponse({ status: 200, description: 'Listado histórico de asignaciones con fechas y responsables' })
+  async historialAsignaciones(@Body() dto: ListHistorialAsignacionesDto) {
+    return this.agenciasService.obtenerHistorialAsignaciones(dto);
   }
 
   // =========================================================================

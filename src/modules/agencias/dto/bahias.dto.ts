@@ -63,3 +63,40 @@ export class ToggleActivaBahiaDto {
   @IsBoolean()
   activa?: boolean;
 }
+
+export class AsignarOperadorBahiaDto {
+  @ApiProperty({ example: 'uuid-bahia', description: 'ID de la bahía' })
+  @IsString()
+  @IsNotEmpty()
+  bahiaId: string;
+
+  @ApiPropertyOptional({ example: 'uuid-operador', description: 'ID del operador a asignar (null para desasignar)' })
+  @IsOptional()
+  @IsString()
+  operadorId?: string | null;
+
+  @ApiPropertyOptional({ example: 'Turno Mañana 08:00 - 16:00', description: 'Notas u observaciones del turno' })
+  @IsOptional()
+  @IsString()
+  notas?: string;
+}
+
+export class ListHistorialAsignacionesDto {
+  @ApiPropertyOptional({ example: 'uuid-bahia', description: 'Filtrar por bahía' })
+  @IsOptional()
+  @IsString()
+  bahiaId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-operador', description: 'Filtrar por operador' })
+  @IsOptional()
+  @IsString()
+  operadorId?: string;
+
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  page?: number;
+
+  @ApiPropertyOptional({ default: 50 })
+  @IsOptional()
+  pageSize?: number;
+}

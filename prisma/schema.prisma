@@ -12,6 +12,8 @@ enum ServiceStatus {
   EN_ESPERA
   EN_PROCESO
   FINALIZADO
+  APROBADO
+  RECHAZADO
   CANCELADO
 }
 
@@ -105,6 +107,16 @@ model User {
   despachosRecibidos  MovimientoInventario[] @relation("RecibeMovimiento")
   alertasEmitidas     AlertaStock[]
   devices             SyncDevice[]
+  incidentesReportados IncidenteTecnico[]        @relation("ReportadoPor")
+  incidentesResueltos  IncidenteTecnico[]        @relation("ResueltoPor")
+  mantenimientos       MantenimientoMaquinaria[]
+  kardexMovimientos    KardexMovimiento[]
+  solicitudesCreadas   SolicitudAprobacion[]     @relation("SolicitanteAprobacion")
+  solicitudesDecididas SolicitudAprobacion[]     @relation("AprobadorDecision")
+  bahiasAsignadas       Bahia[]                   @relation("OperadorActualBahia")
+  historialesOperador   HistorialAsignacionBahia[] @relation("OperadorHistorialAsignacion")
+  asignacionesRealizadas HistorialAsignacionBahia[] @relation("SupervisorAsignadorBahia")
+  serviciosEspeciales   ServicioEspecial[]        @relation("OperadorServicioEspecial")
 
   @@index([email])
   @@index([roleId])
@@ -139,7 +151,10 @@ model Agencia {
   bahias       Bahia[]
   usuarios     User[]
   stocks       StockUbicacion[]
-  alertas      AlertaStock[]
+  alertas              AlertaStock[]
+  maquinarias          Maquinaria[]
+  solicitudesAprobacion SolicitudAprobacion[]
+  serviciosEspeciales   ServicioEspecial[]
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -151,17 +166,22 @@ model Agencia {
 }
 
 model Bahia {
-  id        String   @id @default(uuid())
-  nombre    String   // e.g. "Bahía 01 - Express"
-  codigo    String   @unique
-  agenciaId String
-  agencia   Agencia  @relation(fields: [agenciaId], references: [id])
-  activa    Boolean  @default(true)
-  servicios ServicioLavado[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id               String   @id @default(uuid())
+  nombre           String   // e.g. "Bahía 01 - Express"
+  codigo           String   @unique
+  agenciaId        String
+  agencia          Agencia  @relation(fields: [agenciaId], references: [id])
+  activa           Boolean  @default(true)
+  operadorActualId String?
+  operadorActual   User?    @relation("OperadorActualBahia", fields: [operadorActualId], references: [id])
+  servicios        ServicioLavado[]
+  maquinarias      Maquinaria[]
+  asignaciones     HistorialAsignacionBahia[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@index([agenciaId])
+  @@index([operadorActualId])
 }
 
 // =========================================================================
@@ -232,18 +252,27 @@ model ServicioLavado {
   horaInicio         DateTime?
   horaSalida         DateTime?
 
+  // Gobernanza y Aprobación Gerencial (Cierre Diario)
+  observacionGerente String?
+  aprobadoPor        String?   // Nombre del Gerente
+  fechaAprobacion    DateTime?
+  motivoRechazo      String?
+
   version            Int              @default(1)
   syncedAt           DateTime         @default(now())
+  deletedAt          DateTime?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
   consumos           ConsumoServicio[]
+  evidencias         EvidenciaServicio[]
 
   @@index([placa])
   @@index([estado])
   @@index([bahiaId])
   @@index([clientUuid])
   @@index([updatedAt])
+  @@index([deletedAt])
 }
 
 // -----------------------------------------------------------------------
@@ -346,6 +375,7 @@ model Insumo {
   alertas            AlertaStock[]
   recetas            RecetaInsumo[]
   consumos           ConsumoServicio[]
+  kardex             KardexMovimiento[]
 
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
@@ -508,6 +538,7 @@ model SyncDevice {
   user       User     @relation(fields: [userId], references: [id])
   appVersion String?
   platform   String?  // "ANDROID" | "IOS" | "WEB"
+  pushToken  String?  // Expo Push Token para notificaciones push en tiempo real
   lastSyncAt DateTime @default(now())
   lastIp     String?
   createdAt  DateTime @default(now())
@@ -516,4 +547,232 @@ model SyncDevice {
   @@index([userId])
   @@index([deviceId])
 }
+
+// =========================================================================
+// EVIDENCIAS FOTOGRÁFICAS MÚLTIPLES (1-a-N)
+// =========================================================================
+
+model EvidenciaServicio {
+  id          String         @id @default(uuid())
+  servicioId  String
+  servicio    ServicioLavado @relation(fields: [servicioId], references: [id], onDelete: Cascade)
+  tipo        String         // "INGRESO", "SALIDA", "DANO_PREVIO", "PROCESO", "RECEPCION"
+  url         String
+  descripcion String?
+  tomadaEn    DateTime       @default(now())
+  metadata    Json?
+  createdAt   DateTime       @default(now())
+
+  @@index([servicioId])
+  @@index([tipo])
+}
+
+// =========================================================================
+// MÓDULO DE MAQUINARIA, MANTENIMIENTO E INCIDENTES TÉCNICOS
+// =========================================================================
+
+model Maquinaria {
+  id              String   @id @default(uuid())
+  codigo          String   @unique  // e.g. "HIDRO-001", "ASPIR-004", "COMP-002"
+  nombre          String
+  tipo            String            // "HIDROLAVADORA", "ASPIRADORA", "COMPRESOR", "ESPUMADORA", "PULIDORA"
+  marca           String?
+  modelo          String?
+  serie           String?
+  estadoOperativo String   @default("OPERATIVA") // "OPERATIVA" | "EN_MANTENIMIENTO" | "DE_BAJA"
+  fotoUrl         String?
+  horasUso        Int      @default(0)
+
+  agenciaId       String?
+  agencia         Agencia? @relation(fields: [agenciaId], references: [id])
+  bahiaId         String?
+  bahia           Bahia?   @relation(fields: [bahiaId], references: [id])
+
+  incidentes      IncidenteTecnico[]
+  mantenimientos  MantenimientoMaquinaria[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tipo])
+  @@index([estadoOperativo])
+  @@index([agenciaId])
+  @@index([bahiaId])
+}
+
+model IncidenteTecnico {
+  id               String      @id @default(uuid())
+  maquinariaId     String
+  maquinaria       Maquinaria  @relation(fields: [maquinariaId], references: [id], onDelete: Cascade)
+  reportadoPorId   String
+  reportadoPor     User        @relation("ReportadoPor", fields: [reportadoPorId], references: [id])
+
+  titulo           String
+  descripcion      String
+  gravedad         String      @default("MEDIA") // "BAJA" | "MEDIA" | "ALTA" | "CRITICA"
+  estado           String      @default("ABIERTO") // "ABIERTO" | "EN_PROCESO" | "RESUELTO" | "CANCELADO"
+  fotoEvidenciaUrl String?
+  solucion         String?
+
+  resueltoPorId    String?
+  resueltoPor      User?       @relation("ResueltoPor", fields: [resueltoPorId], references: [id])
+
+  fechaReporte     DateTime    @default(now())
+  fechaSolucion    DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([maquinariaId])
+  @@index([reportadoPorId])
+  @@index([estado])
+  @@index([gravedad])
+}
+
+model MantenimientoMaquinaria {
+  id                   String      @id @default(uuid())
+  maquinariaId         String
+  maquinaria           Maquinaria  @relation(fields: [maquinariaId], references: [id], onDelete: Cascade)
+  tecnicoId            String
+  tecnico              User        @relation(fields: [tecnicoId], references: [id])
+
+  tipo                 String      @default("PREVENTIVO") // "PREVENTIVO" | "CORRECTIVO"
+  estado               String      @default("FINALIZADO") // "PENDIENTE" | "EN_PROCESO" | "FINALIZADO"
+  observaciones        String?
+  repuestosUsados      Json?       // Lista de repuestos e insumos aplicados
+  costoTotal           Decimal?    @db.Decimal(10, 2)
+
+  fechaMantenimiento   DateTime    @default(now())
+  proximoMantenimiento DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  @@index([maquinariaId])
+  @@index([tecnicoId])
+  @@index([tipo])
+  @@index([estado])
+}
+
+// =========================================================================
+// AUDITORÍA Y KARDEX TRANSACCIONAL DE INVENTARIO
+// =========================================================================
+
+model KardexMovimiento {
+  id             String   @id @default(uuid())
+  insumoId       String
+  insumo         Insumo   @relation(fields: [insumoId], references: [id])
+  ubicacionId    String   // ID de Agencia o Bodega
+  tipoMovimiento String   // CONSUMO_SERVICIO, COMPRA_INGRESO, DESPACHO_SALIDA, DESPACHO_ENTRADA, AJUSTE_MERMA
+  cantidad       Decimal  @db.Decimal(12, 4) // Positiva para ingresos, negativa para egresos
+  stockAnterior  Decimal  @db.Decimal(12, 4)
+  stockPosterior Decimal  @db.Decimal(12, 4)
+  costoUnitario  Decimal? @db.Decimal(10, 2)
+  costoTotal     Decimal? @db.Decimal(10, 2)
+  referenciaId   String?  // ID de ServicioLavado, Movimiento o Factura
+  usuarioId      String?
+  usuario        User?    @relation(fields: [usuarioId], references: [id])
+  fecha          DateTime @default(now())
+
+  @@index([insumoId])
+  @@index([ubicacionId])
+  @@index([tipoMovimiento])
+  @@index([fecha])
+}
+
+// =========================================================================
+// MÓDULO DE GOBERNANZA Y SOLICITUDES DE APROBACIÓN (ROL APROBADOR)
+// =========================================================================
+
+model SolicitudAprobacion {
+  id             String    @id @default(uuid())
+  tipo           String    // DESPACHO_QUIMICOS, AJUSTE_MERMA, SERVICIO_ESPECIAL_PRECIO, COMPRA_REPUESTO
+  titulo         String
+  descripcion    String?
+  montoUSD       Decimal?  @db.Decimal(10, 2)
+  estado         String    @default("PENDIENTE") // PENDIENTE, APROBADO, RECHAZADO
+  solicitanteId  String
+  solicitante    User      @relation("SolicitanteAprobacion", fields: [solicitanteId], references: [id])
+  aprobadorId    String?
+  aprobador      User?     @relation("AprobadorDecision", fields: [aprobadorId], references: [id])
+  agenciaId      String?
+  agencia        Agencia?  @relation(fields: [agenciaId], references: [id])
+  entidadRefId   String?   // ID del movimiento, servicio, etc.
+  motivoRechazo  String?
+  fechaDecision  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([estado])
+  @@index([agenciaId])
+  @@index([tipo])
+}
+
+// =========================================================================
+// HISTORIAL DE ASIGNACIONES DINÁMICAS DE OPERADOR A BAHÍA
+// =========================================================================
+
+model HistorialAsignacionBahia {
+  id            String    @id @default(uuid())
+  operadorId    String
+  operador      User      @relation("OperadorHistorialAsignacion", fields: [operadorId], references: [id])
+  bahiaId       String
+  bahia         Bahia     @relation(fields: [bahiaId], references: [id])
+  fechaInicio   DateTime  @default(now())
+  fechaFin      DateTime?
+  asignadoPorId String?
+  asignadoPor   User?     @relation("SupervisorAsignadorBahia", fields: [asignadoPorId], references: [id])
+  motivo        String?
+  createdAt     DateTime  @default(now())
+
+  @@index([operadorId])
+  @@index([bahiaId])
+  @@index([fechaInicio])
+}
+
+// =========================================================================
+// SERVICIOS ESPECIALES Y DETAILING (PULIDO, CERÁMICO, LAVADO MOTOR)
+// =========================================================================
+
+model ServicioEspecial {
+  id                  String    @id @default(uuid())
+  clientUuid          String?   @unique
+  codigoSE            String    @unique // e.g. "SE-2026-001"
+  tipoServicio        String    // 'Pulido' | 'Micro Pulido' | 'Recubrimiento Cerámico' | 'Lavado de motor' | 'Tratamientos especiales'
+  clienteNombre       String?
+  placa               String
+  marca               String?
+  modelo              String?
+  color               String?
+  prioridad           String    @default("Media") // 'Alta' | 'Media' | 'Baja' | 'Urgente'
+  estado              String    @default("Pendiente") // 'Pendiente' | 'En Proceso' | 'Completado' | 'Cancelado'
+  agenciaId           String?
+  agencia             Agencia?  @relation(fields: [agenciaId], references: [id])
+  operadorId          String?
+  operador            User?     @relation("OperadorServicioEspecial", fields: [operadorId], references: [id])
+  bahiaId             String?
+  fechaProgramada     DateTime?
+  horaEstimada        String?
+  fechaInicio         DateTime?
+  fechaFin            DateTime?
+  recetaInsumos       Json?
+  evidencias          Json?
+  notasSupervisor     String?
+  notasOperador       String?
+  observaciones       String?
+  calificacionCalidad Int?      // 1 a 5 estrellas
+  syncedAt            DateTime?
+  version             Int       @default(1)
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([clientUuid])
+  @@index([codigoSE])
+  @@index([estado])
+  @@index([placa])
+  @@index([agenciaId])
+  @@index([operadorId])
+}
+
+
+
 

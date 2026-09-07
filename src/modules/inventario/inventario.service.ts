@@ -12,6 +12,8 @@ import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto } from './dto/insumos.
 import { ListStockDto, AjusteStockDto } from './dto/stock.dto.js';
 import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, ListMovimientosDto } from './dto/movimientos.dto.js';
 import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto } from './dto/alertas.dto.js';
+import { ListKardexDto } from './dto/kardex.dto.js';
+import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 
 @Injectable()
 export class InventarioService {
@@ -258,10 +260,25 @@ export class InventarioService {
       },
     });
 
-    return this.prisma.stockUbicacion.update({
+    const updated = await this.prisma.stockUbicacion.update({
       where: { id: dto.stockUbicacionId },
       data: { cantidadActual: cantidadNueva },
     });
+
+    await this.prisma.kardexMovimiento.create({
+      data: {
+        insumoId: stock.insumoId,
+        ubicacionId: stock.agenciaId || 'BODEGA_CENTRAL',
+        tipoMovimiento: 'AJUSTE_MERMA',
+        cantidad: cantidadNueva - cantidadAnterior,
+        stockAnterior: cantidadAnterior,
+        stockPosterior: cantidadNueva,
+        referenciaId: guia,
+        usuarioId,
+      },
+    });
+
+    return updated;
   }
 
   // ============================================================
@@ -310,11 +327,14 @@ export class InventarioService {
       include: { detalles: true },
     });
 
-    // Incrementar stock en BODEGA_CENTRAL
+    // Incrementar stock en BODEGA_CENTRAL y registrar Kardex
     for (const det of dto.detalles) {
       const existing = await this.prisma.stockUbicacion.findFirst({
         where: { insumoId: det.insumoId, tipoUbicacion: 'BODEGA_CENTRAL' },
       });
+      const stockAnt = existing ? Number(existing.cantidadActual) : 0;
+      const stockPost = stockAnt + Number(det.cantidadEnviada);
+
       if (existing) {
         await this.prisma.stockUbicacion.update({
           where: { id: existing.id },
@@ -329,6 +349,21 @@ export class InventarioService {
           },
         });
       }
+
+      await this.prisma.kardexMovimiento.create({
+        data: {
+          insumoId: det.insumoId,
+          ubicacionId: 'BODEGA_CENTRAL',
+          tipoMovimiento: 'COMPRA_INGRESO',
+          cantidad: det.cantidadEnviada,
+          stockAnterior: stockAnt,
+          stockPosterior: stockPost,
+          costoUnitario: det.costoUnitarioUSD,
+          costoTotal: det.costoUnitarioUSD ? det.costoUnitarioUSD * det.cantidadEnviada : null,
+          referenciaId: movimiento.numeroGuia,
+          usuarioId,
+        },
+      });
     }
 
     return movimiento;
@@ -337,12 +372,13 @@ export class InventarioService {
   async crearDespacho(dto: CrearDespachoDto, usuarioId: string) {
     // Validar destino
     let destinoLabel = '';
+    const targetAgenciaId = dto.sucursalDestinoId || dto.agenciaId;
     if (dto.tipo === 'DESPACHO_AGENCIA') {
-      if (!dto.sucursalDestinoId)
-        throw new BadRequestException('Debe especificar sucursalDestinoId para DESPACHO_AGENCIA');
-      const agencia = await this.prisma.agencia.findUnique({ where: { id: dto.sucursalDestinoId } });
-      if (!agencia) throw new NotFoundException(`Agencia con ID "${dto.sucursalDestinoId}" no encontrada`);
-      destinoLabel = `Agencia ${agencia.nombre}`;
+      if (!targetAgenciaId)
+        throw new BadRequestException('Debe especificar sucursalDestinoId o agenciaId para DESPACHO_AGENCIA');
+      const agencia = await this.prisma.agencia.findUnique({ where: { id: targetAgenciaId } });
+      if (!agencia) throw new NotFoundException(`Agencia con ID "${targetAgenciaId}" no encontrada`);
+      destinoLabel = `Agencia ${agencia.nombre} [${agencia.id}]`;
     } else {
       if (!dto.pulidorDestinoId)
         throw new BadRequestException('Debe especificar pulidorDestinoId para DESPACHO_PULIDOR');
@@ -391,28 +427,46 @@ export class InventarioService {
       include: { detalles: true },
     });
 
-    // Descontar stock de BODEGA_CENTRAL
+    // Descontar stock de BODEGA_CENTRAL y registrar Kardex de salida
     for (const det of dto.detalles) {
       const stockBodega = await this.prisma.stockUbicacion.findFirst({
         where: { insumoId: det.insumoId, tipoUbicacion: 'BODEGA_CENTRAL' },
       });
+      const stockAnt = Number(stockBodega?.cantidadActual ?? 0);
+      const stockPost = stockAnt - Number(det.cantidadEnviada);
+
       if (stockBodega) {
         await this.prisma.stockUbicacion.update({
           where: { id: stockBodega.id },
           data: { cantidadActual: { decrement: det.cantidadEnviada } },
         });
       }
+
+      await this.prisma.kardexMovimiento.create({
+        data: {
+          insumoId: det.insumoId,
+          ubicacionId: 'BODEGA_CENTRAL',
+          tipoMovimiento: 'DESPACHO_SALIDA',
+          cantidad: -Number(det.cantidadEnviada),
+          stockAnterior: stockAnt,
+          stockPosterior: stockPost,
+          referenciaId: movimiento.numeroGuia,
+          usuarioId,
+        },
+      });
     }
 
     return movimiento;
   }
 
   async confirmarRecepcion(dto: ConfirmarRecepcionDto, usuarioId: string) {
-    const movimiento = await this.prisma.movimientoInventario.findUnique({
-      where: { id: dto.movimientoId },
+    const movimiento = await this.prisma.movimientoInventario.findFirst({
+      where: {
+        OR: [{ id: dto.movimientoId }, { numeroGuia: dto.movimientoId }],
+      },
       include: { detalles: true },
     });
-    if (!movimiento) throw new NotFoundException(`Movimiento con ID "${dto.movimientoId}" no encontrado`);
+    if (!movimiento) throw new NotFoundException(`Movimiento con ID/Guía "${dto.movimientoId}" no encontrado`);
     if (movimiento.estadoDespacho !== 'EN_TRANSITO') {
       throw new BadRequestException(`El movimiento ya tiene estado "${movimiento.estadoDespacho}" y no puede confirmarse`);
     }
@@ -438,7 +492,7 @@ export class InventarioService {
     }
 
     await this.prisma.movimientoInventario.update({
-      where: { id: dto.movimientoId },
+      where: { id: movimiento.id },
       data: {
         estadoDespacho: nuevoEstado,
         fechaRecepcion: new Date(),
@@ -449,23 +503,34 @@ export class InventarioService {
       },
     });
 
-    // Si fue RECIBIDO: incrementar stock en destino
+    // Si fue RECIBIDO: incrementar stock en destino y registrar Kardex de entrada
     if (dto.accion === 'RECIBIDO') {
       const detallesActualizados = await this.prisma.movimientoDetalle.findMany({
-        where: { movimientoId: dto.movimientoId },
+        where: { movimientoId: movimiento.id },
       });
+
+      // Extraer ID de la agencia destino
+      let targetAgenciaId = dto.agenciaId || dto.sucursalId;
+      if (!targetAgenciaId && movimiento.destinoUbicacion.includes('[')) {
+        const match = movimiento.destinoUbicacion.match(/\[(.*?)\]/);
+        if (match && match[1]) targetAgenciaId = match[1];
+      }
+      if (!targetAgenciaId) {
+        const receptor = await this.prisma.user.findUnique({ where: { id: usuarioId } });
+        targetAgenciaId = receptor?.agenciaId || undefined;
+      }
+
       for (const det of detallesActualizados) {
         const cantidad = Number(det.cantidadRecibida ?? det.cantidadEnviada);
 
         if (movimiento.tipo === 'DESPACHO_AGENCIA') {
-          // Obtener el ID de la sucursal destino desde el label (buscamos por nombre)
-          // Mejor: guardamos en el movimiento la sucursal destino. Por ahora buscamos por usuarioRecibe
-          // Solución: buscar stock de agencia del usuario receptor
-          const receptor = await this.prisma.user.findUnique({ where: { id: usuarioId } });
-          if (receptor?.agenciaId) {
+          if (targetAgenciaId) {
             const stockAgencia = await this.prisma.stockUbicacion.findFirst({
-              where: { insumoId: det.insumoId, tipoUbicacion: 'AGENCIA', agenciaId: receptor.agenciaId },
+              where: { insumoId: det.insumoId, tipoUbicacion: 'AGENCIA', agenciaId: targetAgenciaId },
             });
+            const stockAnt = Number(stockAgencia?.cantidadActual ?? 0);
+            const stockPost = stockAnt + cantidad;
+
             if (stockAgencia) {
               await this.prisma.stockUbicacion.update({
                 where: { id: stockAgencia.id },
@@ -476,16 +541,32 @@ export class InventarioService {
                 data: {
                   insumoId: det.insumoId,
                   tipoUbicacion: 'AGENCIA',
-                  agenciaId: receptor.agenciaId,
+                  agenciaId: targetAgenciaId,
                   cantidadActual: cantidad,
                 },
               });
             }
+
+            await this.prisma.kardexMovimiento.create({
+              data: {
+                insumoId: det.insumoId,
+                ubicacionId: targetAgenciaId,
+                tipoMovimiento: 'DESPACHO_ENTRADA',
+                cantidad,
+                stockAnterior: stockAnt,
+                stockPosterior: stockPost,
+                referenciaId: movimiento.numeroGuia,
+                usuarioId,
+              },
+            });
           }
         } else if (movimiento.tipo === 'DESPACHO_PULIDOR') {
           const stockPulidor = await this.prisma.stockUbicacion.findFirst({
             where: { insumoId: det.insumoId, pulidorId: usuarioId, tipoUbicacion: { in: ['PULIDOR_MOVIL', 'PULIDOR_FIJO'] } },
           });
+          const stockAnt = Number(stockPulidor?.cantidadActual ?? 0);
+          const stockPost = stockAnt + cantidad;
+
           if (stockPulidor) {
             await this.prisma.stockUbicacion.update({
               where: { id: stockPulidor.id },
@@ -501,24 +582,89 @@ export class InventarioService {
               },
             });
           }
+
+          await this.prisma.kardexMovimiento.create({
+            data: {
+              insumoId: det.insumoId,
+              ubicacionId: `PULIDOR_${usuarioId}`,
+              tipoMovimiento: 'DESPACHO_ENTRADA',
+              cantidad,
+              stockAnterior: stockAnt,
+              stockPosterior: stockPost,
+              referenciaId: movimiento.numeroGuia,
+              usuarioId,
+            },
+          });
         }
       }
     } else {
-      // Si fue RECHAZADO: devolver stock a bodega central
+      // Si fue RECHAZADO: devolver stock a bodega central y registrar Kardex
       for (const det of movimiento.detalles) {
         const stockBodega = await this.prisma.stockUbicacion.findFirst({
           where: { insumoId: det.insumoId, tipoUbicacion: 'BODEGA_CENTRAL' },
         });
+        const stockAnt = Number(stockBodega?.cantidadActual ?? 0);
+        const stockPost = stockAnt + Number(det.cantidadEnviada);
+
         if (stockBodega) {
           await this.prisma.stockUbicacion.update({
             where: { id: stockBodega.id },
             data: { cantidadActual: { increment: Number(det.cantidadEnviada) } },
           });
         }
+
+        await this.prisma.kardexMovimiento.create({
+          data: {
+            insumoId: det.insumoId,
+            ubicacionId: 'BODEGA_CENTRAL',
+            tipoMovimiento: 'DESPACHO_RECHAZADO',
+            cantidad: Number(det.cantidadEnviada),
+            stockAnterior: stockAnt,
+            stockPosterior: stockPost,
+            referenciaId: movimiento.numeroGuia,
+            usuarioId,
+          },
+        });
       }
     }
 
     return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado };
+  }
+
+  async rechazarDespacho(dto: { movimientoId: string; motivo?: string }, usuarioId: string) {
+    return this.confirmarRecepcion(
+      {
+        movimientoId: dto.movimientoId,
+        accion: 'RECHAZADO',
+        observaciones: dto.motivo || 'Despacho rechazado por el receptor en agencia',
+      },
+      usuarioId,
+    );
+  }
+
+  async listDespachos(dto: ListMovimientosDto) {
+    const filter = { ...dto };
+    if (!filter.tipo) {
+      // Por defecto listar ambos tipos de despachos
+      return this.prisma.movimientoInventario.findMany({
+        where: {
+          tipo: { in: ['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR'] },
+          ...(dto.estadoDespacho ? { estadoDespacho: dto.estadoDespacho as any } : {}),
+          ...(dto.numeroGuia ? { numeroGuia: { contains: dto.numeroGuia, mode: 'insensitive' } } : {}),
+        },
+        orderBy: { fechaDespacho: 'desc' },
+        include: {
+          detalles: {
+            include: {
+              insumo: { select: { codigoSKU: true, nombre: true } },
+            },
+          },
+          usuarioDespacha: { select: { id: true, name: true, lastname: true } },
+          usuarioRecibe: { select: { id: true, name: true, lastname: true } },
+        },
+      });
+    }
+    return this.listMovimientos(filter);
   }
 
   async listMovimientos(dto: ListMovimientosDto) {
@@ -665,5 +811,54 @@ export class InventarioService {
         totalRegistros: stocksPulidor.length,
       },
     };
+  }
+
+  // ============================================================
+  //  KARDEX — Auditoría Contable y Trazabilidad Transaccional
+  // ============================================================
+
+  async listKardex(dto: ListKardexDto) {
+    const page = dto.page ? Number(dto.page) : 1;
+    const pageSize = dto.pageSize ? Number(dto.pageSize) : 20;
+    const skip = (page - 1) * pageSize;
+
+    const where: any = {};
+    if (dto.insumoId) where.insumoId = dto.insumoId;
+    if (dto.ubicacionId) where.ubicacionId = dto.ubicacionId;
+    if (dto.tipoMovimiento) where.tipoMovimiento = dto.tipoMovimiento;
+    if (dto.fechaDesde || dto.fechaHasta) {
+      where.fecha = {};
+      if (dto.fechaDesde) where.fecha.gte = new Date(dto.fechaDesde);
+      if (dto.fechaHasta) where.fecha.lte = new Date(dto.fechaHasta);
+    }
+
+    const sortField = dto.sortField && dto.sortField !== 'createdAt' ? dto.sortField : 'fecha';
+    const sortOrder = dto.sortOrder || 'desc';
+
+    const [items, total] = await Promise.all([
+      this.prisma.kardexMovimiento.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { [sortField]: sortOrder },
+        include: {
+          insumo: {
+            select: {
+              id: true,
+              codigoSKU: true,
+              nombre: true,
+              categoria: true,
+              unidadMedida: { select: { simbolo: true } },
+            },
+          },
+          usuario: {
+            select: { id: true, name: true, lastname: true, email: true },
+          },
+        },
+      }),
+      this.prisma.kardexMovimiento.count({ where }),
+    ]);
+
+    return buildDataGridResponse(items, total, page, pageSize);
   }
 }

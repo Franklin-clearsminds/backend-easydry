@@ -29,6 +29,8 @@ import {
   UpdateBahiaDto,
   ListBahiasDto,
   ToggleActivaBahiaDto,
+  AsignarOperadorBahiaDto,
+  ListHistorialAsignacionesDto,
 } from './dto/bahias.dto.js';
 import {
   AsignarUsuarioAgenciaDto,
@@ -574,6 +576,9 @@ export class AgenciasService {
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true },
         },
+        operadorActual: {
+          select: { id: true, name: true, lastname: true, email: true },
+        },
         _count: {
           select: { servicios: true },
         },
@@ -604,6 +609,7 @@ export class AgenciasService {
       },
       include: {
         agencia: { select: { id: true, codigo: true, nombre: true } },
+        operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
       },
     });
   }
@@ -622,6 +628,7 @@ export class AgenciasService {
       },
       include: {
         agencia: { select: { id: true, codigo: true, nombre: true } },
+        operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
       },
     });
   }
@@ -639,8 +646,108 @@ export class AgenciasService {
       data: { activa: nuevaActiva },
       include: {
         agencia: { select: { id: true, codigo: true, nombre: true } },
+        operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
       },
     });
+  }
+
+  async asignarOperadorABahia(dto: AsignarOperadorBahiaDto, asignadoPorId: string) {
+    const bahia = await this.prisma.bahia.findUnique({
+      where: { id: dto.bahiaId },
+      include: { operadorActual: true },
+    });
+    if (!bahia) {
+      throw new NotFoundException(`Bahía con ID "${dto.bahiaId}" no encontrada`);
+    }
+
+    const operadorNuevoId = dto.operadorId && dto.operadorId.trim() ? dto.operadorId.trim() : null;
+
+    if (operadorNuevoId) {
+      const operador = await this.prisma.user.findUnique({ where: { id: operadorNuevoId } });
+      if (!operador) {
+        throw new NotFoundException(`Operador con ID "${operadorNuevoId}" no encontrado`);
+      }
+    }
+
+    const now = new Date();
+
+    // Si había un operador previo asignado y está cambiando, cerrar el historial previo
+    if (bahia.operadorActualId && bahia.operadorActualId !== operadorNuevoId) {
+      await this.prisma.historialAsignacionBahia.updateMany({
+        where: {
+          bahiaId: bahia.id,
+          operadorId: bahia.operadorActualId,
+          fechaFin: null,
+        },
+        data: {
+          fechaFin: now,
+        },
+      });
+    }
+
+    // Si se asigna un nuevo operador, abrir nuevo registro de historial
+    if (operadorNuevoId && bahia.operadorActualId !== operadorNuevoId) {
+      await this.prisma.historialAsignacionBahia.create({
+        data: {
+          bahiaId: bahia.id,
+          operadorId: operadorNuevoId,
+          fechaInicio: now,
+          asignadoPorId,
+          motivo: dto.notas || (dto as any).motivo || null,
+        },
+      });
+    }
+
+    // Actualizar bahía
+    return this.prisma.bahia.update({
+      where: { id: bahia.id },
+      data: {
+        operadorActualId: operadorNuevoId,
+      },
+      include: {
+        agencia: { select: { id: true, codigo: true, nombre: true } },
+        operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
+      },
+    });
+  }
+
+  async obtenerHistorialAsignaciones(dto: ListHistorialAsignacionesDto) {
+    const where: any = {};
+    if (dto.bahiaId) where.bahiaId = dto.bahiaId;
+    if (dto.operadorId) where.operadorId = dto.operadorId;
+
+    const page = dto.page ? Number(dto.page) : 1;
+    const pageSize = dto.pageSize ? Number(dto.pageSize) : 50;
+    const skip = (page - 1) * pageSize;
+
+    const [items, total] = await Promise.all([
+      this.prisma.historialAsignacionBahia.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { fechaInicio: 'desc' },
+        include: {
+          bahia: {
+            select: { id: true, codigo: true, nombre: true, agencia: { select: { id: true, nombre: true } } },
+          },
+          operador: {
+            select: { id: true, name: true, lastname: true, email: true },
+          },
+          asignadoPor: {
+            select: { id: true, name: true, lastname: true, email: true },
+          },
+        },
+      }),
+      this.prisma.historialAsignacionBahia.count({ where }),
+    ]);
+
+    return {
+      data: items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
   }
 
   // =========================================================================

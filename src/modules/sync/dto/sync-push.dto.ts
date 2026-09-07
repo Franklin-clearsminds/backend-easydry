@@ -1,6 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 import { ServiceStatus } from '@prisma/client';
 
 export class MutationDataDto {
@@ -62,6 +73,11 @@ export class MutationDataDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiPropertyOptional({ example: 1, description: 'Versión del registro para control de concurrencia optimista (OCC)' })
+  @IsOptional()
+  @IsInt()
+  version?: number;
 }
 
 export class MutationItemDto {
@@ -101,9 +117,36 @@ export class SyncPushDto {
   @IsNotEmpty()
   deviceId: string;
 
-  @ApiProperty({ type: [MutationItemDto], description: 'Lista de mutaciones generadas offline' })
+  @ApiProperty({
+    type: [MutationItemDto],
+    description: 'Lista de mutaciones generadas offline (máx 50 por petición para evitar timeouts)',
+  })
   @IsArray()
+  @ArrayMinSize(1, { message: 'El lote debe contener al menos 1 mutación' })
+  @ArrayMaxSize(50, { message: 'Lote excede el máximo permitido de 50 mutaciones por petición. Por favor divida en tandas de hasta 50.' })
   @ValidateNested({ each: true })
   @Type(() => MutationItemDto)
   mutations: MutationItemDto[];
 }
+
+export class ReplayDlqDto {
+  @ApiProperty({ example: 'dlq-uuid-1234', description: 'ID del registro en SyncDeadLetterQueue' })
+  @IsString()
+  @IsNotEmpty()
+  dlqId: string;
+
+  @ApiPropertyOptional({ description: 'Payload corregido opcional para reinyectar la mutación' })
+  @IsOptional()
+  payloadCorregido?: any;
+}
+
+export class QueryPendingMediaDto {
+  @ApiProperty({
+    example: ['uuid-orden-1', 'uuid-orden-2'],
+    description: 'Lista de clientUuids a consultar para verificar fotos pendientes de vinculación',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  clientUuids: string[];
+}
+
