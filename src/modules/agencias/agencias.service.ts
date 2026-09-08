@@ -35,6 +35,8 @@ import {
 import {
   AsignarUsuarioAgenciaDto,
   ListUsuariosAgenciaDto,
+  ToggleEstadoUsuarioDto,
+  UpdateUsuarioDto,
 } from './dto/usuarios-agencia.dto.js';
 
 @Injectable()
@@ -60,9 +62,18 @@ export class AgenciasService {
       where.estado = dto.estado;
     }
 
-    return this.prisma.region.findMany({
+    const regiones = await this.prisma.region.findMany({
       where,
       include: {
+        usuarios: {
+          select: {
+            id: true,
+            name: true,
+            lastname: true,
+            email: true,
+            role: { select: { namerol: true } },
+          },
+        },
         _count: {
           select: {
             agencias: true,
@@ -71,6 +82,15 @@ export class AgenciasService {
         },
       },
       orderBy: { nombre: 'asc' },
+    });
+
+    return regiones.map((r) => {
+      const supervisor = r.usuarios?.find((u) => u.role?.namerol === 'SUPERVISOR') || r.usuarios?.[0];
+      return {
+        ...r,
+        responsable: supervisor ? `${supervisor.name} ${supervisor.lastname}`.trim() : '',
+        supervisorId: supervisor?.id || null,
+      };
     });
   }
 
@@ -89,7 +109,7 @@ export class AgenciasService {
       throw new ConflictException(`Ya existe una región con el nombre "${dto.nombre}"`);
     }
 
-    return this.prisma.region.create({
+    const created = await this.prisma.region.create({
       data: {
         codigo: dto.codigo.trim().toUpperCase(),
         nombre: dto.nombre.trim(),
@@ -97,6 +117,26 @@ export class AgenciasService {
         estado: dto.estado ?? 1,
       },
     });
+
+    let responsableNombre = '';
+    if (dto.supervisorId) {
+      const sup = await this.prisma.user.findUnique({
+        where: { id: dto.supervisorId },
+      });
+      if (sup) {
+        await this.prisma.user.update({
+          where: { id: dto.supervisorId },
+          data: { regionId: created.id },
+        });
+        responsableNombre = `${sup.name} ${sup.lastname}`.trim();
+      }
+    }
+
+    return {
+      ...created,
+      responsable: responsableNombre || dto.responsable || '',
+      supervisorId: dto.supervisorId || null,
+    };
   }
 
   async updateRegion(dto: UpdateRegionDto) {
@@ -123,7 +163,7 @@ export class AgenciasService {
       }
     }
 
-    return this.prisma.region.update({
+    const updated = await this.prisma.region.update({
       where: { id: dto.id },
       data: {
         ...(dto.codigo && { codigo: dto.codigo.trim().toUpperCase() }),
@@ -132,6 +172,47 @@ export class AgenciasService {
         ...(dto.estado !== undefined && { estado: dto.estado }),
       },
     });
+
+    let responsableNombre = '';
+    let finalSupervisorId = dto.supervisorId || null;
+
+    if (dto.supervisorId !== undefined) {
+      if (dto.supervisorId) {
+        // Desvincular otros supervisores de esta región
+        await this.prisma.user.updateMany({
+          where: { regionId: region.id, role: { namerol: 'SUPERVISOR' }, id: { not: dto.supervisorId } },
+          data: { regionId: null },
+        });
+        // Asignar el nuevo supervisor
+        const sup = await this.prisma.user.update({
+          where: { id: dto.supervisorId },
+          data: { regionId: region.id },
+        });
+        responsableNombre = `${sup.name} ${sup.lastname}`.trim();
+      } else {
+        // Si se envió vacío, desvincular supervisores de la región
+        await this.prisma.user.updateMany({
+          where: { regionId: region.id, role: { namerol: 'SUPERVISOR' } },
+          data: { regionId: null },
+        });
+        finalSupervisorId = null;
+      }
+    } else {
+      // Mantener supervisor actual
+      const sup = await this.prisma.user.findFirst({
+        where: { regionId: region.id, role: { namerol: 'SUPERVISOR' } },
+      });
+      if (sup) {
+        responsableNombre = `${sup.name} ${sup.lastname}`.trim();
+        finalSupervisorId = sup.id;
+      }
+    }
+
+    return {
+      ...updated,
+      responsable: responsableNombre || dto.responsable || '',
+      supervisorId: finalSupervisorId,
+    };
   }
 
   async toggleEstadoRegion(dto: ToggleEstadoRegionDto) {
@@ -760,6 +841,10 @@ export class AgenciasService {
       throw new NotFoundException(`Usuario con ID "${dto.usuarioId}" no encontrado`);
     }
 
+    if (user.estado !== 1) {
+      throw new BadRequestException('No se puede asignar un usuario inactivo. Debe activarlo primero.');
+    }
+
     if (dto.agenciaId) {
       const agencia = await this.prisma.agencia.findUnique({ where: { id: dto.agenciaId } });
       if (!agencia) {
@@ -814,6 +899,90 @@ export class AgenciasService {
     };
   }
 
+  async toggleEstadoUsuario(dto: ToggleEstadoUsuarioDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: dto.usuarioId } });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID "${dto.usuarioId}" no encontrado`);
+    }
+
+    const nuevoEstado = dto.estado !== undefined ? dto.estado : (user.estado === 1 ? 0 : 1);
+
+    const updatedUser = await this.prisma.user.update({
+      where: { id: dto.usuarioId },
+      data: { estado: nuevoEstado },
+      include: {
+        role: true,
+        agencia: true,
+        region: true,
+      },
+    });
+
+    return {
+      message: `Usuario ${updatedUser.name} ${updatedUser.lastname} ${nuevoEstado === 1 ? 'activado' : 'desactivado'} correctamente`,
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        lastname: updatedUser.lastname,
+        email: updatedUser.email,
+        estado: updatedUser.estado,
+        role: updatedUser.role,
+        agencia: updatedUser.agencia,
+        region: updatedUser.region,
+      },
+    };
+  }
+
+  async updateUsuario(dto: UpdateUsuarioDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: dto.id } });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
+    }
+
+    let roleIdToSet = dto.roleId;
+    if (!roleIdToSet && dto.rolNombre) {
+      const roleFound = await this.prisma.role.findFirst({
+        where: {
+          OR: [
+            { namerol: dto.rolNombre },
+            { namerol: dto.rolNombre.toUpperCase() },
+          ],
+        },
+      });
+      if (roleFound) roleIdToSet = roleFound.id;
+    }
+
+    const updatedUser = await this.prisma.user.update({
+      where: { id: dto.id },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.lastname !== undefined && { lastname: dto.lastname }),
+        ...(dto.email !== undefined && { email: dto.email.toLowerCase().trim() }),
+        ...(dto.estado !== undefined && { estado: dto.estado }),
+        ...(roleIdToSet !== undefined && { roleId: roleIdToSet }),
+        ...(dto.agenciaId !== undefined && { agenciaId: dto.agenciaId }),
+      },
+      include: {
+        role: true,
+        agencia: true,
+        region: true,
+      },
+    });
+
+    return {
+      message: `Usuario ${updatedUser.name} ${updatedUser.lastname} actualizado correctamente`,
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        lastname: updatedUser.lastname,
+        email: updatedUser.email,
+        estado: updatedUser.estado,
+        role: updatedUser.role,
+        agencia: updatedUser.agencia,
+        region: updatedUser.region,
+      },
+    };
+  }
+
   async listUsuariosPorAgencia(dto: ListUsuariosAgenciaDto) {
     const where: any = {};
 
@@ -826,6 +995,10 @@ export class AgenciasService {
 
     if (dto.rolNombre) {
       where.role = { namerol: dto.rolNombre };
+    }
+
+    if (dto.estado !== undefined) {
+      where.estado = dto.estado;
     }
 
     return this.prisma.user.findMany({
@@ -847,3 +1020,4 @@ export class AgenciasService {
     });
   }
 }
+

@@ -44,6 +44,8 @@ import {
 import {
   AsignarUsuarioAgenciaDto,
   ListUsuariosAgenciaDto,
+  ToggleEstadoUsuarioDto,
+  UpdateUsuarioDto,
 } from './dto/usuarios-agencia.dto.js';
 
 @ApiTags('Agencias, Bahías, Regiones y Marcas (100% POST)')
@@ -243,6 +245,22 @@ export class AgenciasController {
   @ApiOperation({ summary: 'Listar personal asignado a una agencia (ADMIN, SUPERVISOR, LIDER_AGENCIA)' })
   async listUsuarios(@Body() dto: ListUsuariosAgenciaDto) {
     return this.agenciasService.listUsuariosPorAgencia(dto);
+  }
+
+  @Post('usuarios/toggle-estado')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Activar o desactivar usuario (1/0) (SUPER_ADMIN, ADMIN)' })
+  async toggleEstadoUsuario(@Body() dto: ToggleEstadoUsuarioDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'cambiar estado de usuarios');
+    return this.agenciasService.toggleEstadoUsuario(dto);
+  }
+
+  @Post('usuarios/update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar datos y estado de usuario (SUPER_ADMIN, ADMIN)' })
+  async updateUsuario(@Body() dto: UpdateUsuarioDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'actualizar usuarios');
+    return this.agenciasService.updateUsuario(dto);
   }
 
   // =========================================================================

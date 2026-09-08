@@ -10,8 +10,12 @@ import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidade
 import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, DetailInsumoDto } from './dto/insumos.dto.js';
 import { ListStockDto, AjusteStockDto } from './dto/stock.dto.js';
 import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, RechazarDespachoDto, ListMovimientosDto } from './dto/movimientos.dto.js';
-import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto } from './dto/alertas.dto.js';
 import { ListKardexDto } from './dto/kardex.dto.js';
+import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto } from './dto/alertas.dto.js';
+import { CreateTipoProductoDto, UpdateTipoProductoDto, ListTiposProductoDto } from './dto/tipo-producto.dto.js';
+import { CreatePresentacionDto, UpdatePresentacionDto, ListPresentacionesDto } from './dto/presentaciones.dto.js';
+import { ListTiposMovimientoDto, ListMotivosDto, CreateMotivoDto, UpdateMotivoDto } from './dto/movimiento-catalogo.dto.js';
+import { RegistrarMovimientoOperativoDto, ListMovimientosGlobalesDto, ListStockBajoDto } from './dto/movimiento-operacion.dto.js';
 
 @ApiTags('Inventario & Bodega (100% POST)')
 @Controller('inventario')
@@ -140,6 +144,20 @@ export class InventarioController {
     return this.inventarioService.resumenStock(body.agenciaId || body.sucursalId, body.pulidorId);
   }
 
+  @Post('stock/agencias-resumen')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resumen consolidado de insumos por agencia' })
+  async stockAgenciasResumen(@Body() dto: any) {
+    return this.inventarioService.obtenerStockAgenciasResumen(dto);
+  }
+
+  @Post('stock/bodegas-resumen')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resumen de inventario en bodegas' })
+  async stockBodegasResumen(@Body() dto: any) {
+    return this.inventarioService.obtenerStockBodegasResumen(dto);
+  }
+
   // ==============================================================
   // MOVIMIENTOS — Compras, Despachos y Recepción
   // ==============================================================
@@ -250,5 +268,126 @@ export class InventarioController {
   @ApiResponse({ status: 200, description: 'Listado paginado DataGrid del Kardex de inventario' })
   async listKardex(@Body() dto: ListKardexDto) {
     return this.inventarioService.listKardex(dto);
+  }
+
+  // ==============================================================
+  // TIPOS DE PRODUCTO (Catálogo Dinámico 100% POST)
+  // ==============================================================
+
+  @Post('tipos/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar catálogo dinámico de tipos de producto' })
+  async listTiposProducto(@Body() dto: ListTiposProductoDto) {
+    return this.inventarioService.listTiposProducto(dto);
+  }
+
+  @Post('tipos/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear nuevo tipo de producto (Líquido, Polvo, Gel, etc.)' })
+  async createTipoProducto(@Body() dto: CreateTipoProductoDto) {
+    return this.inventarioService.createTipoProducto(dto);
+  }
+
+  @Post('tipos/update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar tipo de producto o desactivarlo lógicamente' })
+  async updateTipoProducto(@Body() dto: UpdateTipoProductoDto) {
+    return this.inventarioService.updateTipoProducto(dto);
+  }
+
+  // ==============================================================
+  // PRESENTACIONES DEL PRODUCTO (100% POST)
+  // ==============================================================
+
+  @Post('presentaciones/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar presentaciones asociadas a un insumo/producto' })
+  async listPresentaciones(@Body() dto: ListPresentacionesDto) {
+    return this.inventarioService.listPresentaciones(dto);
+  }
+
+  @Post('presentaciones/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear nueva presentación con factor de equivalencia a unidad base' })
+  async createPresentacion(@Body() dto: CreatePresentacionDto) {
+    return this.inventarioService.createPresentacion(dto);
+  }
+
+  @Post('presentaciones/update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar o desactivar presentación' })
+  async updatePresentacion(@Body() dto: UpdatePresentacionDto) {
+    return this.inventarioService.updatePresentacion(dto);
+  }
+
+  // ==============================================================
+  // TIPOS Y MOTIVOS DE MOVIMIENTO (100% POST)
+  // ==============================================================
+
+  @Post('movimiento-tipos/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar catálogo de tipos de movimiento (ENTRY, CONSUMPTION, etc.)' })
+  async listTiposMovimiento(@Body() dto: ListTiposMovimientoDto) {
+    return this.inventarioService.listTiposMovimiento(dto);
+  }
+
+  @Post('motivos/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar motivos de movimiento configurables' })
+  async listMotivos(@Body() dto: ListMotivosDto) {
+    return this.inventarioService.listMotivos(dto);
+  }
+
+  @Post('motivos/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear nuevo motivo de movimiento' })
+  async createMotivo(@Body() dto: CreateMotivoDto) {
+    return this.inventarioService.createMotivo(dto);
+  }
+
+  @Post('motivos/update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar motivo de movimiento' })
+  async updateMotivo(@Body() dto: UpdateMotivoDto) {
+    return this.inventarioService.updateMotivo(dto);
+  }
+
+  // ==============================================================
+  // MOVIMIENTOS GLOBALES & REGISTRO CENTRALIZADO (Kardex Atómico)
+  // ==============================================================
+
+  @Post('movimientos/registrar')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary:
+      'Registrar movimiento operativo (Entrada, Consumo, Merma) con cálculo automático en unidad base y prevención de saldo negativo',
+  })
+  async registrarMovimiento(@Body() dto: RegistrarMovimientoOperativoDto, @CurrentUser() user: any) {
+    return this.inventarioService.registrarMovimientoGlobal(dto, user?.id || user?.sub);
+  }
+
+  @Post('movimientos/historial')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Historial completo de movimientos de inventario con filtros y DataGrid' })
+  async listMovimientosHistorial(@Body() dto: ListMovimientosGlobalesDto) {
+    return this.inventarioService.listMovimientosGlobales(dto);
+  }
+
+  // ==============================================================
+  // DASHBOARD & ALERTAS DE STOCK BAJO (Datos Reales de BD)
+  // ==============================================================
+
+  @Post('dashboard/resumen')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resumen en tiempo real para el Dashboard de Inventario' })
+  async getDashboardResumen() {
+    return this.inventarioService.obtenerResumenDashboard();
+  }
+
+  @Post('stock-bajo/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listado de productos cuyo stock actual es menor o igual al stock mínimo' })
+  async listStockBajo(@Body() dto: ListStockBajoDto) {
+    return this.inventarioService.listStockBajo(dto);
   }
 }

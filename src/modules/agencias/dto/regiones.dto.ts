@@ -22,6 +22,16 @@ export class CreateRegionDto {
   @IsInt()
   @IsIn([0, 1])
   estado?: number = 1;
+
+  @ApiPropertyOptional({ example: 'uuid-supervisor', description: 'ID del supervisor asignado como responsable' })
+  @IsOptional()
+  @IsString()
+  supervisorId?: string;
+
+  @ApiPropertyOptional({ example: 'Carlos Mendoza', description: 'Nombre denormalizado del responsable' })
+  @IsOptional()
+  @IsString()
+  responsable?: string;
 }
 
 export class UpdateRegionDto {
@@ -50,6 +60,16 @@ export class UpdateRegionDto {
   @IsInt()
   @IsIn([0, 1])
   estado?: number;
+
+  @ApiPropertyOptional({ example: 'uuid-supervisor', description: 'ID del supervisor asignado como responsable' })
+  @IsOptional()
+  @IsString()
+  supervisorId?: string;
+
+  @ApiPropertyOptional({ example: 'Carlos Mendoza', description: 'Nombre denormalizado del responsable' })
+  @IsOptional()
+  @IsString()
+  responsable?: string;
 }
 
 export class ListRegionesDto {

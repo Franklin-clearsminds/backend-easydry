@@ -23,9 +23,11 @@ export class CreateInsumoDto {
   @IsString()
   descripcion?: string;
 
-  @ApiProperty({ description: 'ID del tipo de envase' })
+  @ApiPropertyOptional({ description: 'UUID del tipo de producto configurable' })
+  @IsOptional()
   @IsString()
-  tipoEnvaseId: string;
+  tipoProductoId?: string;
+
 
   @ApiProperty({ description: 'ID de la unidad de medida base' })
   @IsString()
@@ -88,10 +90,11 @@ export class UpdateInsumoDto {
   @IsString()
   descripcion?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'UUID del tipo de producto configurable' })
   @IsOptional()
   @IsString()
-  tipoEnvaseId?: string;
+  tipoProductoId?: string;
+
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -156,10 +159,11 @@ export class ListInsumosDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'ID del tipo de envase para filtrar' })
+
+  @ApiPropertyOptional({ description: 'ID del tipo de producto para filtrar' })
   @IsOptional()
   @IsString()
-  tipoEnvaseId?: string;
+  tipoProductoId?: string;
 }
 
 export class DetailInsumoDto {

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsArray } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsArray, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AsignarUsuarioAgenciaDto {
@@ -37,4 +37,63 @@ export class ListUsuariosAgenciaDto {
   @IsOptional()
   @IsString()
   rolNombre?: string;
+
+  @ApiPropertyOptional({ example: 1, description: 'Filtrar por estado: 1 (Activo), 0 (Inactivo)' })
+  @IsOptional()
+  @IsNumber()
+  estado?: number;
+}
+
+export class ToggleEstadoUsuarioDto {
+  @ApiProperty({ example: 'uuid-usuario', description: 'ID del usuario a activar o desactivar' })
+  @IsString()
+  @IsNotEmpty({ message: 'El ID de usuario es obligatorio' })
+  usuarioId: string;
+
+  @ApiPropertyOptional({ example: 0, description: 'Estado deseado: 1 (activo) o 0 (inactivo). Si se omite, se invierte.' })
+  @IsOptional()
+  @IsNumber()
+  estado?: number;
+}
+
+export class UpdateUsuarioDto {
+  @ApiProperty({ example: 'uuid-usuario', description: 'ID del usuario a actualizar' })
+  @IsString()
+  @IsNotEmpty({ message: 'El ID de usuario es obligatorio' })
+  id: string;
+
+  @ApiPropertyOptional({ example: 'Carlos' })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiPropertyOptional({ example: 'Mendoza' })
+  @IsOptional()
+  @IsString()
+  lastname?: string;
+
+  @ApiPropertyOptional({ example: 'carlos@easydry.com' })
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @ApiPropertyOptional({ example: 1, description: '1 = Activo, 0 = Inactivo' })
+  @IsOptional()
+  @IsNumber()
+  estado?: number;
+
+  @ApiPropertyOptional({ example: 'uuid-rol' })
+  @IsOptional()
+  @IsString()
+  roleId?: string;
+
+  @ApiPropertyOptional({ example: 'SUPERVISOR' })
+  @IsOptional()
+  @IsString()
+  rolNombre?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-agencia' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
 }

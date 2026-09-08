@@ -862,7 +862,6 @@ export class SyncService {
         codigoSKU: true,
         nombre: true,
         categoria: true,
-        tipoEnvase: { select: { id: true, nombre: true, capacidad: true } },
         unidadMedida: { select: { id: true, codigo: true, nombre: true, simbolo: true } },
       },
       orderBy: { nombre: 'asc' },
