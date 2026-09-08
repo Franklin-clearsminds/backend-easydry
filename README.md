@@ -91,14 +91,48 @@ pnpm install
 npm install
 ```
 
-### 2. Sincronizar Base de Datos con Prisma
-```bash
-# Aplicar esquema a PostgreSQL
-npx prisma db push
+### 2. Gestión de Base de Datos y Migraciones con Prisma
 
-# Generar cliente tipado de Prisma
+> ⚠️ **Regla de Oro en Producción & Trabajo en Equipo:**
+> **NUNCA utilices `prisma db push` ni `prisma db pull`.**  
+> - `db push` es un anti-patrón en entornos empresariales: elude la tabla de historial `_prisma_migrations`, no genera archivos SQL versionables y puede destruir o alterar columnas y datos en silencio.
+> - `db pull` sobreescribe el archivo `schema.prisma` desde la base de datos, perdiendo configuraciones y nombres de relaciones definidos en el modelo.  
+> **Todo cambio en el esquema debe ser trazable mediante migraciones SQL versionadas (`prisma migrate`).**
+
+#### A. Aplicar migraciones existentes (Nueva instalación o Producción/CI)
+Aplica todas las migraciones SQL pendientes del directorio `prisma/migrations/` en la base de datos:
+```bash
+# Aplicar migraciones pendientes
+pnpm run prisma:deploy
+# o directamente:
+npx prisma migrate deploy
+
+# Generar el cliente tipado de Prisma
+pnpm run prisma:generate
+# o directamente:
 npx prisma generate
 ```
+
+#### B. Poblar catálogos maestros y usuarios demo
+```bash
+pnpm run prisma:seed
+# o directamente:
+npx prisma db seed
+```
+
+#### C. Crear una nueva migración (Durante el desarrollo de nuevas entidades)
+Cuando agregues o modifiques modelos en `prisma/schema.prisma`:
+```bash
+# Genera el archivo SQL en prisma/migrations/<timestamp>_<nombre>/ y lo aplica localmente
+npx prisma migrate dev --name <nombre_descriptivo_del_cambio>
+```
+
+#### D. Comandos útiles de auditoría y base de datos
+| Comando | Descripción |
+|---|---|
+| `pnpm run prisma:status` | Revisa si existen migraciones pendientes de aplicar o si la BD está al día. |
+| `pnpm run prisma:studio` | Abre Prisma Studio en `http://localhost:5555` para auditar datos en interfaz web. |
+| `pnpm run prisma:generate` | Regenera `@prisma/client` tras cambios de tipos. |
 
 ### 3. Ejecutar el Servidor
 ```bash
