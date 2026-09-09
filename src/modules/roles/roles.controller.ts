@@ -5,6 +5,7 @@ import { CreateRoleDto } from './dto/create-role.dto.js';
 import { UpdateRoleDto } from './dto/update-role.dto.js';
 import { QueryRolesDto, DetailRoleDto } from './dto/query-roles.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
 @ApiTags('Roles (100% POST)')
 @Controller('roles')
@@ -25,8 +26,8 @@ export class RolesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar roles con fechas formateadas YYYY-MM-DD HH:mm:ss (POST Seguro)' })
   @ApiResponse({ status: 200, description: 'Lista de roles obtenida exitosamente' })
-  async list(@Body() queryDto: QueryRolesDto) {
-    return this.rolesService.findAll(queryDto);
+  async list(@Body() queryDto: QueryRolesDto, @CurrentUser() user: any) {
+    return this.rolesService.findAll(queryDto, user?.role?.namerol || user?.role);
   }
 
   @Post('detail')
@@ -55,4 +56,14 @@ export class RolesController {
   async update(@Body() updateDto: UpdateRoleDto) {
     return this.rolesService.update(updateDto);
   }
+
+  @Post('delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Eliminar o desactivar un rol por ID (POST Seguro)' })
+  @ApiResponse({ status: 200, description: 'Rol eliminado exitosamente' })
+  @ApiResponse({ status: 404, description: 'Rol no encontrado' })
+  async delete(@Body() body: { id: string }) {
+    return this.rolesService.delete(body.id);
+  }
 }
+

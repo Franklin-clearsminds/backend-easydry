@@ -66,6 +66,7 @@ model Marca {
 model Role {
   id                String   @id @default(uuid())
   namerol           String   @unique
+  descripcion       String?
   estado            Int      @default(1) // 0 inactivo, 1 activo
   permisos          String[] @default([])
   fechaCreacion     DateTime @default(now())
@@ -73,6 +74,7 @@ model Role {
 
   users             User[]
 
+  @@map("roles")
   @@index([namerol])
   @@index([estado])
 }

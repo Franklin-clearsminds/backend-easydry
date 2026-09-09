@@ -259,7 +259,7 @@ export class InventarioService {
 
     const rolesGlobales = ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA'];
     const rolesRegion = ['SUPERVISOR_REGIONAL'];
-    const rolesAgencia = ['LIDER_AGENCIA', 'PULIDOR_FIJO'];
+    const rolesAgencia = ['LIDER_AGENCIA', 'LIDER_OPERADOR', 'PULIDOR_FIJO'];
     const rolesPulidor = ['PULIDOR_MOVIL'];
 
     if (rolesGlobales.includes(rolNombre)) {

@@ -32,11 +32,17 @@ import {
   AsignarOperadorBahiaDto,
   ListHistorialAsignacionesDto,
 } from './dto/bahias.dto.js';
+import bcrypt from 'bcryptjs';
 import {
   AsignarUsuarioAgenciaDto,
   ListUsuariosAgenciaDto,
   ToggleEstadoUsuarioDto,
   UpdateUsuarioDto,
+  CreateUsuarioDto,
+  DeleteUsuarioDto,
+  ListOperadoresDto,
+  CreateOperadorDto,
+  UpdateOperadorDto,
 } from './dto/usuarios-agencia.dto.js';
 
 @Injectable()
@@ -370,19 +376,50 @@ export class AgenciasService {
       where.estado = dto.estado;
     }
 
-    return this.prisma.agencia.findMany({
+    const list = await this.prisma.agencia.findMany({
       where,
       include: {
         marca: { select: { id: true, nombre: true, estado: true } },
         regionRel: { select: { id: true, codigo: true, nombre: true, estado: true } },
+        usuarios: {
+          select: {
+            id: true,
+            name: true,
+            lastname: true,
+            estado: true,
+            role: { select: { id: true, namerol: true } },
+          },
+        },
         _count: {
           select: {
             bahias: true,
             usuarios: true,
+            solicitudesAprobacion: true,
+            maquinarias: true,
           },
         },
       },
       orderBy: { nombre: 'asc' },
+    });
+
+    return list.map((a) => {
+      const ger = a.usuarios?.find((u) => {
+        const r = (u.role?.namerol || '').toUpperCase();
+        return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+      });
+      const lider = a.usuarios?.find((u) => {
+        const r = (u.role?.namerol || '').toUpperCase();
+        return r === 'LIDER_OPERADOR' || r.includes('LIDER_OPERADOR') || r.includes('LIDER') || r.includes('LÍDER');
+      });
+      return {
+        ...a,
+        responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
+        gerenteId: ger?.id || null,
+        gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,
+        liderOperador: lider ? `${lider.name} ${lider.lastname}`.trim() : 'Sin Asignar',
+        liderOperadorId: lider?.id || null,
+        liderOperadorNombre: lider ? `${lider.name} ${lider.lastname}`.trim() : null,
+      };
     });
   }
 
@@ -437,51 +474,144 @@ export class AgenciasService {
       throw new NotFoundException(`Agencia con ID "${id}" no encontrada`);
     }
 
-    return agencia;
+    const ger = agencia.usuarios?.find((u) => {
+      const r = (u.role?.namerol || '').toUpperCase();
+      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+    });
+    const lider = agencia.usuarios?.find((u) => {
+      const r = (u.role?.namerol || '').toUpperCase();
+      return r === 'LIDER_OPERADOR' || r.includes('LIDER_OPERADOR') || r.includes('LIDER') || r.includes('LÍDER');
+    });
+
+    return {
+      ...agencia,
+      responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
+      gerenteId: ger?.id || null,
+      gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,
+      liderOperador: lider ? `${lider.name} ${lider.lastname}`.trim() : 'Sin Asignar',
+      liderOperadorId: lider?.id || null,
+      liderOperadorNombre: lider ? `${lider.name} ${lider.lastname}`.trim() : null,
+    };
   }
 
   async createAgencia(dto: CreateAgenciaDto) {
-    const codigoExiste = await this.prisma.agencia.findUnique({
-      where: { codigo: dto.codigo.trim().toUpperCase() },
-    });
-    if (codigoExiste) {
-      throw new ConflictException(`Ya existe una agencia con el código "${dto.codigo}"`);
+    const slug = dto.nombre.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase();
+    let codigoGenerado = dto.codigo?.trim().toUpperCase();
+
+    if (!codigoGenerado) {
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+      codigoGenerado = `AGN-${slug}-${randomSuffix}`;
     }
 
-    if (dto.marcaId) {
-      const marca = await this.prisma.marca.findUnique({ where: { id: dto.marcaId } });
-      if (!marca) {
-        throw new NotFoundException(`Marca con ID "${dto.marcaId}" no existe`);
+    let intentos = 0;
+    while (intentos < 5) {
+      const existe = await this.prisma.agencia.findUnique({
+        where: { codigo: codigoGenerado },
+      });
+      if (!existe) break;
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+      codigoGenerado = `AGN-${slug}-${randomSuffix}`;
+      intentos++;
+    }
+
+    let marcaIdFinal: string | null = null;
+    if (dto.marcaId && dto.marcaId !== '0' && dto.marcaId !== 'undefined') {
+      const marca = await this.prisma.marca.findFirst({
+        where: { OR: [{ id: dto.marcaId }, { nombre: { equals: dto.marcaId, mode: 'insensitive' } }] },
+      });
+      if (marca) {
+        marcaIdFinal = marca.id;
       }
     }
 
-    let regionNombre = dto.region?.trim();
-    if (dto.regionId) {
-      const region = await this.prisma.region.findUnique({ where: { id: dto.regionId } });
-      if (!region) {
-        throw new NotFoundException(`Región con ID "${dto.regionId}" no encontrada`);
+    let regionNombre = dto.region?.trim() || 'General';
+    let regionIdFinal: string | null = null;
+    if (dto.regionId && dto.regionId !== '0' && dto.regionId !== 'undefined') {
+      const region = await this.prisma.region.findFirst({
+        where: { OR: [{ id: dto.regionId }, { nombre: { equals: dto.regionId, mode: 'insensitive' } }] },
+      });
+      if (region) {
+        regionIdFinal = region.id;
+        regionNombre = region.nombre;
       }
-      if (!regionNombre) regionNombre = region.nombre;
     }
 
-    return this.prisma.agencia.create({
+    const created = await this.prisma.agencia.create({
       data: {
-        codigo: dto.codigo.trim().toUpperCase(),
+        codigo: codigoGenerado,
         nombre: dto.nombre.trim(),
         region: regionNombre,
-        regionId: dto.regionId,
-        direccion: dto.direccion?.trim(),
-        telefono: dto.telefono?.trim(),
+        regionId: regionIdFinal,
+        direccion: dto.direccion?.trim() || '',
+        telefono: dto.telefono?.trim() || '',
         email: dto.email?.trim().toLowerCase(),
         numeroBahias: dto.numeroBahias ?? 2,
-        marcaId: dto.marcaId,
+        marcaId: marcaIdFinal,
         estado: dto.estado ?? 1,
       },
       include: {
         marca: true,
         regionRel: true,
+        usuarios: {
+          include: { role: true }
+        },
+        bahias: true,
       },
     });
+
+    if (dto.gerenteId && dto.gerenteId !== '0' && dto.gerenteId !== 'undefined') {
+      await this.prisma.user.update({
+        where: { id: dto.gerenteId },
+        data: { agenciaId: created.id },
+      }).catch((e) => console.warn('No se pudo asignar gerente al crear agencia', e));
+    }
+
+    // Auto-crear bahías si no existen
+    const cantBahias = dto.numeroBahias ?? 2;
+    for (let i = 1; i <= cantBahias; i++) {
+      const numStr = String(i).padStart(2, '0');
+      const codigoBahia = `${created.codigo}-B${numStr}`;
+      await this.prisma.bahia.upsert({
+        where: { codigo: codigoBahia },
+        create: {
+          codigo: codigoBahia,
+          nombre: `Bahía ${numStr}`,
+          agenciaId: created.id,
+          activa: true,
+        },
+        update: {},
+      });
+    }
+
+    const finalCreated = await this.prisma.agencia.findUnique({
+      where: { id: created.id },
+      include: {
+        marca: true,
+        regionRel: true,
+        usuarios: {
+          select: {
+            id: true,
+            name: true,
+            lastname: true,
+            estado: true,
+            role: { select: { id: true, namerol: true } },
+          },
+        },
+        bahias: true,
+      },
+    });
+
+    const ger = finalCreated?.usuarios?.find((u) => {
+      const r = (u.role?.namerol || '').toUpperCase();
+      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+    });
+
+    return {
+      ...finalCreated,
+      responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
+      gerenteId: ger?.id || null,
+      gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,
+    };
   }
 
   async updateAgencia(dto: UpdateAgenciaDto) {
@@ -494,46 +624,137 @@ export class AgenciasService {
       const codigoExiste = await this.prisma.agencia.findUnique({
         where: { codigo: dto.codigo.trim().toUpperCase() },
       });
-      if (codigoExiste) {
+      if (codigoExiste && codigoExiste.id !== dto.id) {
         throw new ConflictException(`Ya existe otra agencia con el código "${dto.codigo}"`);
       }
     }
 
-    if (dto.marcaId) {
-      const marca = await this.prisma.marca.findUnique({ where: { id: dto.marcaId } });
-      if (!marca) {
-        throw new NotFoundException(`Marca con ID "${dto.marcaId}" no existe`);
+    let marcaIdFinal: string | null | undefined = undefined;
+    if (dto.marcaId !== undefined) {
+      if (dto.marcaId && dto.marcaId !== '0' && dto.marcaId !== 'undefined') {
+        const marca = await this.prisma.marca.findFirst({
+          where: { OR: [{ id: dto.marcaId }, { nombre: { equals: dto.marcaId, mode: 'insensitive' } }] },
+        });
+        marcaIdFinal = marca ? marca.id : null;
+      } else {
+        marcaIdFinal = null;
       }
     }
 
     let regionNombre = dto.region?.trim();
-    if (dto.regionId) {
-      const region = await this.prisma.region.findUnique({ where: { id: dto.regionId } });
-      if (!region) {
-        throw new NotFoundException(`Región con ID "${dto.regionId}" no encontrada`);
+    let regionIdFinal: string | null | undefined = undefined;
+    if (dto.regionId !== undefined) {
+      if (dto.regionId && dto.regionId !== '0' && dto.regionId !== 'undefined') {
+        const region = await this.prisma.region.findFirst({
+          where: { OR: [{ id: dto.regionId }, { nombre: { equals: dto.regionId, mode: 'insensitive' } }] },
+        });
+        if (region) {
+          regionIdFinal = region.id;
+          if (!regionNombre) regionNombre = region.nombre;
+        } else {
+          regionIdFinal = null;
+        }
+      } else {
+        regionIdFinal = null;
       }
-      if (!regionNombre) regionNombre = region.nombre;
     }
 
-    return this.prisma.agencia.update({
+    const updated = await this.prisma.agencia.update({
       where: { id: dto.id },
       data: {
         ...(dto.codigo && { codigo: dto.codigo.trim().toUpperCase() }),
         ...(dto.nombre && { nombre: dto.nombre.trim() }),
         ...(regionNombre && { region: regionNombre }),
-        ...(dto.regionId !== undefined && { regionId: dto.regionId }),
+        ...(regionIdFinal !== undefined && { regionId: regionIdFinal }),
         ...(dto.direccion !== undefined && { direccion: dto.direccion?.trim() }),
         ...(dto.telefono !== undefined && { telefono: dto.telefono?.trim() }),
         ...(dto.email !== undefined && { email: dto.email?.trim().toLowerCase() }),
         ...(dto.numeroBahias !== undefined && { numeroBahias: dto.numeroBahias }),
-        ...(dto.marcaId !== undefined && { marcaId: dto.marcaId }),
+        ...(marcaIdFinal !== undefined && { marcaId: marcaIdFinal }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
       },
       include: {
         marca: true,
         regionRel: true,
+        usuarios: {
+          include: { role: true }
+        },
+        bahias: true,
       },
     });
+
+    if (dto.gerenteId !== undefined) {
+      if (dto.gerenteId && dto.gerenteId !== '0' && dto.gerenteId !== 'null' && dto.gerenteId !== 'undefined') {
+        await this.prisma.user.updateMany({
+          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR', 'LIDER_AGENCIA', 'LIDER_OPERADOR'] } } },
+          data: { agenciaId: null },
+        });
+        await this.prisma.user.update({
+          where: { id: dto.gerenteId },
+          data: { agenciaId: updated.id },
+        }).catch((e) => console.warn('No se pudo asignar gerente en updateAgencia', e));
+      } else {
+        await this.prisma.user.updateMany({
+          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR', 'LIDER_AGENCIA', 'LIDER_OPERADOR'] } } },
+          data: { agenciaId: null },
+        });
+      }
+    }
+
+    if (dto.numeroBahias && dto.numeroBahias > 0) {
+      for (let i = 1; i <= dto.numeroBahias; i++) {
+        const numStr = String(i).padStart(2, '0');
+        const codigoBahia = `${updated.codigo}-B${numStr}`;
+        await this.prisma.bahia.upsert({
+          where: { codigo: codigoBahia },
+          create: {
+            codigo: codigoBahia,
+            nombre: `Bahía ${numStr}`,
+            agenciaId: updated.id,
+            activa: true,
+          },
+          update: {},
+        });
+      }
+    }
+
+    const finalAgencia = await this.prisma.agencia.findUnique({
+      where: { id: updated.id },
+      include: {
+        marca: true,
+        regionRel: true,
+        usuarios: {
+          select: {
+            id: true,
+            name: true,
+            lastname: true,
+            estado: true,
+            role: { select: { id: true, namerol: true } },
+          },
+        },
+        bahias: true,
+        _count: {
+          select: {
+            bahias: true,
+            usuarios: true,
+            solicitudesAprobacion: true,
+            maquinarias: true,
+          },
+        },
+      },
+    });
+
+    const ger = finalAgencia?.usuarios?.find((u) => {
+      const r = (u.role?.namerol || '').toUpperCase();
+      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+    });
+
+    return {
+      ...finalAgencia,
+      responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
+      gerenteId: ger?.id || null,
+      gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,
+    };
   }
 
   async toggleEstadoAgencia(dto: ToggleEstadoAgenciaDto) {
@@ -604,7 +825,7 @@ export class AgenciasService {
       ['PULIDOR_FIJO', 'PULIDOR_MOVIL'].includes(u.role?.namerol || ''),
     );
     const lideres = agencia.usuarios.filter((u) =>
-      ['LIDER_AGENCIA', 'APROBADOR'].includes(u.role?.namerol || ''),
+      ['LIDER_AGENCIA', 'LIDER_OPERADOR', 'APROBADOR'].includes(u.role?.namerol || ''),
     );
 
     return {
@@ -735,7 +956,7 @@ export class AgenciasService {
   async asignarOperadorABahia(dto: AsignarOperadorBahiaDto, asignadoPorId: string) {
     const bahia = await this.prisma.bahia.findUnique({
       where: { id: dto.bahiaId },
-      include: { operadorActual: true },
+      include: { operadorActual: true, agencia: true },
     });
     if (!bahia) {
       throw new NotFoundException(`Bahía con ID "${dto.bahiaId}" no encontrada`);
@@ -752,7 +973,39 @@ export class AgenciasService {
 
     const now = new Date();
 
-    // Si había un operador previo asignado y está cambiando, cerrar el historial previo
+    // 1. Si el operador ya estaba en OTRA bahía previamente, liberarla y cerrar su historial en ella
+    let bahiaAnterior: any = null;
+    if (operadorNuevoId) {
+      bahiaAnterior = await this.prisma.bahia.findFirst({
+        where: {
+          operadorActualId: operadorNuevoId,
+          id: { not: bahia.id },
+        },
+        include: { agencia: true },
+      });
+
+      if (bahiaAnterior) {
+        // Cerrar historial activo en la bahía de origen
+        await this.prisma.historialAsignacionBahia.updateMany({
+          where: {
+            bahiaId: bahiaAnterior.id,
+            operadorId: operadorNuevoId,
+            fechaFin: null,
+          },
+          data: {
+            fechaFin: now,
+          },
+        });
+
+        // Liberar la bahía de origen en base de datos
+        await this.prisma.bahia.update({
+          where: { id: bahiaAnterior.id },
+          data: { operadorActualId: null },
+        });
+      }
+    }
+
+    // 2. Si la bahía destino tenía OTRO operador asignado previamente, cerrar su historial
     if (bahia.operadorActualId && bahia.operadorActualId !== operadorNuevoId) {
       await this.prisma.historialAsignacionBahia.updateMany({
         where: {
@@ -766,21 +1019,41 @@ export class AgenciasService {
       });
     }
 
-    // Si se asigna un nuevo operador, abrir nuevo registro de historial
+    // 3. Si se desvincula el operador actual de esta bahía (operadorId = null)
+    if (!operadorNuevoId && bahia.operadorActualId) {
+      await this.prisma.historialAsignacionBahia.updateMany({
+        where: {
+          bahiaId: bahia.id,
+          operadorId: bahia.operadorActualId,
+          fechaFin: null,
+        },
+        data: {
+          fechaFin: now,
+        },
+      });
+    }
+
+    // 4. Si se asigna un nuevo operador o se cambia de bahía, abrir nuevo registro de historial con trazabilidad
     if (operadorNuevoId && bahia.operadorActualId !== operadorNuevoId) {
+      const motivoFinal = dto.notas || (dto as any).motivo || (
+        bahiaAnterior
+          ? `Reasignación de ${bahiaAnterior.nombre} (${bahiaAnterior.agencia?.nombre || 'Agencia'}) a ${bahia.nombre} (${bahia.agencia?.nombre || 'Agencia'})`
+          : `Asignación a ${bahia.nombre} (${bahia.agencia?.nombre || 'Agencia'})`
+      );
+
       await this.prisma.historialAsignacionBahia.create({
         data: {
           bahiaId: bahia.id,
           operadorId: operadorNuevoId,
           fechaInicio: now,
           asignadoPorId,
-          motivo: dto.notas || (dto as any).motivo || null,
+          motivo: motivoFinal,
         },
       });
     }
 
-    // Actualizar bahía
-    return this.prisma.bahia.update({
+    // 5. Actualizar la bahía destino con el nuevo operador
+    const bahiaActualizada = await this.prisma.bahia.update({
       where: { id: bahia.id },
       data: {
         operadorActualId: operadorNuevoId,
@@ -790,6 +1063,19 @@ export class AgenciasService {
         operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
       },
     });
+
+    // 6. Actualizar fecha de modificación del operador en la tabla User y asegurar pertenencia a la agencia
+    if (operadorNuevoId) {
+      await this.prisma.user.update({
+        where: { id: operadorNuevoId },
+        data: { 
+          updatedAt: now,
+          agenciaId: bahia.agenciaId,
+        },
+      });
+    }
+
+    return bahiaActualizada;
   }
 
   async obtenerHistorialAsignaciones(dto: ListHistorialAsignacionesDto) {
@@ -951,6 +1237,46 @@ export class AgenciasService {
       if (roleFound) roleIdToSet = roleFound.id;
     }
 
+    let passwordHashToSet: string | undefined;
+    if (dto.password && dto.password.trim().length >= 6) {
+      passwordHashToSet = await bcrypt.hash(dto.password.trim(), 10);
+    }
+
+    let agenciaIdToSet: string | null | undefined = undefined;
+    let regionIdToSet: string | null | undefined = undefined;
+
+    if (dto.agenciaId !== undefined) {
+      if (!dto.agenciaId || dto.agenciaId === 'null' || dto.agenciaId === 'Sin asignar' || dto.agenciaId.toLowerCase().includes('sin sucursal')) {
+        agenciaIdToSet = null;
+        regionIdToSet = null;
+      } else {
+        const ag = await this.prisma.agencia.findFirst({
+          where: { OR: [{ id: dto.agenciaId }, { nombre: dto.agenciaId }] },
+        });
+        if (ag) {
+          agenciaIdToSet = ag.id;
+          if (ag.regionId) regionIdToSet = ag.regionId;
+        } else {
+          agenciaIdToSet = dto.agenciaId;
+        }
+      }
+    } else if (dto.agencia !== undefined) {
+      if (!dto.agencia || dto.agencia === 'Sin asignar' || dto.agencia === 'EasyDry Corporativo' || dto.agencia.toLowerCase().includes('sin sucursal')) {
+        agenciaIdToSet = null;
+        regionIdToSet = null;
+      } else {
+        const ag = await this.prisma.agencia.findFirst({
+          where: { OR: [{ nombre: dto.agencia }, { id: dto.agencia }] },
+        });
+        if (ag) {
+          agenciaIdToSet = ag.id;
+          if (ag.regionId) regionIdToSet = ag.regionId;
+        } else {
+          agenciaIdToSet = null;
+        }
+      }
+    }
+
     const updatedUser = await this.prisma.user.update({
       where: { id: dto.id },
       data: {
@@ -959,7 +1285,9 @@ export class AgenciasService {
         ...(dto.email !== undefined && { email: dto.email.toLowerCase().trim() }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
         ...(roleIdToSet !== undefined && { roleId: roleIdToSet }),
-        ...(dto.agenciaId !== undefined && { agenciaId: dto.agenciaId }),
+        ...(agenciaIdToSet !== undefined && { agenciaId: agenciaIdToSet }),
+        ...(regionIdToSet !== undefined && { regionId: regionIdToSet }),
+        ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet }),
       },
       include: {
         role: true,
@@ -983,8 +1311,145 @@ export class AgenciasService {
     };
   }
 
-  async listUsuariosPorAgencia(dto: ListUsuariosAgenciaDto) {
+  async createUsuario(dto: CreateUsuarioDto) {
+    const emailNorm = dto.email.toLowerCase().trim();
+    const existing = await this.prisma.user.findUnique({ where: { email: emailNorm } });
+    if (existing) {
+      throw new ConflictException(`Ya existe un usuario con el correo electrónico "${emailNorm}"`);
+    }
+
+    let roleIdToSet = dto.roleId;
+    if (!roleIdToSet && dto.rolNombre) {
+      const norm = dto.rolNombre.toUpperCase().trim();
+      let code = norm;
+      if (norm.includes('SUPER') && norm.includes('ADMIN')) code = 'SUPER_ADMIN';
+      else if (norm.includes('ADMIN')) code = 'ADMIN';
+      else if (norm.includes('SUPERVISOR')) code = 'SUPERVISOR';
+      else if (norm.includes('JEFE') && norm.includes('COMERCIAL')) code = 'JEFE_COMERCIAL';
+      else if (norm.includes('COORD') && norm.includes('COMERCIAL')) code = 'COORD_COMERCIAL';
+      else if (norm.includes('APROBADOR') || norm.includes('GERENTE')) code = 'APROBADOR';
+      else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER_OPERADOR';
+      else if (norm.includes('ESPECIALES')) code = 'COORD_SERVICIOS_ESPECIALES';
+      else if (norm.includes('PULIDOR') && norm.includes('FIJO')) code = 'PULIDOR_FIJO';
+      else if (norm.includes('PULIDOR')) code = 'PULIDOR_MOVIL';
+      else if (norm.includes('MANTENIMIENTO')) code = 'COORD_MANTENIMIENTO';
+      else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
+      else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
+      else if (norm.includes('BODEGA')) code = 'COORD_BODEGA';
+
+      const roleFound = await this.prisma.role.findFirst({
+        where: {
+          OR: [
+            { namerol: dto.rolNombre },
+            { namerol: dto.rolNombre.toUpperCase() },
+            { namerol: code },
+          ],
+        },
+      });
+      if (roleFound) roleIdToSet = roleFound.id;
+    }
+
+    if (!roleIdToSet) {
+      const fallbackRole = await this.prisma.role.findFirst();
+      if (fallbackRole) roleIdToSet = fallbackRole.id;
+    }
+
+    if (!roleIdToSet) {
+      throw new BadRequestException('No se encontró un rol válido para asignar al usuario');
+    }
+
+    // Agencia y región son 100% opcionales en la creación
+    let agenciaIdToSet: string | null = null;
+    let regionIdToSet: string | null = null;
+    if (dto.agenciaId && dto.agenciaId !== 'Sin asignar' && !dto.agenciaId.toLowerCase().includes('sin sucursal')) {
+      const ag = await this.prisma.agencia.findFirst({
+        where: { OR: [{ id: dto.agenciaId }, { nombre: dto.agenciaId }] },
+      });
+      if (ag) {
+        agenciaIdToSet = ag.id;
+        regionIdToSet = ag.regionId || null;
+      } else {
+        agenciaIdToSet = dto.agenciaId;
+      }
+    } else if (dto.agencia && dto.agencia !== 'EasyDry Corporativo' && !dto.agencia.toLowerCase().includes('sin asignar') && !dto.agencia.toLowerCase().includes('sin sucursal')) {
+      const agenciaFound = await this.prisma.agencia.findFirst({
+        where: { OR: [{ nombre: dto.agencia }, { id: dto.agencia }] },
+      });
+      if (agenciaFound) {
+        agenciaIdToSet = agenciaFound.id;
+        regionIdToSet = agenciaFound.regionId || null;
+      }
+    }
+
+    const passwordToHash = dto.password?.trim() || 'Admin123*';
+    const passwordHash = await bcrypt.hash(passwordToHash, 10);
+
+    const newUser = await this.prisma.user.create({
+      data: {
+        name: dto.name,
+        lastname: dto.lastname || '',
+        email: emailNorm,
+        passwordHash,
+        roleId: roleIdToSet,
+        agenciaId: agenciaIdToSet,
+        regionId: regionIdToSet,
+        estado: dto.estado !== undefined ? dto.estado : 1,
+      },
+      include: {
+        role: true,
+        agencia: true,
+        region: true,
+      },
+    });
+
+    return {
+      message: `Usuario ${newUser.name} ${newUser.lastname} creado correctamente`,
+      user: {
+        id: newUser.id,
+        name: newUser.name,
+        lastname: newUser.lastname,
+        email: newUser.email,
+        estado: newUser.estado,
+        role: newUser.role,
+        agencia: newUser.agencia,
+        region: newUser.region,
+      },
+    };
+  }
+
+  async deleteUsuario(dto: DeleteUsuarioDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: dto.id } });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
+    }
+
+    try {
+      await this.prisma.user.delete({ where: { id: dto.id } });
+    } catch (e) {
+      // Si el usuario tiene registros vinculados (auditorías, servicios históricos), desactivar y desvincular
+      await this.prisma.user.update({
+        where: { id: dto.id },
+        data: {
+          estado: 0,
+          agenciaId: null,
+          regionId: null,
+          agenciasIds: [],
+        },
+      });
+    }
+
+    return {
+      message: `Usuario ${user.name} ${user.lastname} eliminado correctamente`,
+      id: dto.id,
+    };
+  }
+
+  async listUsuariosPorAgencia(dto: ListUsuariosAgenciaDto, userRole?: string) {
     const where: any = {};
+
+    if (userRole && userRole !== 'SUPER_ADMIN') {
+      where.role = { namerol: { not: 'SUPER_ADMIN' } };
+    }
 
     if (dto.agenciaId) {
       where.OR = [
@@ -994,7 +1459,7 @@ export class AgenciasService {
     }
 
     if (dto.rolNombre) {
-      where.role = { namerol: dto.rolNombre };
+      where.role = { ...(where.role || {}), namerol: dto.rolNombre };
     }
 
     if (dto.estado !== undefined) {
@@ -1019,5 +1484,263 @@ export class AgenciasService {
       orderBy: { name: 'asc' },
     });
   }
+
+  // =========================================================================
+  // 6. GESTIÓN OFICIAL DE OPERADORES DE BAHÍA (100% BASE DE DATOS)
+  // =========================================================================
+
+  private mapUserToOperador(u: any) {
+    const rawLastname = u.lastname || '';
+    const cedulaMatch = rawLastname.match(/CI:\s*([A-Za-z0-9]+)/) || (u.email || '').match(/op\.([A-Za-z0-9]+)@/);
+    const cedula = cedulaMatch ? cedulaMatch[1] : (u.email ? u.email.split('@')[0].replace('op.', '') : 'N/A');
+    const cleanLastname = rawLastname.replace(/\(CI:[^)]+\)/, '').replace(/CI:[^)]+/, '').trim();
+    const fullName = `${u.name || ''} ${cleanLastname}`.trim();
+    const bahiaActual = u.bahiasAsignadas && u.bahiasAsignadas.length > 0 ? u.bahiasAsignadas[0] : null;
+
+    return {
+      id: u.id,
+      nombre: fullName || u.name,
+      cedula: cedula,
+      telefono: '',
+      rol: u.role?.namerol || 'OPERADOR',
+      sucursal: u.agencia?.nombre || 'Sin Agencia',
+      sucursalId: u.agenciaId || u.agencia?.id || null,
+      agenciaId: u.agenciaId || u.agencia?.id || null,
+      bahia: bahiaActual ? (bahiaActual.nombre || bahiaActual.codigo || 'Bahía') : 'Sin asignar',
+      bahiaNombre: bahiaActual ? (bahiaActual.nombre || bahiaActual.codigo || 'Bahía') : 'Sin asignar',
+      bahiaId: bahiaActual ? bahiaActual.id : null,
+      estado: u.estado === 1 ? 'Activo' : 'Inactivo',
+      fechaIngreso: u.createdAt ? new Date(u.createdAt).toISOString().split('T')[0] : 'N/A',
+      fechaActualizacion: u.updatedAt ? new Date(u.updatedAt).toISOString().split('T')[0] : 'N/A',
+      fechaCreacion: u.createdAt ? u.createdAt.toISOString() : null,
+      fechaModificacion: u.updatedAt ? u.updatedAt.toISOString() : null,
+      fechaAsignacion: bahiaActual?.updatedAt ? bahiaActual.updatedAt.toISOString().split('T')[0] : (u.createdAt ? u.createdAt.toISOString().split('T')[0] : ''),
+      vehiculosAtendidos: u._count?.serviciosAtendidos || 0,
+      serviciosRealizados: u._count?.serviciosAtendidos || 0,
+      promedioDiario: 0,
+      ranking: 1,
+      email: u.email,
+      avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
+    };
+  }
+
+  async listOperadores(dto: ListOperadoresDto) {
+    const where: any = {
+      role: {
+        namerol: { in: ['OPERADOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO'] }
+      }
+    };
+
+    if (dto.agenciaId && dto.agenciaId !== 'Todas') {
+      where.OR = [
+        { agenciaId: dto.agenciaId },
+        { agencia: { nombre: dto.agenciaId } }
+      ];
+    }
+
+    if (dto.estado !== undefined) {
+      where.estado = dto.estado;
+    }
+
+    const users = await this.prisma.user.findMany({
+      where,
+      include: {
+        role: true,
+        agencia: true,
+        bahiasAsignadas: true,
+        _count: {
+          select: { serviciosAtendidos: true }
+        }
+      },
+      orderBy: { name: 'asc' }
+    });
+
+    return users.map(u => this.mapUserToOperador(u));
+  }
+
+  async createOperador(dto: CreateOperadorDto, creatorId?: string) {
+    const agencia = await this.prisma.agencia.findFirst({
+      where: {
+        OR: [
+          { id: dto.agenciaId },
+          { nombre: dto.agenciaId }
+        ]
+      }
+    });
+    if (!agencia) {
+      throw new NotFoundException(`Agencia "${dto.agenciaId}" no encontrada`);
+    }
+
+    let role = await this.prisma.role.findFirst({
+      where: {
+        OR: [
+          { namerol: 'OPERADOR' },
+          { namerol: dto.rol || 'OPERADOR' }
+        ]
+      }
+    });
+    if (!role) {
+      role = await this.prisma.role.create({
+        data: {
+          namerol: 'OPERADOR',
+          descripcion: 'Personal técnico y operativo de lavado y acabado en bahía',
+          estado: 1,
+          permisos: ['servicios', 'bahias', 'sync']
+        }
+      });
+    }
+
+    const cedulaClean = (dto.cedula || '').trim();
+    const emailToUse = cedulaClean 
+      ? `op.${cedulaClean}@easydry.internal`
+      : `op.${Date.now().toString().slice(-6)}@easydry.internal`;
+
+    const existing = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: emailToUse },
+          ...(cedulaClean ? [{ lastname: { contains: `CI: ${cedulaClean}` } }] : [])
+        ]
+      }
+    });
+    if (existing) {
+      throw new ConflictException(`Ya existe un operador registrado con esta identificación/cédula (${cedulaClean})`);
+    }
+
+    const passwordHash = await bcrypt.hash('Operador123*', 10);
+    const names = dto.nombre.trim().split(' ');
+    const firstName = names[0] || 'Operador';
+    const lastNamePart = names.slice(1).join(' ');
+    const finalLastName = cedulaClean 
+      ? (lastNamePart ? `${lastNamePart} (CI: ${cedulaClean})` : `(CI: ${cedulaClean})`)
+      : (lastNamePart || 'Técnico');
+
+    const newUser = await this.prisma.user.create({
+      data: {
+        name: firstName,
+        lastname: finalLastName,
+        email: emailToUse,
+        passwordHash,
+        roleId: role.id,
+        agenciaId: agencia.id,
+        estado: dto.estado !== undefined ? dto.estado : 1,
+      },
+      include: {
+        role: true,
+        agencia: true,
+        bahiasAsignadas: true,
+        _count: {
+          select: { serviciosAtendidos: true }
+        }
+      }
+    });
+
+    // Si se especificó bahía, asignarlo inmediatamente a la bahía en BD
+    if (dto.bahiaId && dto.bahiaId.trim() && !dto.bahiaId.toLowerCase().includes('sin bahia') && !dto.bahiaId.toLowerCase().includes('sin bahía')) {
+      const bahiaFound = await this.prisma.bahia.findFirst({
+        where: {
+          agenciaId: agencia.id,
+          OR: [
+            { id: dto.bahiaId },
+            { nombre: dto.bahiaId }
+          ]
+        }
+      });
+      if (bahiaFound) {
+        await this.asignarOperadorABahia(
+          { bahiaId: bahiaFound.id, operadorId: newUser.id, notas: 'Asignación inicial al registrar operador' },
+          creatorId || newUser.id
+        );
+      }
+    }
+
+    const created = await this.prisma.user.findUnique({
+      where: { id: newUser.id },
+      include: {
+        role: true,
+        agencia: true,
+        bahiasAsignadas: true,
+        _count: {
+          select: { serviciosAtendidos: true }
+        }
+      }
+    });
+
+    return this.mapUserToOperador(created);
+  }
+
+  async updateOperador(dto: UpdateOperadorDto, updaterId?: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: dto.id },
+      include: { bahiasAsignadas: true }
+    });
+    if (!user) {
+      throw new NotFoundException(`Operador con ID "${dto.id}" no encontrado`);
+    }
+
+    const dataToUpdate: any = {};
+    if (dto.nombre) {
+      const names = dto.nombre.trim().split(' ');
+      dataToUpdate.name = names[0];
+      const lastNamePart = names.slice(1).join(' ');
+      const cedulaClean = dto.cedula?.trim();
+      dataToUpdate.lastname = cedulaClean 
+        ? (lastNamePart ? `${lastNamePart} (CI: ${cedulaClean})` : `(CI: ${cedulaClean})`)
+        : (lastNamePart || 'Técnico');
+    }
+    if (dto.estado !== undefined) {
+      dataToUpdate.estado = dto.estado;
+    }
+    if (dto.agenciaId) {
+      const agencia = await this.prisma.agencia.findFirst({
+        where: {
+          OR: [{ id: dto.agenciaId }, { nombre: dto.agenciaId }]
+        }
+      });
+      if (agencia) {
+        dataToUpdate.agenciaId = agencia.id;
+      }
+    }
+
+    await this.prisma.user.update({
+      where: { id: dto.id },
+      data: dataToUpdate
+    });
+
+    // Si se especificó bahía para cambiar o desvincular
+    if (dto.bahiaId !== undefined) {
+      const currentBahia = user.bahiasAsignadas?.[0];
+      const esSinBahia = !dto.bahiaId || dto.bahiaId.toLowerCase().includes('sin bahia') || dto.bahiaId.toLowerCase().includes('sin bahía');
+
+      if (esSinBahia && currentBahia) {
+        await this.asignarOperadorABahia({ bahiaId: currentBahia.id, operadorId: null }, updaterId || user.id);
+      } else if (!esSinBahia) {
+        const agenciaIdTarget = dataToUpdate.agenciaId || user.agenciaId;
+        const bahiaTarget = await this.prisma.bahia.findFirst({
+          where: {
+            agenciaId: agenciaIdTarget || undefined,
+            OR: [{ id: dto.bahiaId }, { nombre: dto.bahiaId }]
+          }
+        });
+        if (bahiaTarget && (!currentBahia || currentBahia.id !== bahiaTarget.id)) {
+          await this.asignarOperadorABahia({ bahiaId: bahiaTarget.id, operadorId: user.id }, updaterId || user.id);
+        }
+      }
+    }
+
+    const reloaded = await this.prisma.user.findUnique({
+      where: { id: dto.id },
+      include: {
+        role: true,
+        agencia: true,
+        bahiasAsignadas: true,
+        _count: { select: { serviciosAtendidos: true } }
+      }
+    });
+
+    return this.mapUserToOperador(reloaded);
+  }
 }
+
+
 

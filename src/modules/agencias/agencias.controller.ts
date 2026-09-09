@@ -46,6 +46,11 @@ import {
   ListUsuariosAgenciaDto,
   ToggleEstadoUsuarioDto,
   UpdateUsuarioDto,
+  CreateUsuarioDto,
+  DeleteUsuarioDto,
+  ListOperadoresDto,
+  CreateOperadorDto,
+  UpdateOperadorDto,
 } from './dto/usuarios-agencia.dto.js';
 
 @ApiTags('Agencias, Bahías, Regiones y Marcas (100% POST)')
@@ -242,9 +247,9 @@ export class AgenciasController {
 
   @Post('usuarios/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar personal asignado a una agencia (ADMIN, SUPERVISOR, LIDER_AGENCIA)' })
-  async listUsuarios(@Body() dto: ListUsuariosAgenciaDto) {
-    return this.agenciasService.listUsuariosPorAgencia(dto);
+  @ApiOperation({ summary: 'Listar usuarios del sistema o filtrados por agencia/rol/estado' })
+  async listUsuarios(@Body() dto: ListUsuariosAgenciaDto, @CurrentUser() user: any) {
+    return this.agenciasService.listUsuariosPorAgencia(dto, user?.role?.namerol || user?.role);
   }
 
   @Post('usuarios/toggle-estado')
@@ -261,6 +266,49 @@ export class AgenciasController {
   async updateUsuario(@Body() dto: UpdateUsuarioDto, @CurrentUser() user: any) {
     this._requireAdmin(user, 'actualizar usuarios');
     return this.agenciasService.updateUsuario(dto);
+  }
+
+  @Post('usuarios/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear nuevo usuario con credenciales y contraseña (SUPER_ADMIN, ADMIN)' })
+  async createUsuario(@Body() dto: CreateUsuarioDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'crear usuarios');
+    return this.agenciasService.createUsuario(dto);
+  }
+
+  @Post('usuarios/delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Eliminar usuario de la base de datos (SUPER_ADMIN, ADMIN)' })
+  async deleteUsuario(@Body() dto: DeleteUsuarioDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'eliminar usuarios');
+    return this.agenciasService.deleteUsuario(dto);
+  }
+
+  // =========================================================================
+  // 6. GESTIÓN OFICIAL DE OPERADORES DE BAHÍA (100% BASE DE DATOS)
+  // =========================================================================
+
+  @Post('operadores/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar operadores registrados en base de datos' })
+  async listOperadores(@Body() dto: ListOperadoresDto) {
+    return this.agenciasService.listOperadores(dto);
+  }
+
+  @Post('operadores/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Registrar nuevo operador y asignarlo a agencia y bahía en BD' })
+  async createOperador(@Body() dto: CreateOperadorDto, @CurrentUser() user: any) {
+    this._requireAgenciaManager(user, 'crear operadores');
+    return this.agenciasService.createOperador(dto, user?.id);
+  }
+
+  @Post('operadores/update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar operador y su asignación de bahía en BD' })
+  async updateOperador(@Body() dto: UpdateOperadorDto, @CurrentUser() user: any) {
+    this._requireAgenciaManager(user, 'editar operadores');
+    return this.agenciasService.updateOperador(dto, user?.id);
   }
 
   // =========================================================================
@@ -287,7 +335,7 @@ export class AgenciasController {
 
   private _requireAgenciaManager(user: any, accion: string) {
     const rol = this._getRole(user);
-    if (!['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER_AGENCIA'].includes(rol)) {
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER_AGENCIA', 'LIDER_OPERADOR', 'APROBADOR', 'GERENTE'].includes(rol)) {
       throw new ForbiddenException(`No tiene permisos para ${accion}`);
     }
   }

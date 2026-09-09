@@ -8,6 +8,11 @@ export class CreateRoleDto {
   @IsNotEmpty({ message: 'El campo namerol es requerido' })
   namerol: string;
 
+  @ApiProperty({ example: 'Supervisa las operaciones de las sucursales asignadas', description: 'Descripción detallada del rol', required: false })
+  @IsOptional()
+  @IsString({ message: 'El campo descripcion debe ser una cadena de texto' })
+  descripcion?: string;
+
   @ApiProperty({ example: 1, description: 'Estado del rol: 1 = Activo, 0 = Inactivo', default: 1 })
   @IsOptional()
   @IsIn([0, 1], { message: 'El estado debe ser 1 (Activo) o 0 (Inactivo)' })

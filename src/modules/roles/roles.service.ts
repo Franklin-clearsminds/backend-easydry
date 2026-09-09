@@ -22,6 +22,7 @@ export class RolesService {
     return {
       id: role.id,
       namerol: role.namerol,
+      descripcion: role.descripcion || '',
       estado: role.estado,
       permisos: Array.isArray(role.permisos) ? role.permisos : [],
       fechaCreacion: formatDateTime(role.fechaCreacion),
@@ -30,22 +31,30 @@ export class RolesService {
     };
   }
 
-  async findAll(query?: QueryRolesDto) {
+  async findAll(query?: QueryRolesDto, userRole?: string) {
     const where: any = {};
+
+    if (userRole && userRole !== 'SUPER_ADMIN') {
+      where.namerol = { not: 'SUPER_ADMIN' };
+    }
 
     if (query?.estado !== undefined) {
       where.estado = Number(query.estado);
     }
 
     if (query?.namerol) {
-      where.namerol = { contains: query.namerol.trim(), mode: 'insensitive' };
+      where.namerol = { contains: query.namerol.trim(), mode: 'insensitive', ...(userRole && userRole !== 'SUPER_ADMIN' ? { not: 'SUPER_ADMIN' } : {}) };
     }
 
     if (query?.search) {
       const q = query.search.trim();
       where.OR = [
         { namerol: { contains: q, mode: 'insensitive' } },
+        { descripcion: { contains: q, mode: 'insensitive' } },
       ];
+      if (userRole && userRole !== 'SUPER_ADMIN') {
+        where.AND = [{ namerol: { not: 'SUPER_ADMIN' } }];
+      }
     }
 
     const roles = await this.prisma.role.findMany({
@@ -97,6 +106,7 @@ export class RolesService {
     const newRole = await this.prisma.role.create({
       data: {
         namerol: namerolNormalized,
+        descripcion: createDto.descripcion?.trim() || null,
         estado: createDto.estado !== undefined ? Number(createDto.estado) : 1,
         permisos: createDto.permisos ?? [],
       },
@@ -106,7 +116,7 @@ export class RolesService {
   }
 
   async update(updateDto: UpdateRoleDto) {
-    const { id, namerol, estado, permisos } = updateDto;
+    const { id, namerol, descripcion, estado, permisos } = updateDto;
 
     const role = await this.prisma.role.findUnique({
       where: { id },
@@ -135,6 +145,10 @@ export class RolesService {
       }
     }
 
+    if (descripcion !== undefined) {
+      dataToUpdate.descripcion = descripcion?.trim() || null;
+    }
+
     if (estado !== undefined) {
       dataToUpdate.estado = Number(estado);
     }
@@ -155,4 +169,36 @@ export class RolesService {
 
     return this.mapRoleResponse(updated);
   }
+
+  async delete(id: string) {
+    const role = await this.prisma.role.findUnique({
+      where: { id },
+    });
+
+    if (!role) {
+      throw new NotFoundException(`Rol con ID '${id}' no encontrado`);
+    }
+
+    if (role.namerol === 'SUPER_ADMIN') {
+      throw new ForbiddenException('El rol SUPER_ADMIN no puede ser eliminado por diseño del sistema.');
+    }
+
+    try {
+      await this.prisma.role.delete({
+        where: { id },
+      });
+    } catch {
+      await this.prisma.role.update({
+        where: { id },
+        data: { estado: 0 },
+      });
+    }
+
+    return {
+      success: true,
+      message: `Rol '${role.namerol}' eliminado exitosamente`,
+      id,
+    };
+  }
 }
+

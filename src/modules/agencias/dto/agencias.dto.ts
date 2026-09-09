@@ -52,6 +52,11 @@ export class CreateAgenciaDto {
   @IsInt()
   @IsIn([0, 1])
   estado?: number = 1;
+
+  @ApiPropertyOptional({ example: 'uuid-gerente', description: 'ID del usuario gerente responsable' })
+  @IsOptional()
+  @IsString()
+  gerenteId?: string;
 }
 
 export class UpdateAgenciaDto {
@@ -110,6 +115,11 @@ export class UpdateAgenciaDto {
   @IsInt()
   @IsIn([0, 1])
   estado?: number;
+
+  @ApiPropertyOptional({ example: 'uuid-gerente', description: 'ID del usuario gerente responsable' })
+  @IsOptional()
+  @IsString()
+  gerenteId?: string;
 }
 
 export class ListAgenciasDto {

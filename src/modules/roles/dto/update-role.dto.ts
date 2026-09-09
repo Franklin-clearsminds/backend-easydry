@@ -13,6 +13,11 @@ export class UpdateRoleDto {
   @IsString({ message: 'El campo namerol debe ser una cadena de texto' })
   namerol?: string;
 
+  @ApiProperty({ example: 'Descripción actualizada del rol', description: 'Nueva descripción', required: false })
+  @IsOptional()
+  @IsString({ message: 'El campo descripcion debe ser una cadena de texto' })
+  descripcion?: string;
+
   @ApiProperty({ example: 1, description: 'Nuevo estado del rol: 1 = Activo, 0 = Inactivo', required: false })
   @IsOptional()
   @IsIn([0, 1], { message: 'El estado debe ser 1 (Activo) o 0 (Inactivo)' })

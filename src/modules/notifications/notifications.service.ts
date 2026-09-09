@@ -106,7 +106,7 @@ export class NotificationsService {
     const destinatarios = await this.prisma.user.findMany({
       where: {
         role: {
-          namerol: { in: ['COORD_BODEGA', 'LIDER_AGENCIA', 'ADMIN'] },
+          namerol: { in: ['COORD_BODEGA', 'LIDER_AGENCIA', 'LIDER_OPERADOR', 'ADMIN'] },
         },
       },
       select: { id: true },
