@@ -390,4 +390,40 @@ export class InventarioController {
   async listStockBajo(@Body() dto: ListStockBajoDto) {
     return this.inventarioService.listStockBajo(dto);
   }
+
+  // ==============================================================
+  // INSUMOS POR SERVICIOS DE AGENCIA (LÍDER OPERADOR) & CONSUMO OT
+  // ==============================================================
+
+  @Post('agencia/insumos-servicios')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Obtener insumos requeridos por los servicios de una agencia con stock real y alertas (Líder Operador / Agencia)',
+  })
+  async insumosServiciosAgencia(
+    @Body() body: { agenciaId?: string; sucursalId?: string },
+    @CurrentUser() user: any,
+  ) {
+    const agenciaId = body?.agenciaId || body?.sucursalId || user?.agenciaId || user?.sucursalId;
+    return this.inventarioService.obtenerInsumosServiciosAgencia(agenciaId);
+  }
+
+  @Post('stock/consumir-servicio')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Descontar stock de insumos por creación o ejecución de servicio/OT y generar alertas de stock bajo',
+  })
+  async consumirStockServicio(
+    @Body() dto: {
+      agenciaId: string;
+      ordenTrabajo?: string;
+      placa?: string;
+      insumos: Array<{ insumoId?: string; codigoSKU?: string; cantidad: number }>;
+      operador?: string;
+    },
+    @CurrentUser() user: any,
+  ) {
+    const agenciaId = dto?.agenciaId || user?.agenciaId || user?.sucursalId;
+    return this.inventarioService.consumirInsumosServicio({ ...dto, agenciaId }, user?.id || user?.sub);
+  }
 }

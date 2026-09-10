@@ -216,7 +216,16 @@ export class OperacionesService {
       },
     });
 
-    return serializeServicioLavado(created);
+    // Hook: Descuento inmediato de stock al registrar el servicio en la agencia
+    try {
+      await this._ejecutarConsumoInsumos(created, false);
+    } catch (err: any) {
+      // Fallback no-block para asegurar registro físico en bahía, bajando el stock y disparando alerta
+      await this._ejecutarConsumoInsumos(created, true);
+    }
+
+    const finalCreated = await this.findOneRaw(created.id);
+    return serializeServicioLavado(finalCreated);
   }
 
   async update(id: string, updateDto: UpdateServicioDto, isOfflineSync: boolean = false) {
@@ -257,13 +266,15 @@ export class OperacionesService {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // HOOK: Al finalizar un servicio, descontar insumos de la receta
+    // HOOK: Al finalizar un servicio, descontar insumos de la receta (si no fueron descontados al registrar)
     // ──────────────────────────────────────────────────────────────────
     if (
       data.estado === ServiceStatus.FINALIZADO &&
       servicio.estado !== ServiceStatus.FINALIZADO
     ) {
-      await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
+      if (!servicio.consumos || servicio.consumos.length === 0) {
+        await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
+      }
     }
 
     const updated = await this.prisma.servicioLavado.update({

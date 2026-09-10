@@ -1507,4 +1507,335 @@ export class InventarioService {
 
     return buildDataGridResponse(paginatedItems, bajoStockItems.length, page, pageSize);
   }
+
+  // ==============================================================
+  // INSUMOS POR SERVICIOS DE AGENCIA (LÍDER OPERADOR) & CONSUMO
+  // ==============================================================
+
+  async obtenerInsumosServiciosAgencia(agenciaId: string) {
+    if (!agenciaId) {
+      throw new BadRequestException('Se requiere el ID de la agencia.');
+    }
+
+    let agencia = null;
+    try {
+      agencia = await this.prisma.agencia.findUnique({
+        where: { id: agenciaId },
+        include: {
+          marca: true,
+          regionRel: true,
+        },
+      });
+    } catch {
+      // Ignorar error de formato de ID
+    }
+
+    if (!agencia) {
+      agencia = await this.prisma.agencia.findFirst({
+        where: {
+          OR: [
+            { nombre: { contains: agenciaId, mode: 'insensitive' } },
+            { codigo: { contains: agenciaId, mode: 'insensitive' } },
+          ],
+        },
+        include: {
+          marca: true,
+          regionRel: true,
+        },
+      });
+    }
+
+    if (!agencia) {
+      agencia = await this.prisma.agencia.findFirst({
+        include: {
+          marca: true,
+          regionRel: true,
+        },
+      });
+    }
+
+    if (!agencia) {
+      throw new NotFoundException(`No se encontró ninguna agencia registrada en el sistema.`);
+    }
+
+    // Obtener todos los servicios activos del catálogo con sus recetas
+    const catalogo = await this.prisma.catalogoServicio.findMany({
+      include: {
+        recetas: {
+          include: {
+            insumo: {
+              include: {
+                unidadMedida: true,
+                tipoProducto: true,
+              },
+            },
+            unidadConsumo: true,
+          },
+        },
+      },
+      orderBy: { codigo: 'asc' },
+    });
+
+    // Mapear insumos únicos requeridos por las recetas de los servicios
+    const insumosMap = new Map<string, {
+      insumo: any;
+      servicios: Array<{
+        servicioId: number;
+        codigo: string;
+        nombre: string;
+        categoria: string;
+        cantidadUsada: number;
+        unidad: string;
+      }>;
+      consumoMaximo: number;
+    }>();
+
+    for (const serv of catalogo) {
+      for (const receta of serv.recetas) {
+        const ins = receta.insumo;
+        if (!ins) continue;
+
+        const cantidadUsada = Number(receta.cantidadUsada);
+        const unidadSimbolo = receta.unidadConsumo?.simbolo || ins.unidadMedida?.simbolo || 'u';
+
+        if (!insumosMap.has(ins.id)) {
+          insumosMap.set(ins.id, {
+            insumo: ins,
+            servicios: [],
+            consumoMaximo: cantidadUsada,
+          });
+        }
+
+        const record = insumosMap.get(ins.id)!;
+        record.servicios.push({
+          servicioId: serv.id,
+          codigo: serv.codigo,
+          nombre: serv.nombre,
+          categoria: serv.categoria,
+          cantidadUsada,
+          unidad: unidadSimbolo,
+        });
+
+        if (cantidadUsada > record.consumoMaximo) {
+          record.consumoMaximo = cantidadUsada;
+        }
+      }
+    }
+
+    // Consultar stock real de esta agencia
+    const stocksAgencia = await this.prisma.stockUbicacion.findMany({
+      where: {
+        agenciaId,
+        tipoUbicacion: 'AGENCIA',
+      },
+    });
+
+    const stockPorInsumo = new Map<string, number>();
+    for (const st of stocksAgencia) {
+      stockPorInsumo.set(st.insumoId, Number(st.cantidadActual));
+    }
+
+    let insumosOptimos = 0;
+    let insumosBajoMinimo = 0;
+    let insumosAgotados = 0;
+    const alertas: string[] = [];
+
+    const insumosResultado = Array.from(insumosMap.values()).map(({ insumo, servicios, consumoMaximo }) => {
+      const stockActual = stockPorInsumo.get(insumo.id) ?? 0;
+      const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
+      const unidad = insumo.unidadMedida?.simbolo || 'u';
+
+      let estado: 'OPTIMO' | 'BAJO' | 'CRITICO' | 'AGOTADO' = 'OPTIMO';
+      let mensajeAlerta: string | null = null;
+
+      if (stockActual <= 0) {
+        estado = 'AGOTADO';
+        insumosAgotados++;
+        mensajeAlerta = `Agotado: No se pueden realizar ${servicios.map(s => s.nombre).join(', ')}`;
+        alertas.push(`🔴 ${insumo.nombre}: AGOTADO (${stockActual} ${unidad}). Afecta ${servicios.length} servicios.`);
+      } else if (stockActual <= stockMinimo) {
+        estado = 'BAJO';
+        insumosBajoMinimo++;
+        mensajeAlerta = `Stock bajo mínimo (${stockActual.toFixed(2)} de ${stockMinimo} ${unidad}). Reabastecer pronto.`;
+        alertas.push(`⚠️ ${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad} restantes).`);
+      } else {
+        insumosOptimos++;
+      }
+
+      const serviciosEstimados = consumoMaximo > 0 ? Math.floor(stockActual / consumoMaximo) : 0;
+
+      return {
+        id: insumo.id,
+        codigoSKU: insumo.codigoSKU,
+        nombre: insumo.nombre,
+        categoria: insumo.categoria,
+        tipoProducto: insumo.tipoProducto?.nombre || 'General',
+        unidadMedida: unidad,
+        stockActual,
+        stockMinimo,
+        estado,
+        mensajeAlerta,
+        consumoMaximo,
+        serviciosEstimados,
+        serviciosAsociados: servicios,
+      };
+    });
+
+    return {
+      agencia: {
+        id: agencia.id,
+        codigo: agencia.codigo,
+        nombre: agencia.nombre,
+        region: agencia.region || agencia.regionRel?.nombre,
+      },
+      resumen: {
+        totalInsumosRequeridos: insumosResultado.length,
+        insumosOptimos,
+        insumosBajoMinimo,
+        insumosAgotados,
+        totalAlertas: alertas.length,
+        alertas,
+      },
+      insumos: insumosResultado,
+    };
+  }
+
+  async consumirInsumosServicio(
+    dto: {
+      agenciaId: string;
+      ordenTrabajo?: string;
+      placa?: string;
+      insumos: Array<{ insumoId?: string; codigoSKU?: string; cantidad: number }>;
+      operador?: string;
+    },
+    usuarioId?: string,
+  ) {
+    const { agenciaId, ordenTrabajo = 'OT-GENERAL', placa = 'S/P', insumos, operador } = dto;
+    if (!agenciaId) {
+      throw new BadRequestException('Se requiere el ID de la agencia.');
+    }
+
+    let finalUsuarioId = usuarioId;
+    if (!finalUsuarioId) {
+      const defaultUser = await this.prisma.user.findFirst({ select: { id: true } });
+      finalUsuarioId = defaultUser?.id || '';
+    }
+
+    let targetAgenciaId = agenciaId;
+    try {
+      const ag = await this.prisma.agencia.findFirst({
+        where: {
+          OR: [
+            { id: agenciaId },
+            { nombre: { contains: agenciaId, mode: 'insensitive' } },
+            { codigo: { contains: agenciaId, mode: 'insensitive' } },
+          ],
+        },
+      });
+      if (ag) {
+        targetAgenciaId = ag.id;
+      }
+    } catch {
+      // Usar agenciaId directo
+    }
+
+    const alertasGeneradas: string[] = [];
+
+    for (const item of insumos || []) {
+      const cantidadADescontar = Number(item.cantidad || 0);
+      if (cantidadADescontar <= 0) continue;
+
+      let insumo = null;
+      if (item.insumoId) {
+        insumo = await this.prisma.insumo.findUnique({
+          where: { id: item.insumoId },
+          include: { unidadMedida: true },
+        });
+      } else if (item.codigoSKU) {
+        insumo = await this.prisma.insumo.findUnique({
+          where: { codigoSKU: item.codigoSKU },
+          include: { unidadMedida: true },
+        });
+      }
+
+      if (!insumo) continue;
+
+      await this.prisma.$transaction(async (tx) => {
+        let stock = await tx.stockUbicacion.findFirst({
+          where: {
+            insumoId: insumo.id,
+            tipoUbicacion: 'AGENCIA',
+            agenciaId: targetAgenciaId,
+          },
+        });
+
+        if (!stock) {
+          stock = await tx.stockUbicacion.create({
+            data: {
+              insumoId: insumo.id,
+              tipoUbicacion: 'AGENCIA',
+              agenciaId: targetAgenciaId,
+              cantidadActual: 0,
+              cantidadMinima: Number(insumo.stockMinimoAgencia ?? 2),
+            },
+          });
+        }
+
+        const stockAnterior = Number(stock.cantidadActual ?? 0);
+        const stockPosterior = stockAnterior - cantidadADescontar;
+
+        await tx.stockUbicacion.update({
+          where: { id: stock.id },
+          data: { cantidadActual: { decrement: cantidadADescontar } },
+        });
+
+        await tx.kardexMovimiento.create({
+          data: {
+            insumoId: insumo.id,
+            ubicacionId: targetAgenciaId,
+            tipoMovimiento: 'CONSUMO_SERVICIO',
+            cantidad: -cantidadADescontar,
+            stockAnterior,
+            stockPosterior,
+            costoUnitario: Number(insumo.costoUnitarioUSD ?? 0),
+            costoTotal: Number((cantidadADescontar * Number(insumo.costoUnitarioUSD ?? 0)).toFixed(2)),
+            referenciaId: ordenTrabajo || placa,
+            usuarioId: finalUsuarioId || null,
+          },
+        });
+
+        const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
+        if (stockPosterior <= 0 && finalUsuarioId) {
+          alertasGeneradas.push(`🚨 ¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
+          await tx.alertaStock.create({
+            data: {
+              insumoId: insumo.id,
+              nivel: 'CRITICO',
+              agenciaId: targetAgenciaId,
+              usuarioEmisorId: finalUsuarioId,
+              mensaje: `Insumo ${insumo.nombre} agotado tras registrar OT ${ordenTrabajo} (${placa}). Saldo: ${stockPosterior.toFixed(2)}`,
+              stockReportado: stockPosterior,
+            },
+          });
+        } else if (stockPosterior <= stockMinimo && finalUsuarioId) {
+          alertasGeneradas.push(`⚠️ Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
+          await tx.alertaStock.create({
+            data: {
+              insumoId: insumo.id,
+              nivel: 'BAJO',
+              agenciaId: targetAgenciaId,
+              usuarioEmisorId: finalUsuarioId,
+              mensaje: `Insumo ${insumo.nombre} bajo mínimo tras registrar OT ${ordenTrabajo}. Saldo: ${stockPosterior.toFixed(2)}`,
+              stockReportado: stockPosterior,
+            },
+          });
+        }
+      });
+    }
+
+    return {
+      success: true,
+      alertasGeneradas,
+    };
+  }
 }
