@@ -852,7 +852,13 @@ export class InventarioService {
         }
       }
     } else {
-      // Si fue RECHAZADO: devolver stock a bodega central y registrar Kardex
+      // Si fue RECHAZADO: devolver stock a bodega central, registrar Kardex y emitir alerta
+      let emisorId = usuarioId;
+      if (!emisorId) {
+        const defaultUser = await this.prisma.user.findFirst({ select: { id: true } });
+        emisorId = defaultUser?.id || '';
+      }
+
       for (const det of movimiento.detalles) {
         const stockBodega = await this.prisma.stockUbicacion.findFirst({
           where: { insumoId: det.insumoId, tipoUbicacion: 'BODEGA_CENTRAL' },
@@ -876,9 +882,24 @@ export class InventarioService {
             stockAnterior: stockAnt,
             stockPosterior: stockPost,
             referenciaId: movimiento.numeroGuia,
-            usuarioId,
+            usuarioId: emisorId || null,
           },
         });
+
+        if (emisorId) {
+          try {
+            await this.prisma.alertaStock.create({
+              data: {
+                insumoId: det.insumoId,
+                nivel: 'CRITICO',
+                usuarioEmisorId: emisorId,
+                mensaje: `🚨 Despacho ${movimiento.numeroGuia} RECHAZADO por sede: ${dto.observaciones || 'Mercadería no recibida'}`,
+              },
+            });
+          } catch {
+            // Ignorar error al registrar alerta
+          }
+        }
       }
     }
 
@@ -890,35 +911,98 @@ export class InventarioService {
       {
         movimientoId: dto.movimientoId,
         accion: 'RECHAZADO',
-        observaciones: dto.motivo || 'Despacho rechazado por el receptor en agencia',
+        observaciones: dto.motivo || 'Despacho rechazado por el receptor en agencia (No llegó / Defectuoso)',
       },
       usuarioId,
     );
   }
 
   async listDespachos(dto: ListMovimientosDto) {
-    const filter = { ...dto };
-    if (!filter.tipo) {
-      // Por defecto listar ambos tipos de despachos
-      return this.prisma.movimientoInventario.findMany({
-        where: {
-          tipo: { in: ['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR'] },
-          ...(dto.estadoDespacho ? { estadoDespacho: dto.estadoDespacho as any } : {}),
-          ...(dto.numeroGuia ? { numeroGuia: { contains: dto.numeroGuia, mode: 'insensitive' } } : {}),
-        },
-        orderBy: { fechaDespacho: 'desc' },
-        include: {
-          detalles: {
-            include: {
-              insumo: { select: { codigoSKU: true, nombre: true } },
+    const targetAgencyFilter = dto.sucursalId || (dto as any).agenciaId;
+    const where: any = {
+      tipo: { in: ['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR'] },
+      ...(dto.estadoDespacho ? { estadoDespacho: dto.estadoDespacho as any } : {}),
+      ...(dto.numeroGuia ? { numeroGuia: { contains: dto.numeroGuia, mode: 'insensitive' } } : {}),
+      ...(targetAgencyFilter
+        ? { destinoUbicacion: { contains: targetAgencyFilter, mode: 'insensitive' } }
+        : {}),
+      ...(dto.pulidorId ? { usuarioRecibeId: dto.pulidorId } : {}),
+    };
+
+    return this.prisma.movimientoInventario.findMany({
+      where,
+      orderBy: { fechaDespacho: 'desc' },
+      include: {
+        detalles: {
+          include: {
+            insumo: {
+              select: {
+                id: true,
+                codigoSKU: true,
+                nombre: true,
+                unidadMedida: true,
+              },
             },
           },
-          usuarioDespacha: { select: { id: true, name: true, lastname: true } },
-          usuarioRecibe: { select: { id: true, name: true, lastname: true } },
+        },
+        usuarioDespacha: { select: { id: true, name: true, lastname: true } },
+        usuarioRecibe: { select: { id: true, name: true, lastname: true } },
+      },
+    });
+  }
+
+  async obtenerDespachosPendientesAgencia(agenciaId: string) {
+    if (!agenciaId) return [];
+
+    let agencia = null;
+    try {
+      agencia = await this.prisma.agencia.findFirst({
+        where: {
+          OR: [
+            { id: agenciaId },
+            { nombre: { contains: agenciaId, mode: 'insensitive' } },
+            { codigo: { contains: agenciaId, mode: 'insensitive' } },
+          ],
         },
       });
+    } catch {
+      // Ignorar
     }
-    return this.listMovimientos(filter);
+
+    const searchTerms: string[] = [agenciaId];
+    if (agencia) {
+      searchTerms.push(agencia.id);
+      searchTerms.push(agencia.nombre);
+      if (agencia.codigo) searchTerms.push(agencia.codigo);
+    }
+
+    const orConditions = searchTerms.map((term) => ({
+      destinoUbicacion: { contains: term, mode: 'insensitive' as const },
+    }));
+
+    return this.prisma.movimientoInventario.findMany({
+      where: {
+        tipo: 'DESPACHO_AGENCIA',
+        estadoDespacho: 'EN_TRANSITO',
+        OR: orConditions,
+      },
+      orderBy: { fechaDespacho: 'desc' },
+      include: {
+        detalles: {
+          include: {
+            insumo: {
+              select: {
+                id: true,
+                codigoSKU: true,
+                nombre: true,
+                unidadMedida: true,
+              },
+            },
+          },
+        },
+        usuarioDespacha: { select: { id: true, name: true, lastname: true } },
+      },
+    });
   }
 
   async listMovimientos(dto: ListMovimientosDto) {

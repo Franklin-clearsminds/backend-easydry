@@ -223,6 +223,17 @@ export class InventarioController {
     return this.inventarioService.listDespachos(dto);
   }
 
+  @Post('despachos/agencia/pendientes')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Consultar despachos pendientes de confirmación para una agencia (LIDER_OPERADOR / LIDER_AGENCIA)' })
+  async obtenerDespachosPendientesAgencia(
+    @Body() dto: { agenciaId?: string; sucursalId?: string },
+    @CurrentUser() user: any,
+  ) {
+    const targetAgencia = dto.agenciaId || dto.sucursalId || user?.agenciaId || '';
+    return this.inventarioService.obtenerDespachosPendientesAgencia(targetAgencia);
+  }
+
   @Post('movimientos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Historial de movimientos con filtros por tipo, estado, fecha y responsable' })
