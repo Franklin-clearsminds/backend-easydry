@@ -6,11 +6,14 @@ import {
   ListCatalogoServiciosDto,
 } from './dto/servicios.dto.js';
 
+// Roles que tienen su catálogo acotado a su agencia
+const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'APROBADOR'];
+
 @Injectable()
 export class CatalogosService {
   constructor(private prisma: PrismaService) {}
 
-  async listServicios(dto?: ListCatalogoServiciosDto) {
+  async listServicios(dto?: ListCatalogoServiciosDto, userCtx?: { agenciaId?: string; namerol?: string }) {
     const where: any = {};
     if (dto?.categoria && dto.categoria !== 'TODOS') {
       where.categoria = dto.categoria.trim().toUpperCase();
@@ -22,7 +25,45 @@ export class CatalogosService {
       ];
     }
 
-    return this.prisma.catalogoServicio.findMany({
+    // Determinar el agenciaId efectivo: puede venir del body (admin filtrando otra agencia) o del JWT
+    const efectiveAgenciaId = dto?.agenciaId || userCtx?.agenciaId;
+    const namerol = userCtx?.namerol || '';
+    const isScopedRole = ROLES_SCOPED.includes(namerol);
+
+    // Contexto de respuesta: información de la agencia para el frontend
+    let agenciaCtx: { tieneServiciosEspeciales: boolean; servicioIds: number[] } | null = null;
+
+    if (efectiveAgenciaId && isScopedRole) {
+      // Obtener la configuración de servicios de la agencia desde la BD
+      const agencia = await this.prisma.agencia.findUnique({
+        where: { id: efectiveAgenciaId },
+        select: {
+          tieneServiciosEspeciales: true,
+          servicioIds: true,
+          serviciosNombres: true,
+        },
+      });
+
+      if (agencia) {
+        const rawIds = Array.isArray(agencia.servicioIds) ? agencia.servicioIds : [];
+        const ids = rawIds.map((id: any) => Number(id)).filter((n: number) => !isNaN(n) && n > 0);
+
+        agenciaCtx = {
+          tieneServiciosEspeciales: agencia.tieneServiciosEspeciales ?? false,
+          servicioIds: ids,
+        };
+
+        // Restringir catálogo estrictamente a los IDs asignados a la agencia en BD
+        where.id = { in: ids };
+
+        // Si la agencia no tiene activados los servicios especiales, no mostrar servicios especiales
+        if (!agencia.tieneServiciosEspeciales) {
+          where.categoria = 'GENERAL';
+        }
+      }
+    }
+
+    const servicios = await this.prisma.catalogoServicio.findMany({
       where,
       include: {
         recetas: {
@@ -41,6 +82,16 @@ export class CatalogosService {
       },
       orderBy: { codigo: 'asc' },
     });
+
+    // Envolver respuesta con contexto de agencia cuando corresponda
+    if (agenciaCtx) {
+      return {
+        servicios,
+        agencia: agenciaCtx,
+      };
+    }
+
+    return servicios;
   }
 
   async createServicio(dto: CreateCatalogoServicioDto) {

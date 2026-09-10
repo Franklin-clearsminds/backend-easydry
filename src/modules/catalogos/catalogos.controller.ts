@@ -5,6 +5,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Request,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { CatalogosService } from './catalogos.service.js';
@@ -25,10 +26,15 @@ export class CatalogosController {
 
   @Post('servicios/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar catálogo de servicios (GENERAL / ESPECIAL) con sus recetas de insumos' })
-  @ApiResponse({ status: 200, description: 'Listado de servicios de catálogo' })
-  async listServicios(@Body() dto?: ListCatalogoServiciosDto) {
-    return this.catalogosService.listServicios(dto);
+  @ApiOperation({ summary: 'Listar catálogo de servicios — auto-filtrado por agencia para roles LIDER/APROBADOR' })
+  @ApiResponse({ status: 200, description: 'Lista de servicios (plain array para admins, objeto {servicios, agencia} para roles acotados)' })
+  async listServicios(@Request() req: any, @Body() dto?: ListCatalogoServiciosDto) {
+    const user = req.user;
+    const userCtx = {
+      agenciaId: user?.agenciaId || user?.agencia?.id || undefined,
+      namerol: user?.roleDetails?.namerol || user?.role || undefined,
+    };
+    return this.catalogosService.listServicios(dto, userCtx);
   }
 
   @Post('servicios/create')

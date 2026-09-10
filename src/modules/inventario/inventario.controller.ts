@@ -83,9 +83,9 @@ export class InventarioController {
 
   @Post('insumos/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar catálogo maestro de insumos con filtros' })
-  async listInsumos(@Body() dto: ListInsumosDto) {
-    return this.inventarioService.listInsumos(dto);
+  @ApiOperation({ summary: 'Listar catálogo maestro de insumos con filtros (auto-filtrado por servicios/agencia)' })
+  async listInsumos(@Body() dto: ListInsumosDto, @CurrentUser() user: any) {
+    return this.inventarioService.listInsumos(dto, user);
   }
 
   @Post('insumos/detail')
@@ -412,11 +412,11 @@ export class InventarioController {
     summary: 'Obtener insumos requeridos por los servicios de una agencia con stock real y alertas (Líder Operador / Agencia)',
   })
   async insumosServiciosAgencia(
-    @Body() body: { agenciaId?: string; sucursalId?: string },
+    @Body() body: { agenciaId?: string; sucursalId?: string; servicioIds?: number[] },
     @CurrentUser() user: any,
   ) {
     const agenciaId = body?.agenciaId || body?.sucursalId || user?.agenciaId || user?.sucursalId;
-    return this.inventarioService.obtenerInsumosServiciosAgencia(agenciaId);
+    return this.inventarioService.obtenerInsumosServiciosAgencia(agenciaId, body?.servicioIds);
   }
 
   @Post('stock/consumir-servicio')

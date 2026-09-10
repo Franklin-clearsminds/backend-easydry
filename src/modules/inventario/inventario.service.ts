@@ -151,7 +151,7 @@ export class InventarioService {
   //  INSUMOS (Catálogo Maestro)
   // ============================================================
 
-  async listInsumos(dto: ListInsumosDto) {
+  async listInsumos(dto: ListInsumosDto, user?: any) {
     const where: any = {};
     if (dto.categoria) where.categoria = dto.categoria;
     if (dto.tipoProductoId) where.tipoProductoId = dto.tipoProductoId;
@@ -163,6 +163,37 @@ export class InventarioService {
         { descripcion: { contains: dto.search, mode: 'insensitive' } },
       ];
     }
+
+    // Filtrar estrictamente por los insumos requeridos por los servicios
+    const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'APROBADOR', 'LAVADOR'];
+    const userRole = (user?.roleDetails?.namerol || user?.role || '').toUpperCase();
+    const isScopedRole = ROLES_SCOPED.some(r => userRole === r || userRole.includes(r));
+    const targetAgenciaId = dto?.agenciaId || (isScopedRole ? (user?.agenciaId || user?.agencia?.id) : undefined);
+
+    if (targetAgenciaId) {
+      const agencia = await this.prisma.agencia.findFirst({
+        where: {
+          OR: [
+            { id: targetAgenciaId },
+            { nombre: { equals: targetAgenciaId, mode: 'insensitive' } },
+          ],
+        },
+        select: { servicioIds: true, tieneServiciosEspeciales: true },
+      });
+
+      const rawIds = Array.isArray(agencia?.servicioIds) ? agencia.servicioIds : [];
+      const sIds = rawIds.map((n: any) => Number(n)).filter((n: number) => !isNaN(n) && n > 0);
+
+      if (sIds.length > 0) {
+        where.recetas = { some: { catalogoServicioId: { in: sIds } } };
+      } else {
+        where.id = { in: [] }; // Si la agencia no tiene servicios asignados, no requiere insumos
+      }
+    } else if (dto.soloDeServicios !== false) {
+      // Vista global: mostrar exclusivamente los insumos requeridos por los servicios del catálogo
+      where.recetas = { some: {} };
+    }
+
     return this.prisma.insumo.findMany({
       where,
       orderBy: { codigoSKU: 'asc' },
@@ -172,6 +203,19 @@ export class InventarioService {
         presentaciones: {
           where: { estado: 1 },
           include: { unidad: { select: { id: true, codigo: true, simbolo: true, nombre: true } } },
+        },
+        recetas: {
+          include: {
+            catalogoServicio: {
+              select: {
+                id: true,
+                codigo: true,
+                nombre: true,
+                categoria: true,
+              },
+            },
+            unidadConsumo: { select: { id: true, simbolo: true, nombre: true } },
+          },
         },
         _count: { select: { stocks: true, alertas: true, presentaciones: true } },
       },
@@ -259,7 +303,7 @@ export class InventarioService {
 
     const rolesGlobales = ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA'];
     const rolesRegion = ['SUPERVISOR_REGIONAL'];
-    const rolesAgencia = ['LIDER_AGENCIA', 'LIDER_OPERADOR', 'PULIDOR_FIJO'];
+    const rolesAgencia = ['LIDER_AGENCIA', 'LIDER', 'PULIDOR_FIJO'];
     const rolesPulidor = ['PULIDOR_MOVIL'];
 
     if (rolesGlobales.includes(rolNombre)) {
@@ -389,7 +433,7 @@ export class InventarioService {
         },
       }),
       this.prisma.insumo.findMany({
-        where: { estado: 1 },
+        where: { estado: 1, recetas: { some: {} } },
         include: {
           tipoProducto: { select: { id: true, nombre: true } },
           unidadMedida: { select: { id: true, simbolo: true, nombre: true } },
@@ -471,7 +515,7 @@ export class InventarioService {
 
   async obtenerStockBodegasResumen(dto: { bodegaId?: string } = {}) {
     const insumos = await this.prisma.insumo.findMany({
-      where: { estado: 1 },
+      where: { estado: 1, recetas: { some: {} } },
       include: {
         tipoProducto: { select: { id: true, nombre: true } },
         unidadMedida: { select: { id: true, simbolo: true, nombre: true } },
@@ -1596,7 +1640,7 @@ export class InventarioService {
   // INSUMOS POR SERVICIOS DE AGENCIA (LÍDER OPERADOR) & CONSUMO
   // ==============================================================
 
-  async obtenerInsumosServiciosAgencia(agenciaId: string) {
+  async obtenerInsumosServiciosAgencia(agenciaId: string, servicioIds?: number[]) {
     if (!agenciaId) {
       throw new BadRequestException('Se requiere el ID de la agencia.');
     }
@@ -1642,8 +1686,9 @@ export class InventarioService {
       throw new NotFoundException(`No se encontró ninguna agencia registrada en el sistema.`);
     }
 
-    // Obtener todos los servicios activos del catálogo con sus recetas
+    // Obtener los servicios del catálogo con sus recetas (filtrado por los servicios autorizados de la agencia)
     const catalogo = await this.prisma.catalogoServicio.findMany({
+      where: servicioIds?.length ? { id: { in: servicioIds } } : undefined,
       include: {
         recetas: {
           include: {

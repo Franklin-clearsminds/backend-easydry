@@ -31,6 +31,7 @@ import {
   ToggleActivaBahiaDto,
   AsignarOperadorBahiaDto,
   ListHistorialAsignacionesDto,
+  DesasignarOperadorBahiaDto,
 } from './dto/bahias.dto.js';
 import bcrypt from 'bcryptjs';
 import {
@@ -409,7 +410,7 @@ export class AgenciasService {
       });
       const lider = a.usuarios?.find((u) => {
         const r = (u.role?.namerol || '').toUpperCase();
-        return r === 'LIDER_OPERADOR' || r.includes('LIDER_OPERADOR') || r.includes('LIDER') || r.includes('LÍDER');
+        return r === 'LIDER' || r.includes('LIDER') || r.includes('LÍDER');
       });
       return {
         ...a,
@@ -480,7 +481,7 @@ export class AgenciasService {
     });
     const lider = agencia.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'LIDER_OPERADOR' || r.includes('LIDER_OPERADOR') || r.includes('LIDER') || r.includes('LÍDER');
+      return r === 'LIDER' || r.includes('LIDER') || r.includes('LÍDER');
     });
 
     return {
@@ -546,8 +547,12 @@ export class AgenciasService {
         telefono: dto.telefono?.trim() || '',
         email: dto.email?.trim().toLowerCase(),
         numeroBahias: dto.numeroBahias ?? 2,
+        maxLavadoresPorBahia: dto.maxLavadoresPorBahia ?? 1,
         marcaId: marcaIdFinal,
         estado: dto.estado ?? 1,
+        tieneServiciosEspeciales: dto.tieneServiciosEspeciales ?? false,
+        servicioIds: Array.isArray(dto.servicioIds) ? dto.servicioIds : [],
+        serviciosNombres: Array.isArray(dto.serviciosNombres) ? dto.serviciosNombres : [],
       },
       include: {
         marca: true,
@@ -564,6 +569,13 @@ export class AgenciasService {
         where: { id: dto.gerenteId },
         data: { agenciaId: created.id },
       }).catch((e) => console.warn('No se pudo asignar gerente al crear agencia', e));
+    }
+
+    if (dto.liderOperadorId && dto.liderOperadorId !== '0' && dto.liderOperadorId !== 'undefined') {
+      await this.prisma.user.update({
+        where: { id: dto.liderOperadorId },
+        data: { agenciaId: created.id },
+      }).catch((e) => console.warn('No se pudo asignar líder operador al crear agencia', e));
     }
 
     // Auto-crear bahías si no existen
@@ -605,12 +617,19 @@ export class AgenciasService {
       const r = (u.role?.namerol || '').toUpperCase();
       return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
     });
+    const lider = finalCreated?.usuarios?.find((u) => {
+      const r = (u.role?.namerol || '').toUpperCase();
+      return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
+    });
 
     return {
       ...finalCreated,
       responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
       gerenteId: ger?.id || null,
       gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,
+      liderOperador: lider ? `${lider.name} ${lider.lastname}`.trim() : 'Sin Asignar',
+      liderOperadorId: lider?.id || null,
+      liderOperadorNombre: lider ? `${lider.name} ${lider.lastname}`.trim() : null,
     };
   }
 
@@ -670,8 +689,12 @@ export class AgenciasService {
         ...(dto.telefono !== undefined && { telefono: dto.telefono?.trim() }),
         ...(dto.email !== undefined && { email: dto.email?.trim().toLowerCase() }),
         ...(dto.numeroBahias !== undefined && { numeroBahias: dto.numeroBahias }),
+        ...(dto.maxLavadoresPorBahia !== undefined && { maxLavadoresPorBahia: dto.maxLavadoresPorBahia }),
         ...(marcaIdFinal !== undefined && { marcaId: marcaIdFinal }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
+        ...(dto.tieneServiciosEspeciales !== undefined && { tieneServiciosEspeciales: dto.tieneServiciosEspeciales }),
+        ...(Array.isArray(dto.servicioIds) ? { servicioIds: dto.servicioIds } : {}),
+        ...(Array.isArray(dto.serviciosNombres) ? { serviciosNombres: dto.serviciosNombres } : {}),
       },
       include: {
         marca: true,
@@ -686,7 +709,7 @@ export class AgenciasService {
     if (dto.gerenteId !== undefined) {
       if (dto.gerenteId && dto.gerenteId !== '0' && dto.gerenteId !== 'null' && dto.gerenteId !== 'undefined') {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR', 'LIDER_AGENCIA', 'LIDER_OPERADOR'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR', 'LIDER_AGENCIA', 'LIDER'] } } },
           data: { agenciaId: null },
         });
         await this.prisma.user.update({
@@ -695,7 +718,25 @@ export class AgenciasService {
         }).catch((e) => console.warn('No se pudo asignar gerente en updateAgencia', e));
       } else {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR', 'LIDER_AGENCIA', 'LIDER_OPERADOR'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR', 'LIDER_AGENCIA', 'LIDER'] } } },
+          data: { agenciaId: null },
+        });
+      }
+    }
+
+    if (dto.liderOperadorId !== undefined) {
+      if (dto.liderOperadorId && dto.liderOperadorId !== '0' && dto.liderOperadorId !== 'null' && dto.liderOperadorId !== 'undefined') {
+        await this.prisma.user.updateMany({
+          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'] } } },
+          data: { agenciaId: null },
+        });
+        await this.prisma.user.update({
+          where: { id: dto.liderOperadorId },
+          data: { agenciaId: updated.id },
+        }).catch((e) => console.warn('No se pudo asignar líder operador en updateAgencia', e));
+      } else {
+        await this.prisma.user.updateMany({
+          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'] } } },
           data: { agenciaId: null },
         });
       }
@@ -748,12 +789,19 @@ export class AgenciasService {
       const r = (u.role?.namerol || '').toUpperCase();
       return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
     });
+    const lider = finalAgencia?.usuarios?.find((u) => {
+      const r = (u.role?.namerol || '').toUpperCase();
+      return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
+    });
 
     return {
       ...finalAgencia,
       responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
       gerenteId: ger?.id || null,
       gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,
+      liderOperador: lider ? `${lider.name} ${lider.lastname}`.trim() : 'Sin Asignar',
+      liderOperadorId: lider?.id || null,
+      liderOperadorNombre: lider ? `${lider.name} ${lider.lastname}`.trim() : null,
     };
   }
 
@@ -825,7 +873,7 @@ export class AgenciasService {
       ['PULIDOR_FIJO', 'PULIDOR_MOVIL'].includes(u.role?.namerol || ''),
     );
     const lideres = agencia.usuarios.filter((u) =>
-      ['LIDER_AGENCIA', 'LIDER_OPERADOR', 'APROBADOR'].includes(u.role?.namerol || ''),
+      ['LIDER_AGENCIA', 'LIDER', 'APROBADOR'].includes(u.role?.namerol || ''),
     );
 
     return {
@@ -969,78 +1017,79 @@ export class AgenciasService {
       if (!operador) {
         throw new NotFoundException(`Operador con ID "${operadorNuevoId}" no encontrado`);
       }
-    }
 
-    const now = new Date();
-
-    // 1. Si el operador ya estaba en OTRA bahía previamente, liberarla y cerrar su historial en ella
-    let bahiaAnterior: any = null;
-    if (operadorNuevoId) {
-      bahiaAnterior = await this.prisma.bahia.findFirst({
-        where: {
-          operadorActualId: operadorNuevoId,
-          id: { not: bahia.id },
-        },
-        include: { agencia: true },
+      // Verificar que el operador no esté ya asignado a esta bahía
+      const yaAsignado = await this.prisma.bahiaOperador.findUnique({
+        where: { bahiaId_operadorId: { bahiaId: bahia.id, operadorId: operadorNuevoId } },
       });
+      if (yaAsignado && yaAsignado.activo) {
+        throw new ConflictException(`El operador ya está asignado a esta bahía`);
+      }
 
-      if (bahiaAnterior) {
-        // Cerrar historial activo en la bahía de origen
-        await this.prisma.historialAsignacionBahia.updateMany({
-          where: {
-            bahiaId: bahiaAnterior.id,
-            operadorId: operadorNuevoId,
-            fechaFin: null,
-          },
-          data: {
-            fechaFin: now,
-          },
+      // Validar máximo de lavadores por bahía
+      const maxLav = bahia.agencia?.maxLavadoresPorBahia ?? 1;
+      const activosEnBahia = await this.prisma.bahiaOperador.count({
+        where: { bahiaId: bahia.id, activo: true, operadorId: { not: operadorNuevoId } },
+      });
+      if (activosEnBahia >= maxLav) {
+        throw new BadRequestException(`La bahía alcanzó el máximo de ${maxLav} lavador(es) simultáneos`);
+      }
+
+      // Si el operador estaba en OTRA bahía, desasignarlo de allí
+      const asignacionAnterior = await this.prisma.bahiaOperador.findFirst({
+        where: { operadorId: operadorNuevoId, activo: true, bahiaId: { not: bahia.id } },
+        include: { bahia: { include: { agencia: true } } },
+      });
+      if (asignacionAnterior) {
+        await this.prisma.bahiaOperador.update({
+          where: { id: asignacionAnterior.id },
+          data: { activo: false },
         });
-
-        // Liberar la bahía de origen en base de datos
+        await this.prisma.historialAsignacionBahia.updateMany({
+          where: { bahiaId: asignacionAnterior.bahiaId, operadorId: operadorNuevoId, fechaFin: null },
+          data: { fechaFin: new Date() },
+        });
         await this.prisma.bahia.update({
-          where: { id: bahiaAnterior.id },
+          where: { id: asignacionAnterior.bahiaId },
           data: { operadorActualId: null },
         });
       }
     }
 
-    // 2. Si la bahía destino tenía OTRO operador asignado previamente, cerrar su historial
-    if (bahia.operadorActualId && bahia.operadorActualId !== operadorNuevoId) {
-      await this.prisma.historialAsignacionBahia.updateMany({
-        where: {
-          bahiaId: bahia.id,
-          operadorId: bahia.operadorActualId,
-          fechaFin: null,
-        },
-        data: {
-          fechaFin: now,
-        },
-      });
-    }
+    const now = new Date();
 
-    // 3. Si se desvincula el operador actual de esta bahía (operadorId = null)
+    // Si se desvincula el operador actual de esta bahía (operadorId = null)
     if (!operadorNuevoId && bahia.operadorActualId) {
       await this.prisma.historialAsignacionBahia.updateMany({
-        where: {
-          bahiaId: bahia.id,
-          operadorId: bahia.operadorActualId,
-          fechaFin: null,
-        },
-        data: {
-          fechaFin: now,
-        },
+        where: { bahiaId: bahia.id, operadorId: bahia.operadorActualId, fechaFin: null },
+        data: { fechaFin: now },
+      });
+      // Desactivar todas las asignaciones activas de esta bahía
+      await this.prisma.bahiaOperador.updateMany({
+        where: { bahiaId: bahia.id, activo: true },
+        data: { activo: false },
       });
     }
 
-    // 4. Si se asigna un nuevo operador o se cambia de bahía, abrir nuevo registro de historial con trazabilidad
-    if (operadorNuevoId && bahia.operadorActualId !== operadorNuevoId) {
-      const motivoFinal = dto.notas || (dto as any).motivo || (
-        bahiaAnterior
-          ? `Reasignación de ${bahiaAnterior.nombre} (${bahiaAnterior.agencia?.nombre || 'Agencia'}) a ${bahia.nombre} (${bahia.agencia?.nombre || 'Agencia'})`
-          : `Asignación a ${bahia.nombre} (${bahia.agencia?.nombre || 'Agencia'})`
+    // Crear registro en BahiaOperador si se asigna un operador
+    if (operadorNuevoId) {
+      const motivoFinal = dto.notas || (
+        `Asignación a ${bahia.nombre} (${bahia.agencia?.nombre || 'Agencia'})`
       );
 
+      // Upsert en tabla intermedia
+      await this.prisma.bahiaOperador.upsert({
+        where: { bahiaId_operadorId: { bahiaId: bahia.id, operadorId: operadorNuevoId } },
+        create: {
+          bahiaId: bahia.id,
+          operadorId: operadorNuevoId,
+          activo: true,
+          asignadoPorId,
+        },
+        update: { activo: true },
+      });
+
+      // Crear historial de asignación
       await this.prisma.historialAsignacionBahia.create({
         data: {
           bahiaId: bahia.id,
@@ -1052,30 +1101,104 @@ export class AgenciasService {
       });
     }
 
-    // 5. Actualizar la bahía destino con el nuevo operador
-    const bahiaActualizada = await this.prisma.bahia.update({
+    // Actualizar operadorActualId de la bahía (compatibilidad legacy)
+    await this.prisma.bahia.update({
       where: { id: bahia.id },
-      data: {
-        operadorActualId: operadorNuevoId,
+      data: { operadorActualId: operadorNuevoId },
+    });
+
+    // Actualizar agencia del operador
+    if (operadorNuevoId) {
+      await this.prisma.user.update({
+        where: { id: operadorNuevoId },
+        data: { updatedAt: now, agenciaId: bahia.agenciaId },
+      });
+    }
+
+    // Retornar bahía actualizada con operadores múltiples
+    return this.prisma.bahia.findUnique({
+      where: { id: bahia.id },
+      include: {
+        agencia: { select: { id: true, codigo: true, nombre: true, maxLavadoresPorBahia: true } },
+        operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
+        operadores: {
+          where: { activo: true },
+          include: {
+            operador: { select: { id: true, name: true, lastname: true, email: true } },
+          },
+        },
       },
+    });
+  }
+
+  async listarOperadoresDeBahia(bahiaId: string) {
+    const bahia = await this.prisma.bahia.findUnique({ where: { id: bahiaId } });
+    if (!bahia) {
+      throw new NotFoundException(`Bahía con ID "${bahiaId}" no encontrada`);
+    }
+    return this.prisma.bahiaOperador.findMany({
+      where: { bahiaId, activo: true },
+      include: {
+        operador: {
+          select: { id: true, name: true, lastname: true, email: true },
+        },
+        asignadoPor: {
+          select: { id: true, name: true, lastname: true },
+        },
+      },
+      orderBy: { fechaAsignacion: 'asc' },
+    });
+  }
+
+  async desasignarOperadorDeBahia(dto: DesasignarOperadorBahiaDto, desasignadoPorId: string) {
+    const bahia = await this.prisma.bahia.findUnique({
+      where: { id: dto.bahiaId },
+      include: { agencia: true },
+    });
+    if (!bahia) {
+      throw new NotFoundException(`Bahía con ID "${dto.bahiaId}" no encontrada`);
+    }
+
+    const asignacion = await this.prisma.bahiaOperador.findUnique({
+      where: { bahiaId_operadorId: { bahiaId: dto.bahiaId, operadorId: dto.operadorId } },
+    });
+    if (!asignacion || !asignacion.activo) {
+      throw new NotFoundException(`El operador no está asignado activamente a esta bahía`);
+    }
+
+    const now = new Date();
+
+    // Desactivar la asignación en tabla intermedia
+    await this.prisma.bahiaOperador.update({
+      where: { id: asignacion.id },
+      data: { activo: false },
+    });
+
+    // Cerrar historial activo
+    await this.prisma.historialAsignacionBahia.updateMany({
+      where: { bahiaId: dto.bahiaId, operadorId: dto.operadorId, fechaFin: null },
+      data: { fechaFin: now },
+    });
+
+    // Si era el operadorActual, buscar el siguiente o null
+    if (bahia.operadorActualId === dto.operadorId) {
+      const siguiente = await this.prisma.bahiaOperador.findFirst({
+        where: { bahiaId: dto.bahiaId, activo: true, operadorId: { not: dto.operadorId } },
+        orderBy: { fechaAsignacion: 'asc' },
+      });
+      await this.prisma.bahia.update({
+        where: { id: dto.bahiaId },
+        data: { operadorActualId: siguiente?.operadorId || null },
+      });
+    }
+
+    return this.prisma.bahia.findUnique({
+      where: { id: dto.bahiaId },
       include: {
         agencia: { select: { id: true, codigo: true, nombre: true } },
         operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
       },
     });
-
-    // 6. Actualizar fecha de modificación del operador en la tabla User y asegurar pertenencia a la agencia
-    if (operadorNuevoId) {
-      await this.prisma.user.update({
-        where: { id: operadorNuevoId },
-        data: { 
-          updatedAt: now,
-          agenciaId: bahia.agenciaId,
-        },
-      });
-    }
-
-    return bahiaActualizada;
   }
 
   async obtenerHistorialAsignaciones(dto: ListHistorialAsignacionesDto) {
@@ -1224,13 +1347,37 @@ export class AgenciasService {
       throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
     }
 
-    let roleIdToSet = dto.roleId;
+    let roleIdToSet: string | undefined = undefined;
+    if (dto.roleId) {
+      const roleExists = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
+      if (roleExists) {
+        roleIdToSet = roleExists.id;
+      }
+    }
     if (!roleIdToSet && dto.rolNombre) {
+      const norm = dto.rolNombre.toUpperCase().trim();
+      let code = norm;
+      if (norm.includes('SUPER') && norm.includes('ADMIN')) code = 'SUPER_ADMIN';
+      else if (norm.includes('ADMIN')) code = 'ADMIN';
+      else if (norm.includes('SUPERVISOR')) code = 'SUPERVISOR';
+      else if (norm.includes('JEFE') && norm.includes('COMERCIAL')) code = 'JEFE_COMERCIAL';
+      else if (norm.includes('COORD') && norm.includes('COMERCIAL')) code = 'COORD_COMERCIAL';
+      else if (norm.includes('APROBADOR') || norm.includes('GERENTE')) code = 'APROBADOR';
+      else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER';
+      else if (norm.includes('ESPECIALES')) code = 'COORD_SERVICIOS_ESPECIALES';
+      else if (norm.includes('PULIDOR') && norm.includes('FIJO')) code = 'PULIDOR_FIJO';
+      else if (norm.includes('PULIDOR')) code = 'PULIDOR_MOVIL';
+      else if (norm.includes('MANTENIMIENTO')) code = 'COORD_MANTENIMIENTO';
+      else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
+      else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
+      else if (norm.includes('BODEGA')) code = 'COORD_BODEGA';
+
       const roleFound = await this.prisma.role.findFirst({
         where: {
           OR: [
             { namerol: dto.rolNombre },
             { namerol: dto.rolNombre.toUpperCase() },
+            { namerol: code },
           ],
         },
       });
@@ -1318,7 +1465,13 @@ export class AgenciasService {
       throw new ConflictException(`Ya existe un usuario con el correo electrónico "${emailNorm}"`);
     }
 
-    let roleIdToSet = dto.roleId;
+    let roleIdToSet: string | undefined = undefined;
+    if (dto.roleId) {
+      const roleExists = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
+      if (roleExists) {
+        roleIdToSet = roleExists.id;
+      }
+    }
     if (!roleIdToSet && dto.rolNombre) {
       const norm = dto.rolNombre.toUpperCase().trim();
       let code = norm;
@@ -1328,7 +1481,7 @@ export class AgenciasService {
       else if (norm.includes('JEFE') && norm.includes('COMERCIAL')) code = 'JEFE_COMERCIAL';
       else if (norm.includes('COORD') && norm.includes('COMERCIAL')) code = 'COORD_COMERCIAL';
       else if (norm.includes('APROBADOR') || norm.includes('GERENTE')) code = 'APROBADOR';
-      else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER_OPERADOR';
+      else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER';
       else if (norm.includes('ESPECIALES')) code = 'COORD_SERVICIOS_ESPECIALES';
       else if (norm.includes('PULIDOR') && norm.includes('FIJO')) code = 'PULIDOR_FIJO';
       else if (norm.includes('PULIDOR')) code = 'PULIDOR_MOVIL';
@@ -1502,7 +1655,7 @@ export class AgenciasService {
       nombre: fullName || u.name,
       cedula: cedula,
       telefono: '',
-      rol: u.role?.namerol || 'OPERADOR',
+      rol: u.role?.namerol || 'LAVADOR',
       sucursal: u.agencia?.nombre || 'Sin Agencia',
       sucursalId: u.agenciaId || u.agencia?.id || null,
       agenciaId: u.agenciaId || u.agencia?.id || null,
@@ -1527,7 +1680,7 @@ export class AgenciasService {
   async listOperadores(dto: ListOperadoresDto) {
     const where: any = {
       role: {
-        namerol: { in: ['OPERADOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO'] }
+        namerol: { in: ['LAVADOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO'] }
       }
     };
 
@@ -1574,15 +1727,15 @@ export class AgenciasService {
     let role = await this.prisma.role.findFirst({
       where: {
         OR: [
-          { namerol: 'OPERADOR' },
-          { namerol: dto.rol || 'OPERADOR' }
+          { namerol: 'LAVADOR' },
+          { namerol: dto.rol || 'LAVADOR' }
         ]
       }
     });
     if (!role) {
       role = await this.prisma.role.create({
         data: {
-          namerol: 'OPERADOR',
+          namerol: 'LAVADOR',
           descripcion: 'Personal técnico y operativo de lavado y acabado en bahía',
           estado: 1,
           permisos: ['servicios', 'bahias', 'sync']

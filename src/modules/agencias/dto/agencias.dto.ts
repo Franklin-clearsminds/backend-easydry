@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsInt, IsIn, IsEmail } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsInt, IsIn, IsEmail, IsArray, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateAgenciaDto {
@@ -42,6 +42,11 @@ export class CreateAgenciaDto {
   @IsInt()
   numeroBahias?: number = 2;
 
+  @ApiPropertyOptional({ example: 2, description: 'Máximo de lavadores simultáneos por bahía' })
+  @IsOptional()
+  @IsInt()
+  maxLavadoresPorBahia?: number = 1;
+
   @ApiPropertyOptional({ example: 'uuid-marca', description: 'ID de la marca a la que pertenece la agencia' })
   @IsOptional()
   @IsString()
@@ -57,6 +62,28 @@ export class CreateAgenciaDto {
   @IsOptional()
   @IsString()
   gerenteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-lider', description: 'ID del usuario líder operador de la agencia' })
+  @IsOptional()
+  @IsString()
+  liderOperadorId?: string;
+
+  @ApiPropertyOptional({ example: [6, 7, 8, 9], description: 'IDs de los servicios del catálogo que ofrece la agencia' })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  servicioIds?: number[];
+
+  @ApiPropertyOptional({ example: ['Lavado Express', 'Lavado Full'], description: 'Nombres de los servicios asignados' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  serviciosNombres?: string[];
+
+  @ApiPropertyOptional({ example: true, description: 'Si la agencia tiene activos los servicios especiales' })
+  @IsOptional()
+  @IsBoolean()
+  tieneServiciosEspeciales?: boolean;
 }
 
 export class UpdateAgenciaDto {
@@ -105,6 +132,11 @@ export class UpdateAgenciaDto {
   @IsInt()
   numeroBahias?: number;
 
+  @ApiPropertyOptional({ example: 2, description: 'Máximo de lavadores simultáneos por bahía' })
+  @IsOptional()
+  @IsInt()
+  maxLavadoresPorBahia?: number;
+
   @ApiPropertyOptional({ example: 'uuid-marca' })
   @IsOptional()
   @IsString()
@@ -120,6 +152,28 @@ export class UpdateAgenciaDto {
   @IsOptional()
   @IsString()
   gerenteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-lider', description: 'ID del usuario líder operador de la agencia' })
+  @IsOptional()
+  @IsString()
+  liderOperadorId?: string;
+
+  @ApiPropertyOptional({ example: [6, 7, 8, 9], description: 'IDs de los servicios del catálogo que ofrece la agencia' })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  servicioIds?: number[];
+
+  @ApiPropertyOptional({ example: ['Lavado Express', 'Lavado Full'], description: 'Nombres de los servicios asignados' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  serviciosNombres?: string[];
+
+  @ApiPropertyOptional({ example: true, description: 'Si la agencia tiene activos los servicios especiales' })
+  @IsOptional()
+  @IsBoolean()
+  tieneServiciosEspeciales?: boolean;
 }
 
 export class ListAgenciasDto {

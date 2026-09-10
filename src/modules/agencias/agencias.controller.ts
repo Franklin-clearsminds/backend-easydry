@@ -40,6 +40,7 @@ import {
   ToggleActivaBahiaDto,
   AsignarOperadorBahiaDto,
   ListHistorialAsignacionesDto,
+  DesasignarOperadorBahiaDto,
 } from './dto/bahias.dto.js';
 import {
   AsignarUsuarioAgenciaDto,
@@ -233,6 +234,25 @@ export class AgenciasController {
     return this.agenciasService.obtenerHistorialAsignaciones(dto);
   }
 
+  @Post('bahias/listar-operadores')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar operadores activos asignados a una bahía' })
+  @ApiResponse({ status: 200, description: 'Listado de operadores activos de la bahía' })
+  async listarOperadoresBahia(@Body() body: { bahiaId: string }) {
+    return this.agenciasService.listarOperadoresDeBahia(body.bahiaId);
+  }
+
+  @Post('bahias/desasignar-operador')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Desasignar un operador específico de una bahía' })
+  @ApiResponse({ status: 200, description: 'Bahía actualizada sin el operador desasignado' })
+  async desasignarOperador(
+    @Body() dto: DesasignarOperadorBahiaDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.agenciasService.desasignarOperadorDeBahia(dto, userId);
+  }
+
   // =========================================================================
   // 5. ASIGNACIÓN DE USUARIOS A AGENCIAS Y REGIONES
   // =========================================================================
@@ -335,7 +355,7 @@ export class AgenciasController {
 
   private _requireAgenciaManager(user: any, accion: string) {
     const rol = this._getRole(user);
-    if (!['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER_AGENCIA', 'LIDER_OPERADOR', 'APROBADOR', 'GERENTE'].includes(rol)) {
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER_AGENCIA', 'LIDER', 'APROBADOR', 'GERENTE'].includes(rol)) {
       throw new ForbiddenException(`No tiene permisos para ${accion}`);
     }
   }

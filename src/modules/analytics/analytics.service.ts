@@ -15,7 +15,7 @@ export class AnalyticsService {
     let agenciaId = dto.agenciaId;
     let regionId = dto.regionId;
 
-    if (userRole === 'LIDER_AGENCIA' || userRole === 'LIDER_OPERADOR' || userRole === 'APROBADOR' || userRole === 'OPERADOR') {
+    if (userRole === 'LIDER_AGENCIA' || userRole === 'LIDER' || userRole === 'APROBADOR' || userRole === 'LAVADOR') {
       agenciaId = user?.agenciaId || agenciaId;
     } else if (userRole === 'SUPERVISOR') {
       regionId = user?.regionId || regionId;
@@ -163,7 +163,7 @@ export class AnalyticsService {
     let agenciaId = dto.agenciaId;
     const userRole = user?.roleDetails?.namerol;
 
-    if (userRole === 'LIDER_AGENCIA' || userRole === 'LIDER_OPERADOR' || userRole === 'APROBADOR' || userRole === 'OPERADOR') {
+    if (userRole === 'LIDER_AGENCIA' || userRole === 'LIDER' || userRole === 'APROBADOR' || userRole === 'LAVADOR') {
       agenciaId = user?.agenciaId || agenciaId;
     }
 

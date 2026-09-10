@@ -100,3 +100,20 @@ export class ListHistorialAsignacionesDto {
   @IsOptional()
   pageSize?: number;
 }
+
+export class DesasignarOperadorBahiaDto {
+  @ApiProperty({ example: 'uuid-bahia', description: 'ID de la bahía' })
+  @IsString()
+  @IsNotEmpty()
+  bahiaId: string;
+
+  @ApiProperty({ example: 'uuid-operador', description: 'ID del operador a desasignar' })
+  @IsString()
+  @IsNotEmpty()
+  operadorId: string;
+
+  @ApiPropertyOptional({ example: 'Fin de turno', description: 'Motivo de la desasignación' })
+  @IsOptional()
+  @IsString()
+  motivo?: string;
+}

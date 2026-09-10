@@ -80,6 +80,11 @@ export class ListCatalogoServiciosDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-agencia-123', description: 'Filtrar servicios habilitados para esta agencia' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
 }
 
 export class DeleteCatalogoServicioDto {

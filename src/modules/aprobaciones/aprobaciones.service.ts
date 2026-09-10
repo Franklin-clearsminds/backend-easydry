@@ -18,7 +18,7 @@ export class AprobacionesService {
 
     // Scoping por rol:
     const userRole = user?.roleDetails?.namerol;
-    if (userRole === 'APROBADOR' || userRole === 'LIDER_AGENCIA' || userRole === 'LIDER_OPERADOR') {
+    if (userRole === 'APROBADOR' || userRole === 'LIDER_AGENCIA' || userRole === 'LIDER') {
       if (user?.agenciaId) {
         where.agenciaId = user.agenciaId;
       }

@@ -164,6 +164,15 @@ export class ListInsumosDto {
   @IsOptional()
   @IsString()
   tipoProductoId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar por agencia (obtiene insumos de los servicios autorizados para la agencia)' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar estrictamente a insumos requeridos por servicios' })
+  @IsOptional()
+  soloDeServicios?: boolean;
 }
 
 export class DetailInsumoDto {

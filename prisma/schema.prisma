@@ -120,6 +120,8 @@ model User {
   asignacionesRealizadas HistorialAsignacionBahia[] @relation("SupervisorAsignadorBahia")
   serviciosEspeciales   ServicioEspecial[]        @relation("OperadorServicioEspecial")
   movimientosInventarioGlobal MovimientoInventarioGlobal[] @relation("ResponsableMovimientoGlobal")
+  bahiaOperadores       BahiaOperador[]           @relation("BahiaOperador")
+  bahiaOperadorAsignaciones BahiaOperador[]      @relation("BahiaOperadorAsignador")
 
   @@index([email])
   @@index([roleId])
@@ -140,8 +142,14 @@ model Agencia {
   direccion    String?
   telefono     String?
   email        String?
-  numeroBahias Int      @default(0) // Capacidad máxima de bahías
-  estado       Int      @default(1) // 1 activo, 0 inactivo
+  numeroBahias          Int      @default(0) // Capacidad máxima de bahías
+  maxLavadoresPorBahia  Int      @default(1) // Máximo de lavadores simultáneos por bahía
+  estado                Int      @default(1) // 1 activo, 0 inactivo
+
+  // Servicios del catálogo que la agencia ofrece (origen de verdad en base)
+  tieneServiciosEspeciales Boolean @default(false) // Si la agencia tiene activos los servicios especiales
+  servicioIds               Json?                    // ids del catálogo asignados a la agencia
+  serviciosNombres          Json?                    // nombres de los servicios asignados (caché)
 
   // Marca franquiciadora
   marcaId      String?
@@ -180,6 +188,7 @@ model Bahia {
   servicios        ServicioLavado[]
   maquinarias      Maquinaria[]
   asignaciones     HistorialAsignacionBahia[]
+  operadores       BahiaOperador[]
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -834,6 +843,29 @@ model HistorialAsignacionBahia {
   @@index([operadorId])
   @@index([bahiaId])
   @@index([fechaInicio])
+}
+
+// =========================================================================
+// ASIGNACIÓN MÚLTIPLE DE OPERADORES A BAHÍA (MANY-TO-MANY)
+// =========================================================================
+
+model BahiaOperador {
+  id              String   @id @default(uuid())
+  bahiaId         String
+  bahia           Bahia    @relation(fields: [bahiaId], references: [id], onDelete: Cascade)
+  operadorId      String
+  operador        User     @relation("BahiaOperador", fields: [operadorId], references: [id], onDelete: Cascade)
+  activo          Boolean  @default(true)
+  fechaAsignacion DateTime @default(now())
+  asignadoPorId   String?
+  asignadoPor     User?    @relation("BahiaOperadorAsignador", fields: [asignadoPorId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([bahiaId, operadorId])
+  @@index([bahiaId])
+  @@index([operadorId])
+  @@index([activo])
 }
 
 // =========================================================================
