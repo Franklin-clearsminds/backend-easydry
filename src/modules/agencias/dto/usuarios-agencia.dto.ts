@@ -102,6 +102,11 @@ export class UpdateUsuarioDto {
   @IsString()
   agencia?: string;
 
+  @ApiPropertyOptional({ example: 'uuid-region' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
+
   @ApiPropertyOptional({ example: 'NuevaClave123*', description: 'Nueva contraseña si se desea actualizar' })
   @IsOptional()
   @IsString()
@@ -160,6 +165,11 @@ export class CreateUsuarioDto {
   @IsOptional()
   @IsString()
   agencia?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-region' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
 
   @ApiPropertyOptional({ example: 'MOVIL', description: 'Modalidad de operador especial: FIJO o MOVIL' })
   @IsOptional()

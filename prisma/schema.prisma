@@ -36,6 +36,8 @@ model Region {
 
   agencias    Agencia[]
   usuarios    User[]
+  serviciosEspeciales ServicioEspecial[]
+  bodegas     Bodega[]
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -532,6 +534,26 @@ model StockUbicacion {
   @@index([pulidorId])
 }
 
+model Bodega {
+  id               String   @id @default(uuid())
+  codigo           String   @unique
+  nombre           String
+  ciudad           String?
+  direccion        String?
+  telefono         String?
+  esCentral        Boolean  @default(false)
+  activa           Boolean  @default(true)
+  regionId         String?
+  region           Region?  @relation(fields: [regionId], references: [id])
+  porcentajeAlerta Int      @default(20)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("bodegas")
+  @@index([activa])
+  @@index([regionId])
+}
+
 // 5. Historial de Movimientos y Despachos
 enum TipoMovimientoInv {
   COMPRA_PROVEEDOR
@@ -889,10 +911,15 @@ model ServicioEspecial {
   operadorId          String?
   operador            User?     @relation("OperadorServicioEspecial", fields: [operadorId], references: [id])
   bahiaId             String?
+  regionId            String?
+  region              Region?   @relation(fields: [regionId], references: [id])
+  regionNombre        String?
   fechaProgramada     DateTime?
   horaEstimada        String?
   fechaInicio         DateTime?
   fechaFin            DateTime?
+  videoInicialUrl     String?
+  videoFinalUrl       String?
   recetaInsumos       Json?
   evidencias          Json?
   notasSupervisor     String?
@@ -911,6 +938,7 @@ model ServicioEspecial {
   @@index([placa])
   @@index([agenciaId])
   @@index([operadorId])
+  @@index([regionId])
 }
 
 

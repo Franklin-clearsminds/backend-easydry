@@ -57,6 +57,7 @@ export function serializeServicioLavado(s: any): any {
     empleado: operadorNombre,
     servicioNombre,
     servicio: servicioNombre,
+    categoriaServicio: s.catalogo?.categoria || s.categoriaServicio || 'GENERAL',
 
     // Tiempos y Fechas
     fecha: fechaIngresoStr.split('T')[0],
@@ -95,6 +96,8 @@ export function serializeServicioLavado(s: any): any {
     bahiaRel: s.bahia,
     operadorRel: s.operador,
     catalogoRel: s.catalogo,
+    catalogo: s.catalogo || s.catalogoRel || null,
+    operador: s.operador || s.operadorRel || null,
     consumos: s.consumos || [],
     evidencias: s.evidencias || [],
   };

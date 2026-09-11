@@ -1437,7 +1437,8 @@ export class AgenciasService {
       else if (norm.includes('MANTENIMIENTO')) code = 'COORD_MANTENIMIENTO';
       else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
       else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
-      else if (norm.includes('BODEGA')) code = 'COORD_BODEGA';
+      else if (norm.includes('BODEGA') || norm.includes('INVENTARIO') || norm.includes('DISTRIBUIDOR') || norm.includes('GESTOR')) code = 'COORD_BODEGA';
+      else if (norm.includes('LAVADOR') || norm === 'OPERADOR') code = 'LAVADOR';
 
       const roleFound = await this.prisma.role.findFirst({
         where: {
@@ -1445,6 +1446,8 @@ export class AgenciasService {
             { namerol: dto.rolNombre },
             { namerol: dto.rolNombre.toUpperCase() },
             { namerol: code },
+            { namerol: code === 'LIDER' ? 'LIDER_AGENCIA' : code },
+            { namerol: code === 'COORD_BODEGA' ? 'DISTRIBUIDOR' : code },
           ],
         },
       });
@@ -1487,6 +1490,38 @@ export class AgenciasService {
           if (ag.regionId) regionIdToSet = ag.regionId;
         } else {
           agenciaIdToSet = null;
+        }
+      }
+    }
+
+    if (!regionIdToSet && (dto.regionId || dto.agencia)) {
+      if (dto.regionId) {
+        const reg = await this.prisma.region.findFirst({
+          where: {
+            OR: [
+              { id: dto.regionId },
+              { nombre: { contains: dto.regionId, mode: 'insensitive' } },
+              { codigo: { contains: dto.regionId, mode: 'insensitive' } },
+            ],
+          },
+        });
+        if (reg) regionIdToSet = reg.id;
+      }
+      if (!regionIdToSet && dto.agencia) {
+        const searchWord = dto.agencia
+          .replace(/bodega regional|bodega central|bodega/gi, '')
+          .replace(/-.*/g, '')
+          .trim();
+        if (searchWord) {
+          const reg = await this.prisma.region.findFirst({
+            where: {
+              OR: [
+                { nombre: { contains: searchWord, mode: 'insensitive' } },
+                { codigo: { contains: searchWord, mode: 'insensitive' } },
+              ],
+            },
+          });
+          if (reg) regionIdToSet = reg.id;
         }
       }
     }
@@ -1555,7 +1590,8 @@ export class AgenciasService {
       else if (norm.includes('MANTENIMIENTO')) code = 'COORD_MANTENIMIENTO';
       else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
       else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
-      else if (norm.includes('BODEGA')) code = 'COORD_BODEGA';
+      else if (norm.includes('BODEGA') || norm.includes('INVENTARIO') || norm.includes('DISTRIBUIDOR') || norm.includes('GESTOR')) code = 'COORD_BODEGA';
+      else if (norm.includes('LAVADOR') || norm === 'OPERADOR') code = 'LAVADOR';
 
       const roleFound = await this.prisma.role.findFirst({
         where: {
@@ -1563,6 +1599,8 @@ export class AgenciasService {
             { namerol: dto.rolNombre },
             { namerol: dto.rolNombre.toUpperCase() },
             { namerol: code },
+            { namerol: code === 'LIDER' ? 'LIDER_AGENCIA' : code },
+            { namerol: code === 'COORD_BODEGA' ? 'DISTRIBUIDOR' : code },
           ],
         },
       });
@@ -1598,6 +1636,38 @@ export class AgenciasService {
       if (agenciaFound) {
         agenciaIdToSet = agenciaFound.id;
         regionIdToSet = agenciaFound.regionId || null;
+      }
+    }
+
+    if (!regionIdToSet && (dto.regionId || dto.agencia)) {
+      if (dto.regionId) {
+        const reg = await this.prisma.region.findFirst({
+          where: {
+            OR: [
+              { id: dto.regionId },
+              { nombre: { contains: dto.regionId, mode: 'insensitive' } },
+              { codigo: { contains: dto.regionId, mode: 'insensitive' } },
+            ],
+          },
+        });
+        if (reg) regionIdToSet = reg.id;
+      }
+      if (!regionIdToSet && dto.agencia) {
+        const searchWord = dto.agencia
+          .replace(/bodega regional|bodega central|bodega/gi, '')
+          .replace(/-.*/g, '')
+          .trim();
+        if (searchWord) {
+          const reg = await this.prisma.region.findFirst({
+            where: {
+              OR: [
+                { nombre: { contains: searchWord, mode: 'insensitive' } },
+                { codigo: { contains: searchWord, mode: 'insensitive' } },
+              ],
+            },
+          });
+          if (reg) regionIdToSet = reg.id;
+        }
       }
     }
 

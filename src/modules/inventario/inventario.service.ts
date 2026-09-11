@@ -17,7 +17,9 @@ import { CreateTipoProductoDto, UpdateTipoProductoDto, ListTiposProductoDto } fr
 import { CreatePresentacionDto, UpdatePresentacionDto, ListPresentacionesDto } from './dto/presentaciones.dto.js';
 import { ListTiposMovimientoDto, ListMotivosDto, CreateMotivoDto, UpdateMotivoDto } from './dto/movimiento-catalogo.dto.js';
 import { RegistrarMovimientoOperativoDto, ListMovimientosGlobalesDto, ListStockBajoDto } from './dto/movimiento-operacion.dto.js';
+import { CreateBodegaDto, UpdateBodegaDto, ToggleActivaBodegaDto, DeleteBodegaDto } from './dto/bodegas.dto.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class InventarioService {
@@ -233,7 +235,14 @@ export class InventarioService {
             agenciaId: agenciaTarget.id,
             tipoUbicacion: 'AGENCIA',
           },
-        } : true,
+          include: {
+            agencia: { select: { id: true, nombre: true } },
+          },
+        } : {
+          include: {
+            agencia: { select: { id: true, nombre: true } },
+          },
+        },
         _count: { select: { stocks: true, alertas: true, presentaciones: true } },
       },
     });
@@ -331,8 +340,8 @@ export class InventarioService {
   async listStock(dto: ListStockDto, usuarioId: string, rolNombre: string, agenciaIdUsuario?: string) {
     const where: any = {};
 
-    const rolesGlobales = ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA'];
-    const rolesRegion = ['SUPERVISOR_REGIONAL'];
+    const rolesGlobales = ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA', 'DISTRIBUIDOR'];
+    const rolesRegion = ['SUPERVISOR_REGIONAL', 'ASISTENTE_BODEGA'];
     const rolesAgencia = ['LIDER_AGENCIA', 'LIDER', 'PULIDOR_FIJO'];
     const rolesPulidor = ['PULIDOR_MOVIL'];
 
@@ -460,13 +469,20 @@ export class InventarioService {
           region: true,
           direccion: true,
           numeroBahias: true,
+          servicioIds: true,
+          tieneServiciosEspeciales: true,
         },
       }),
       this.prisma.insumo.findMany({
-        where: { estado: 1, recetas: { some: {} } },
+        where: { estado: 1 },
         include: {
           tipoProducto: { select: { id: true, nombre: true } },
           unidadMedida: { select: { id: true, simbolo: true, nombre: true } },
+          recetas: {
+            select: {
+              catalogoServicioId: true,
+            },
+          },
         },
         orderBy: { nombre: 'asc' },
       }),
@@ -478,7 +494,9 @@ export class InventarioService {
     const stockMap = new Map<string, number>();
     for (const s of stocksUbicacion) {
       if (s.agenciaId) {
-        stockMap.set(`${s.agenciaId}_${s.insumoId}`, Number(s.cantidadActual));
+        const key = `${s.agenciaId}_${s.insumoId}`;
+        const prev = stockMap.get(key) ?? 0;
+        stockMap.set(key, prev + Number(s.cantidadActual));
       }
     }
 
@@ -489,7 +507,19 @@ export class InventarioService {
       let alertaAgencia = false;
       let criticosAgencia = 0;
 
-      const insumosAgencia = insumos.map((ins) => {
+      const rawIds = Array.isArray(ag.servicioIds) ? ag.servicioIds : [];
+      const sIds = new Set(rawIds.map((n: any) => Number(n)).filter((n: number) => !isNaN(n) && n > 0));
+
+      // Filtrar estrictamente: solo los insumos que esta agencia realmente utiliza o necesita:
+      // 1. Requeridos por las recetas de los servicios asignados a la agencia
+      // 2. O con existencias físicas ya registradas en la agencia (> 0)
+      const insumosDeEstaAgencia = insumos.filter((ins) => {
+        const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
+        const perteneceAServicios = ins.recetas?.some((r: any) => sIds.has(Number(r.catalogoServicioId)));
+        return perteneceAServicios || actual > 0;
+      });
+
+      const insumosAgencia = insumosDeEstaAgencia.map((ins) => {
         const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
         const minimo = Number(ins.stockMinimoAgencia) || 2;
         let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Sin Stock' = 'Óptimo';
@@ -521,6 +551,7 @@ export class InventarioService {
           stockMinimo: minimo,
           deficit,
           estado,
+          requeridoPorServicios: ins.recetas?.some((r: any) => sIds.has(Number(r.catalogoServicioId))) || false,
         };
       });
 
@@ -543,7 +574,328 @@ export class InventarioService {
     };
   }
 
+  private bodegasTableInitialized = false;
+  private bodegasInitPromise: Promise<void> | null = null;
+
+  private async ensureBodegasTable(): Promise<void> {
+    if (this.bodegasTableInitialized) return;
+    if (this.bodegasInitPromise) return this.bodegasInitPromise;
+
+    this.bodegasInitPromise = (async () => {
+      try {
+        await this.prisma.$executeRawUnsafe(`
+          CREATE TABLE IF NOT EXISTS "bodegas" (
+            "id" TEXT PRIMARY KEY,
+            "codigo" TEXT UNIQUE NOT NULL,
+            "nombre" TEXT UNIQUE NOT NULL,
+            "ciudad" TEXT,
+            "direccion" TEXT,
+            "telefono" TEXT,
+            "esCentral" BOOLEAN DEFAULT false,
+            "activa" BOOLEAN DEFAULT true,
+            "regionId" TEXT NOT NULL,
+            "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            CREATE INDEX IF NOT EXISTS "bodegas_regionId_idx" ON "bodegas"("regionId")
+          `);
+        } catch (_) {}
+
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            CREATE INDEX IF NOT EXISTS "bodegas_activa_idx" ON "bodegas"("activa")
+          `);
+        } catch (_) {}
+
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            ALTER TABLE "bodegas" ADD COLUMN IF NOT EXISTS "porcentajeAlerta" NUMERIC DEFAULT 20
+          `);
+        } catch (_) {}
+
+        const countResult: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(*)::int as count FROM "bodegas"`);
+        const count = Number(countResult[0]?.count || 0);
+
+        if (count === 0) {
+          const regiones = await this.prisma.region.findMany({ where: { estado: 1 }, orderBy: { nombre: 'asc' } });
+          const sierraReg = regiones.find(r => r.nombre.toLowerCase().includes('sierra') || r.nombre.toLowerCase().includes('pichincha')) || regiones[0];
+
+          if (sierraReg) {
+            await this.prisma.$executeRawUnsafe(
+              `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "regionId", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+               ON CONFLICT ("codigo") DO NOTHING`,
+              'bod_central',
+              'BOD-CENTRAL',
+              'Bodega Central Nacional',
+              'Quito',
+              sierraReg.id,
+              true,
+              true,
+              20
+            );
+          }
+
+          for (const reg of regiones) {
+            const nom = reg.nombre.trim();
+            const nomCap = nom.charAt(0).toUpperCase() + nom.slice(1);
+            let ciudad = 'Quito';
+            if (nom.toLowerCase().includes('costa') || nom.toLowerCase().includes('guayas')) ciudad = 'Guayaquil';
+            else if (nom.toLowerCase().includes('austro') || nom.toLowerCase().includes('azuay')) ciudad = 'Cuenca';
+            else if (nom.toLowerCase().includes('manab')) ciudad = 'Manta';
+
+            const bodId = `bod_${reg.codigo.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+            const bodCod = `BOD-${reg.codigo.toUpperCase()}`;
+            const bodNom = `Bodega Regional ${nomCap}`;
+
+            await this.prisma.$executeRawUnsafe(
+              `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "regionId", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+               ON CONFLICT ("codigo") DO NOTHING`,
+              bodId,
+              bodCod,
+              bodNom,
+              ciudad,
+              reg.id,
+              false,
+              true,
+              20
+            );
+          }
+        }
+        this.bodegasTableInitialized = true;
+      } catch (e) {
+        console.error('Error ensuring bodegas table in PostgreSQL:', e);
+      } finally {
+        this.bodegasInitPromise = null;
+      }
+    })();
+
+    return this.bodegasInitPromise;
+  }
+
+  async listBodegas() {
+    await this.ensureBodegasTable();
+
+    const bodegasRows: any[] = await this.prisma.$queryRawUnsafe(`
+      SELECT b."id", b."codigo", b."nombre", b."ciudad", b."direccion", b."telefono",
+             b."esCentral", b."activa", b."regionId", b."porcentajeAlerta", b."createdAt", b."updatedAt",
+             r."nombre" as "regionNombre", r."codigo" as "regionCodigo"
+      FROM "bodegas" b
+      LEFT JOIN "Region" r ON b."regionId" = r."id"
+      ORDER BY b."esCentral" DESC, b."nombre" ASC
+    `);
+
+    return bodegasRows.map((row) => ({
+      id: row.id,
+      codigo: row.codigo,
+      nombre: row.nombre,
+      ciudad: row.ciudad || 'Quito',
+      direccion: row.direccion || '',
+      telefono: row.telefono || '',
+      region: row.regionNombre || 'Nacional',
+      regionId: row.regionId,
+      regionCodigo: row.regionCodigo || '',
+      esCentral: !!row.esCentral,
+      activa: !!row.activa,
+      porcentajeAlerta: Number(row.porcentajeAlerta || 20),
+      fechaCreacion: row.createdAt ? new Date(row.createdAt).toISOString().split('T')[0] : '2026-01-01',
+    }));
+  }
+
+  async crearBodega(dto: CreateBodegaDto) {
+    await this.ensureBodegasTable();
+
+    if (!dto.nombre || !dto.nombre.trim()) {
+      throw new BadRequestException('El nombre de la bodega es requerido');
+    }
+
+    if (!dto.regionId || !dto.regionId.trim()) {
+      throw new BadRequestException('Cada bodega debe estar estrictamente vinculada a una región');
+    }
+
+    const regionFound = await this.prisma.region.findFirst({
+      where: {
+        OR: [
+          { id: dto.regionId },
+          { nombre: { equals: dto.regionId, mode: 'insensitive' } },
+          { codigo: { equals: dto.regionId, mode: 'insensitive' } },
+        ],
+      },
+    });
+
+    if (!regionFound) {
+      throw new BadRequestException(`La región especificada "${dto.regionId}" no existe en la base de datos`);
+    }
+
+    const nombreNorm = dto.nombre.trim();
+    const codigoNorm = (dto.codigo?.trim() || `BOD-${nombreNorm.toUpperCase().replace(/[^A-Z0-9]/g, '_').slice(0, 15)}`);
+
+    const existing: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT "id" FROM "bodegas" WHERE "codigo" = $1 OR "nombre" = $2`,
+      codigoNorm,
+      nombreNorm
+    );
+
+    if (existing.length > 0) {
+      throw new ConflictException(`Ya existe una bodega con el nombre "${nombreNorm}" o código "${codigoNorm}"`);
+    }
+
+    const newId = `bod_${randomUUID().slice(0, 8)}`;
+    const ciudad = dto.ciudad?.trim() || regionFound.nombre;
+    const pct = dto.porcentajeAlerta !== undefined ? Number(dto.porcentajeAlerta) : 20;
+
+    await this.prisma.$executeRawUnsafe(
+      `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "direccion", "telefono", "regionId", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, false, true, $8, NOW(), NOW())`,
+      newId,
+      codigoNorm,
+      nombreNorm,
+      ciudad,
+      dto.direccion?.trim() || '',
+      dto.telefono?.trim() || '',
+      regionFound.id,
+      pct
+    );
+
+    return {
+      id: newId,
+      codigo: codigoNorm,
+      nombre: nombreNorm,
+      ciudad,
+      direccion: dto.direccion?.trim() || '',
+      telefono: dto.telefono?.trim() || '',
+      region: regionFound.nombre,
+      regionId: regionFound.id,
+      esCentral: false,
+      activa: true,
+      porcentajeAlerta: pct,
+      fechaCreacion: new Date().toISOString().split('T')[0],
+      message: `Bodega "${nombreNorm}" creada exitosamente vinculada a la región "${regionFound.nombre}"`,
+    };
+  }
+
+  async actualizarBodega(dto: UpdateBodegaDto) {
+    await this.ensureBodegasTable();
+
+    const existing: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT * FROM "bodegas" WHERE "id" = $1`,
+      dto.id
+    );
+
+    if (!existing || existing.length === 0) {
+      throw new NotFoundException(`Bodega con ID "${dto.id}" no encontrada`);
+    }
+
+    const current = existing[0];
+    let regionIdToSet = current.regionId;
+
+    if (dto.regionId && dto.regionId !== current.regionId) {
+      const regionFound = await this.prisma.region.findFirst({
+        where: {
+          OR: [
+            { id: dto.regionId },
+            { nombre: { equals: dto.regionId, mode: 'insensitive' } },
+            { codigo: { equals: dto.regionId, mode: 'insensitive' } },
+          ],
+        },
+      });
+      if (!regionFound) {
+        throw new BadRequestException(`La región "${dto.regionId}" no existe`);
+      }
+      regionIdToSet = regionFound.id;
+    }
+
+    const nombreToSet = dto.nombre?.trim() || current.nombre;
+    const codigoToSet = dto.codigo?.trim() || current.codigo;
+    const ciudadToSet = dto.ciudad !== undefined ? dto.ciudad?.trim() : current.ciudad;
+    const direccionToSet = dto.direccion !== undefined ? dto.direccion?.trim() : current.direccion;
+    const telefonoToSet = dto.telefono !== undefined ? dto.telefono?.trim() : current.telefono;
+    const activaToSet = dto.activa !== undefined ? !!dto.activa : !!current.activa;
+    const porcentajeAlertaToSet = dto.porcentajeAlerta !== undefined ? Number(dto.porcentajeAlerta) : Number(current.porcentajeAlerta || 20);
+
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE "bodegas"
+       SET "nombre" = $1, "codigo" = $2, "ciudad" = $3, "direccion" = $4, "telefono" = $5,
+           "regionId" = $6, "activa" = $7, "porcentajeAlerta" = $8, "updatedAt" = NOW()
+       WHERE "id" = $9`,
+      nombreToSet,
+      codigoToSet,
+      ciudadToSet,
+      direccionToSet,
+      telefonoToSet,
+      regionIdToSet,
+      activaToSet,
+      porcentajeAlertaToSet,
+      dto.id
+    );
+
+    return {
+      id: dto.id,
+      codigo: codigoToSet,
+      nombre: nombreToSet,
+      ciudad: ciudadToSet,
+      direccion: direccionToSet,
+      telefono: telefonoToSet,
+      regionId: regionIdToSet,
+      esCentral: !!current.esCentral,
+      activa: activaToSet,
+      porcentajeAlerta: porcentajeAlertaToSet,
+      message: `Bodega "${nombreToSet}" actualizada correctamente`,
+    };
+  }
+
+  async toggleActivaBodega(dto: ToggleActivaBodegaDto) {
+    await this.ensureBodegasTable();
+
+    const existing: any[] = await this.prisma.$queryRawUnsafe(`SELECT * FROM "bodegas" WHERE "id" = $1`, dto.id);
+    if (!existing || existing.length === 0) {
+      throw new NotFoundException(`Bodega con ID "${dto.id}" no encontrada`);
+    }
+
+    if (existing[0].esCentral) {
+      throw new BadRequestException('La Bodega Central Nacional no puede ser desactivada');
+    }
+
+    const nuevoEstado = !existing[0].activa;
+    await this.prisma.$executeRawUnsafe(`UPDATE "bodegas" SET "activa" = $1, "updatedAt" = NOW() WHERE "id" = $2`, nuevoEstado, dto.id);
+
+    return {
+      id: dto.id,
+      activa: nuevoEstado,
+      message: `Bodega "${existing[0].nombre}" ${nuevoEstado ? 'activada' : 'desactivada'} correctamente`,
+    };
+  }
+
+  async eliminarBodega(dto: DeleteBodegaDto) {
+    await this.ensureBodegasTable();
+
+    const existing: any[] = await this.prisma.$queryRawUnsafe(`SELECT * FROM "bodegas" WHERE "id" = $1`, dto.id);
+    if (!existing || existing.length === 0) {
+      throw new NotFoundException(`Bodega con ID "${dto.id}" no encontrada`);
+    }
+
+    if (existing[0].esCentral) {
+      throw new BadRequestException('La Bodega Central Nacional no puede ser eliminada');
+    }
+
+    await this.prisma.$executeRawUnsafe(`DELETE FROM "bodegas" WHERE "id" = $1`, dto.id);
+
+    return {
+      id: dto.id,
+      message: `Bodega "${existing[0].nombre}" eliminada correctamente del sistema`,
+    };
+  }
+
   async obtenerStockBodegasResumen(dto: { bodegaId?: string } = {}) {
+    const bodegas = await this.listBodegas();
+    const bodegaSeleccionada = (dto.bodegaId ? bodegas.find((b) => b.id === dto.bodegaId) : null) || bodegas[0];
+    const pctAlerta = Number(bodegaSeleccionada?.porcentajeAlerta || 20);
+
     const insumos = await this.prisma.insumo.findMany({
       where: { estado: 1, recetas: { some: {} } },
       include: {
@@ -563,14 +915,17 @@ export class InventarioService {
       const optimo = Number(ins.stockOptimoBodega) || 50;
       stockTotalUnidades += Math.round((actual / cNeto) * 100) / 100;
 
+      // Umbral configurable en % en relación al stock mínimo ingresado
+      const umbralAlerta = Math.round(minimo * (1 + pctAlerta / 100) * 100) / 100;
+
       let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Agotado' = 'Óptimo';
       if (actual <= 0) {
         estado = 'Agotado';
         totalBajoMinimo++;
-      } else if (actual < minimo) {
+      } else if (actual <= minimo) {
         estado = 'Crítico';
         totalBajoMinimo++;
-      } else if (actual <= minimo * 1.2) {
+      } else if (actual <= umbralAlerta) {
         estado = 'Bajo';
         totalBajoMinimo++;
       }
@@ -585,25 +940,21 @@ export class InventarioService {
         stockActual: actual,
         stockMinimo: minimo,
         stockOptimo: optimo,
+        porcentajeAlerta: pctAlerta,
+        umbralAlerta,
         estado,
       };
     });
 
     return {
-      bodega: {
-        id: 'bod_central',
-        codigo: 'BOD-CENTRAL',
-        nombre: 'Bodega Central Nacional',
-        ciudad: 'Quito',
-        region: 'Pichincha',
-        esCentral: true,
-        activa: true,
-      },
+      bodega: bodegaSeleccionada,
+      bodegas,
       metricas: {
         totalInsumos: insumosBodega.length,
         stockTotalUnidades,
         insumosBajoMinimo: totalBajoMinimo,
         insumosOptimos: insumosBodega.length - totalBajoMinimo,
+        porcentajeAlertaConfigurado: pctAlerta,
       },
       insumos: insumosBodega,
     };
@@ -700,13 +1051,38 @@ export class InventarioService {
   async crearDespacho(dto: CrearDespachoDto, usuarioId: string) {
     // Validar destino
     let destinoLabel = '';
-    const targetAgenciaId = dto.sucursalDestinoId || dto.agenciaId;
+    const targetAgenciaId = dto.sucursalDestinoId || dto.agenciaId || dto.agenciaDestinoId || (dto as any).agenciaDestinoId;
     if (dto.tipo === 'DESPACHO_AGENCIA') {
       if (!targetAgenciaId)
         throw new BadRequestException('Debe especificar sucursalDestinoId o agenciaId para DESPACHO_AGENCIA');
-      const agencia = await this.prisma.agencia.findUnique({ where: { id: targetAgenciaId } });
-      if (!agencia) throw new NotFoundException(`Agencia con ID "${targetAgenciaId}" no encontrada`);
+
+      const agencia = await this.prisma.agencia.findFirst({
+        where: {
+          OR: [
+            { id: targetAgenciaId },
+            { nombre: { equals: targetAgenciaId, mode: 'insensitive' } },
+            { codigo: { equals: targetAgenciaId, mode: 'insensitive' } },
+          ],
+        },
+      });
+      if (!agencia) throw new NotFoundException(`Agencia "${targetAgenciaId}" no encontrada`);
       destinoLabel = `Agencia ${agencia.nombre} [${agencia.id}]`;
+
+      // Validar que si el usuario es ASISTENTE_BODEGA, solo despache a su misma región
+      if (usuarioId) {
+        const usuario = await this.prisma.user.findUnique({
+          where: { id: usuarioId },
+          include: { role: true, region: true },
+        });
+        const rolUsuario = usuario?.role?.namerol?.toUpperCase() || '';
+        if (rolUsuario === 'ASISTENTE_BODEGA' && usuario?.regionId) {
+          if (agencia.regionId && agencia.regionId !== usuario.regionId) {
+            throw new ForbiddenException(
+              `Acceso denegado: Como Asistente de Bodega de la región "${usuario.region?.nombre || ''}", únicamente puedes surtir insumos a agencias o bodegas de tu misma región.`,
+            );
+          }
+        }
+      }
     } else {
       if (!dto.pulidorDestinoId)
         throw new BadRequestException('Debe especificar pulidorDestinoId para DESPACHO_PULIDOR');
@@ -720,14 +1096,35 @@ export class InventarioService {
       const insumo = await this.prisma.insumo.findUnique({ where: { id: det.insumoId } });
       if (!insumo) throw new NotFoundException(`Insumo con ID "${det.insumoId}" no encontrado`);
 
-      const stockBodega = await this.prisma.stockUbicacion.findFirst({
+      let stockBodega = await this.prisma.stockUbicacion.findFirst({
         where: { insumoId: det.insumoId, tipoUbicacion: 'BODEGA_CENTRAL' },
       });
+
+      // Si no existe el registro en StockUbicacion de BODEGA_CENTRAL, inicializarlo con el stockActual del insumo
+      if (!stockBodega) {
+        const stockInicial = Math.max(Number(insumo.stockActual) || 0, Number(det.cantidadEnviada) || 0);
+        stockBodega = await this.prisma.stockUbicacion.create({
+          data: {
+            insumoId: det.insumoId,
+            tipoUbicacion: 'BODEGA_CENTRAL',
+            cantidadActual: stockInicial,
+          },
+        });
+      }
+
       const disponible = Number(stockBodega?.cantidadActual ?? 0);
       if (disponible < det.cantidadEnviada) {
-        throw new BadRequestException(
-          `Stock insuficiente en bodega para "${insumo.nombre}": disponible ${disponible}, requerido ${det.cantidadEnviada}`,
-        );
+        const stockGlobal = Number(insumo.stockActual) || 0;
+        if (stockGlobal >= det.cantidadEnviada) {
+          stockBodega = await this.prisma.stockUbicacion.update({
+            where: { id: stockBodega.id },
+            data: { cantidadActual: stockGlobal },
+          });
+        } else {
+          throw new BadRequestException(
+            `Stock insuficiente en bodega para "${insumo.nombre}": disponible ${disponible}, requerido ${det.cantidadEnviada}`,
+          );
+        }
       }
     }
 
@@ -757,18 +1154,25 @@ export class InventarioService {
 
     // Descontar stock de BODEGA_CENTRAL y registrar Kardex de salida
     for (const det of dto.detalles) {
-      const stockBodega = await this.prisma.stockUbicacion.findFirst({
+      let stockBodega = await this.prisma.stockUbicacion.findFirst({
         where: { insumoId: det.insumoId, tipoUbicacion: 'BODEGA_CENTRAL' },
       });
+      if (!stockBodega) {
+        stockBodega = await this.prisma.stockUbicacion.create({
+          data: {
+            insumoId: det.insumoId,
+            tipoUbicacion: 'BODEGA_CENTRAL',
+            cantidadActual: 0,
+          },
+        });
+      }
       const stockAnt = Number(stockBodega?.cantidadActual ?? 0);
       const stockPost = stockAnt - Number(det.cantidadEnviada);
 
-      if (stockBodega) {
-        await this.prisma.stockUbicacion.update({
-          where: { id: stockBodega.id },
-          data: { cantidadActual: { decrement: det.cantidadEnviada } },
-        });
-      }
+      await this.prisma.stockUbicacion.update({
+        where: { id: stockBodega.id },
+        data: { cantidadActual: { decrement: det.cantidadEnviada } },
+      });
 
       await this.prisma.kardexMovimiento.create({
         data: {
@@ -819,15 +1223,19 @@ export class InventarioService {
       }
     }
 
+    const observacionesActualizadas = dto.observaciones
+      ? (dto.accion === 'RECHAZADO'
+          ? `${movimiento.observaciones ? movimiento.observaciones + ' ' : ''}| RECHAZO: ${dto.observaciones}`.trim()
+          : `${movimiento.observaciones ? movimiento.observaciones + ' ' : ''}| RECEPCIÓN: ${dto.observaciones}`.trim())
+      : movimiento.observaciones;
+
     await this.prisma.movimientoInventario.update({
       where: { id: movimiento.id },
       data: {
         estadoDespacho: nuevoEstado,
         fechaRecepcion: new Date(),
-        usuarioRecibeId: usuarioId,
-        observaciones: dto.observaciones
-          ? `${movimiento.observaciones ?? ''} | RECEPCIÓN: ${dto.observaciones}`
-          : movimiento.observaciones,
+        usuarioRecibeId: usuarioId || movimiento.usuarioRecibeId,
+        observaciones: observacionesActualizadas,
       },
     });
 
@@ -837,15 +1245,57 @@ export class InventarioService {
         where: { movimientoId: movimiento.id },
       });
 
-      // Extraer ID de la agencia destino
-      let targetAgenciaId = dto.agenciaId || dto.sucursalId;
-      if (!targetAgenciaId && movimiento.destinoUbicacion.includes('[')) {
+      // Extraer ID de la agencia destino de forma robusta
+      let targetAgenciaId: string | undefined = undefined;
+
+      // 1. Extraer ID del corchete en destinoUbicacion: "Agencia EasyDry Quito Norte [UUID]"
+      if (movimiento.destinoUbicacion && movimiento.destinoUbicacion.includes('[')) {
         const match = movimiento.destinoUbicacion.match(/\[(.*?)\]/);
-        if (match && match[1]) targetAgenciaId = match[1];
+        if (match && match[1]) {
+          const candidate = match[1].trim();
+          const ag = await this.prisma.agencia.findUnique({ where: { id: candidate } });
+          if (ag) targetAgenciaId = ag.id;
+        }
       }
-      if (!targetAgenciaId) {
+
+      // 2. Si no se resolvió, probar dto.agenciaId o dto.sucursalId validando existencia
+      if (!targetAgenciaId && (dto.agenciaId || dto.sucursalId)) {
+        const rawAg = (dto.agenciaId || dto.sucursalId)!.trim();
+        const ag = await this.prisma.agencia.findFirst({
+          where: {
+            OR: [
+              { id: rawAg },
+              { nombre: { equals: rawAg, mode: 'insensitive' } },
+              { codigo: { equals: rawAg, mode: 'insensitive' } },
+            ],
+          },
+        });
+        if (ag) targetAgenciaId = ag.id;
+      }
+
+      // 3. Probar nombre de destinoUbicacion
+      if (!targetAgenciaId && movimiento.destinoUbicacion) {
+        const cleanName = movimiento.destinoUbicacion
+          .replace(/^Agencia\s+/i, '')
+          .replace(/\[.*?\]/g, '')
+          .trim();
+        if (cleanName) {
+          const ag = await this.prisma.agencia.findFirst({
+            where: {
+              OR: [
+                { nombre: { contains: cleanName, mode: 'insensitive' } },
+                { codigo: { contains: cleanName, mode: 'insensitive' } },
+              ],
+            },
+          });
+          if (ag) targetAgenciaId = ag.id;
+        }
+      }
+
+      // 4. Si aún no, agencia del receptor
+      if (!targetAgenciaId && usuarioId) {
         const receptor = await this.prisma.user.findUnique({ where: { id: usuarioId } });
-        targetAgenciaId = receptor?.agenciaId || undefined;
+        if (receptor?.agenciaId) targetAgenciaId = receptor.agenciaId;
       }
 
       for (const det of detallesActualizados) {
@@ -853,9 +1303,27 @@ export class InventarioService {
 
         if (movimiento.tipo === 'DESPACHO_AGENCIA') {
           if (targetAgenciaId) {
-            const stockAgencia = await this.prisma.stockUbicacion.findFirst({
+            // Deduplicar registros previos en StockUbicacion si existieren
+            const existingStocks = await this.prisma.stockUbicacion.findMany({
               where: { insumoId: det.insumoId, tipoUbicacion: 'AGENCIA', agenciaId: targetAgenciaId },
+              orderBy: { updatedAt: 'desc' },
             });
+
+            let stockAgencia = existingStocks[0] || null;
+            if (existingStocks.length > 1) {
+              let sumaExtra = 0;
+              for (let i = 1; i < existingStocks.length; i++) {
+                sumaExtra += Number(existingStocks[i].cantidadActual);
+                await this.prisma.stockUbicacion.delete({ where: { id: existingStocks[i].id } });
+              }
+              if (sumaExtra > 0) {
+                stockAgencia = await this.prisma.stockUbicacion.update({
+                  where: { id: stockAgencia.id },
+                  data: { cantidadActual: { increment: sumaExtra } },
+                });
+              }
+            }
+
             const stockAnt = Number(stockAgencia?.cantidadActual ?? 0);
             const stockPost = stockAnt + cantidad;
 
@@ -865,12 +1333,14 @@ export class InventarioService {
                 data: { cantidadActual: { increment: cantidad } },
               });
             } else {
-              await this.prisma.stockUbicacion.create({
+              const insInfo = await this.prisma.insumo.findUnique({ where: { id: det.insumoId } });
+              stockAgencia = await this.prisma.stockUbicacion.create({
                 data: {
                   insumoId: det.insumoId,
                   tipoUbicacion: 'AGENCIA',
                   agenciaId: targetAgenciaId,
                   cantidadActual: cantidad,
+                  cantidadMinima: insInfo?.stockMinimoAgencia ?? 2,
                 },
               });
             }
@@ -980,30 +1450,97 @@ export class InventarioService {
     return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado };
   }
 
-  async rechazarDespacho(dto: { movimientoId: string; motivo?: string }, usuarioId: string) {
+  async rechazarDespacho(
+    dto: { movimientoId: string; motivo?: string; observaciones?: string; agenciaId?: string },
+    usuarioId: string,
+  ) {
+    const motivoFinal = dto.motivo || dto.observaciones || 'Despacho rechazado por el receptor en agencia (No recibido / Incompleto)';
     return this.confirmarRecepcion(
       {
         movimientoId: dto.movimientoId,
         accion: 'RECHAZADO',
-        observaciones: dto.motivo || 'Despacho rechazado por el receptor en agencia (No llegó / Defectuoso)',
+        observaciones: motivoFinal,
+        agenciaId: dto.agenciaId,
       },
       usuarioId,
     );
   }
 
-  async listDespachos(dto: ListMovimientosDto) {
-    const targetAgencyFilter = dto.sucursalId || (dto as any).agenciaId;
+  async listDespachos(dto: ListMovimientosDto, usuarioId?: string) {
+    const targetAgencyFilter = dto.sucursalId || (dto as any).agenciaId || (dto as any).agenciaDestinoId;
+    let agencySearchFilter: any = undefined;
+    if (targetAgencyFilter) {
+      const ag = await this.prisma.agencia.findFirst({
+        where: {
+          OR: [
+            { id: targetAgencyFilter },
+            { nombre: { contains: targetAgencyFilter, mode: 'insensitive' } },
+            { codigo: { contains: targetAgencyFilter, mode: 'insensitive' } },
+          ],
+        },
+      });
+      const searchTerms = [targetAgencyFilter];
+      if (ag) {
+        searchTerms.push(ag.id);
+        searchTerms.push(ag.nombre);
+        if (ag.codigo) searchTerms.push(ag.codigo);
+      }
+      agencySearchFilter = {
+        OR: searchTerms.map((term) => ({
+          destinoUbicacion: { contains: term, mode: 'insensitive' },
+        })),
+      };
+    }
+
+    let regionalFilter: any = undefined;
+    if (usuarioId && !targetAgencyFilter) {
+      const usuario = await this.prisma.user.findUnique({
+        where: { id: usuarioId },
+        include: { role: true, region: true },
+      });
+      const rol = usuario?.role?.namerol?.toUpperCase() || '';
+      const isAsistente = (rol.includes('ASISTENTE') && rol.includes('BODEGA')) || rol === 'ASISTENTE_BODEGA';
+      if (usuario && isAsistente) {
+        const conditions: any[] = [
+          { usuarioDespachaId: usuario.id },
+          { usuarioRecibeId: usuario.id },
+        ];
+
+        if (usuario.regionId) {
+          const agenciasRegion = await this.prisma.agencia.findMany({
+            where: { regionId: usuario.regionId },
+            select: { id: true, nombre: true },
+          });
+          const bodegasRegion = (await this.prisma.$queryRawUnsafe(
+            `SELECT "id", "nombre", "codigo" FROM "bodegas" WHERE "regionId" = $1`,
+            usuario.regionId
+          ).catch(() => [])) as any[];
+
+          const terms = [
+            ...agenciasRegion.flatMap((a) => [a.id, a.nombre]),
+            ...bodegasRegion.flatMap((b: any) => [b.id, b.nombre, b.codigo]),
+            usuario.region?.nombre || '',
+          ].filter(Boolean);
+
+          for (const t of terms) {
+            conditions.push({ destinoUbicacion: { contains: t, mode: 'insensitive' } });
+            conditions.push({ origenUbicacion: { contains: t, mode: 'insensitive' } });
+          }
+        }
+
+        regionalFilter = { OR: conditions };
+      }
+    }
+
     const where: any = {
       tipo: { in: ['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR'] },
       ...(dto.estadoDespacho ? { estadoDespacho: dto.estadoDespacho as any } : {}),
       ...(dto.numeroGuia ? { numeroGuia: { contains: dto.numeroGuia, mode: 'insensitive' } } : {}),
-      ...(targetAgencyFilter
-        ? { destinoUbicacion: { contains: targetAgencyFilter, mode: 'insensitive' } }
-        : {}),
+      ...(agencySearchFilter || regionalFilter || {}),
       ...(dto.pulidorId ? { usuarioRecibeId: dto.pulidorId } : {}),
     };
 
-    return this.prisma.movimientoInventario.findMany({
+    const movimientos = await this.prisma.movimientoInventario.findMany({
       where,
       orderBy: { fechaDespacho: 'desc' },
       include: {
@@ -1022,6 +1559,20 @@ export class InventarioService {
         usuarioDespacha: { select: { id: true, name: true, lastname: true } },
         usuarioRecibe: { select: { id: true, name: true, lastname: true } },
       },
+    });
+
+    return movimientos.map((m) => {
+      let motivoRechazo = '';
+      if (m.observaciones && m.observaciones.includes('RECHAZO:')) {
+        const parts = m.observaciones.split(/RECHAZO:\s*/i);
+        if (parts.length > 1) {
+          motivoRechazo = parts[parts.length - 1].trim();
+        }
+      }
+      return {
+        ...m,
+        motivoRechazo: motivoRechazo || undefined,
+      };
     });
   }
 
@@ -1862,7 +2413,8 @@ export class InventarioService {
     const stockPorInsumo = new Map<string, number>();
     const stockMinimoPorInsumo = new Map<string, number>();
     for (const st of stocksAgencia) {
-      stockPorInsumo.set(st.insumoId, Number(st.cantidadActual));
+      const prev = stockPorInsumo.get(st.insumoId) ?? 0;
+      stockPorInsumo.set(st.insumoId, prev + Number(st.cantidadActual));
       stockMinimoPorInsumo.set(st.insumoId, Number(st.cantidadMinima ?? st.insumo?.stockMinimoAgencia ?? 2));
     }
 

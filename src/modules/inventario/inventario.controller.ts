@@ -16,6 +16,7 @@ import { CreateTipoProductoDto, UpdateTipoProductoDto, ListTiposProductoDto } fr
 import { CreatePresentacionDto, UpdatePresentacionDto, ListPresentacionesDto } from './dto/presentaciones.dto.js';
 import { ListTiposMovimientoDto, ListMotivosDto, CreateMotivoDto, UpdateMotivoDto } from './dto/movimiento-catalogo.dto.js';
 import { RegistrarMovimientoOperativoDto, ListMovimientosGlobalesDto, ListStockBajoDto } from './dto/movimiento-operacion.dto.js';
+import { CreateBodegaDto, UpdateBodegaDto, ToggleActivaBodegaDto, DeleteBodegaDto } from './dto/bodegas.dto.js';
 
 @ApiTags('Inventario & Bodega (100% POST)')
 @Controller('inventario')
@@ -151,6 +152,41 @@ export class InventarioController {
     return this.inventarioService.obtenerStockAgenciasResumen(dto);
   }
 
+  @Post('bodegas/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar bodegas del sistema (Central y Regionales)' })
+  async listBodegas() {
+    return this.inventarioService.listBodegas();
+  }
+
+  @Post('bodegas/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear nueva bodega regional vinculada estrictamente a una región (SUPER_ADMIN / ADMIN / COORD_BODEGA)' })
+  async crearBodega(@Body() dto: CreateBodegaDto) {
+    return this.inventarioService.crearBodega(dto);
+  }
+
+  @Post('bodegas/update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar bodega (nombre, código, región, ciudad, etc.)' })
+  async actualizarBodega(@Body() dto: UpdateBodegaDto) {
+    return this.inventarioService.actualizarBodega(dto);
+  }
+
+  @Post('bodegas/toggle-activa')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Activar o desactivar bodega regional' })
+  async toggleActivaBodega(@Body() dto: ToggleActivaBodegaDto) {
+    return this.inventarioService.toggleActivaBodega(dto);
+  }
+
+  @Post('bodegas/delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Eliminar bodega regional del sistema' })
+  async eliminarBodega(@Body() dto: DeleteBodegaDto) {
+    return this.inventarioService.eliminarBodega(dto);
+  }
+
   @Post('stock/bodegas-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen de inventario en bodegas' })
@@ -219,8 +255,8 @@ export class InventarioController {
   @Post('despachos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar despachos de químicos con estado (EN_TRANSITO, RECIBIDO, RECHAZADO)' })
-  async listDespachosDirecto(@Body() dto: ListMovimientosDto) {
-    return this.inventarioService.listDespachos(dto);
+  async listDespachosDirecto(@Body() dto: ListMovimientosDto, @CurrentUser() user: any) {
+    return this.inventarioService.listDespachos(dto, user?.id);
   }
 
   @Post('despachos/agencia/pendientes')

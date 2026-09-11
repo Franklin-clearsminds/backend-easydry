@@ -27,7 +27,7 @@ export class OperacionesController {
   @ApiResponse({ status: 200, description: 'Lista de servicios filtrados' })
   async findAll(@Body() queryDto: QueryServiciosDto) {
     return this.operacionesService.findAll({
-      sucursalId: queryDto?.sucursalId,
+      sucursalId: queryDto?.sucursalId || queryDto?.agenciaId,
       estado: queryDto?.estado,
       search: queryDto?.search,
     });

@@ -85,6 +85,11 @@ export class CrearDespachoDto {
   @IsString()
   agenciaId?: string;
 
+  @ApiPropertyOptional({ description: 'Alias de agenciaId utilizado en el frontend' })
+  @IsOptional()
+  @IsString()
+  agenciaDestinoId?: string;
+
   @ApiPropertyOptional({ description: 'ID del pulidor destino (si tipo=DESPACHO_PULIDOR)' })
   @IsOptional()
   @IsString()
@@ -151,6 +156,16 @@ export class RechazarDespachoDto {
   @IsOptional()
   @IsString()
   motivo?: string;
+
+  @ApiPropertyOptional({ description: 'Alias de motivo' })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'ID de la agencia que rechaza el despacho' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
 }
 
 // ——— Listar movimientos ———

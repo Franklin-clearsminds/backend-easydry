@@ -35,7 +35,9 @@ export class OperacionesService {
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
   }) {
-    const where: any = {};
+    const where: any = {
+      deletedAt: null,
+    };
 
     const targetAgencia = params?.agenciaId || params?.sucursalId;
     if (targetAgencia) {
@@ -56,7 +58,7 @@ export class OperacionesService {
     }
 
     const page = params?.page ? Number(params.page) : 1;
-    const pageSize = params?.pageSize ? Number(params.pageSize) : 50;
+    const pageSize = params?.pageSize ? Number(params.pageSize) : 200;
     const skip = (page - 1) * pageSize;
     const sortField = params?.sortField || 'createdAt';
     const sortOrder = params?.sortOrder || 'desc';
@@ -109,7 +111,7 @@ export class OperacionesService {
           include: {
             recetas: {
               include: {
-                insumo: { select: { id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true } },
+                insumo: { select: { id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true, costoUnitarioUSD: true } },
                 unidadConsumo: { select: { codigo: true, simbolo: true, factorBase: true } },
               },
             },
@@ -145,36 +147,181 @@ export class OperacionesService {
     const clientUuid = createDto.clientUuid || randomUUID();
     const now = new Date();
 
-    // Control físico de Bahía: Impedir doble auto simultáneo en proceso en la misma bahía
-    if (createDto.estado === ServiceStatus.EN_PROCESO && createDto.bahiaId) {
+    // 1. Resolución Defensiva de Bahía (Soporta UUID, nombre de bahía o fallback a bahía activa)
+    let bahia: any = null;
+    if (createDto.bahiaId) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(createDto.bahiaId);
+      if (isUuid) {
+        bahia = await this.prisma.bahia.findUnique({
+          where: { id: createDto.bahiaId },
+          include: { agencia: true },
+        });
+      }
+      if (!bahia) {
+        const busquedaNombre = createDto.bahiaId.replace(/\(.*?\)/g, '').trim();
+        if (busquedaNombre) {
+          bahia = await this.prisma.bahia.findFirst({
+            where: {
+              nombre: { contains: busquedaNombre, mode: 'insensitive' },
+            },
+            include: { agencia: true },
+          });
+        }
+      }
+    }
+    if (!bahia) {
+      bahia = await this.prisma.bahia.findFirst({
+        where: { activa: true },
+        include: { agencia: true },
+      });
+      if (!bahia) {
+        bahia = await this.prisma.bahia.findFirst({
+          include: { agencia: true },
+        });
+      }
+    }
+    if (!bahia) {
+      throw new BadRequestException('No se encontró ninguna bahía configurada en el sistema para registrar el servicio.');
+    }
+
+    const resolvedBahiaId = bahia.id;
+    const agenciaId = bahia.agenciaId;
+
+    // 2. Resolución Defensiva de Operador (Verifica existencia de User para FK)
+    let validOperadorId = operadorId;
+    let user = validOperadorId ? await this.prisma.user.findUnique({ where: { id: validOperadorId } }) : null;
+    if (!user) {
+      if (bahia.operadorActualId) {
+        user = await this.prisma.user.findUnique({ where: { id: bahia.operadorActualId } });
+      }
+      if (!user) {
+        user = await this.prisma.user.findFirst({ where: { estado: 1 } }) || await this.prisma.user.findFirst();
+      }
+      if (user) {
+        validOperadorId = user.id;
+      }
+    }
+
+    // 3. Resolución Defensiva de Catálogo de Servicio y sus Recetas
+    let catalogo: any = null;
+    if (createDto.servicioCatalogoId) {
+      catalogo = await this.prisma.catalogoServicio.findUnique({
+        where: { id: Number(createDto.servicioCatalogoId) },
+        include: {
+          recetas: {
+            include: {
+              insumo: true,
+              unidadConsumo: true,
+            },
+          },
+        },
+      });
+    }
+    if (!catalogo) {
+      catalogo = await this.prisma.catalogoServicio.findFirst({
+        include: {
+          recetas: {
+            include: {
+              insumo: true,
+              unidadConsumo: true,
+            },
+          },
+        },
+      });
+    }
+    if (!catalogo) {
+      throw new BadRequestException('No se encontró el servicio solicitado en el catálogo.');
+    }
+    const resolvedCatalogoId = catalogo.id;
+
+    // 4. Control físico de Bahía: Impedir doble auto simultáneo en proceso en la misma bahía
+    if (createDto.estado === ServiceStatus.EN_PROCESO) {
       const activoEnBahia = await this.prisma.servicioLavado.findFirst({
         where: {
-          bahiaId: createDto.bahiaId,
+          bahiaId: resolvedBahiaId,
           estado: ServiceStatus.EN_PROCESO,
           deletedAt: null,
         },
       });
-      if (activoEnBahia) {
+      if (activoEnBahia && activoEnBahia.placa !== createDto.placa.toUpperCase().trim()) {
         throw new BadRequestException(
-          `La bahía seleccionada ya se encuentra ocupada por el vehículo ${activoEnBahia.placa}. Espere a que finalice o seleccione otra bahía disponible.`,
+          `La bahía "${bahia.nombre}" ya se encuentra ocupada por el vehículo ${activoEnBahia.placa}. Espere a que finalice o seleccione otra bahía disponible.`,
         );
       }
     }
 
-    // Advertencia de Maquinaria Averiada o Fuera de Servicio
+    // 5. VALIDACIÓN ESTRICTA DE STOCK ANTES DE CREAR EL SERVICIO
+    // "solo no me debe permitir si no tengo stock de uno de los suministros necesarios para el servicio"
+    const recetas = catalogo.recetas ?? [];
+    if (agenciaId && recetas.length > 0) {
+      const faltantes: string[] = [];
+      for (const receta of recetas) {
+        if (receta.esOpcional) continue;
+
+        const cantidadBaseNecesaria = this._convertirAUnidadBase(
+          Number(receta.cantidadUsada),
+          receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+        );
+
+        const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
+        const disponible = Number(stock?.cantidadActual ?? 0);
+
+        if (disponible < cantidadBaseNecesaria) {
+          const simbolo = receta.unidadConsumo?.simbolo || 'und';
+          faltantes.push(
+            `"${receta.insumo.nombre}": disponible ${disponible.toFixed(2)} ${simbolo}, requerido ${cantidadBaseNecesaria.toFixed(2)} ${simbolo}`,
+          );
+        }
+      }
+
+      if (faltantes.length > 0) {
+        throw new BadRequestException(
+          `No se puede iniciar el servicio: Stock insuficiente en la agencia para los insumos obligatorios:\n` +
+            faltantes.map((f) => `  • ${f}`).join('\n') +
+            `\nPor favor solicite suministros a Bodega Central antes de crear el servicio.`,
+        );
+      }
+    }
+
+    // 6. Advertencia de Maquinaria Averiada o Fuera de Servicio
     let observacionesFinales = createDto.observaciones;
-    if (createDto.bahiaId) {
-      const maquinaAveriada = await this.prisma.maquinaria.findFirst({
-        where: {
-          bahiaId: createDto.bahiaId,
-          estadoOperativo: { in: ['FUERA_DE_SERVICIO', 'DE_BAJA'] },
-        },
-      });
-      if (maquinaAveriada) {
-        const advertencia = `[ALERTA TÉCNICA: Maquinaria ${maquinaAveriada.codigo} (${maquinaAveriada.nombre}) en estado ${maquinaAveriada.estadoOperativo}]`;
-        observacionesFinales = observacionesFinales
-          ? `${observacionesFinales} | ${advertencia}`
-          : advertencia;
+    const maquinaAveriada = await this.prisma.maquinaria.findFirst({
+      where: {
+        bahiaId: resolvedBahiaId,
+        estadoOperativo: { in: ['FUERA_DE_SERVICIO', 'DE_BAJA'] },
+      },
+    });
+    if (maquinaAveriada) {
+      const advertencia = `[ALERTA TÉCNICA: Maquinaria ${maquinaAveriada.codigo} (${maquinaAveriada.nombre}) en estado ${maquinaAveriada.estadoOperativo}]`;
+      observacionesFinales = observacionesFinales
+        ? `${observacionesFinales} | ${advertencia}`
+        : advertencia;
+    }
+
+    // 7. Registro seguro del servicio de lavado en base de datos
+    let estadoInicial = createDto.estado || ServiceStatus.EN_ESPERA;
+    let observacionGerenteAuto: string | undefined = undefined;
+    let aprobadoPorAuto: string | undefined = undefined;
+    let fechaAprobacionAuto: Date | undefined = undefined;
+
+    // Si se crea directamente como FINALIZADO, verificar si la agencia cuenta con aprobador asignado
+    if (estadoInicial === ServiceStatus.FINALIZADO) {
+      let tieneAprobador = false;
+      if (agenciaId) {
+        const approver = await this.prisma.user.findFirst({
+          where: {
+            estado: 1,
+            OR: [{ agenciaId }, { agenciasIds: { has: agenciaId } }],
+            role: { namerol: { in: ['APROBADOR', 'GERENTE'] } },
+          },
+        });
+        if (approver) tieneAprobador = true;
+      }
+      if (!tieneAprobador) {
+        estadoInicial = ServiceStatus.APROBADO;
+        observacionGerenteAuto = 'Aprobado automáticamente (Agencia sin aprobador asignado)';
+        aprobadoPorAuto = 'Sistema (Auto-Aprobación)';
+        fechaAprobacionAuto = now;
       }
     }
 
@@ -185,12 +332,16 @@ export class OperacionesService {
         modelo: createDto.modelo.trim(),
         color: createDto.color?.trim(),
         cliente: createDto.cliente?.trim(),
-        estado: createDto.estado || ServiceStatus.EN_ESPERA,
-        bahiaId: createDto.bahiaId,
-        servicioCatalogoId: createDto.servicioCatalogoId,
-        operadorId,
+        estado: estadoInicial,
+        observacionGerente: observacionGerenteAuto,
+        aprobadoPor: aprobadoPorAuto,
+        fechaAprobacion: fechaAprobacionAuto,
+        bahiaId: resolvedBahiaId,
+        servicioCatalogoId: resolvedCatalogoId,
+        operadorId: validOperadorId,
         horaIngreso: now,
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,
+        horaSalida: estadoInicial === ServiceStatus.FINALIZADO || estadoInicial === ServiceStatus.APROBADO ? now : null,
         fotoIngresoUrl: createDto.fotoIngresoUrl,
         fotoSalidaUrl: createDto.fotoSalidaUrl,
         observaciones: observacionesFinales,
@@ -204,8 +355,8 @@ export class OperacionesService {
           include: {
             recetas: {
               include: {
-                insumo: { select: { codigoSKU: true, nombre: true } },
-                unidadConsumo: { select: { codigo: true, simbolo: true } },
+                insumo: { select: { id: true, codigoSKU: true, nombre: true, costoUnitarioUSD: true } },
+                unidadConsumo: { select: { id: true, codigo: true, simbolo: true, factorBase: true } },
               },
             },
           },
@@ -216,13 +367,8 @@ export class OperacionesService {
       },
     });
 
-    // Hook: Descuento inmediato de stock al registrar el servicio en la agencia
-    try {
-      await this._ejecutarConsumoInsumos(created, false);
-    } catch (err: any) {
-      // Fallback no-block para asegurar registro físico en bahía, bajando el stock y disparando alerta
-      await this._ejecutarConsumoInsumos(created, true);
-    }
+    // 8. Descuento atómico de stock e inserción de Kardex
+    await this._ejecutarConsumoInsumos(created, false);
 
     const finalCreated = await this.findOneRaw(created.id);
     return serializeServicioLavado(finalCreated);
@@ -274,6 +420,36 @@ export class OperacionesService {
     ) {
       if (!servicio.consumos || servicio.consumos.length === 0) {
         await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
+      }
+
+      // ──────────────────────────────────────────────────────────────
+      // AUTO-APROBACIÓN PARA AGENCIAS SIN APROBADOR ASIGNADO
+      // ──────────────────────────────────────────────────────────────
+      const agenciaId = servicio.bahia?.agencia?.id || servicio.bahia?.agenciaId;
+      let tieneAprobador = false;
+      if (agenciaId) {
+        const approver = await this.prisma.user.findFirst({
+          where: {
+            estado: 1,
+            OR: [
+              { agenciaId },
+              { agenciasIds: { has: agenciaId } },
+            ],
+            role: {
+              namerol: { in: ['APROBADOR', 'GERENTE'] },
+            },
+          },
+        });
+        if (approver) {
+          tieneAprobador = true;
+        }
+      }
+
+      if (!tieneAprobador) {
+        data.estado = ServiceStatus.APROBADO;
+        data.observacionGerente = 'Aprobado automáticamente (Agencia sin aprobador asignado)';
+        data.aprobadoPor = 'Sistema (Auto-Aprobación)';
+        data.fechaAprobacion = new Date();
       }
     }
 
@@ -762,6 +938,9 @@ export class OperacionesService {
 
   async aprobarServicio(id: string, observacion?: string, gerenteNombre?: string) {
     const servicio = await this.findOneRaw(id);
+    if (servicio.estado !== ServiceStatus.FINALIZADO) {
+      throw new BadRequestException('Solo se pueden aprobar servicios que ya han sido finalizados.');
+    }
     const updated = await this.prisma.servicioLavado.update({
       where: { id: servicio.id },
       data: {
@@ -795,6 +974,9 @@ export class OperacionesService {
 
   async rechazarServicio(id: string, motivo: string, gerenteNombre?: string) {
     const servicio = await this.findOneRaw(id);
+    if (servicio.estado !== ServiceStatus.FINALIZADO) {
+      throw new BadRequestException('Solo se pueden rechazar servicios que ya han sido finalizados.');
+    }
     const updated = await this.prisma.servicioLavado.update({
       where: { id: servicio.id },
       data: {

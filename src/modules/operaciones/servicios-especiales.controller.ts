@@ -21,8 +21,8 @@ export class ServiciosEspecialesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar servicios especiales (Pulido, Cerámico, Lavado de Motor)' })
   @ApiResponse({ status: 200, description: 'Lista paginada de servicios especiales' })
-  async list(@Body() queryDto: QueryServicioEspecialDto) {
-    return this.service.findAll(queryDto);
+  async list(@Body() queryDto: QueryServicioEspecialDto, @CurrentUser() user: any) {
+    return this.service.findAll(queryDto, user);
   }
 
   @Post('detail')
@@ -39,28 +39,29 @@ export class ServiciosEspecialesController {
   @ApiResponse({ status: 201, description: 'Servicio especial registrado exitosamente' })
   async crear(
     @Body() dto: CreateServicioEspecialDto,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.service.create(dto, userId);
+    return this.service.create(dto, user?.id, user);
   }
 
   @Post('iniciar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Marcar inicio de trabajo en servicio especial (EN_PROCESO)' })
+  @ApiOperation({ summary: 'Marcar inicio de trabajo en servicio especial con video inicial' })
   @ApiResponse({ status: 200, description: 'Servicio especial iniciado' })
   async iniciar(
     @Body() dto: IniciarServicioEspecialDto,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
     return this.service.iniciar({
       id: dto.id,
-      operadorId: dto.operadorId || userId,
+      operadorId: dto.operadorId || user?.id,
+      videoInicialUrl: dto.videoInicialUrl,
     });
   }
 
   @Post('completar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Finalizar servicio especial con calificación de calidad y evidencias' })
+  @ApiOperation({ summary: 'Finalizar servicio especial con video final y calificación' })
   @ApiResponse({ status: 200, description: 'Servicio especial completado' })
   async completar(@Body() dto: CompletarServicioEspecialDto) {
     return this.service.completar(dto);
@@ -72,5 +73,23 @@ export class ServiciosEspecialesController {
   @ApiResponse({ status: 200, description: 'Servicio especial cancelado' })
   async delete(@Body() body: { id: string; motivo?: string }) {
     return this.service.softDelete(body.id, body.motivo);
+  }
+
+  @Post('pulidores')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar pulidores activos por región' })
+  @ApiResponse({ status: 200, description: 'Lista de pulidores zonales' })
+  async pulidores(@Body() body: { regionId?: string }, @CurrentUser() user: any) {
+    const regionId = body?.regionId || user?.regionId || '';
+    return this.service.listarPulidoresPorRegion(regionId);
+  }
+
+  @Post('stock-pulidor')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Consultar existencias de químicos en custodia del pulidor' })
+  @ApiResponse({ status: 200, description: 'Inventario personal del pulidor' })
+  async stockPulidor(@Body() body: { pulidorId?: string }, @CurrentUser() user: any) {
+    const pulidorId = body?.pulidorId || user?.id || '';
+    return this.service.obtenerStockPulidor(pulidorId);
   }
 }
