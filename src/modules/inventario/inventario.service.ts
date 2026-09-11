@@ -164,37 +164,48 @@ export class InventarioService {
       ];
     }
 
-    // Filtrar estrictamente por los insumos requeridos por los servicios
+    // Filtrar estrictamente por los insumos de la sede (servicios asignados + insumos existentes en stock)
     const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'APROBADOR', 'LAVADOR'];
     const userRole = (user?.roleDetails?.namerol || user?.role || '').toUpperCase();
     const isScopedRole = ROLES_SCOPED.some(r => userRole === r || userRole.includes(r));
     const targetAgenciaId = dto?.agenciaId || (isScopedRole ? (user?.agenciaId || user?.agencia?.id) : undefined);
 
+    let agenciaTarget: any = null;
     if (targetAgenciaId) {
-      const agencia = await this.prisma.agencia.findFirst({
+      agenciaTarget = await this.prisma.agencia.findFirst({
         where: {
           OR: [
             { id: targetAgenciaId },
             { nombre: { equals: targetAgenciaId, mode: 'insensitive' } },
           ],
         },
-        select: { servicioIds: true, tieneServiciosEspeciales: true },
+        select: { id: true, servicioIds: true, tieneServiciosEspeciales: true },
       });
 
-      const rawIds = Array.isArray(agencia?.servicioIds) ? agencia.servicioIds : [];
-      const sIds = rawIds.map((n: any) => Number(n)).filter((n: number) => !isNaN(n) && n > 0);
+      if (agenciaTarget) {
+        const rawIds = Array.isArray(agenciaTarget.servicioIds) ? agenciaTarget.servicioIds : [];
+        const sIds = rawIds.map((n: any) => Number(n)).filter((n: number) => !isNaN(n) && n > 0);
 
-      if (sIds.length > 0) {
-        where.recetas = { some: { catalogoServicioId: { in: sIds } } };
+        const orSedeConditions: any[] = [
+          { stocks: { some: { agenciaId: agenciaTarget.id, tipoUbicacion: 'AGENCIA' } } },
+        ];
+        if (sIds.length > 0) {
+          orSedeConditions.push({ recetas: { some: { catalogoServicioId: { in: sIds } } } });
+        }
+
+        where.AND = [
+          ...(where.AND || []),
+          { OR: orSedeConditions },
+        ];
       } else {
-        where.id = { in: [] }; // Si la agencia no tiene servicios asignados, no requiere insumos
+        where.id = { in: [] }; // Si la agencia no existe, no devolver registros erróneos
       }
     } else if (dto.soloDeServicios !== false) {
       // Vista global: mostrar exclusivamente los insumos requeridos por los servicios del catálogo
       where.recetas = { some: {} };
     }
 
-    return this.prisma.insumo.findMany({
+    const insumos = await this.prisma.insumo.findMany({
       where,
       orderBy: { codigoSKU: 'asc' },
       include: {
@@ -217,9 +228,28 @@ export class InventarioService {
             unidadConsumo: { select: { id: true, simbolo: true, nombre: true } },
           },
         },
+        stocks: agenciaTarget ? {
+          where: {
+            agenciaId: agenciaTarget.id,
+            tipoUbicacion: 'AGENCIA',
+          },
+        } : true,
         _count: { select: { stocks: true, alertas: true, presentaciones: true } },
       },
     });
+
+    if (agenciaTarget) {
+      return insumos.map((ins: any) => {
+        const stockSede = Array.isArray(ins.stocks) ? ins.stocks[0] : null;
+        return {
+          ...ins,
+          stockActual: stockSede ? Number(stockSede.cantidadActual) : 0,
+          stockMinimoAgencia: stockSede ? Number(stockSede.cantidadMinima) : Number(ins.stockMinimoAgencia ?? 2),
+        };
+      });
+    }
+
+    return insumos;
   }
 
   async detailInsumo(id: string) {
@@ -1686,26 +1716,92 @@ export class InventarioService {
       throw new NotFoundException(`No se encontró ninguna agencia registrada en el sistema.`);
     }
 
-    // Obtener los servicios del catálogo con sus recetas (filtrado por los servicios autorizados de la agencia)
-    const catalogo = await this.prisma.catalogoServicio.findMany({
-      where: servicioIds?.length ? { id: { in: servicioIds } } : undefined,
-      include: {
-        recetas: {
+    // Si no se envían servicioIds explícitos, usar automáticamente los agencia.servicioIds de la BD
+    const rawIds = (servicioIds && servicioIds.length > 0)
+      ? servicioIds
+      : (Array.isArray(agencia.servicioIds) ? agencia.servicioIds : []);
+    const cleanServicioIds = rawIds.map((n: any) => Number(n)).filter((n: number) => !isNaN(n) && n > 0);
+
+    // Obtener los servicios del catálogo con sus recetas para los servicios activos de la sede
+    const catalogo = cleanServicioIds.length > 0
+      ? await this.prisma.catalogoServicio.findMany({
+          where: { id: { in: cleanServicioIds } },
           include: {
-            insumo: {
+            recetas: {
               include: {
-                unidadMedida: true,
-                tipoProducto: true,
+                insumo: {
+                  include: {
+                    unidadMedida: true,
+                    tipoProducto: true,
+                  },
+                },
+                unidadConsumo: true,
               },
             },
-            unidadConsumo: true,
+          },
+          orderBy: { codigo: 'asc' },
+        })
+      : [];
+
+    // Auto-inicialización de slots de stock para insumos requeridos por las recetas que falten en StockUbicacion
+    const recetasInsumos = catalogo.flatMap((c) => c.recetas.map((r) => r.insumo).filter(Boolean));
+
+    let stocksAgencia = await this.prisma.stockUbicacion.findMany({
+      where: {
+        agenciaId: agencia.id,
+        tipoUbicacion: 'AGENCIA',
+      },
+      include: {
+        insumo: {
+          include: {
+            unidadMedida: true,
+            tipoProducto: true,
           },
         },
       },
-      orderBy: { codigo: 'asc' },
     });
 
-    // Mapear insumos únicos requeridos por las recetas de los servicios
+    const setStocksExistentes = new Set(stocksAgencia.map((s) => s.insumoId));
+    let nuevosSlotsCreados = false;
+
+    for (const ins of recetasInsumos) {
+      if (!setStocksExistentes.has(ins.id)) {
+        try {
+          await this.prisma.stockUbicacion.create({
+            data: {
+              agenciaId: agencia.id,
+              insumoId: ins.id,
+              tipoUbicacion: 'AGENCIA',
+              cantidadActual: 0,
+              cantidadMinima: ins.stockMinimoAgencia ?? 2,
+            },
+          });
+          setStocksExistentes.add(ins.id);
+          nuevosSlotsCreados = true;
+        } catch (e) {
+          console.warn(`[StockUbicacion] Error al auto-inicializar stock para insumo ${ins.id}:`, e);
+        }
+      }
+    }
+
+    if (nuevosSlotsCreados) {
+      stocksAgencia = await this.prisma.stockUbicacion.findMany({
+        where: {
+          agenciaId: agencia.id,
+          tipoUbicacion: 'AGENCIA',
+        },
+        include: {
+          insumo: {
+            include: {
+              unidadMedida: true,
+              tipoProducto: true,
+            },
+          },
+        },
+      });
+    }
+
+    // Mapear insumos requeridos por las recetas de los servicios asignados
     const insumosMap = new Map<string, {
       insumo: any;
       servicios: Array<{
@@ -1751,17 +1847,23 @@ export class InventarioService {
       }
     }
 
-    // Consultar stock real de esta agencia
-    const stocksAgencia = await this.prisma.stockUbicacion.findMany({
-      where: {
-        agenciaId,
-        tipoUbicacion: 'AGENCIA',
-      },
-    });
+    // REGLA FUNDAMENTAL: Si un insumo existe en el stock de la sede (StockUbicacion) pero su servicio
+    // fue desasignado o quitado, DEBE PERMANECER visible en la sede con su stock real y no borrarse.
+    for (const st of stocksAgencia) {
+      if (st.insumo && !insumosMap.has(st.insumoId)) {
+        insumosMap.set(st.insumoId, {
+          insumo: st.insumo,
+          servicios: [],
+          consumoMaximo: 0,
+        });
+      }
+    }
 
     const stockPorInsumo = new Map<string, number>();
+    const stockMinimoPorInsumo = new Map<string, number>();
     for (const st of stocksAgencia) {
       stockPorInsumo.set(st.insumoId, Number(st.cantidadActual));
+      stockMinimoPorInsumo.set(st.insumoId, Number(st.cantidadMinima ?? st.insumo?.stockMinimoAgencia ?? 2));
     }
 
     let insumosOptimos = 0;
@@ -1771,8 +1873,9 @@ export class InventarioService {
 
     const insumosResultado = Array.from(insumosMap.values()).map(({ insumo, servicios, consumoMaximo }) => {
       const stockActual = stockPorInsumo.get(insumo.id) ?? 0;
-      const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
+      const stockMinimo = stockMinimoPorInsumo.get(insumo.id) ?? Number(insumo.stockMinimoAgencia ?? 2);
       const unidad = insumo.unidadMedida?.simbolo || 'u';
+      const tieneServicios = servicios.length > 0;
 
       let estado: 'OPTIMO' | 'BAJO' | 'CRITICO' | 'AGOTADO' = 'OPTIMO';
       let mensajeAlerta: string | null = null;
@@ -1780,18 +1883,46 @@ export class InventarioService {
       if (stockActual <= 0) {
         estado = 'AGOTADO';
         insumosAgotados++;
-        mensajeAlerta = `Agotado: No se pueden realizar ${servicios.map(s => s.nombre).join(', ')}`;
-        alertas.push(`🔴 ${insumo.nombre}: AGOTADO (${stockActual} ${unidad}). Afecta ${servicios.length} servicios.`);
+        if (tieneServicios) {
+          mensajeAlerta = `Agotado: No se pueden realizar ${servicios.map(s => s.nombre).join(', ')}`;
+          alertas.push(`🔴 ${insumo.nombre}: AGOTADO (${stockActual} ${unidad}). Afecta ${servicios.length} servicios.`);
+        } else {
+          mensajeAlerta = `Sin existencias en sede (Servicio no asignado actualmente)`;
+        }
       } else if (stockActual <= stockMinimo) {
         estado = 'BAJO';
         insumosBajoMinimo++;
-        mensajeAlerta = `Stock bajo mínimo (${stockActual.toFixed(2)} de ${stockMinimo} ${unidad}). Reabastecer pronto.`;
-        alertas.push(`⚠️ ${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad} restantes).`);
+        if (tieneServicios) {
+          mensajeAlerta = `Stock bajo mínimo (${stockActual.toFixed(2)} de ${stockMinimo} ${unidad}). Reabastecer pronto.`;
+          alertas.push(`⚠️ ${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad} restantes).`);
+        } else {
+          mensajeAlerta = `Insumo en sede bajo nivel mínimo (${stockActual.toFixed(2)} ${unidad})`;
+        }
       } else {
         insumosOptimos++;
+        if (!tieneServicios) {
+          mensajeAlerta = `Insumo disponible en sede (Servicio no asignado actualmente)`;
+        }
       }
 
       const serviciosEstimados = consumoMaximo > 0 ? Math.floor(stockActual / consumoMaximo) : 0;
+
+      const serviciosQueLoUsan = tieneServicios
+        ? servicios.map(s => ({
+            ...s,
+            cantidadPorServicio: s.cantidadUsada,
+          }))
+        : [
+            {
+              servicioId: 0,
+              codigo: 'SEDE',
+              nombre: 'Insumo en Sede (Sin servicio activo)',
+              categoria: 'GENERAL',
+              cantidadUsada: 0,
+              cantidadPorServicio: 0,
+              unidad,
+            },
+          ];
 
       return {
         id: insumo.id,
@@ -1806,7 +1937,10 @@ export class InventarioService {
         mensajeAlerta,
         consumoMaximo,
         serviciosEstimados,
+        capacidadServiciosRestantes: serviciosEstimados,
         serviciosAsociados: servicios,
+        serviciosQueLoUsan,
+        esInsumoEnSede: !tieneServicios,
       };
     });
 

@@ -495,6 +495,61 @@ export class AgenciasService {
     };
   }
 
+  /**
+   * Sincroniza los insumos requeridos por los servicios asignados a una agencia.
+   * Inicializa los registros de StockUbicacion faltantes con cantidadActual = 0.
+   * Los insumos preexistentes (con o sin existencias) NUNCA se eliminan ni modifican.
+   */
+  async sincronizarStockInsumosPorServicios(agenciaId: string, servicioIds: number[]): Promise<void> {
+    if (!agenciaId || !Array.isArray(servicioIds) || servicioIds.length === 0) return;
+
+    try {
+      const cleanIds = servicioIds.map(Number).filter((n) => !isNaN(n) && n > 0);
+      if (cleanIds.length === 0) return;
+
+      const recetas = await this.prisma.recetaInsumo.findMany({
+        where: { catalogoServicioId: { in: cleanIds } },
+        include: {
+          insumo: {
+            select: { id: true, stockMinimoAgencia: true },
+          },
+        },
+      });
+
+      if (recetas.length === 0) return;
+
+      const insumoIds = Array.from(new Set(recetas.map((r) => r.insumoId).filter(Boolean)));
+
+      const existentes = await this.prisma.stockUbicacion.findMany({
+        where: {
+          agenciaId,
+          tipoUbicacion: 'AGENCIA',
+          insumoId: { in: insumoIds },
+        },
+        select: { insumoId: true },
+      });
+
+      const setExistentes = new Set(existentes.map((s) => s.insumoId));
+
+      for (const r of recetas) {
+        if (!setExistentes.has(r.insumoId)) {
+          await this.prisma.stockUbicacion.create({
+            data: {
+              agenciaId,
+              insumoId: r.insumoId,
+              tipoUbicacion: 'AGENCIA',
+              cantidadActual: 0,
+              cantidadMinima: r.insumo?.stockMinimoAgencia ?? 2,
+            },
+          }).catch((err) => console.warn(`[StockSync] Error al crear stock inicial para insumo ${r.insumoId}:`, err));
+          setExistentes.add(r.insumoId);
+        }
+      }
+    } catch (err) {
+      console.warn('[StockSync] Error en sincronizarStockInsumosPorServicios:', err);
+    }
+  }
+
   async createAgencia(dto: CreateAgenciaDto) {
     const slug = dto.nombre.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase();
     let codigoGenerado = dto.codigo?.trim().toUpperCase();
@@ -621,6 +676,11 @@ export class AgenciasService {
       const r = (u.role?.namerol || '').toUpperCase();
       return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
     });
+
+    const sIdsCreacion = Array.isArray(created.servicioIds) ? (created.servicioIds as number[]) : [];
+    if (sIdsCreacion.length > 0) {
+      await this.sincronizarStockInsumosPorServicios(created.id, sIdsCreacion);
+    }
 
     return {
       ...finalCreated,
@@ -793,6 +853,13 @@ export class AgenciasService {
       const r = (u.role?.namerol || '').toUpperCase();
       return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
     });
+
+    const finalServicioIds = Array.isArray(dto.servicioIds)
+      ? (dto.servicioIds as number[])
+      : (Array.isArray(updated.servicioIds) ? (updated.servicioIds as number[]) : []);
+    if (finalServicioIds.length > 0) {
+      await this.sincronizarStockInsumosPorServicios(updated.id, finalServicioIds);
+    }
 
     return {
       ...finalAgencia,
