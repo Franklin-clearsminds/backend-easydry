@@ -114,16 +114,20 @@ model User {
   roleId        String
   role          Role     @relation(fields: [roleId], references: [id])
 
-  // Agencia principal asignada (obligatorio para: LIDER_AGENCIA, APROBADOR, PULIDOR_FIJO; opcional para PULIDOR_MOVIL)
+  // Agencia principal (obligatoria para: LIDER, APROBADOR; PULIDOR con agencia = fijo)
   agenciaId     String?
   agencia       Agencia? @relation(fields: [agenciaId], references: [id])
 
   // Lista de agencias accesibles (para roles regionales / nacionales)
   agenciasIds   String[] @default([])
 
-  // Región asignada (especialmente para roles como SUPERVISOR, COORD_COMERCIAL)
+  // Región (SUPERVISOR, COORD_COMERCIAL, COORD_SERVICIOS_ESPECIALES, PULIDOR móvil)
   regionId      String?
   region        Region?  @relation(fields: [regionId], references: [id])
+
+  // Bodega asignada (obligatoria para ASISTENTE_BODEGA; opcional para COORD_BODEGA → central)
+  bodegaId      String?
+  bodega        Bodega?  @relation(fields: [bodegaId], references: [id])
 
   estado        Int      @default(1) // 0 desactivo, 1 activo
   createdAt     DateTime @default(now())
@@ -153,6 +157,7 @@ model User {
   @@index([roleId])
   @@index([agenciaId])
   @@index([regionId])
+  @@index([bodegaId])
   @@index([estado])
 }
 
@@ -558,24 +563,36 @@ model StockUbicacion {
   @@index([pulidorId])
 }
 
+enum TipoBodega {
+  CENTRAL
+  REGIONAL
+}
+
 model Bodega {
-  id               String   @id @default(uuid())
-  codigo           String   @unique
+  id               String     @id @default(uuid())
+  codigo           String     @unique
   nombre           String
   ciudad           String?
   direccion        String?
   telefono         String?
-  esCentral        Boolean  @default(false)
-  activa           Boolean  @default(true)
+  /// CENTRAL = única nacional (despacha a cualquier lugar). REGIONAL = solo agencias de su región.
+  tipo             TipoBodega @default(REGIONAL)
+  /// Compatibilidad legacy; se mantiene sincronizado con tipo === CENTRAL
+  esCentral        Boolean    @default(false)
+  activa           Boolean    @default(true)
+  /// Obligatoria para REGIONAL; opcional/null para CENTRAL
   regionId         String?
-  region           Region?  @relation(fields: [regionId], references: [id])
-  porcentajeAlerta Int      @default(20)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  region           Region?    @relation(fields: [regionId], references: [id])
+  porcentajeAlerta Int        @default(20)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  usuarios         User[]
 
   @@map("bodegas")
   @@index([activa])
   @@index([regionId])
+  @@index([tipo])
 }
 
 // 5. Historial de Movimientos y Despachos

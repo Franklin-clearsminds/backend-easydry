@@ -371,14 +371,22 @@ export class InventarioService {
     const isPulidor = isPulidorRole && !agenciaIdUsuario;
 
     if (isGlobal) {
-      // Super Admin, Admin y Gestor de Inventario ven todo de todos sin restricciones territoriales
+      // Super Admin, Admin y Coord Bodega ven todo sin restricciones territoriales
       if (dto.sucursalId) {
         where.agenciaId = dto.sucursalId;
       }
     } else if (isAsistente || isSupervisor) {
-      // Asistente de Bodega y Supervisor Regional solo pueden ver existencias de su región asignada
-      const userRegionId = usuario?.regionId;
-      const userRegionName = usuario?.region?.nombre;
+      // Asistente: región de su bodega; Supervisor: región asignada
+      let userRegionId = usuario?.regionId;
+      let userRegionName = usuario?.region?.nombre;
+      if (isAsistente && usuarioId) {
+        const uFull = await this.prisma.user.findUnique({
+          where: { id: usuarioId },
+          include: { bodega: { include: { region: true } }, region: true },
+        });
+        userRegionId = uFull?.bodega?.regionId || uFull?.regionId || userRegionId;
+        userRegionName = uFull?.bodega?.region?.nombre || uFull?.region?.nombre || userRegionName;
+      }
       let agenciasRegionIds: string[] = [];
 
       if (userRegionId || userRegionName) {
@@ -695,29 +703,50 @@ export class InventarioService {
           `);
         } catch (_) {}
 
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            DO $type$ BEGIN
+              CREATE TYPE "TipoBodega" AS ENUM ('CENTRAL', 'REGIONAL');
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $type$;
+          `);
+        } catch (_) {}
+
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            ALTER TABLE "bodegas" ADD COLUMN IF NOT EXISTS "tipo" "TipoBodega" NOT NULL DEFAULT 'REGIONAL'
+          `);
+        } catch (_) {}
+
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            UPDATE "bodegas" SET "tipo" = 'CENTRAL', "esCentral" = true
+            WHERE "esCentral" = true OR "codigo" = 'BOD-CENTRAL'
+          `);
+        } catch (_) {}
+
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            ALTER TABLE "bodegas" ALTER COLUMN "regionId" DROP NOT NULL
+          `);
+        } catch (_) {}
+
         const countResult: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(*)::int as count FROM "bodegas"`);
         const count = Number(countResult[0]?.count || 0);
 
         if (count === 0) {
+          await this.prisma.$executeRawUnsafe(
+            `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "regionId", "tipo", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
+             VALUES ($1, $2, $3, $4, NULL, 'CENTRAL'::"TipoBodega", true, true, $5, NOW(), NOW())
+             ON CONFLICT ("codigo") DO NOTHING`,
+            'bod_central',
+            'BOD-CENTRAL',
+            'Bodega Central Nacional',
+            'Quito',
+            20
+          );
+
           const regiones = await this.prisma.region.findMany({ where: { estado: 1 }, orderBy: { nombre: 'asc' } });
-          const sierraReg = regiones.find(r => r.nombre.toLowerCase().includes('sierra') || r.nombre.toLowerCase().includes('pichincha')) || regiones[0];
-
-          if (sierraReg) {
-            await this.prisma.$executeRawUnsafe(
-              `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "regionId", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-               ON CONFLICT ("codigo") DO NOTHING`,
-              'bod_central',
-              'BOD-CENTRAL',
-              'Bodega Central Nacional',
-              'Quito',
-              sierraReg.id,
-              true,
-              true,
-              20
-            );
-          }
-
           for (const reg of regiones) {
             const nom = reg.nombre.trim();
             const nomCap = nom.charAt(0).toUpperCase() + nom.slice(1);
@@ -731,16 +760,14 @@ export class InventarioService {
             const bodNom = `Bodega Regional ${nomCap}`;
 
             await this.prisma.$executeRawUnsafe(
-              `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "regionId", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+              `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "regionId", "tipo", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, 'REGIONAL'::"TipoBodega", false, true, $6, NOW(), NOW())
                ON CONFLICT ("codigo") DO NOTHING`,
               bodId,
               bodCod,
               bodNom,
               ciudad,
               reg.id,
-              false,
-              true,
               20
             );
           }
@@ -761,31 +788,32 @@ export class InventarioService {
 
     const bodegasRows: any[] = await this.prisma.$queryRawUnsafe(`
       SELECT b."id", b."codigo", b."nombre", b."ciudad", b."direccion", b."telefono",
-             b."esCentral", b."activa", b."regionId", b."porcentajeAlerta", b."createdAt", b."updatedAt",
+             b."tipo", b."esCentral", b."activa", b."regionId", b."porcentajeAlerta", b."createdAt", b."updatedAt",
              r."nombre" as "regionNombre", r."codigo" as "regionCodigo"
       FROM "bodegas" b
       LEFT JOIN "Region" r ON b."regionId" = r."id"
-      ORDER BY b."esCentral" DESC, b."nombre" ASC
+      ORDER BY CASE WHEN b."tipo" = 'CENTRAL' OR b."esCentral" = true THEN 0 ELSE 1 END, b."nombre" ASC
     `);
 
     let filteredRows = bodegasRows;
     if (usuarioId) {
       const usuario = await this.prisma.user.findUnique({
         where: { id: usuarioId },
-        include: { role: true, region: true },
+        include: { role: true, region: true, bodega: true },
       });
       const userRole = (usuario?.role?.namerol || '').toUpperCase();
       const isAsistente =
         userRole === 'ASISTENTE_BODEGA' ||
         (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
 
-      if (isAsistente && (usuario?.regionId || usuario?.region?.nombre)) {
-        const uRegId = usuario.regionId;
-        const uRegName = (usuario.region?.nombre || '').toLowerCase();
+      if (isAsistente) {
+        const uRegId = usuario?.bodega?.regionId || usuario?.regionId;
+        const uRegName = (usuario?.bodega as any)?.region?.nombre || (usuario?.region?.nombre || '').toLowerCase();
         filteredRows = bodegasRows.filter(
           (row) =>
+            (usuario?.bodegaId && row.id === usuario.bodegaId) ||
             (uRegId && row.regionId === uRegId) ||
-            (uRegName && row.regionNombre && row.regionNombre.toLowerCase().includes(uRegName))
+            (uRegName && row.regionNombre && String(row.regionNombre).toLowerCase().includes(String(uRegName).toLowerCase()))
         );
       }
     }
@@ -800,7 +828,8 @@ export class InventarioService {
       region: row.regionNombre || 'Nacional',
       regionId: row.regionId,
       regionCodigo: row.regionCodigo || '',
-      esCentral: !!row.esCentral,
+      tipo: row.tipo || (row.esCentral ? 'CENTRAL' : 'REGIONAL'),
+      esCentral: !!row.esCentral || row.tipo === 'CENTRAL',
       activa: !!row.activa,
       porcentajeAlerta: Number(row.porcentajeAlerta || 20),
       fechaCreacion: row.createdAt ? new Date(row.createdAt).toISOString().split('T')[0] : '2026-01-01',
@@ -814,22 +843,37 @@ export class InventarioService {
       throw new BadRequestException('El nombre de la bodega es requerido');
     }
 
-    if (!dto.regionId || !dto.regionId.trim()) {
-      throw new BadRequestException('Cada bodega debe estar estrictamente vinculada a una región');
+    const tipo = (dto.tipo || 'REGIONAL').toUpperCase() as 'CENTRAL' | 'REGIONAL';
+    if (tipo !== 'CENTRAL' && tipo !== 'REGIONAL') {
+      throw new BadRequestException('tipo debe ser CENTRAL o REGIONAL');
     }
 
-    const regionFound = await this.prisma.region.findFirst({
-      where: {
-        OR: [
-          { id: dto.regionId },
-          { nombre: { equals: dto.regionId, mode: 'insensitive' } },
-          { codigo: { equals: dto.regionId, mode: 'insensitive' } },
-        ],
-      },
-    });
-
-    if (!regionFound) {
-      throw new BadRequestException(`La región especificada "${dto.regionId}" no existe en la base de datos`);
+    let regionFound: { id: string; nombre: string } | null = null;
+    if (tipo === 'REGIONAL') {
+      if (!dto.regionId || !dto.regionId.trim()) {
+        throw new BadRequestException('Las bodegas REGIONALES deben estar vinculadas a una región');
+      }
+      regionFound = await this.prisma.region.findFirst({
+        where: {
+          OR: [
+            { id: dto.regionId },
+            { nombre: { equals: dto.regionId, mode: 'insensitive' } },
+            { codigo: { equals: dto.regionId, mode: 'insensitive' } },
+          ],
+        },
+      });
+      if (!regionFound) {
+        throw new BadRequestException(`La región especificada "${dto.regionId}" no existe en la base de datos`);
+      }
+    } else {
+      const existentesCentral: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT "id", "nombre" FROM "bodegas" WHERE "tipo" = 'CENTRAL' AND "activa" = true LIMIT 1`,
+      );
+      if (existentesCentral.length > 0) {
+        throw new ConflictException(
+          `Ya existe la Bodega Central Nacional ("${existentesCentral[0].nombre}"). Solo se permite una bodega CENTRAL.`,
+        );
+      }
     }
 
     const nombreNorm = dto.nombre.trim();
@@ -846,19 +890,22 @@ export class InventarioService {
     }
 
     const newId = `bod_${randomUUID().slice(0, 8)}`;
-    const ciudad = dto.ciudad?.trim() || regionFound.nombre;
+    const ciudad = dto.ciudad?.trim() || regionFound?.nombre || 'Nacional';
     const pct = dto.porcentajeAlerta !== undefined ? Number(dto.porcentajeAlerta) : 20;
+    const esCentral = tipo === 'CENTRAL';
 
     await this.prisma.$executeRawUnsafe(
-      `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "direccion", "telefono", "regionId", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, false, true, $8, NOW(), NOW())`,
+      `INSERT INTO "bodegas" ("id", "codigo", "nombre", "ciudad", "direccion", "telefono", "regionId", "tipo", "esCentral", "activa", "porcentajeAlerta", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::"TipoBodega", $9, true, $10, NOW(), NOW())`,
       newId,
       codigoNorm,
       nombreNorm,
       ciudad,
       dto.direccion?.trim() || '',
       dto.telefono?.trim() || '',
-      regionFound.id,
+      regionFound?.id || null,
+      tipo,
+      esCentral,
       pct
     );
 
@@ -869,13 +916,16 @@ export class InventarioService {
       ciudad,
       direccion: dto.direccion?.trim() || '',
       telefono: dto.telefono?.trim() || '',
-      region: regionFound.nombre,
-      regionId: regionFound.id,
-      esCentral: false,
+      region: regionFound?.nombre || 'Nacional',
+      regionId: regionFound?.id || null,
+      tipo,
+      esCentral,
       activa: true,
       porcentajeAlerta: pct,
       fechaCreacion: new Date().toISOString().split('T')[0],
-      message: `Bodega "${nombreNorm}" creada exitosamente vinculada a la región "${regionFound.nombre}"`,
+      message: tipo === 'CENTRAL'
+        ? `Bodega Central Nacional "${nombreNorm}" creada exitosamente`
+        : `Bodega "${nombreNorm}" creada exitosamente vinculada a la región "${regionFound?.nombre}"`,
     };
   }
 
@@ -1168,19 +1218,61 @@ export class InventarioService {
       if (!agencia) throw new NotFoundException(`Agencia "${targetAgenciaId}" no encontrada`);
       destinoLabel = `Agencia ${agencia.nombre} [${agencia.id}]`;
 
-      // Validar que si el usuario es ASISTENTE_BODEGA, solo despache a su misma región
+      // Reglas de despacho por rol:
+      // - COORD_BODEGA / ADMIN / SUPER_ADMIN: cualquier destino
+      // - ASISTENTE_BODEGA: solo agencias de la región de su bodega asignada
+      // - LIDER: solo otras agencias de su misma región
       if (usuarioId) {
         const usuario = await this.prisma.user.findUnique({
           where: { id: usuarioId },
-          include: { role: true, region: true },
+          include: {
+            role: true,
+            region: true,
+            agencia: true,
+            bodega: { include: { region: true } },
+          },
         });
         const rolUsuario = usuario?.role?.namerol?.toUpperCase() || '';
-        if (rolUsuario === 'ASISTENTE_BODEGA' && usuario?.regionId) {
-          if (agencia.regionId && agencia.regionId !== usuario.regionId) {
+        const isCoordBodega =
+          rolUsuario === 'COORD_BODEGA' ||
+          rolUsuario === 'DISTRIBUIDOR' ||
+          rolUsuario === 'SUPER_ADMIN' ||
+          rolUsuario === 'ADMIN';
+        const isAsistente =
+          rolUsuario === 'ASISTENTE_BODEGA' ||
+          (rolUsuario.includes('ASISTENTE') && rolUsuario.includes('BODEGA'));
+        const isLider = rolUsuario === 'LIDER' || rolUsuario === 'LIDER_AGENCIA' || rolUsuario === 'LIDER_OPERADOR';
+
+        if (isAsistente) {
+          const regionPermitida =
+            usuario?.bodega?.regionId ||
+            usuario?.regionId ||
+            null;
+          if (!regionPermitida) {
             throw new ForbiddenException(
-              `Acceso denegado: Como Asistente de Bodega de la región "${usuario.region?.nombre || ''}", únicamente puedes surtir insumos a agencias o bodegas de tu misma región.`,
+              'Como Asistente de Bodega debes estar asignado a una bodega regional para despachar.',
             );
           }
+          if (agencia.regionId && agencia.regionId !== regionPermitida) {
+            throw new ForbiddenException(
+              `Acceso denegado: solo puedes despachar a agencias de la región de tu bodega (${usuario?.bodega?.region?.nombre || usuario?.region?.nombre || 'asignada'}).`,
+            );
+          }
+        } else if (isLider) {
+          const regionLider = usuario?.agencia?.regionId || usuario?.regionId;
+          if (!regionLider) {
+            throw new ForbiddenException('El Líder Operador debe tener agencia/región para despachar.');
+          }
+          if (agencia.id === usuario?.agenciaId) {
+            throw new BadRequestException('No puedes despachar hacia tu misma agencia de origen.');
+          }
+          if (agencia.regionId && agencia.regionId !== regionLider) {
+            throw new ForbiddenException(
+              'Como Líder Operador solo puedes despachar a otras agencias de tu misma región.',
+            );
+          }
+        } else if (!isCoordBodega && rolUsuario && !rolUsuario.includes('SUPERVISOR')) {
+          // Otros roles no despachan (salvo que ya pasaron validaciones anteriores)
         }
       }
     } else {
@@ -1801,29 +1893,37 @@ export class InventarioService {
     if (usuarioId) {
       const usuario = await this.prisma.user.findUnique({
         where: { id: usuarioId },
-        include: { role: true, region: true },
+        include: { role: true, region: true, bodega: true },
       });
       const userRole = (usuario?.role?.namerol || '').toUpperCase();
       const isAsistente =
         userRole === 'ASISTENTE_BODEGA' ||
         (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
+      const isGlobalAlertViewer =
+        userRole === 'SUPER_ADMIN' ||
+        userRole === 'ADMIN' ||
+        userRole === 'COORD_BODEGA' ||
+        userRole === 'DISTRIBUIDOR' ||
+        userRole.includes('SUPERVISOR');
 
-      if (isAsistente && (usuario?.regionId || usuario?.region?.nombre)) {
-        const agenciasRegion = await this.prisma.agencia.findMany({
-          where: {
-            OR: [
-              ...(usuario.regionId ? [{ regionId: usuario.regionId }] : []),
-              ...(usuario.region?.nombre ? [{ region: { contains: usuario.region.nombre, mode: 'insensitive' as const } }] : []),
-            ],
-          },
-          select: { id: true },
-        });
-        const agIds = agenciasRegion.map((a) => a.id);
-        if (targetAgencia) {
-          where.agenciaId = agIds.includes(targetAgencia) ? targetAgencia : '__ACCESO_DENEGADO__';
+      if (isAsistente) {
+        const regionId = usuario?.bodega?.regionId || usuario?.regionId;
+        if (regionId) {
+          const agenciasRegion = await this.prisma.agencia.findMany({
+            where: { regionId },
+            select: { id: true },
+          });
+          const agIds = agenciasRegion.map((a) => a.id);
+          if (targetAgencia) {
+            where.agenciaId = agIds.includes(targetAgencia) ? targetAgencia : '__ACCESO_DENEGADO__';
+          } else {
+            where.agenciaId = { in: agIds };
+          }
         } else {
-          where.agenciaId = { in: agIds };
+          where.agenciaId = '__SIN_REGION_ASISTENTE__';
         }
+      } else if (isGlobalAlertViewer) {
+        if (targetAgencia) where.agenciaId = targetAgencia;
       } else if (targetAgencia) {
         where.agenciaId = targetAgencia;
       }

@@ -178,7 +178,7 @@ const ROLES_DATA: RoleSeed[] = [
   },
   {
     namerol: 'LIDER',
-    descripcion: 'Líder con acceso a plataforma para registrar OTs y coordinar bahías e inventario.',
+    descripcion: 'Líder Operador: registra OTs/servicios de su agencia, controla bahías, gestiona inventario local, confirma recepciones y puede despachar a otras agencias de su misma región.',
     estado: 1,
     permisos: [
       'dashboard', 'notificaciones', 'servicios', 'configuracion/servicios', 'maquinaria',
@@ -193,25 +193,7 @@ const ROLES_DATA: RoleSeed[] = [
       registrarIncidente: true,
       gestionarInventario: true,
       accionesEnvios: true,
-    },
-  },
-  {
-    namerol: 'LIDER_AGENCIA',
-    descripcion: 'Líder de agencia: OTs, bahías, maquinaria e inventario de su sede.',
-    estado: 1,
-    permisos: [
-      'dashboard', 'notificaciones', 'servicios', 'configuracion/servicios', 'maquinaria',
-      'inventario', 'envios', 'operadores', 'asignaciones', 'perfil',
-    ],
-    acciones: {
-      ...ACCIONES_VACIAS,
-      cambiarBahiaOperador: true,
-      registrarServicio: true,
-      verTodosServicios: true,
-      verMaquinaria: true,
-      registrarIncidente: true,
-      gestionarInventario: true,
-      accionesEnvios: true,
+      despacharSuministros: true,
     },
   },
   {
@@ -285,9 +267,9 @@ const ROLES_DATA: RoleSeed[] = [
   },
   {
     namerol: 'COORD_BODEGA',
-    descripcion: 'Inventario nacional, recepción de compras y despachos multi-región.',
+    descripcion: 'Coordinador de Bodega Central: ingreso de compras a bodega nacional y despacho a cualquier agencia o bodega regional del país.',
     estado: 1,
-    permisos: ['dashboard', 'inventario', 'envios', 'perfil'],
+    permisos: ['dashboard', 'inventario', 'envios', 'notificaciones', 'reportes', 'perfil'],
     acciones: {
       ...ACCIONES_VACIAS,
       verTodasSucursales: true,
@@ -300,9 +282,9 @@ const ROLES_DATA: RoleSeed[] = [
   },
   {
     namerol: 'ASISTENTE_BODEGA',
-    descripcion: 'Opera bodega regional: entradas y despachos a agencias de su región.',
+    descripcion: 'Asistente asignado a una bodega regional: despacha solo a agencias de la región de su bodega y atiende alertas regionales.',
     estado: 1,
-    permisos: ['dashboard', 'inventario', 'envios', 'perfil'],
+    permisos: ['dashboard', 'inventario', 'envios', 'notificaciones', 'perfil'],
     acciones: {
       ...ACCIONES_VACIAS,
       gestionarInventario: true,

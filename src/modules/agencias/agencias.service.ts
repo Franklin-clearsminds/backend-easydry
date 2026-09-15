@@ -1460,7 +1460,6 @@ export class AgenciasService {
             { namerol: dto.rolNombre },
             { namerol: dto.rolNombre.toUpperCase() },
             { namerol: code },
-            { namerol: code === 'LIDER' ? 'LIDER_AGENCIA' : code },
             { namerol: code === 'COORD_BODEGA' ? 'DISTRIBUIDOR' : code },
           ],
         },
@@ -1475,6 +1474,7 @@ export class AgenciasService {
 
     let agenciaIdToSet: string | null | undefined = undefined;
     let regionIdToSet: string | null | undefined = undefined;
+    let bodegaIdToSet: string | null | undefined = undefined;
 
     if (dto.agenciaId !== undefined) {
       if (!dto.agenciaId || dto.agenciaId === 'null' || dto.agenciaId === 'Sin asignar' || dto.agenciaId.toLowerCase().includes('sin sucursal')) {
@@ -1545,20 +1545,24 @@ export class AgenciasService {
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (
       userRoleCode === 'COORD_BODEGA' ||
       userRoleCode === 'DISTRIBUIDOR' ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
     ) {
-      // Gestor de Inventario / Coord Bodega: acceso total nacional (sin agencia ni región fija)
+      // Coord Bodega: acceso total nacional (sin agencia ni región fija)
       agenciaIdToSet = null;
       regionIdToSet = null;
+      if (dto.bodegaId !== undefined) bodegaIdToSet = dto.bodegaId || null;
     } else if (userRoleCode.includes('SUPERVISOR')) {
       agenciaIdToSet = null;
+      bodegaIdToSet = null;
       if (!regionIdToSet) {
         regionIdToSet = user.regionId;
       }
@@ -1570,15 +1574,21 @@ export class AgenciasService {
       userRoleCode === 'ASISTENTE_BODEGA' ||
       (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
     ) {
-      // Asistente de Bodega: vinculado operativamente a su región
+      // Asistente de Bodega: vinculado a bodega regional
       agenciaIdToSet = null;
-      if (!regionIdToSet) {
-        regionIdToSet = user.regionId;
+      if (dto.bodegaId !== undefined) {
+        bodegaIdToSet = dto.bodegaId || null;
+      } else {
+        bodegaIdToSet = user.bodegaId;
       }
-      if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+      if (!bodegaIdToSet) {
+        throw new BadRequestException('El Asistente de Bodega debe estar asignado a una bodega regional (bodegaId).');
       }
+      const bod = await this.prisma.bodega.findUnique({ where: { id: bodegaIdToSet } });
+      if (!bod || bod.tipo === 'CENTRAL' || bod.esCentral) {
+        throw new BadRequestException('El Asistente de Bodega solo puede asignarse a bodegas de tipo REGIONAL.');
+      }
+      regionIdToSet = bod.regionId || regionIdToSet || user.regionId;
     }
 
     const updatedUser = await this.prisma.user.update({
@@ -1591,12 +1601,14 @@ export class AgenciasService {
         ...(roleIdToSet !== undefined && { roleId: roleIdToSet }),
         ...(agenciaIdToSet !== undefined && { agenciaId: agenciaIdToSet }),
         ...(regionIdToSet !== undefined && { regionId: regionIdToSet }),
+        ...(bodegaIdToSet !== undefined && { bodegaId: bodegaIdToSet }),
         ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet }),
       },
       include: {
         role: true,
         agencia: true,
         region: true,
+        bodega: true,
       },
     });
 
@@ -1611,6 +1623,7 @@ export class AgenciasService {
         role: updatedUser.role,
         agencia: updatedUser.agencia,
         region: updatedUser.region,
+        bodega: updatedUser.bodega,
       },
     };
   }
@@ -1653,7 +1666,6 @@ export class AgenciasService {
             { namerol: dto.rolNombre },
             { namerol: dto.rolNombre.toUpperCase() },
             { namerol: code },
-            { namerol: code === 'LIDER' ? 'LIDER_AGENCIA' : code },
             { namerol: code === 'COORD_BODEGA' ? 'DISTRIBUIDOR' : code },
           ],
         },
@@ -1673,6 +1685,7 @@ export class AgenciasService {
     // Agencia y región son 100% opcionales en la creación
     let agenciaIdToSet: string | null = null;
     let regionIdToSet: string | null = null;
+    let bodegaIdToSet: string | null = null;
     if (dto.agenciaId && dto.agenciaId !== 'Sin asignar' && !dto.agenciaId.toLowerCase().includes('sin sucursal')) {
       const ag = await this.prisma.agencia.findFirst({
         where: { OR: [{ id: dto.agenciaId }, { nombre: dto.agenciaId }] },
@@ -1724,24 +1737,37 @@ export class AgenciasService {
         }
       }
     }
+
+    if (dto.bodegaId) {
+      const bodega = await this.prisma.bodega.findUnique({ where: { id: dto.bodegaId } });
+      if (!bodega) {
+        throw new BadRequestException(`Bodega "${dto.bodegaId}" no encontrada`);
+      }
+      bodegaIdToSet = bodega.id;
+      if (bodega.regionId) regionIdToSet = bodega.regionId;
+    }
+
     const userRoleCode = (dto.rolNombre || '').toUpperCase();
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (
       userRoleCode === 'COORD_BODEGA' ||
       userRoleCode === 'DISTRIBUIDOR' ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
     ) {
-      // Gestor de Inventario / Coord Bodega: alcance nacional global sin agencia ni región fija
+      // Coord Bodega: alcance nacional sin agencia/región; bodega opcional (central)
       agenciaIdToSet = null;
       regionIdToSet = null;
     } else if (userRoleCode.includes('SUPERVISOR')) {
       agenciaIdToSet = null;
+      bodegaIdToSet = null;
       if (!regionIdToSet) {
         const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
         regionIdToSet = defaultReg?.id || null;
@@ -1750,12 +1776,23 @@ export class AgenciasService {
       userRoleCode === 'ASISTENTE_BODEGA' ||
       (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
     ) {
-      // Asistente de Bodega: asignado operativamente a su región
       agenciaIdToSet = null;
-      if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+      if (!bodegaIdToSet) {
+        throw new BadRequestException('El Asistente de Bodega debe estar asignado a una bodega regional (bodegaId).');
       }
+      const bod = await this.prisma.bodega.findUnique({ where: { id: bodegaIdToSet } });
+      if (!bod || bod.tipo === 'CENTRAL' || bod.esCentral) {
+        throw new BadRequestException('El Asistente de Bodega solo puede asignarse a bodegas de tipo REGIONAL.');
+      }
+      regionIdToSet = bod.regionId || regionIdToSet;
+      if (!regionIdToSet) {
+        throw new BadRequestException('La bodega asignada al asistente debe tener región.');
+      }
+    } else if (userRoleCode === 'LIDER' || userRoleCode.includes('LIDER')) {
+      if (!agenciaIdToSet) {
+        throw new BadRequestException('El Líder Operador debe tener una agencia asignada.');
+      }
+      bodegaIdToSet = null;
     }
 
     const passwordToHash = dto.password?.trim() || 'Admin123*';
@@ -1770,12 +1807,14 @@ export class AgenciasService {
         roleId: roleIdToSet,
         agenciaId: agenciaIdToSet,
         regionId: regionIdToSet,
+        bodegaId: bodegaIdToSet,
         estado: dto.estado !== undefined ? dto.estado : 1,
       },
       include: {
         role: true,
         agencia: true,
         region: true,
+        bodega: true,
       },
     });
 
@@ -1790,6 +1829,8 @@ export class AgenciasService {
         role: newUser.role,
         agencia: newUser.agencia,
         region: newUser.region,
+        bodega: newUser.bodega,
+        bodegaId: newUser.bodegaId,
       },
     };
   }
