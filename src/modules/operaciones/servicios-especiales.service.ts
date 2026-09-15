@@ -37,51 +37,105 @@ export class ServiciosEspecialesService {
   async findAll(query: QueryServicioEspecialDto, currentUser?: any) {
     const where: any = { deletedAt: null };
 
-    // 1. Filtrado Estricto por Rol y Región
+    // 1. Filtrado Estricto por Rol y Región (RBAC)
     if (currentUser) {
-      const rol = (currentUser.role?.namerol || currentUser.role || '').toUpperCase();
+      const rol = (currentUser.role?.namerol || currentUser.roleDetails?.namerol || currentUser.role || '').toUpperCase();
+      const isSuperAdminOrAdmin = rol === 'SUPER_ADMIN' || rol === 'ADMIN';
+      const isSupervisor = rol === 'SUPERVISOR' || rol === 'GERENTE_REGIONAL' || rol.includes('SUPERVISOR') || rol.includes('REGIONAL');
+      const isAprobador = rol === 'APROBADOR' || rol === 'GERENTE';
       const isPulidor = rol.includes('PULIDOR') || rol === 'PULIDOR_MOVIL' || rol === 'PULIDOR_FIJO';
       const isCoord = rol.includes('COORD_SERVICIOS_ESPECIALES') || (rol.includes('COORD') && rol.includes('ESPECIALES'));
 
-      if (isPulidor) {
-        // El pulidor ve únicamente los servicios asignados a él
-        where.operadorId = currentUser.id;
+      if (isSuperAdminOrAdmin) {
+        // Super Admin y Admin: ven todo a nivel nacional sin restricciones forzadas
+        if (query.regionId && query.regionId !== 'Todas' && query.regionId !== 'TODAS') {
+          where.regionId = query.regionId;
+        }
+        const targetAgencia = query.agenciaId || query.sucursalId;
+        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
+          where.agenciaId = targetAgencia;
+        }
+      } else if (isSupervisor) {
+        // Gerente Regional / Supervisor: solo servicios de su región
+        const regId = currentUser.regionId || query.regionId;
+        if (regId && regId !== 'Todas' && regId !== 'TODAS') {
+          where.OR = [
+            { regionId: regId },
+            { agencia: { regionId: regId } }
+          ];
+        }
+        const targetAgencia = query.agenciaId || query.sucursalId;
+        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
+          where.agenciaId = targetAgencia;
+        }
+      } else if (isAprobador) {
+        // Aprobador: solo servicios de su sucursal / agencia asignada
+        const targetAgencia = currentUser.agenciaId || query.agenciaId || query.sucursalId;
+        if (targetAgencia) {
+          where.agenciaId = targetAgencia;
+        }
+      } else if (isPulidor) {
+        // El pulidor ve los servicios asignados a él; y si es fijo en una agencia, también los servicios de su agencia
+        if (currentUser.agenciaId) {
+          where.OR = [
+            { operadorId: currentUser.id },
+            { agenciaId: currentUser.agenciaId }
+          ];
+        } else {
+          where.operadorId = currentUser.id;
+        }
       } else if (isCoord && currentUser.regionId) {
         // El coordinador ve únicamente los servicios de su región asignada
         where.regionId = currentUser.regionId;
       }
+    } else {
+      if (query.regionId && query.regionId !== 'Todas' && query.regionId !== 'TODAS') {
+        where.regionId = query.regionId;
+      }
+      const targetAgencia = query.agenciaId || query.sucursalId;
+      if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
+        where.agenciaId = targetAgencia;
+      }
     }
 
-    if (query.operadorId) {
+    if (query.operadorId && !where.operadorId) {
       where.operadorId = query.operadorId;
     }
 
-    if (query.regionId) {
-      where.regionId = query.regionId;
+    if (query.estado && query.estado !== 'Todos' && query.estado !== 'TODOS') {
+      const qEst = query.estado.trim();
+      if (qEst.toLowerCase() === 'en proceso') {
+        where.estado = { in: ['En Proceso', 'EN_PROCESO', 'Pendiente', 'PENDIENTE'] };
+      } else if (qEst.toLowerCase() === 'completado' || qEst.toLowerCase() === 'realizado') {
+        where.estado = { in: ['Completado', 'FINALIZADO', 'COMPLETADO', 'Finalizado'] };
+      } else {
+        where.estado = { equals: qEst, mode: 'insensitive' };
+      }
     }
 
-    const targetAgencia = query.agenciaId || query.sucursalId;
-    if (targetAgencia) {
-      where.agenciaId = targetAgencia;
-    }
-
-    if (query.estado && query.estado !== 'Todos') {
-      where.estado = { equals: query.estado, mode: 'insensitive' };
-    }
-
-    if (query.tipoServicio && query.tipoServicio !== 'Todos') {
+    if (query.tipoServicio && query.tipoServicio !== 'Todos' && query.tipoServicio !== 'TODOS') {
       where.tipoServicio = { contains: query.tipoServicio, mode: 'insensitive' };
     }
 
     if (query.search) {
       const q = query.search.trim();
-      where.OR = [
+      const searchConditions = [
         { codigoSE: { contains: q, mode: 'insensitive' } },
         { placa: { contains: q, mode: 'insensitive' } },
         { modelo: { contains: q, mode: 'insensitive' } },
         { clienteNombre: { contains: q, mode: 'insensitive' } },
         { observaciones: { contains: q, mode: 'insensitive' } },
       ];
+
+      if (where.OR) {
+        where.AND = [
+          { OR: where.OR },
+          { OR: searchConditions },
+        ];
+        delete where.OR;
+      } else {
+        where.OR = searchConditions;
+      }
     }
 
     const page = query.page ? Number(query.page) : 1;
@@ -335,7 +389,7 @@ export class ServiciosEspecialesService {
         estado: 1,
         regionId,
         role: {
-          namerol: { in: ['PULIDOR_MOVIL', 'PULIDOR_FIJO', 'Pulidor Móvil', 'Pulidor Fijo'] },
+          namerol: { in: ['PULIDOR', 'PULIDOR_MOVIL', 'PULIDOR_FIJO', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'] },
         },
       },
       select: {
@@ -345,6 +399,8 @@ export class ServiciosEspecialesService {
         email: true,
         regionId: true,
         region: { select: { id: true, nombre: true } },
+        agenciaId: true,
+        agencia: { select: { id: true, nombre: true } },
       },
       orderBy: { name: 'asc' },
     });

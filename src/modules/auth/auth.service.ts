@@ -54,7 +54,7 @@ export class AuthService {
       where: { email: email.toLowerCase().trim() },
       include: {
         role: {
-          select: { id: true, namerol: true, permisos: true, estado: true },
+          select: { id: true, namerol: true, permisos: true, acciones: true, estado: true },
         },
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true },
@@ -98,7 +98,11 @@ export class AuthService {
         role: user.role?.namerol,
         roleCode: user.role?.namerol,
         rolNombre: user.role?.namerol,
+        /** Códigos de módulos permitidos (desde Role.permisos en BD) */
         permisos: user.role?.permisos ?? [],
+        modulos: user.role?.permisos ?? [],
+        /** Acciones granulares del rol (desde Role.acciones en BD) */
+        acciones: user.role?.acciones ?? null,
         agenciaId: user.agenciaId,
         agenciasIds: user.agenciasIds,
         agencia: user.agencia,
@@ -134,7 +138,7 @@ export class AuthService {
       where: { id: payload.sub },
       include: {
         role: {
-          select: { id: true, namerol: true, permisos: true, estado: true },
+          select: { id: true, namerol: true, permisos: true, acciones: true, estado: true },
         },
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true },
@@ -171,6 +175,8 @@ export class AuthService {
         roleCode: user.role?.namerol,
         rolNombre: user.role?.namerol,
         permisos: user.role?.permisos ?? [],
+        modulos: user.role?.permisos ?? [],
+        acciones: user.role?.acciones ?? null,
         agenciaId: user.agenciaId,
         agenciasIds: user.agenciasIds,
         agencia: user.agencia,
@@ -194,7 +200,7 @@ export class AuthService {
         lastname: true,
         roleId: true,
         role: {
-          select: { id: true, namerol: true, permisos: true, estado: true },
+          select: { id: true, namerol: true, permisos: true, acciones: true, estado: true },
         },
         agenciaId: true,
         agenciasIds: true,
@@ -226,6 +232,8 @@ export class AuthService {
       sucursalNombre: user.agencia?.nombre,
       regionNombre: user.region?.nombre,
       permisos: role?.permisos ?? [],
+      modulos: role?.permisos ?? [],
+      acciones: role?.acciones ?? null,
       roleDetails: role,
     };
   }

@@ -47,7 +47,12 @@ export class CreateAgenciaDto {
   @IsInt()
   maxLavadoresPorBahia?: number = 1;
 
-  @ApiPropertyOptional({ example: 'uuid-marca', description: 'ID de la marca a la que pertenece la agencia' })
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'ID del cliente corporativo al que pertenece la agencia' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Alias retrocompatible para clienteId' })
   @IsOptional()
   @IsString()
   marcaId?: string;
@@ -137,7 +142,12 @@ export class UpdateAgenciaDto {
   @IsInt()
   maxLavadoresPorBahia?: number;
 
-  @ApiPropertyOptional({ example: 'uuid-marca' })
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'ID del cliente corporativo' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Alias retrocompatible para clienteId' })
   @IsOptional()
   @IsString()
   marcaId?: string;
@@ -192,7 +202,12 @@ export class ListAgenciasDto {
   @IsString()
   regionId?: string;
 
-  @ApiPropertyOptional({ example: 'uuid-marca', description: 'Filtrar por marca' })
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Filtrar por cliente corporativo' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Alias retrocompatible para clienteId' })
   @IsOptional()
   @IsString()
   marcaId?: string;

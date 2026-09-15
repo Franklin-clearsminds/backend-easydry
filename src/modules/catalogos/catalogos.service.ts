@@ -192,7 +192,7 @@ export class CatalogosService {
           where: { activa: true },
           select: { id: true, codigo: true, nombre: true },
         },
-        marca: { select: { id: true, nombre: true } },
+        cliente: { select: { id: true, nombre: true } },
       },
       orderBy: { codigo: 'asc' },
     });

@@ -46,10 +46,10 @@ model Region {
 }
 
 // =========================================================================
-// MARCAS
+// CLIENTES
 // =========================================================================
 
-model Marca {
+model Cliente {
   id        String    @id @default(uuid())
   nombre    String    @unique
   estado    Int       @default(1) // 1 activo, 0 inactivo
@@ -70,7 +70,10 @@ model Role {
   namerol           String   @unique
   descripcion       String?
   estado            Int      @default(1) // 0 inactivo, 1 activo
+  /// Códigos de módulos a los que el rol tiene acceso (FK lógica a ModuloSistema.codigo)
   permisos          String[] @default([])
+  /// Acciones granulares del rol (JSON con flags de negocio)
+  acciones          Json?
   fechaCreacion     DateTime @default(now())
   fechaModificacion DateTime @updatedAt
 
@@ -79,6 +82,27 @@ model Role {
   @@map("roles")
   @@index([namerol])
   @@index([estado])
+}
+
+/// Catálogo oficial de módulos / permisos de navegación del sistema
+model ModuloSistema {
+  id            String   @id @default(uuid())
+  codigo        String   @unique
+  nombre        String
+  descripcion   String?
+  icono         String?
+  rutaPrincipal String?
+  grupo         String
+  orden         Int      @default(0)
+  estado        Int      @default(1) // 1 activo, 0 inactivo
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("modulos_sistema")
+  @@index([estado])
+  @@index([grupo])
+  @@index([orden])
 }
 
 model User {
@@ -153,9 +177,9 @@ model Agencia {
   servicioIds               Json?                    // ids del catálogo asignados a la agencia
   serviciosNombres          Json?                    // nombres de los servicios asignados (caché)
 
-  // Marca franquiciadora
-  marcaId      String?
-  marca        Marca?   @relation(fields: [marcaId], references: [id])
+  // Cliente corporativo / franquiciador
+  clienteId    String?
+  cliente      Cliente? @relation(fields: [clienteId], references: [id])
 
   // Región oficial
   regionId     String?
@@ -175,7 +199,7 @@ model Agencia {
   @@index([region])
   @@index([regionId])
   @@index([estado])
-  @@index([marcaId])
+  @@index([clienteId])
 }
 
 model Bahia {

@@ -148,15 +148,15 @@ export class InventarioController {
   @Post('stock/agencias-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen consolidado de insumos por agencia' })
-  async stockAgenciasResumen(@Body() dto: any) {
-    return this.inventarioService.obtenerStockAgenciasResumen(dto);
+  async stockAgenciasResumen(@Body() dto: any, @CurrentUser() user: any) {
+    return this.inventarioService.obtenerStockAgenciasResumen(dto, user?.id);
   }
 
   @Post('bodegas/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar bodegas del sistema (Central y Regionales)' })
-  async listBodegas() {
-    return this.inventarioService.listBodegas();
+  async listBodegas(@CurrentUser() user: any) {
+    return this.inventarioService.listBodegas(user?.id);
   }
 
   @Post('bodegas/create')
@@ -293,8 +293,8 @@ export class InventarioController {
   @Post('alertas/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Bandeja de alertas para Bodega Central con filtros (ASISTENTE_BODEGA / COORD_BODEGA)' })
-  async listAlertas(@Body() dto: ListAlertasDto) {
-    return this.inventarioService.listAlertas(dto);
+  async listAlertas(@Body() dto: ListAlertasDto, @CurrentUser() user: any) {
+    return this.inventarioService.listAlertas(dto, user?.id);
   }
 
   @Post('alertas/atender')

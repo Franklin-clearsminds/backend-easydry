@@ -16,10 +16,18 @@ export class RolesController {
 
   @Post('permisos/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar catálogo oficial de permisos disponibles del sistema (POST Seguro)' })
+  @ApiOperation({ summary: 'Listar catálogo oficial de permisos/módulos desde BD (POST Seguro)' })
   @ApiResponse({ status: 200, description: 'Catálogo oficial de permisos obtenido exitosamente' })
   async listAvailablePermissions() {
     return this.rolesService.getAvailablePermissions();
+  }
+
+  @Post('modulos/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar módulos del sistema desde BD (POST Seguro)' })
+  @ApiResponse({ status: 200, description: 'Lista de módulos obtenida exitosamente' })
+  async listModulos(@Body() body?: { soloActivos?: boolean }) {
+    return this.rolesService.listModulos(body?.soloActivos !== false);
   }
 
   @Post('list')

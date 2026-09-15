@@ -17,12 +17,27 @@ export class AprobacionesService {
     const where: any = {};
 
     // Scoping por rol:
-    const userRole = user?.roleDetails?.namerol;
-    if (userRole === 'APROBADOR' || userRole === 'LIDER_AGENCIA' || userRole === 'LIDER') {
+    const userRole = (user?.role?.namerol || user?.roleDetails?.namerol || user?.role || '').toUpperCase();
+    const isSuperAdminOrAdmin = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
+    const isSupervisor = userRole === 'SUPERVISOR' || userRole === 'GERENTE_REGIONAL' || userRole.includes('SUPERVISOR') || userRole.includes('REGIONAL');
+    const isAprobador = userRole === 'APROBADOR' || userRole === 'LIDER_AGENCIA' || userRole === 'LIDER' || userRole === 'GERENTE';
+
+    if (isSuperAdminOrAdmin) {
+      if (dto.agenciaId && dto.agenciaId !== 'Todas' && dto.agenciaId !== 'TODAS') {
+        where.agenciaId = dto.agenciaId;
+      }
+    } else if (isSupervisor) {
+      if (user?.regionId) {
+        where.agencia = { regionId: user.regionId };
+      }
+      if (dto.agenciaId && dto.agenciaId !== 'Todas' && dto.agenciaId !== 'TODAS') {
+        where.agenciaId = dto.agenciaId;
+      }
+    } else if (isAprobador) {
       if (user?.agenciaId) {
         where.agenciaId = user.agenciaId;
       }
-    } else if (dto.agenciaId) {
+    } else if (dto.agenciaId && dto.agenciaId !== 'Todas' && dto.agenciaId !== 'TODAS') {
       where.agenciaId = dto.agenciaId;
     }
 

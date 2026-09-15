@@ -14,9 +14,13 @@ export class QueryServiciosDto extends DataGridQueryDto {
   @IsString()
   agenciaId?: string;
 
-
-  @ApiPropertyOptional({ enum: ServiceStatus, description: 'Filtrar por estado operativo' })
+  @ApiPropertyOptional({ example: 'region-uuid-01', description: 'Filtrar por ID de región' })
   @IsOptional()
-  @IsEnum(ServiceStatus)
-  estado?: ServiceStatus;
+  @IsString()
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar por estado operativo' })
+  @IsOptional()
+  @IsString()
+  estado?: string | ServiceStatus;
 }

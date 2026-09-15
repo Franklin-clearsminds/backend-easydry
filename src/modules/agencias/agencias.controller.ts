@@ -22,11 +22,15 @@ import {
   ResumenAgenciaDto,
 } from './dto/agencias.dto.js';
 import {
+  CreateClienteDto,
+  UpdateClienteDto,
+  ListClientesDto,
+  ToggleEstadoClienteDto,
   CreateMarcaDto,
   UpdateMarcaDto,
   ListMarcasDto,
   ToggleEstadoMarcaDto,
-} from './dto/marcas.dto.js';
+} from './dto/clientes.dto.js';
 import {
   CreateRegionDto,
   UpdateRegionDto,
@@ -97,38 +101,70 @@ export class AgenciasController {
   }
 
   // =========================================================================
-  // 2. MARCAS (CRUD + ESTADO)
+  // 2. CLIENTES (CRUD + ESTADO)
   // =========================================================================
 
+  @Post('clientes/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar clientes corporativos registrados (POST)' })
+  async listClientes(@Body() dto: ListClientesDto) {
+    return this.agenciasService.listClientes(dto);
+  }
+
+  @Post('clientes/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear nuevo cliente corporativo (SUPER_ADMIN, ADMIN)' })
+  async createCliente(@Body() dto: CreateClienteDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'crear clientes');
+    return this.agenciasService.createCliente(dto);
+  }
+
+  @Post('clientes/update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar cliente corporativo existente (SUPER_ADMIN, ADMIN)' })
+  async updateCliente(@Body() dto: UpdateClienteDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'actualizar clientes');
+    return this.agenciasService.updateCliente(dto);
+  }
+
+  @Post('clientes/toggle-estado')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Activar o desactivar cliente corporativo (0/1) (SUPER_ADMIN, ADMIN)' })
+  async toggleEstadoCliente(@Body() dto: ToggleEstadoClienteDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'cambiar estado de clientes');
+    return this.agenciasService.toggleEstadoCliente(dto);
+  }
+
+  // Endpoints retrocompatibles para marcas
   @Post('marcas/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar marcas registradas (POST)' })
+  @ApiOperation({ summary: 'Listar marcas (alias de clientes) (POST)' })
   async listMarcas(@Body() dto: ListMarcasDto) {
-    return this.agenciasService.listMarcas(dto);
+    return this.agenciasService.listClientes(dto);
   }
 
   @Post('marcas/create')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Crear nueva marca (SUPER_ADMIN, ADMIN)' })
+  @ApiOperation({ summary: 'Crear nueva marca (alias de clientes) (SUPER_ADMIN, ADMIN)' })
   async createMarca(@Body() dto: CreateMarcaDto, @CurrentUser() user: any) {
     this._requireAdmin(user, 'crear marcas');
-    return this.agenciasService.createMarca(dto);
+    return this.agenciasService.createCliente(dto);
   }
 
   @Post('marcas/update')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Actualizar marca existente (SUPER_ADMIN, ADMIN)' })
+  @ApiOperation({ summary: 'Actualizar marca (alias de clientes) (SUPER_ADMIN, ADMIN)' })
   async updateMarca(@Body() dto: UpdateMarcaDto, @CurrentUser() user: any) {
     this._requireAdmin(user, 'actualizar marcas');
-    return this.agenciasService.updateMarca(dto);
+    return this.agenciasService.updateCliente(dto);
   }
 
   @Post('marcas/toggle-estado')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Activar o desactivar marca (0/1) (SUPER_ADMIN, ADMIN)' })
+  @ApiOperation({ summary: 'Activar o desactivar marca (alias de clientes) (SUPER_ADMIN, ADMIN)' })
   async toggleEstadoMarca(@Body() dto: ToggleEstadoMarcaDto, @CurrentUser() user: any) {
     this._requireAdmin(user, 'cambiar estado de marcas');
-    return this.agenciasService.toggleEstadoMarca(dto);
+    return this.agenciasService.toggleEstadoCliente(dto);
   }
 
   // =========================================================================

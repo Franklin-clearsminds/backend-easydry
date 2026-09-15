@@ -25,12 +25,18 @@ export class OperacionesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar órdenes de servicio con filtros en body (POST Seguro)' })
   @ApiResponse({ status: 200, description: 'Lista de servicios filtrados' })
-  async findAll(@Body() queryDto: QueryServiciosDto) {
+  async findAll(@Body() queryDto: QueryServiciosDto, @CurrentUser() user: any) {
     return this.operacionesService.findAll({
       sucursalId: queryDto?.sucursalId || queryDto?.agenciaId,
+      agenciaId: queryDto?.agenciaId,
+      regionId: queryDto?.regionId,
       estado: queryDto?.estado,
       search: queryDto?.search,
-    });
+      page: queryDto?.page,
+      pageSize: queryDto?.pageSize,
+      sortField: queryDto?.sortField,
+      sortOrder: queryDto?.sortOrder,
+    }, user);
   }
 
   @Post('servicios/detail')

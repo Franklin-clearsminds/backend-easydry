@@ -13,11 +13,15 @@ import {
   ToggleEstadoAgenciaDto,
 } from './dto/agencias.dto.js';
 import {
+  CreateClienteDto,
+  UpdateClienteDto,
+  ListClientesDto,
+  ToggleEstadoClienteDto,
   CreateMarcaDto,
   UpdateMarcaDto,
   ListMarcasDto,
   ToggleEstadoMarcaDto,
-} from './dto/marcas.dto.js';
+} from './dto/clientes.dto.js';
 import {
   CreateRegionDto,
   UpdateRegionDto,
@@ -237,10 +241,10 @@ export class AgenciasService {
   }
 
   // =========================================================================
-  // 2. MARCAS (CRUD + TOGGLE)
+  // 2. CLIENTES (CRUD + ESTADO)
   // =========================================================================
 
-  async listMarcas(dto: ListMarcasDto) {
+  async listClientes(dto: ListClientesDto) {
     const where: any = {};
 
     if (dto.search) {
@@ -251,7 +255,7 @@ export class AgenciasService {
       where.estado = dto.estado;
     }
 
-    return this.prisma.marca.findMany({
+    return this.prisma.cliente.findMany({
       where,
       include: {
         _count: {
@@ -262,15 +266,15 @@ export class AgenciasService {
     });
   }
 
-  async createMarca(dto: CreateMarcaDto) {
-    const existing = await this.prisma.marca.findUnique({
+  async createCliente(dto: CreateClienteDto) {
+    const existing = await this.prisma.cliente.findUnique({
       where: { nombre: dto.nombre.trim() },
     });
     if (existing) {
-      throw new ConflictException(`Ya existe una marca registrada con el nombre "${dto.nombre}"`);
+      throw new ConflictException(`Ya existe un cliente registrado con el nombre "${dto.nombre}"`);
     }
 
-    return this.prisma.marca.create({
+    return this.prisma.cliente.create({
       data: {
         nombre: dto.nombre.trim(),
         estado: dto.estado ?? 1,
@@ -278,22 +282,22 @@ export class AgenciasService {
     });
   }
 
-  async updateMarca(dto: UpdateMarcaDto) {
-    const marca = await this.prisma.marca.findUnique({ where: { id: dto.id } });
-    if (!marca) {
-      throw new NotFoundException(`Marca con ID "${dto.id}" no encontrada`);
+  async updateCliente(dto: UpdateClienteDto) {
+    const cliente = await this.prisma.cliente.findUnique({ where: { id: dto.id } });
+    if (!cliente) {
+      throw new NotFoundException(`Cliente con ID "${dto.id}" no encontrado`);
     }
 
-    if (dto.nombre && dto.nombre.trim() !== marca.nombre) {
-      const existing = await this.prisma.marca.findUnique({
+    if (dto.nombre && dto.nombre.trim() !== cliente.nombre) {
+      const existing = await this.prisma.cliente.findUnique({
         where: { nombre: dto.nombre.trim() },
       });
       if (existing) {
-        throw new ConflictException(`Ya existe otra marca con el nombre "${dto.nombre}"`);
+        throw new ConflictException(`Ya existe otro cliente con el nombre "${dto.nombre}"`);
       }
     }
 
-    return this.prisma.marca.update({
+    return this.prisma.cliente.update({
       where: { id: dto.id },
       data: {
         ...(dto.nombre && { nombre: dto.nombre.trim() }),
@@ -302,19 +306,25 @@ export class AgenciasService {
     });
   }
 
-  async toggleEstadoMarca(dto: ToggleEstadoMarcaDto) {
-    const marca = await this.prisma.marca.findUnique({ where: { id: dto.id } });
-    if (!marca) {
-      throw new NotFoundException(`Marca con ID "${dto.id}" no encontrada`);
+  async toggleEstadoCliente(dto: ToggleEstadoClienteDto) {
+    const cliente = await this.prisma.cliente.findUnique({ where: { id: dto.id } });
+    if (!cliente) {
+      throw new NotFoundException(`Cliente con ID "${dto.id}" no encontrado`);
     }
 
-    const nuevoEstado = dto.estado !== undefined ? dto.estado : marca.estado === 1 ? 0 : 1;
+    const nuevoEstado = dto.estado !== undefined ? dto.estado : cliente.estado === 1 ? 0 : 1;
 
-    return this.prisma.marca.update({
+    return this.prisma.cliente.update({
       where: { id: dto.id },
       data: { estado: nuevoEstado },
     });
   }
+
+  // Aliases retrocompatibles para marcas
+  async listMarcas(dto: any) { return this.listClientes(dto); }
+  async createMarca(dto: any) { return this.createCliente(dto); }
+  async updateMarca(dto: any) { return this.updateCliente(dto); }
+  async toggleEstadoMarca(dto: any) { return this.toggleEstadoCliente(dto); }
 
   // =========================================================================
   // 3. AGENCIAS (CRUD + DETALLE + RESUMEN)
@@ -369,8 +379,9 @@ export class AgenciasService {
       where.region = { contains: dto.region, mode: 'insensitive' };
     }
 
-    if (dto.marcaId) {
-      where.marcaId = dto.marcaId;
+    const targetClienteId = dto.clienteId || dto.marcaId;
+    if (targetClienteId) {
+      where.clienteId = targetClienteId;
     }
 
     if (dto.estado !== undefined) {
@@ -380,7 +391,7 @@ export class AgenciasService {
     const list = await this.prisma.agencia.findMany({
       where,
       include: {
-        marca: { select: { id: true, nombre: true, estado: true } },
+        cliente: { select: { id: true, nombre: true, estado: true } },
         regionRel: { select: { id: true, codigo: true, nombre: true, estado: true } },
         usuarios: {
           select: {
@@ -428,7 +439,7 @@ export class AgenciasService {
     const agencia = await this.prisma.agencia.findUnique({
       where: { id },
       include: {
-        marca: true,
+        cliente: true,
         regionRel: true,
         bahias: {
           orderBy: { codigo: 'asc' },
@@ -570,13 +581,14 @@ export class AgenciasService {
       intentos++;
     }
 
-    let marcaIdFinal: string | null = null;
-    if (dto.marcaId && dto.marcaId !== '0' && dto.marcaId !== 'undefined') {
-      const marca = await this.prisma.marca.findFirst({
-        where: { OR: [{ id: dto.marcaId }, { nombre: { equals: dto.marcaId, mode: 'insensitive' } }] },
+    const rawClienteId = dto.clienteId || dto.marcaId;
+    let clienteIdFinal: string | null = null;
+    if (rawClienteId && rawClienteId !== '0' && rawClienteId !== 'undefined') {
+      const cliente = await this.prisma.cliente.findFirst({
+        where: { OR: [{ id: rawClienteId }, { nombre: { equals: rawClienteId, mode: 'insensitive' } }] },
       });
-      if (marca) {
-        marcaIdFinal = marca.id;
+      if (cliente) {
+        clienteIdFinal = cliente.id;
       }
     }
 
@@ -603,14 +615,14 @@ export class AgenciasService {
         email: dto.email?.trim().toLowerCase(),
         numeroBahias: dto.numeroBahias ?? 2,
         maxLavadoresPorBahia: dto.maxLavadoresPorBahia ?? 1,
-        marcaId: marcaIdFinal,
+        clienteId: clienteIdFinal,
         estado: dto.estado ?? 1,
         tieneServiciosEspeciales: dto.tieneServiciosEspeciales ?? false,
         servicioIds: Array.isArray(dto.servicioIds) ? dto.servicioIds : [],
         serviciosNombres: Array.isArray(dto.serviciosNombres) ? dto.serviciosNombres : [],
       },
       include: {
-        marca: true,
+        cliente: true,
         regionRel: true,
         usuarios: {
           include: { role: true }
@@ -653,7 +665,7 @@ export class AgenciasService {
     const finalCreated = await this.prisma.agencia.findUnique({
       where: { id: created.id },
       include: {
-        marca: true,
+        cliente: true,
         regionRel: true,
         usuarios: {
           select: {
@@ -708,15 +720,16 @@ export class AgenciasService {
       }
     }
 
-    let marcaIdFinal: string | null | undefined = undefined;
-    if (dto.marcaId !== undefined) {
-      if (dto.marcaId && dto.marcaId !== '0' && dto.marcaId !== 'undefined') {
-        const marca = await this.prisma.marca.findFirst({
-          where: { OR: [{ id: dto.marcaId }, { nombre: { equals: dto.marcaId, mode: 'insensitive' } }] },
+    const rawClienteId = dto.clienteId !== undefined ? dto.clienteId : dto.marcaId;
+    let clienteIdFinal: string | null | undefined = undefined;
+    if (rawClienteId !== undefined) {
+      if (rawClienteId && rawClienteId !== '0' && rawClienteId !== 'undefined') {
+        const cliente = await this.prisma.cliente.findFirst({
+          where: { OR: [{ id: rawClienteId }, { nombre: { equals: rawClienteId, mode: 'insensitive' } }] },
         });
-        marcaIdFinal = marca ? marca.id : null;
+        clienteIdFinal = cliente ? cliente.id : null;
       } else {
-        marcaIdFinal = null;
+        clienteIdFinal = null;
       }
     }
 
@@ -750,14 +763,14 @@ export class AgenciasService {
         ...(dto.email !== undefined && { email: dto.email?.trim().toLowerCase() }),
         ...(dto.numeroBahias !== undefined && { numeroBahias: dto.numeroBahias }),
         ...(dto.maxLavadoresPorBahia !== undefined && { maxLavadoresPorBahia: dto.maxLavadoresPorBahia }),
-        ...(marcaIdFinal !== undefined && { marcaId: marcaIdFinal }),
+        ...(clienteIdFinal !== undefined && { clienteId: clienteIdFinal }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
         ...(dto.tieneServiciosEspeciales !== undefined && { tieneServiciosEspeciales: dto.tieneServiciosEspeciales }),
         ...(Array.isArray(dto.servicioIds) ? { servicioIds: dto.servicioIds } : {}),
         ...(Array.isArray(dto.serviciosNombres) ? { serviciosNombres: dto.serviciosNombres } : {}),
       },
       include: {
-        marca: true,
+        cliente: true,
         regionRel: true,
         usuarios: {
           include: { role: true }
@@ -822,7 +835,7 @@ export class AgenciasService {
     const finalAgencia = await this.prisma.agencia.findUnique({
       where: { id: updated.id },
       include: {
-        marca: true,
+        cliente: true,
         regionRel: true,
         usuarios: {
           select: {
@@ -883,7 +896,7 @@ export class AgenciasService {
     return this.prisma.agencia.update({
       where: { id: dto.id },
       data: { estado: nuevoEstado },
-      include: { marca: true, regionRel: true },
+      include: { cliente: true, regionRel: true },
     });
   }
 
@@ -896,7 +909,7 @@ export class AgenciasService {
     const agencia = await this.prisma.agencia.findUnique({
       where: { id: targetAgenciaId },
       include: {
-        marca: true,
+        cliente: true,
         regionRel: true,
         bahias: true,
         usuarios: {
@@ -936,9 +949,10 @@ export class AgenciasService {
     });
 
     // Desglose de personal
-    const pulidores = agencia.usuarios.filter((u) =>
-      ['PULIDOR_FIJO', 'PULIDOR_MOVIL'].includes(u.role?.namerol || ''),
-    );
+    const pulidores = agencia.usuarios.filter((u) => {
+      const r = (u.role?.namerol || '').toUpperCase();
+      return r.includes('PULIDOR');
+    });
     const lideres = agencia.usuarios.filter((u) =>
       ['LIDER_AGENCIA', 'LIDER', 'APROBADOR'].includes(u.role?.namerol || ''),
     );
@@ -950,7 +964,8 @@ export class AgenciasService {
         nombre: agencia.nombre,
         region: agencia.region,
         regionOficial: agencia.regionRel ? { id: agencia.regionRel.id, nombre: agencia.regionRel.nombre } : null,
-        marca: agencia.marca?.nombre ?? 'Sin Marca',
+        cliente: agencia.cliente?.nombre ?? 'Sin Cliente',
+        marca: agencia.cliente?.nombre ?? 'Sin Cliente',
         estado: agencia.estado,
         numeroBahiasCapacidad: agencia.numeroBahias,
       },
@@ -1409,7 +1424,7 @@ export class AgenciasService {
   }
 
   async updateUsuario(dto: UpdateUsuarioDto) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.id } });
+    const user = await this.prisma.user.findUnique({ where: { id: dto.id }, include: { role: true } });
     if (!user) {
       throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
     }
@@ -1432,8 +1447,7 @@ export class AgenciasService {
       else if (norm.includes('APROBADOR') || norm.includes('GERENTE')) code = 'APROBADOR';
       else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER';
       else if (norm.includes('ESPECIALES')) code = 'COORD_SERVICIOS_ESPECIALES';
-      else if (norm.includes('PULIDOR') && norm.includes('FIJO')) code = 'PULIDOR_FIJO';
-      else if (norm.includes('PULIDOR')) code = 'PULIDOR_MOVIL';
+      else if (norm.includes('PULIDOR')) code = 'PULIDOR';
       else if (norm.includes('MANTENIMIENTO')) code = 'COORD_MANTENIMIENTO';
       else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
       else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
@@ -1526,6 +1540,47 @@ export class AgenciasService {
       }
     }
 
+    const currentRoleName = user.role?.namerol || dto.rolNombre || '';
+    const userRoleCode = currentRoleName.toUpperCase();
+    if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
+      agenciaIdToSet = null;
+      regionIdToSet = null;
+    } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
+      agenciaIdToSet = null;
+      regionIdToSet = null;
+    } else if (
+      userRoleCode === 'COORD_BODEGA' ||
+      userRoleCode === 'DISTRIBUIDOR' ||
+      (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
+      (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
+    ) {
+      // Gestor de Inventario / Coord Bodega: acceso total nacional (sin agencia ni región fija)
+      agenciaIdToSet = null;
+      regionIdToSet = null;
+    } else if (userRoleCode.includes('SUPERVISOR')) {
+      agenciaIdToSet = null;
+      if (!regionIdToSet) {
+        regionIdToSet = user.regionId;
+      }
+      if (!regionIdToSet) {
+        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
+        regionIdToSet = defaultReg?.id || null;
+      }
+    } else if (
+      userRoleCode === 'ASISTENTE_BODEGA' ||
+      (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
+    ) {
+      // Asistente de Bodega: vinculado operativamente a su región
+      agenciaIdToSet = null;
+      if (!regionIdToSet) {
+        regionIdToSet = user.regionId;
+      }
+      if (!regionIdToSet) {
+        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
+        regionIdToSet = defaultReg?.id || null;
+      }
+    }
+
     const updatedUser = await this.prisma.user.update({
       where: { id: dto.id },
       data: {
@@ -1585,8 +1640,7 @@ export class AgenciasService {
       else if (norm.includes('APROBADOR') || norm.includes('GERENTE')) code = 'APROBADOR';
       else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER';
       else if (norm.includes('ESPECIALES')) code = 'COORD_SERVICIOS_ESPECIALES';
-      else if (norm.includes('PULIDOR') && norm.includes('FIJO')) code = 'PULIDOR_FIJO';
-      else if (norm.includes('PULIDOR')) code = 'PULIDOR_MOVIL';
+      else if (norm.includes('PULIDOR')) code = 'PULIDOR';
       else if (norm.includes('MANTENIMIENTO')) code = 'COORD_MANTENIMIENTO';
       else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
       else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
@@ -1668,6 +1722,39 @@ export class AgenciasService {
           });
           if (reg) regionIdToSet = reg.id;
         }
+      }
+    }
+    const userRoleCode = (dto.rolNombre || '').toUpperCase();
+    if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
+      agenciaIdToSet = null;
+      regionIdToSet = null;
+    } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
+      agenciaIdToSet = null;
+      regionIdToSet = null;
+    } else if (
+      userRoleCode === 'COORD_BODEGA' ||
+      userRoleCode === 'DISTRIBUIDOR' ||
+      (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
+      (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
+    ) {
+      // Gestor de Inventario / Coord Bodega: alcance nacional global sin agencia ni región fija
+      agenciaIdToSet = null;
+      regionIdToSet = null;
+    } else if (userRoleCode.includes('SUPERVISOR')) {
+      agenciaIdToSet = null;
+      if (!regionIdToSet) {
+        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
+        regionIdToSet = defaultReg?.id || null;
+      }
+    } else if (
+      userRoleCode === 'ASISTENTE_BODEGA' ||
+      (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
+    ) {
+      // Asistente de Bodega: asignado operativamente a su región
+      agenciaIdToSet = null;
+      if (!regionIdToSet) {
+        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
+        regionIdToSet = defaultReg?.id || null;
       }
     }
 
@@ -1817,7 +1904,7 @@ export class AgenciasService {
   async listOperadores(dto: ListOperadoresDto) {
     const where: any = {
       role: {
-        namerol: { in: ['LAVADOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO'] }
+        namerol: { in: ['LAVADOR', 'PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO', 'Pulidor'] }
       }
     };
 
@@ -1894,12 +1981,12 @@ export class AgenciasService {
       }
     });
     if (existing) {
-      throw new ConflictException(`Ya existe un operador registrado con esta identificación/cédula (${cedulaClean})`);
+      throw new ConflictException(`Ya existe un lavador registrado con esta identificación/cédula (${cedulaClean})`);
     }
 
-    const passwordHash = await bcrypt.hash('Operador123*', 10);
+    const passwordHash = await bcrypt.hash('Lavador123*', 10);
     const names = dto.nombre.trim().split(' ');
-    const firstName = names[0] || 'Operador';
+    const firstName = names[0] || 'Lavador';
     const lastNamePart = names.slice(1).join(' ');
     const finalLastName = cedulaClean 
       ? (lastNamePart ? `${lastNamePart} (CI: ${cedulaClean})` : `(CI: ${cedulaClean})`)

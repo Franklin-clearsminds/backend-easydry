@@ -4,18 +4,55 @@ import { CreateRoleDto } from './dto/create-role.dto.js';
 import { UpdateRoleDto } from './dto/update-role.dto.js';
 import { QueryRolesDto } from './dto/query-roles.dto.js';
 import { formatDateTime } from '../../common/utils/date-formatter.util.js';
-import { OFFICIAL_PERMISSIONS, OFFICIAL_PERMISSION_CODES } from './constants/permissions.constant.js';
 
 @Injectable()
 export class RolesService {
   constructor(private prisma: PrismaService) {}
 
-  getAvailablePermissions() {
+  /** Catálogo de módulos/permisos desde la tabla modulos_sistema */
+  async getAvailablePermissions() {
+    const modulos = await this.prisma.moduloSistema.findMany({
+      where: { estado: 1 },
+      orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+    });
+
+    const catalogo = modulos.map((m) => ({
+      id: m.id,
+      codigo: m.codigo,
+      nombre: m.nombre,
+      descripcion: m.descripcion || '',
+      icono: m.icono || undefined,
+      rutaPrincipal: m.rutaPrincipal || undefined,
+      grupo: m.grupo,
+      orden: m.orden,
+    }));
+
     return {
-      total: OFFICIAL_PERMISSIONS.length,
-      codigos: OFFICIAL_PERMISSION_CODES,
-      catalogo: OFFICIAL_PERMISSIONS,
+      total: catalogo.length,
+      codigos: catalogo.map((c) => c.codigo),
+      catalogo,
     };
+  }
+
+  /** Listado de módulos del sistema (misma fuente que permisos) */
+  async listModulos(soloActivos = true) {
+    const where = soloActivos ? { estado: 1 } : {};
+    const modulos = await this.prisma.moduloSistema.findMany({
+      where,
+      orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+    });
+
+    return modulos.map((m) => ({
+      id: m.id,
+      codigo: m.codigo,
+      nombre: m.nombre,
+      descripcion: m.descripcion || '',
+      icono: m.icono || 'circle',
+      rutaPrincipal: m.rutaPrincipal || `/${m.codigo}`,
+      grupo: m.grupo,
+      orden: m.orden,
+      estado: m.estado,
+    }));
   }
 
   private mapRoleResponse(role: any) {
@@ -25,6 +62,7 @@ export class RolesService {
       descripcion: role.descripcion || '',
       estado: role.estado,
       permisos: Array.isArray(role.permisos) ? role.permisos : [],
+      acciones: role.acciones ?? null,
       fechaCreacion: formatDateTime(role.fechaCreacion),
       fechaModificacion: formatDateTime(role.fechaModificacion),
       usuariosCount: role._count?.users ?? role.users?.length ?? 0,

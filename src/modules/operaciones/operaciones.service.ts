@@ -28,24 +28,91 @@ export class OperacionesService {
   async findAll(params?: {
     agenciaId?: string;
     sucursalId?: string;
-    estado?: ServiceStatus;
+    regionId?: string;
+    estado?: string | ServiceStatus;
     search?: string;
     page?: number;
     pageSize?: number;
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
-  }) {
+  }, currentUser?: any) {
     const where: any = {
       deletedAt: null,
     };
 
-    const targetAgencia = params?.agenciaId || params?.sucursalId;
-    if (targetAgencia) {
-      where.bahia = { agenciaId: targetAgencia };
+    // 1. Scoping RBAC por rol del usuario
+    if (currentUser) {
+      const userRole = (currentUser.role?.namerol || currentUser.roleDetails?.namerol || currentUser.role || '').toUpperCase();
+      const isSuperAdminOrAdmin = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
+      const isSupervisor = userRole === 'SUPERVISOR' || userRole === 'GERENTE_REGIONAL' || userRole.includes('SUPERVISOR') || userRole.includes('REGIONAL');
+      const isAprobador = userRole === 'APROBADOR' || userRole === 'GERENTE';
+      const isLider = userRole === 'LIDER' || userRole === 'LIDER_OPERADOR' || userRole === 'LIDER_AGENCIA';
+      const isLavador = userRole === 'LAVADOR' || userRole === 'OPERADOR';
+
+      if (isSuperAdminOrAdmin) {
+        // Super Admin y Admin: acceso nacional irrestricto
+        const targetAgencia = params?.agenciaId || params?.sucursalId;
+        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
+          where.bahia = { agenciaId: targetAgencia };
+        } else if (params?.regionId && params.regionId !== 'Todas' && params.regionId !== 'TODAS') {
+          where.bahia = { agencia: { regionId: params.regionId } };
+        }
+      } else if (isSupervisor) {
+        // Gerente Regional / Supervisor: solo operaciones de su región asignada
+        const regionId = currentUser.regionId || params?.regionId;
+        const targetAgencia = params?.agenciaId || params?.sucursalId;
+        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
+          where.bahia = {
+            agenciaId: targetAgencia,
+            ...(regionId ? { agencia: { regionId } } : {}),
+          };
+        } else if (regionId) {
+          where.bahia = { agencia: { regionId } };
+        }
+      } else if (isAprobador || isLider) {
+        // Aprobador / Líder: únicamente de su sucursal / agencia asignada
+        const targetAgencia = currentUser.agenciaId || params?.agenciaId || params?.sucursalId;
+        if (targetAgencia) {
+          where.bahia = { agenciaId: targetAgencia };
+        }
+      } else if (isLavador) {
+        // Lavador: solo ve los servicios donde él fue el operador asignado
+        where.operadorId = currentUser.id;
+      } else {
+        const targetAgencia = params?.agenciaId || params?.sucursalId;
+        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
+          where.bahia = { agenciaId: targetAgencia };
+        }
+      }
+    } else {
+      const targetAgencia = params?.agenciaId || params?.sucursalId;
+      if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
+        where.bahia = { agenciaId: targetAgencia };
+      }
+      if (params?.regionId && params.regionId !== 'Todas' && params.regionId !== 'TODAS') {
+        where.bahia = { agencia: { regionId: params.regionId } };
+      }
     }
 
-    if (params?.estado) {
-      where.estado = params.estado;
+    // 2. Filtro por Estado Operativo
+    if (params?.estado && params.estado !== 'Todos' && params.estado !== 'TODOS') {
+      const st = String(params.estado).toUpperCase().trim();
+      if (st === 'EN_PROCESO' || st === 'EN PROCESO') {
+        where.estado = { in: [ServiceStatus.EN_ESPERA, ServiceStatus.EN_PROCESO] };
+      } else if (st === 'POR_APROBAR' || st === 'POR APROBAR' || st === 'FALTAN DE APROBAR') {
+        where.estado = ServiceStatus.FINALIZADO;
+        where.aprobadoPor = null;
+      } else if (st === 'APROBADO' || st === 'APROBADOS') {
+        where.estado = ServiceStatus.APROBADO;
+      } else if (st === 'FINALIZADO' || st === 'REALIZADO' || st === 'REALIZADOS') {
+        where.estado = { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] };
+      } else if (st === 'RECHAZADO' || st === 'RECHAZADOS') {
+        where.estado = ServiceStatus.RECHAZADO;
+      } else if (st === 'CANCELADO' || st === 'CANCELADOS') {
+        where.estado = ServiceStatus.CANCELADO;
+      } else if (Object.values(ServiceStatus).includes(st as ServiceStatus)) {
+        where.estado = st as ServiceStatus;
+      }
     }
 
     if (params?.search) {
