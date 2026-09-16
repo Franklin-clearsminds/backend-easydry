@@ -41,6 +41,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         region: {
           select: { id: true, codigo: true, nombre: true },
         },
+        bodega: {
+          select: { id: true, codigo: true, nombre: true, regionId: true, tipo: true },
+        },
       },
     });
 
@@ -67,6 +70,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       agencia: user.agencia,
       regionId: user.regionId,
       region: user.region,
+      bodegaId: user.bodegaId,
+      bodega: user.bodega,
       estado: user.estado,
     };
   }

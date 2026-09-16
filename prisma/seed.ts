@@ -116,14 +116,15 @@ const ROLES_DATA: RoleSeed[] = [
     descripcion: 'Nivel máximo de la plataforma. Acceso global inmutable: supervisión nacional, auditoría y gobierno del sistema.',
     estado: 1,
     permisos: ALL_MODULOS,
-    acciones: ACCIONES_FULL,
+    // Acceso total a todas las operaciones y acciones del sistema.
+    acciones: { ...ACCIONES_FULL },
   },
   {
     namerol: 'ADMIN',
     descripcion: 'Administrador operativo de la plataforma. Gestiona usuarios, configuración y módulos asignados.',
     estado: 1,
     permisos: ALL_MODULOS,
-    acciones: ACCIONES_FULL,
+    acciones: { ...ACCIONES_FULL, despacharSuministros: false, accionesEnvios: false },
   },
   {
     namerol: 'APROBADOR',
@@ -249,7 +250,7 @@ const ROLES_DATA: RoleSeed[] = [
     namerol: 'PULIDOR',
     descripcion: 'Especialista en pulido y servicios especiales (fijo o móvil según agencia).',
     estado: 1,
-    permisos: ['dashboard', 'notificaciones', 'servicios', 'inventario', 'perfil'],
+    permisos: ['dashboard', 'notificaciones', 'servicios', 'inventario', 'envios', 'perfil'],
     acciones: {
       ...ACCIONES_VACIAS,
       registrarServicio: true,
@@ -401,13 +402,13 @@ async function main() {
   }
 
   const tiposMovData = [
-    { codigo: 'ENTRY', nombre: 'Entrada / Compra', descripcion: 'Ingreso físico de producto al inventario', esEntrada: true, estado: 1 },
-    { codigo: 'CONSUMPTION', nombre: 'Consumo Operativo', descripcion: 'Consumo o gasto de producto en operaciones', esEntrada: false, estado: 1 },
-    { codigo: 'POSITIVE_ADJUSTMENT', nombre: 'Ajuste Positivo', descripcion: 'Incremento de stock por corrección física', esEntrada: true, estado: 1 },
-    { codigo: 'NEGATIVE_ADJUSTMENT', nombre: 'Ajuste Negativo', descripcion: 'Disminución de stock por corrección o faltante', esEntrada: false, estado: 1 },
-    { codigo: 'WASTE', nombre: 'Merma / Daño', descripcion: 'Baja de producto por daño, derrame o caducidad', esEntrada: false, estado: 1 },
+    { codigo: 'ENTRY', nombre: 'Ingreso', descripcion: 'Ingreso físico de producto al inventario (compra / abastecimiento)', esEntrada: true, estado: 1 },
+    { codigo: 'CONSUMPTION', nombre: 'Consumo', descripcion: 'Consumo o gasto de producto en operaciones', esEntrada: false, estado: 1 },
+    { codigo: 'POSITIVE_ADJUSTMENT', nombre: 'Ajuste (+)', descripcion: 'Incremento de stock por corrección física', esEntrada: true, estado: 1 },
+    { codigo: 'NEGATIVE_ADJUSTMENT', nombre: 'Ajuste (−)', descripcion: 'Disminución de stock por corrección o faltante', esEntrada: false, estado: 1 },
+    { codigo: 'WASTE', nombre: 'Merma', descripcion: 'Baja de producto por daño, derrame o caducidad', esEntrada: false, estado: 1 },
     { codigo: 'RETURN', nombre: 'Devolución', descripcion: 'Devolución de producto al proveedor o almacén', esEntrada: true, estado: 1 },
-    { codigo: 'TRANSFER', nombre: 'Transferencia', descripcion: 'Movimiento entre bodegas o ubicaciones', esEntrada: false, estado: 1 },
+    { codigo: 'TRANSFER', nombre: 'Envío / Transferencia', descripcion: 'Movimiento entre bodegas o ubicaciones', esEntrada: false, estado: 1 },
   ];
   for (const tm of tiposMovData) {
     await prisma.tipoMovimientoInventario.create({ data: tm });

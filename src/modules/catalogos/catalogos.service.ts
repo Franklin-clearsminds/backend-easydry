@@ -6,8 +6,8 @@ import {
   ListCatalogoServiciosDto,
 } from './dto/servicios.dto.js';
 
-// Roles que tienen su catálogo acotado a su agencia
-const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'APROBADOR'];
+// Roles cuyo catálogo se acota a Agencia.servicioIds
+const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'LIDER_OPERADOR', 'APROBADOR'];
 
 @Injectable()
 export class CatalogosService {
@@ -25,16 +25,14 @@ export class CatalogosService {
       ];
     }
 
-    // Determinar el agenciaId efectivo: puede venir del body (admin filtrando otra agencia) o del JWT
     const efectiveAgenciaId = dto?.agenciaId || userCtx?.agenciaId;
-    const namerol = userCtx?.namerol || '';
-    const isScopedRole = ROLES_SCOPED.includes(namerol);
+    const namerol = (userCtx?.namerol || '').toUpperCase();
+    const isScopedRole = ROLES_SCOPED.includes(namerol) || namerol.includes('LIDER');
 
-    // Contexto de respuesta: información de la agencia para el frontend
     let agenciaCtx: { tieneServiciosEspeciales: boolean; servicioIds: number[] } | null = null;
 
-    if (efectiveAgenciaId && isScopedRole) {
-      // Obtener la configuración de servicios de la agencia desde la BD
+    // Rol de sede O admin filtrando por agencia → solo servicios de la lista de esa agencia
+    if (efectiveAgenciaId && (isScopedRole || !!dto?.agenciaId)) {
       const agencia = await this.prisma.agencia.findUnique({
         where: { id: efectiveAgenciaId },
         select: {
@@ -53,14 +51,19 @@ export class CatalogosService {
           servicioIds: ids,
         };
 
-        // Restringir catálogo estrictamente a los IDs asignados a la agencia en BD
-        where.id = { in: ids };
+        // Sin IDs → vacío (nunca catálogo global)
+        where.id = { in: ids.length > 0 ? ids : [-1] };
 
-        // Si la agencia no tiene activados los servicios especiales, no mostrar servicios especiales
         if (!agencia.tieneServiciosEspeciales) {
           where.categoria = 'GENERAL';
         }
+      } else if (isScopedRole) {
+        where.id = { in: [-1] };
+        agenciaCtx = { tieneServiciosEspeciales: false, servicioIds: [] };
       }
+    } else if (isScopedRole && !efectiveAgenciaId) {
+      where.id = { in: [-1] };
+      agenciaCtx = { tieneServiciosEspeciales: false, servicioIds: [] };
     }
 
     const servicios = await this.prisma.catalogoServicio.findMany({
@@ -83,7 +86,6 @@ export class CatalogosService {
       orderBy: { codigo: 'asc' },
     });
 
-    // Envolver respuesta con contexto de agencia cuando corresponda
     if (agenciaCtx) {
       return {
         servicios,
@@ -110,7 +112,7 @@ export class CatalogosService {
         categoria: dto.categoria.trim().toUpperCase(),
         descripcion: dto.descripcion?.trim() || null,
         precio: dto.precio ?? 0,
-        tiempoEstimadoMin: dto.tiempoEstimadoMin ?? 30,
+        tiempoEstimadoMin: Number(dto.tiempoEstimadoMin) > 0 ? Math.round(Number(dto.tiempoEstimadoMin)) : 30,
       },
       include: {
         recetas: {
@@ -149,7 +151,9 @@ export class CatalogosService {
         ...(dto.categoria && { categoria: dto.categoria.trim().toUpperCase() }),
         ...(dto.descripcion !== undefined && { descripcion: dto.descripcion?.trim() || null }),
         ...(dto.precio !== undefined && { precio: dto.precio }),
-        ...(dto.tiempoEstimadoMin !== undefined && { tiempoEstimadoMin: dto.tiempoEstimadoMin }),
+        ...(dto.tiempoEstimadoMin !== undefined && {
+          tiempoEstimadoMin: Math.max(1, Math.round(Number(dto.tiempoEstimadoMin) || 30)),
+        }),
       },
       include: {
         recetas: {

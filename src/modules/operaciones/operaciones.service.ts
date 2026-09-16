@@ -285,21 +285,31 @@ export class OperacionesService {
       });
     }
     if (!catalogo) {
-      catalogo = await this.prisma.catalogoServicio.findFirst({
-        include: {
-          recetas: {
-            include: {
-              insumo: true,
-              unidadConsumo: true,
-            },
-          },
-        },
-      });
-    }
-    if (!catalogo) {
-      throw new BadRequestException('No se encontró el servicio solicitado en el catálogo.');
+      throw new BadRequestException('Debe indicar un servicio válido del catálogo asignado a la agencia.');
     }
     const resolvedCatalogoId = catalogo.id;
+
+    // Validar que el servicio esté en la lista de la agencia (Agencia.servicioIds)
+    if (agenciaId) {
+      const agenciaOt = await this.prisma.agencia.findUnique({
+        where: { id: agenciaId },
+        select: { id: true, nombre: true, servicioIds: true },
+      });
+      if (agenciaOt) {
+        const rawIds = Array.isArray(agenciaOt.servicioIds) ? agenciaOt.servicioIds : [];
+        const ids = rawIds.map((id: any) => Number(id)).filter((n: number) => !Number.isNaN(n) && n > 0);
+        if (ids.length === 0) {
+          throw new BadRequestException(
+            `La agencia "${agenciaOt.nombre}" no tiene servicios asignados. Configúralos en Sucursales.`,
+          );
+        }
+        if (!ids.includes(Number(resolvedCatalogoId))) {
+          throw new BadRequestException(
+            `El servicio "${catalogo.nombre}" no está en la lista de servicios de la agencia "${agenciaOt.nombre}".`,
+          );
+        }
+      }
+    }
 
     // 4. Control físico de Bahía: Impedir doble auto simultáneo en proceso en la misma bahía
     if (createDto.estado === ServiceStatus.EN_PROCESO) {
@@ -392,6 +402,14 @@ export class OperacionesService {
       }
     }
 
+    // Hora salida estimada desde CatalogoServicio.tiempoEstimadoMin (BD)
+    const minsEstimados = Math.max(1, Number(catalogo.tiempoEstimadoMin) || 30);
+    const horaSalidaEstimada = new Date(now.getTime() + minsEstimados * 60_000);
+    const horaSalidaFinal =
+      estadoInicial === ServiceStatus.FINALIZADO || estadoInicial === ServiceStatus.APROBADO
+        ? now
+        : horaSalidaEstimada;
+
     const created = await this.prisma.servicioLavado.create({
       data: {
         clientUuid,
@@ -408,7 +426,7 @@ export class OperacionesService {
         operadorId: validOperadorId,
         horaIngreso: now,
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,
-        horaSalida: estadoInicial === ServiceStatus.FINALIZADO || estadoInicial === ServiceStatus.APROBADO ? now : null,
+        horaSalida: horaSalidaFinal,
         fotoIngresoUrl: createDto.fotoIngresoUrl,
         fotoSalidaUrl: createDto.fotoSalidaUrl,
         observaciones: observacionesFinales,
@@ -447,7 +465,8 @@ export class OperacionesService {
     delete data.id;
     data.version = { increment: 1 };
 
-    if (updateDto.estado === ServiceStatus.FINALIZADO && !servicio.horaSalida) {
+    if (updateDto.estado === ServiceStatus.FINALIZADO) {
+      // Al finalizar, horaSalida pasa a ser la real (antes era estimada por tiempoEstimadoMin)
       data.horaSalida = new Date();
     }
 
@@ -887,14 +906,51 @@ export class OperacionesService {
       throw new NotFoundException(`Catálogo de servicio con ID ${dto.catalogoServicioId} no encontrado`);
     }
 
-    // Validar insumos y unidades
+    if (!dto.items || dto.items.length === 0) {
+      await this.prisma.recetaInsumo.deleteMany({
+        where: { catalogoServicioId: dto.catalogoServicioId },
+      });
+      return {
+        catalogoServicioId: dto.catalogoServicioId,
+        catalogoNombre: catalogo.nombre,
+        categoria: catalogo.categoria,
+        recetaActualizada: [],
+      };
+    }
+
+    // Validar insumos y resolver unidades con fallback robusto
     for (const item of dto.items) {
       const insumo = await this.prisma.insumo.findUnique({ where: { id: item.insumoId } });
       if (!insumo) throw new NotFoundException(`Insumo con ID "${item.insumoId}" no encontrado`);
 
-      const unidad = await this.prisma.unidadMedida.findUnique({ where: { id: item.unidadConsumoId } });
-      if (!unidad) throw new NotFoundException(`Unidad con ID "${item.unidadConsumoId}" no encontrada`);
+      let unidad: any = null;
+      if (item.unidadConsumoId && item.unidadConsumoId !== 'und_default' && item.unidadConsumoId.trim().length > 0) {
+        unidad = await this.prisma.unidadMedida.findUnique({ where: { id: item.unidadConsumoId } });
+      }
+
+      if (!unidad && insumo.unidadMedidaId) {
+        unidad = await this.prisma.unidadMedida.findUnique({ where: { id: insumo.unidadMedidaId } });
+      }
+
+      if (!unidad) {
+        unidad = await this.prisma.unidadMedida.findFirst({ where: { estado: 1 } });
+      }
+
+      if (!unidad) {
+        throw new NotFoundException(`No se encontró una unidad de medida para el insumo "${insumo.nombre}"`);
+      }
+
+      item.unidadConsumoId = unidad.id;
     }
+
+    // Sincronizar: eliminar de la receta los insumos que ya no estén en dto.items
+    const incomingInsumoIds = dto.items.map((i) => i.insumoId);
+    await this.prisma.recetaInsumo.deleteMany({
+      where: {
+        catalogoServicioId: dto.catalogoServicioId,
+        insumoId: { notIn: incomingInsumoIds },
+      },
+    });
 
     // Upsert cada línea de receta
     const resultados = [];
@@ -913,7 +969,7 @@ export class OperacionesService {
           where: { id: existing.id },
           data: {
             cantidadUsada: item.cantidadUsada,
-            unidadConsumoId: item.unidadConsumoId,
+            unidadConsumoId: item.unidadConsumoId!,
             esOpcional: item.esOpcional ?? false,
             observacion: item.observacion,
           },
@@ -929,7 +985,7 @@ export class OperacionesService {
             catalogoServicioId: dto.catalogoServicioId,
             insumoId: item.insumoId,
             cantidadUsada: item.cantidadUsada,
-            unidadConsumoId: item.unidadConsumoId,
+            unidadConsumoId: item.unidadConsumoId!,
             esOpcional: item.esOpcional ?? false,
             observacion: item.observacion,
           },

@@ -62,6 +62,9 @@ export class AuthService {
         region: {
           select: { id: true, codigo: true, nombre: true },
         },
+        bodega: {
+          select: { id: true, codigo: true, nombre: true, regionId: true, tipo: true },
+        },
       },
     });
 
@@ -111,6 +114,9 @@ export class AuthService {
         regionId: user.regionId,
         region: user.region,
         regionNombre: user.region?.nombre,
+        bodegaId: user.bodegaId,
+        bodega: user.bodega,
+        servicioIds: Array.isArray(user.servicioIds) ? user.servicioIds : [],
         estado: user.estado,
       },
     };
@@ -145,6 +151,9 @@ export class AuthService {
         },
         region: {
           select: { id: true, codigo: true, nombre: true },
+        },
+        bodega: {
+          select: { id: true, codigo: true, nombre: true, regionId: true, tipo: true },
         },
       },
     });
@@ -185,6 +194,9 @@ export class AuthService {
         regionId: user.regionId,
         region: user.region,
         regionNombre: user.region?.nombre,
+        bodegaId: user.bodegaId,
+        bodega: user.bodega,
+        servicioIds: Array.isArray(user.servicioIds) ? user.servicioIds : [],
         estado: user.estado,
       },
     };
@@ -204,9 +216,13 @@ export class AuthService {
         },
         agenciaId: true,
         agenciasIds: true,
+        bodegaId: true,
         estado: true,
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true, direccion: true },
+        },
+        bodega: {
+          select: { id: true, codigo: true, nombre: true, regionId: true, tipo: true },
         },
         regionId: true,
         region: {
@@ -231,6 +247,7 @@ export class AuthService {
       sucursal: user.agencia?.nombre,
       sucursalNombre: user.agencia?.nombre,
       regionNombre: user.region?.nombre,
+      bodegaId: user.bodegaId,
       permisos: role?.permisos ?? [],
       modulos: role?.permisos ?? [],
       acciones: role?.acciones ?? null,

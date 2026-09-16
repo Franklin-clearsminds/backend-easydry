@@ -190,8 +190,8 @@ export class InventarioController {
   @Post('stock/bodegas-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen de inventario en bodegas' })
-  async stockBodegasResumen(@Body() dto: any) {
-    return this.inventarioService.obtenerStockBodegasResumen(dto);
+  async stockBodegasResumen(@Body() dto: any, @CurrentUser() user: any) {
+    return this.inventarioService.obtenerStockBodegasResumen(dto, user?.id);
   }
 
   // ==============================================================
@@ -415,9 +415,12 @@ export class InventarioController {
 
   @Post('movimientos/historial')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Historial completo de movimientos de inventario con filtros y DataGrid' })
-  async listMovimientosHistorial(@Body() dto: ListMovimientosGlobalesDto) {
-    return this.inventarioService.listMovimientosGlobales(dto);
+  @ApiOperation({
+    summary:
+      'Historial de Kardex filtrado por rol: Admin/SuperAdmin=todo, Coord=Bodega Central, Asistente=su bodega regional',
+  })
+  async listMovimientosHistorial(@Body() dto: ListMovimientosGlobalesDto, @CurrentUser() user: any) {
+    return this.inventarioService.listMovimientosGlobales(dto, user?.id || user?.sub);
   }
 
   // ==============================================================
@@ -426,9 +429,9 @@ export class InventarioController {
 
   @Post('dashboard/resumen')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Resumen en tiempo real para el Dashboard de Inventario' })
-  async getDashboardResumen() {
-    return this.inventarioService.obtenerResumenDashboard();
+  @ApiOperation({ summary: 'Resumen en tiempo real para el Dashboard de Inventario (últimos movimientos según rol)' })
+  async getDashboardResumen(@CurrentUser() user: any) {
+    return this.inventarioService.obtenerResumenDashboard(user?.id || user?.sub);
   }
 
   @Post('stock-bajo/list')
@@ -453,6 +456,19 @@ export class InventarioController {
   ) {
     const agenciaId = body?.agenciaId || body?.sucursalId || user?.agenciaId || user?.sucursalId;
     return this.inventarioService.obtenerInsumosServiciosAgencia(agenciaId, body?.servicioIds);
+  }
+
+  @Post('pulidor/insumos-servicios')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Insumos requeridos por los servicios asignados al pulidor (kit personal)',
+  })
+  async insumosServiciosPulidor(
+    @Body() body: { pulidorId?: string; servicioIds?: number[] },
+    @CurrentUser() user: any,
+  ) {
+    const pulidorId = body?.pulidorId || user?.id || user?.sub;
+    return this.inventarioService.obtenerInsumosServiciosPulidor(pulidorId, body?.servicioIds);
   }
 
   @Post('stock/consumir-servicio')
