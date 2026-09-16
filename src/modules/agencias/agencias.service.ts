@@ -511,7 +511,11 @@ export class AgenciasService {
    * Inicializa los registros de StockUbicacion faltantes con cantidadActual = 0.
    * Los insumos preexistentes (con o sin existencias) NUNCA se eliminan ni modifican.
    */
-  async sincronizarStockInsumosPorServicios(agenciaId: string, servicioIds: number[]): Promise<void> {
+  async sincronizarStockInsumosPorServicios(
+    agenciaId: string,
+    servicioIds: number[],
+    emisorId?: string,
+  ): Promise<void> {
     if (!agenciaId || !Array.isArray(servicioIds) || servicioIds.length === 0) return;
 
     try {
@@ -522,8 +526,9 @@ export class AgenciasService {
         where: { catalogoServicioId: { in: cleanIds } },
         include: {
           insumo: {
-            select: { id: true, stockMinimoAgencia: true },
+            select: { id: true, nombre: true, codigoSKU: true, stockMinimoAgencia: true },
           },
+          catalogoServicio: { select: { nombre: true, codigo: true } },
         },
       });
 
@@ -537,10 +542,11 @@ export class AgenciasService {
           tipoUbicacion: 'AGENCIA',
           insumoId: { in: insumoIds },
         },
-        select: { insumoId: true },
+        select: { id: true, insumoId: true, cantidadActual: true },
       });
 
       const setExistentes = new Set(existentes.map((s) => s.insumoId));
+      const stockPorInsumo = new Map(existentes.map((s) => [s.insumoId, Number(s.cantidadActual)]));
 
       for (const r of recetas) {
         if (!setExistentes.has(r.insumoId)) {
@@ -554,11 +560,192 @@ export class AgenciasService {
             },
           }).catch((err) => console.warn(`[StockSync] Error al crear stock inicial para insumo ${r.insumoId}:`, err));
           setExistentes.add(r.insumoId);
+          stockPorInsumo.set(r.insumoId, 0);
         }
+      }
+
+      const emisor = emisorId || (await this.resolverUsuarioSistemaId());
+      if (!emisor) return;
+
+      const agencia = await this.prisma.agencia.findUnique({
+        where: { id: agenciaId },
+        select: { nombre: true, codigo: true },
+      });
+
+      for (const insumoId of insumoIds) {
+        const stock = stockPorInsumo.get(insumoId) ?? 0;
+        if (stock > 0) continue;
+        const rec = recetas.find((r) => r.insumoId === insumoId);
+        const nombreIns = rec?.insumo?.nombre || insumoId;
+        const servicios = [...new Set(
+          recetas.filter((r) => r.insumoId === insumoId).map((r) => r.catalogoServicio?.nombre || r.catalogoServicio?.codigo).filter(Boolean),
+        )];
+        await this.ensureAlertaStockPendiente({
+          insumoId,
+          nivel: 'AGOTADO',
+          agenciaId,
+          pulidorId: null,
+          emisorId: emisor,
+          stockReportado: 0,
+          mensaje:
+            `Sede ${agencia?.nombre || agenciaId}: ${nombreIns} requerido por servicio(s) asignado(s)` +
+            (servicios.length ? ` (${servicios.join(', ')})` : '') +
+            ` sin stock. Despachar insumos.`,
+        });
       }
     } catch (err) {
       console.warn('[StockSync] Error en sincronizarStockInsumosPorServicios:', err);
     }
+  }
+
+  /**
+   * Crea slots de kit (0) + alertas AGOTADO al asignar servicios especiales a un pulidor.
+   */
+  async sincronizarStockPulidorPorServicios(
+    pulidorId: string,
+    servicioIds: number[],
+    emisorId?: string,
+  ): Promise<void> {
+    if (!pulidorId || !Array.isArray(servicioIds) || servicioIds.length === 0) return;
+
+    try {
+      const cleanIds = servicioIds.map(Number).filter((n) => !isNaN(n) && n > 0);
+      if (cleanIds.length === 0) return;
+
+      const pulidor = await this.prisma.user.findUnique({
+        where: { id: pulidorId },
+        select: {
+          id: true,
+          name: true,
+          lastname: true,
+          agenciaId: true,
+          regionId: true,
+          region: { select: { nombre: true } },
+          agencia: { select: { nombre: true } },
+        },
+      });
+      if (!pulidor) return;
+
+      const tipoUb: 'PULIDOR_FIJO' | 'PULIDOR_MOVIL' = pulidor.agenciaId ? 'PULIDOR_FIJO' : 'PULIDOR_MOVIL';
+
+      const recetas = await this.prisma.recetaInsumo.findMany({
+        where: { catalogoServicioId: { in: cleanIds } },
+        include: {
+          insumo: {
+            select: { id: true, nombre: true, codigoSKU: true, stockMinimoAgencia: true },
+          },
+          catalogoServicio: { select: { nombre: true, codigo: true } },
+        },
+      });
+      if (recetas.length === 0) return;
+
+      const insumoIds = Array.from(new Set(recetas.map((r) => r.insumoId).filter(Boolean)));
+      const existentes = await this.prisma.stockUbicacion.findMany({
+        where: { pulidorId, insumoId: { in: insumoIds } },
+        select: { insumoId: true, cantidadActual: true },
+      });
+      const setExistentes = new Set(existentes.map((s) => s.insumoId));
+      const stockPorInsumo = new Map(existentes.map((s) => [s.insumoId, Number(s.cantidadActual)]));
+
+      for (const r of recetas) {
+        if (!setExistentes.has(r.insumoId)) {
+          await this.prisma.stockUbicacion.create({
+            data: {
+              pulidorId,
+              insumoId: r.insumoId,
+              tipoUbicacion: tipoUb,
+              cantidadActual: 0,
+              cantidadMinima: r.insumo?.stockMinimoAgencia ?? 1,
+              agenciaId: pulidor.agenciaId || null,
+            },
+          }).catch((err) => console.warn(`[StockSync] Error kit pulidor ${pulidorId}/${r.insumoId}:`, err));
+          setExistentes.add(r.insumoId);
+          stockPorInsumo.set(r.insumoId, 0);
+        }
+      }
+
+      const emisor = emisorId || (await this.resolverUsuarioSistemaId());
+      if (!emisor) return;
+
+      const nombrePulidor = `${pulidor.name} ${pulidor.lastname || ''}`.trim();
+      const contexto = pulidor.agenciaId
+        ? `Pulidor fijo ${nombrePulidor} (${pulidor.agencia?.nombre || 'sede'})`
+        : `Pulidor móvil ${nombrePulidor} (Región ${pulidor.region?.nombre || 'N/D'})`;
+
+      for (const insumoId of insumoIds) {
+        const stock = stockPorInsumo.get(insumoId) ?? 0;
+        if (stock > 0) continue;
+        const rec = recetas.find((r) => r.insumoId === insumoId);
+        const nombreIns = rec?.insumo?.nombre || insumoId;
+        const servicios = [...new Set(
+          recetas.filter((r) => r.insumoId === insumoId).map((r) => r.catalogoServicio?.nombre || r.catalogoServicio?.codigo).filter(Boolean),
+        )];
+        await this.ensureAlertaStockPendiente({
+          insumoId,
+          nivel: 'AGOTADO',
+          agenciaId: pulidor.agenciaId || null,
+          pulidorId,
+          emisorId: emisor,
+          stockReportado: 0,
+          mensaje:
+            `${contexto}: ${nombreIns} requerido` +
+            (servicios.length ? ` por ${servicios.join(', ')}` : '') +
+            ` sin stock en kit. Despachar insumos al pulidor.`,
+        });
+      }
+    } catch (err) {
+      console.warn('[StockSync] Error en sincronizarStockPulidorPorServicios:', err);
+    }
+  }
+
+  private async resolverUsuarioSistemaId(): Promise<string | null> {
+    const admin = await this.prisma.user.findFirst({
+      where: { role: { namerol: { in: ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA'] } }, estado: 1 },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return admin?.id || null;
+  }
+
+  private async ensureAlertaStockPendiente(params: {
+    insumoId: string;
+    nivel: 'BAJO' | 'CRITICO' | 'AGOTADO';
+    agenciaId?: string | null;
+    pulidorId?: string | null;
+    emisorId: string;
+    stockReportado: number;
+    mensaje: string;
+  }): Promise<void> {
+    const where: any = {
+      insumoId: params.insumoId,
+      estado: 'PENDIENTE',
+      nivel: params.nivel,
+    };
+    if (params.pulidorId) {
+      where.pulidorId = params.pulidorId;
+    } else if (params.agenciaId) {
+      where.agenciaId = params.agenciaId;
+      where.pulidorId = null;
+    } else {
+      where.agenciaId = null;
+      where.pulidorId = null;
+    }
+
+    const existing = await this.prisma.alertaStock.findFirst({ where, select: { id: true } });
+    if (existing) return;
+
+    await this.prisma.alertaStock.create({
+      data: {
+        insumoId: params.insumoId,
+        nivel: params.nivel,
+        estado: 'PENDIENTE',
+        agenciaId: params.agenciaId || null,
+        pulidorId: params.pulidorId || null,
+        usuarioEmisorId: params.emisorId,
+        mensaje: params.mensaje,
+        stockReportado: params.stockReportado,
+      },
+    }).catch((err) => console.warn('[AlertaStock] No se pudo crear alerta:', err));
   }
 
   async createAgencia(dto: CreateAgenciaDto) {
@@ -1429,18 +1616,27 @@ export class AgenciasService {
       throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
     }
 
+    if (user.role?.namerol === 'SUPER_ADMIN') {
+      throw new ForbiddenException('El usuario Super Administrador es de sistema y no puede gestionarse desde la aplicación.');
+    }
+
     let roleIdToSet: string | undefined = undefined;
     if (dto.roleId) {
       const roleExists = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
       if (roleExists) {
+        if (roleExists.namerol === 'SUPER_ADMIN') {
+          throw new ForbiddenException('No se puede asignar el rol SUPER_ADMIN desde la aplicación.');
+        }
         roleIdToSet = roleExists.id;
       }
     }
     if (!roleIdToSet && dto.rolNombre) {
       const norm = dto.rolNombre.toUpperCase().trim();
+      if (norm === 'SUPER_ADMIN' || (norm.includes('SUPER') && norm.includes('ADMIN'))) {
+        throw new ForbiddenException('No se puede asignar el rol SUPER_ADMIN desde la aplicación.');
+      }
       let code = norm;
-      if (norm.includes('SUPER') && norm.includes('ADMIN')) code = 'SUPER_ADMIN';
-      else if (norm.includes('ADMIN')) code = 'ADMIN';
+      if (norm.includes('ADMIN')) code = 'ADMIN';
       else if (norm.includes('SUPERVISOR')) code = 'SUPERVISOR';
       else if (norm.includes('JEFE') && norm.includes('COMERCIAL')) code = 'JEFE_COMERCIAL';
       else if (norm.includes('COORD') && norm.includes('COMERCIAL')) code = 'COORD_COMERCIAL';
@@ -1460,11 +1656,13 @@ export class AgenciasService {
             { namerol: dto.rolNombre },
             { namerol: dto.rolNombre.toUpperCase() },
             { namerol: code },
-            { namerol: code === 'LIDER' ? 'LIDER_AGENCIA' : code },
             { namerol: code === 'COORD_BODEGA' ? 'DISTRIBUIDOR' : code },
           ],
         },
       });
+      if (roleFound?.namerol === 'SUPER_ADMIN') {
+        throw new ForbiddenException('No se puede asignar el rol SUPER_ADMIN desde la aplicación.');
+      }
       if (roleFound) roleIdToSet = roleFound.id;
     }
 
@@ -1475,6 +1673,7 @@ export class AgenciasService {
 
     let agenciaIdToSet: string | null | undefined = undefined;
     let regionIdToSet: string | null | undefined = undefined;
+    let bodegaIdToSet: string | null | undefined = undefined;
 
     if (dto.agenciaId !== undefined) {
       if (!dto.agenciaId || dto.agenciaId === 'null' || dto.agenciaId === 'Sin asignar' || dto.agenciaId.toLowerCase().includes('sin sucursal')) {
@@ -1545,40 +1744,49 @@ export class AgenciasService {
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (
       userRoleCode === 'COORD_BODEGA' ||
       userRoleCode === 'DISTRIBUIDOR' ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
     ) {
-      // Gestor de Inventario / Coord Bodega: acceso total nacional (sin agencia ni región fija)
+      // Coord Bodega: acceso total nacional (sin agencia ni región fija)
       agenciaIdToSet = null;
       regionIdToSet = null;
+      if (dto.bodegaId !== undefined) bodegaIdToSet = dto.bodegaId || null;
     } else if (userRoleCode.includes('SUPERVISOR')) {
       agenciaIdToSet = null;
+      bodegaIdToSet = null;
       if (!regionIdToSet) {
         regionIdToSet = user.regionId;
       }
       if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+        throw new BadRequestException('El supervisor debe tener una región asignada.');
       }
     } else if (
       userRoleCode === 'ASISTENTE_BODEGA' ||
       (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
     ) {
-      // Asistente de Bodega: vinculado operativamente a su región
+      // Asistente de Bodega: vinculado a bodega regional
       agenciaIdToSet = null;
-      if (!regionIdToSet) {
-        regionIdToSet = user.regionId;
+      if (dto.bodegaId !== undefined) {
+        bodegaIdToSet = dto.bodegaId || null;
+      } else {
+        bodegaIdToSet = user.bodegaId;
       }
-      if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+      if (!bodegaIdToSet) {
+        throw new BadRequestException('El Asistente de Bodega debe estar asignado a una bodega regional (bodegaId).');
       }
+      const bod = await this.prisma.bodega.findUnique({ where: { id: bodegaIdToSet } });
+      if (!bod || bod.tipo === 'CENTRAL' || bod.esCentral) {
+        throw new BadRequestException('El Asistente de Bodega solo puede asignarse a bodegas de tipo REGIONAL.');
+      }
+      regionIdToSet = bod.regionId || regionIdToSet || user.regionId;
     }
 
     const updatedUser = await this.prisma.user.update({
@@ -1591,14 +1799,29 @@ export class AgenciasService {
         ...(roleIdToSet !== undefined && { roleId: roleIdToSet }),
         ...(agenciaIdToSet !== undefined && { agenciaId: agenciaIdToSet }),
         ...(regionIdToSet !== undefined && { regionId: regionIdToSet }),
+        ...(bodegaIdToSet !== undefined && { bodegaId: bodegaIdToSet }),
         ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet }),
+        ...(dto.servicioIds !== undefined && {
+          servicioIds: Array.isArray(dto.servicioIds)
+            ? dto.servicioIds.map(Number).filter((n) => !isNaN(n) && n > 0)
+            : [],
+        }),
       },
       include: {
         role: true,
         agencia: true,
         region: true,
+        bodega: true,
       },
     });
+
+    const sIdsUser = Array.isArray(updatedUser.servicioIds)
+      ? (updatedUser.servicioIds as any[]).map(Number).filter((n) => !isNaN(n) && n > 0)
+      : [];
+    const rolUser = (updatedUser.role?.namerol || '').toUpperCase();
+    if (sIdsUser.length > 0 && (rolUser.includes('PULIDOR') || !updatedUser.agenciaId)) {
+      await this.sincronizarStockPulidorPorServicios(updatedUser.id, sIdsUser, dto.id);
+    }
 
     return {
       message: `Usuario ${updatedUser.name} ${updatedUser.lastname} actualizado correctamente`,
@@ -1611,6 +1834,8 @@ export class AgenciasService {
         role: updatedUser.role,
         agencia: updatedUser.agencia,
         region: updatedUser.region,
+        bodega: updatedUser.bodega,
+        servicioIds: Array.isArray(updatedUser.servicioIds) ? updatedUser.servicioIds : [],
       },
     };
   }
@@ -1626,14 +1851,19 @@ export class AgenciasService {
     if (dto.roleId) {
       const roleExists = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
       if (roleExists) {
+        if (roleExists.namerol === 'SUPER_ADMIN') {
+          throw new ForbiddenException('No se puede asignar el rol SUPER_ADMIN desde la aplicación.');
+        }
         roleIdToSet = roleExists.id;
       }
     }
     if (!roleIdToSet && dto.rolNombre) {
       const norm = dto.rolNombre.toUpperCase().trim();
+      if (norm === 'SUPER_ADMIN' || (norm.includes('SUPER') && norm.includes('ADMIN'))) {
+        throw new ForbiddenException('No se puede asignar el rol SUPER_ADMIN desde la aplicación.');
+      }
       let code = norm;
-      if (norm.includes('SUPER') && norm.includes('ADMIN')) code = 'SUPER_ADMIN';
-      else if (norm.includes('ADMIN')) code = 'ADMIN';
+      if (norm.includes('ADMIN')) code = 'ADMIN';
       else if (norm.includes('SUPERVISOR')) code = 'SUPERVISOR';
       else if (norm.includes('JEFE') && norm.includes('COMERCIAL')) code = 'JEFE_COMERCIAL';
       else if (norm.includes('COORD') && norm.includes('COMERCIAL')) code = 'COORD_COMERCIAL';
@@ -1653,16 +1883,20 @@ export class AgenciasService {
             { namerol: dto.rolNombre },
             { namerol: dto.rolNombre.toUpperCase() },
             { namerol: code },
-            { namerol: code === 'LIDER' ? 'LIDER_AGENCIA' : code },
             { namerol: code === 'COORD_BODEGA' ? 'DISTRIBUIDOR' : code },
           ],
         },
       });
+      if (roleFound?.namerol === 'SUPER_ADMIN') {
+        throw new ForbiddenException('No se puede asignar el rol SUPER_ADMIN desde la aplicación.');
+      }
       if (roleFound) roleIdToSet = roleFound.id;
     }
 
     if (!roleIdToSet) {
-      const fallbackRole = await this.prisma.role.findFirst();
+      const fallbackRole = await this.prisma.role.findFirst({
+        where: { namerol: { not: 'SUPER_ADMIN' } },
+      });
       if (fallbackRole) roleIdToSet = fallbackRole.id;
     }
 
@@ -1673,6 +1907,7 @@ export class AgenciasService {
     // Agencia y región son 100% opcionales en la creación
     let agenciaIdToSet: string | null = null;
     let regionIdToSet: string | null = null;
+    let bodegaIdToSet: string | null = null;
     if (dto.agenciaId && dto.agenciaId !== 'Sin asignar' && !dto.agenciaId.toLowerCase().includes('sin sucursal')) {
       const ag = await this.prisma.agencia.findFirst({
         where: { OR: [{ id: dto.agenciaId }, { nombre: dto.agenciaId }] },
@@ -1724,42 +1959,72 @@ export class AgenciasService {
         }
       }
     }
+
+    if (dto.bodegaId) {
+      const bodega = await this.prisma.bodega.findUnique({ where: { id: dto.bodegaId } });
+      if (!bodega) {
+        throw new BadRequestException(`Bodega "${dto.bodegaId}" no encontrada`);
+      }
+      bodegaIdToSet = bodega.id;
+      if (bodega.regionId) regionIdToSet = bodega.regionId;
+    }
+
     const userRoleCode = (dto.rolNombre || '').toUpperCase();
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
       agenciaIdToSet = null;
       regionIdToSet = null;
+      bodegaIdToSet = null;
     } else if (
       userRoleCode === 'COORD_BODEGA' ||
       userRoleCode === 'DISTRIBUIDOR' ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
       (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
     ) {
-      // Gestor de Inventario / Coord Bodega: alcance nacional global sin agencia ni región fija
+      // Coord Bodega: alcance nacional sin agencia/región; bodega opcional (central)
       agenciaIdToSet = null;
       regionIdToSet = null;
     } else if (userRoleCode.includes('SUPERVISOR')) {
       agenciaIdToSet = null;
+      bodegaIdToSet = null;
       if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+        throw new BadRequestException('El supervisor debe tener una región asignada.');
       }
     } else if (
       userRoleCode === 'ASISTENTE_BODEGA' ||
       (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
     ) {
-      // Asistente de Bodega: asignado operativamente a su región
       agenciaIdToSet = null;
-      if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+      if (!bodegaIdToSet) {
+        throw new BadRequestException('El Asistente de Bodega debe estar asignado a una bodega regional (bodegaId).');
       }
+      const bod = await this.prisma.bodega.findUnique({ where: { id: bodegaIdToSet } });
+      if (!bod || bod.tipo === 'CENTRAL' || bod.esCentral) {
+        throw new BadRequestException('El Asistente de Bodega solo puede asignarse a bodegas de tipo REGIONAL.');
+      }
+      regionIdToSet = bod.regionId || regionIdToSet;
+      if (!regionIdToSet) {
+        throw new BadRequestException('La bodega asignada al asistente debe tener región.');
+      }
+    } else if (userRoleCode === 'LIDER' || userRoleCode.includes('LIDER')) {
+      if (!agenciaIdToSet) {
+        throw new BadRequestException('El Líder Operador debe tener una agencia asignada.');
+      }
+      bodegaIdToSet = null;
     }
 
-    const passwordToHash = dto.password?.trim() || 'Admin123*';
+    const passwordToHash = dto.password?.trim();
+    if (!passwordToHash) {
+      throw new BadRequestException('La contraseña es obligatoria para crear el usuario.');
+    }
     const passwordHash = await bcrypt.hash(passwordToHash, 10);
+
+    const servicioIdsToSet = Array.isArray(dto.servicioIds)
+      ? dto.servicioIds.map(Number).filter((n) => !isNaN(n) && n > 0)
+      : [];
 
     const newUser = await this.prisma.user.create({
       data: {
@@ -1770,14 +2035,24 @@ export class AgenciasService {
         roleId: roleIdToSet,
         agenciaId: agenciaIdToSet,
         regionId: regionIdToSet,
+        bodegaId: bodegaIdToSet,
+        servicioIds: servicioIdsToSet,
         estado: dto.estado !== undefined ? dto.estado : 1,
       },
       include: {
         role: true,
         agencia: true,
         region: true,
+        bodega: true,
       },
     });
+
+    if (servicioIdsToSet.length > 0) {
+      const rolNuevo = (newUser.role?.namerol || dto.rolNombre || '').toUpperCase();
+      if (rolNuevo.includes('PULIDOR') || !newUser.agenciaId) {
+        await this.sincronizarStockPulidorPorServicios(newUser.id, servicioIdsToSet, newUser.id);
+      }
+    }
 
     return {
       message: `Usuario ${newUser.name} ${newUser.lastname} creado correctamente`,
@@ -1790,6 +2065,9 @@ export class AgenciasService {
         role: newUser.role,
         agencia: newUser.agencia,
         region: newUser.region,
+        bodega: newUser.bodega,
+        bodegaId: newUser.bodegaId,
+        servicioIds: Array.isArray(newUser.servicioIds) ? newUser.servicioIds : [],
       },
     };
   }
@@ -1821,12 +2099,11 @@ export class AgenciasService {
     };
   }
 
-  async listUsuariosPorAgencia(dto: ListUsuariosAgenciaDto, userRole?: string) {
-    const where: any = {};
-
-    if (userRole && userRole !== 'SUPER_ADMIN') {
-      where.role = { namerol: { not: 'SUPER_ADMIN' } };
-    }
+  async listUsuariosPorAgencia(dto: ListUsuariosAgenciaDto, _userRole?: string) {
+    const where: any = {
+      // Usuario SUPER_ADMIN nunca se lista en directorios
+      role: { namerol: { not: 'SUPER_ADMIN' } },
+    };
 
     if (dto.agenciaId) {
       where.OR = [
@@ -1836,7 +2113,11 @@ export class AgenciasService {
     }
 
     if (dto.rolNombre) {
-      where.role = { ...(where.role || {}), namerol: dto.rolNombre };
+      // Si piden explícitamente SUPER_ADMIN, no devolver nada
+      if (dto.rolNombre.trim().toUpperCase() === 'SUPER_ADMIN') {
+        return [];
+      }
+      where.role = { namerol: dto.rolNombre };
     }
 
     if (dto.estado !== undefined) {
@@ -1857,6 +2138,9 @@ export class AgenciasService {
         regionId: true,
         region: { select: { id: true, codigo: true, nombre: true } },
         agenciasIds: true,
+        servicioIds: true,
+        bodegaId: true,
+        bodega: { select: { id: true, codigo: true, nombre: true } },
       },
       orderBy: { name: 'asc' },
     });

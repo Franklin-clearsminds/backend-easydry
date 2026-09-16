@@ -69,34 +69,29 @@ export class RolesService {
     };
   }
 
-  async findAll(query?: QueryRolesDto, userRole?: string) {
-    const where: any = {};
-
-    if (userRole && userRole !== 'SUPER_ADMIN') {
-      where.namerol = { not: 'SUPER_ADMIN' };
-    }
+  async findAll(query?: QueryRolesDto, _userRole?: string) {
+    const and: any[] = [{ namerol: { not: 'SUPER_ADMIN' } }];
 
     if (query?.estado !== undefined) {
-      where.estado = Number(query.estado);
+      and.push({ estado: Number(query.estado) });
     }
 
     if (query?.namerol) {
-      where.namerol = { contains: query.namerol.trim(), mode: 'insensitive', ...(userRole && userRole !== 'SUPER_ADMIN' ? { not: 'SUPER_ADMIN' } : {}) };
+      and.push({ namerol: { contains: query.namerol.trim(), mode: 'insensitive' } });
     }
 
     if (query?.search) {
       const q = query.search.trim();
-      where.OR = [
-        { namerol: { contains: q, mode: 'insensitive' } },
-        { descripcion: { contains: q, mode: 'insensitive' } },
-      ];
-      if (userRole && userRole !== 'SUPER_ADMIN') {
-        where.AND = [{ namerol: { not: 'SUPER_ADMIN' } }];
-      }
+      and.push({
+        OR: [
+          { namerol: { contains: q, mode: 'insensitive' } },
+          { descripcion: { contains: q, mode: 'insensitive' } },
+        ],
+      });
     }
 
     const roles = await this.prisma.role.findMany({
-      where,
+      where: { AND: and },
       include: {
         _count: {
           select: { users: true },
@@ -132,6 +127,10 @@ export class RolesService {
 
   async create(createDto: CreateRoleDto) {
     const namerolNormalized = createDto.namerol.trim().toUpperCase();
+
+    if (namerolNormalized === 'SUPER_ADMIN') {
+      throw new ForbiddenException('No se puede crear el rol SUPER_ADMIN; es un rol de sistema reservado.');
+    }
 
     const existing = await this.prisma.role.findUnique({
       where: { namerol: namerolNormalized },

@@ -114,16 +114,23 @@ model User {
   roleId        String
   role          Role     @relation(fields: [roleId], references: [id])
 
-  // Agencia principal asignada (obligatorio para: LIDER_AGENCIA, APROBADOR, PULIDOR_FIJO; opcional para PULIDOR_MOVIL)
+  // Agencia principal (obligatoria para: LIDER, APROBADOR; PULIDOR con agencia = fijo)
   agenciaId     String?
   agencia       Agencia? @relation(fields: [agenciaId], references: [id])
 
   // Lista de agencias accesibles (para roles regionales / nacionales)
   agenciasIds   String[] @default([])
 
-  // Región asignada (especialmente para roles como SUPERVISOR, COORD_COMERCIAL)
+  // Región (SUPERVISOR, COORD_COMERCIAL, COORD_SERVICIOS_ESPECIALES, PULIDOR móvil)
   regionId      String?
   region        Region?  @relation(fields: [regionId], references: [id])
+
+  // Bodega asignada (obligatoria para ASISTENTE_BODEGA; opcional para COORD_BODEGA → central)
+  bodegaId      String?
+  bodega        Bodega?  @relation(fields: [bodegaId], references: [id])
+
+  // Servicios del catálogo asignados al pulidor móvil (ids CatalogoServicio) para kit / insumos necesarios
+  servicioIds   Json?
 
   estado        Int      @default(1) // 0 desactivo, 1 activo
   createdAt     DateTime @default(now())
@@ -134,6 +141,7 @@ model User {
   despachosRealizados MovimientoInventario[] @relation("DespachaMovimiento")
   despachosRecibidos  MovimientoInventario[] @relation("RecibeMovimiento")
   alertasEmitidas     AlertaStock[]
+  alertasKitPulidor   AlertaStock[]          @relation("AlertaStockPulidor")
   devices             SyncDevice[]
   incidentesReportados IncidenteTecnico[]        @relation("ReportadoPor")
   incidentesResueltos  IncidenteTecnico[]        @relation("ResueltoPor")
@@ -153,6 +161,7 @@ model User {
   @@index([roleId])
   @@index([agenciaId])
   @@index([regionId])
+  @@index([bodegaId])
   @@index([estado])
 }
 
@@ -470,7 +479,11 @@ model MovimientoInventarioGlobal {
   stockNuevo        Decimal                     @db.Decimal(12, 4)
   presentacionId    String?
   presentacion      PresentacionInsumo?         @relation(fields: [presentacionId], references: [id])
-  ubicacionId       String?                     // ID de Bodega o Agencia si aplica
+  ubicacionId       String?                     // ID de Bodega o Agencia si aplica (ubicación afectada)
+  /// Etiqueta legible del origen del movimiento (Proveedor, Bodega X, Agencia Y…)
+  origenUbicacion   String?
+  /// Etiqueta legible del destino (Bodega X, Agencia Y, Consumo, Merma…)
+  destinoUbicacion  String?
   responsableId     String?
   responsable       User?                       @relation("ResponsableMovimientoGlobal", fields: [responsableId], references: [id])
   motivoId          String?
@@ -545,6 +558,10 @@ model StockUbicacion {
   agenciaId      String?
   agencia        Agencia?           @relation(fields: [agenciaId], references: [id])
 
+  /// Bodega física (CENTRAL o REGIONAL) cuando el stock está en almacén
+  bodegaId       String?
+  bodega         Bodega?            @relation(fields: [bodegaId], references: [id])
+
   pulidorId      String?
   pulidor        User?              @relation(fields: [pulidorId], references: [id])
 
@@ -555,27 +572,41 @@ model StockUbicacion {
   @@index([insumoId])
   @@index([tipoUbicacion])
   @@index([agenciaId])
+  @@index([bodegaId])
   @@index([pulidorId])
 }
 
+enum TipoBodega {
+  CENTRAL
+  REGIONAL
+}
+
 model Bodega {
-  id               String   @id @default(uuid())
-  codigo           String   @unique
+  id               String     @id @default(uuid())
+  codigo           String     @unique
   nombre           String
   ciudad           String?
   direccion        String?
   telefono         String?
-  esCentral        Boolean  @default(false)
-  activa           Boolean  @default(true)
+  /// CENTRAL = única nacional (despacha a cualquier lugar). REGIONAL = solo agencias de su región.
+  tipo             TipoBodega @default(REGIONAL)
+  /// Compatibilidad legacy; se mantiene sincronizado con tipo === CENTRAL
+  esCentral        Boolean    @default(false)
+  activa           Boolean    @default(true)
+  /// Obligatoria para REGIONAL; opcional/null para CENTRAL
   regionId         String?
-  region           Region?  @relation(fields: [regionId], references: [id])
-  porcentajeAlerta Int      @default(20)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  region           Region?    @relation(fields: [regionId], references: [id])
+  porcentajeAlerta Int        @default(20)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  usuarios         User[]
+  stocks           StockUbicacion[]
 
   @@map("bodegas")
   @@index([activa])
   @@index([regionId])
+  @@index([tipo])
 }
 
 // 5. Historial de Movimientos y Despachos
@@ -583,6 +614,7 @@ enum TipoMovimientoInv {
   COMPRA_PROVEEDOR
   DESPACHO_AGENCIA
   DESPACHO_PULIDOR
+  DESPACHO_BODEGA
   RECEPCION_CONFIRMADA
   RECEPCION_RECHAZADA
   CONSUMO_SERVICIO
@@ -606,6 +638,13 @@ model MovimientoInventario {
   origenUbicacion   String
   destinoUbicacion  String
 
+  /// FKs tipadas (además de labels legibles)
+  origenBodegaId    String?
+  origenAgenciaId   String?
+  destinoBodegaId   String?
+  destinoAgenciaId  String?
+  destinoPulidorId  String?
+
   usuarioDespachaId String
   usuarioDespacha   User                @relation("DespachaMovimiento", fields: [usuarioDespachaId], references: [id])
   usuarioRecibeId   String?
@@ -622,6 +661,11 @@ model MovimientoInventario {
   @@index([numeroGuia])
   @@index([tipo])
   @@index([estadoDespacho])
+  @@index([origenBodegaId])
+  @@index([origenAgenciaId])
+  @@index([destinoBodegaId])
+  @@index([destinoAgenciaId])
+  @@index([destinoPulidorId])
 }
 
 model MovimientoDetalle {
@@ -662,6 +706,10 @@ model AlertaStock {
   usuarioEmisorId String
   usuarioEmisor   User              @relation(fields: [usuarioEmisorId], references: [id])
 
+  /** Kit del pulidor (móvil/fijo) cuando la alerta no es de una agencia */
+  pulidorId       String?
+  pulidor         User?             @relation("AlertaStockPulidor", fields: [pulidorId], references: [id])
+
   mensaje         String?
   stockReportado  Decimal?          @db.Decimal(10, 3)
   fechaAtencion   DateTime?
@@ -672,6 +720,7 @@ model AlertaStock {
   @@index([estado])
   @@index([nivel])
   @@index([agenciaId])
+  @@index([pulidorId])
 }
 
 // =========================================================================

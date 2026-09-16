@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsNumber, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsString, IsNumber, IsOptional, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateCatalogoServicioDto {
   @ApiProperty({ example: 'SER-001', description: 'Código único del servicio' })
@@ -24,17 +25,24 @@ export class CreateCatalogoServicioDto {
 
   @ApiPropertyOptional({ example: 15.0, default: 0.0 })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   precio?: number;
 
-  @ApiPropertyOptional({ example: 30, default: 30 })
-  @IsOptional()
+  @ApiProperty({
+    example: 30,
+    description: 'Duración estimada en minutos. Se usa para calcular hora de salida al crear la OT.',
+    default: 30,
+  })
+  @Type(() => Number)
   @IsNumber()
-  tiempoEstimadoMin?: number;
+  @Min(1)
+  tiempoEstimadoMin: number;
 }
 
 export class UpdateCatalogoServicioDto {
   @ApiProperty({ example: 1 })
+  @Type(() => Number)
   @IsNumber()
   @IsNotEmpty()
   id: number;
@@ -61,12 +69,18 @@ export class UpdateCatalogoServicioDto {
 
   @ApiPropertyOptional({ example: 18.0 })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   precio?: number;
 
-  @ApiPropertyOptional({ example: 35 })
+  @ApiPropertyOptional({
+    example: 35,
+    description: 'Duración estimada en minutos para cálculo de hora de salida en OT',
+  })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
+  @Min(1)
   tiempoEstimadoMin?: number;
 }
 

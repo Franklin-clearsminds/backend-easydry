@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsArray, IsNumber } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsArray, IsNumber, IsInt } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AsignarUsuarioAgenciaDto {
@@ -107,10 +107,29 @@ export class UpdateUsuarioDto {
   @IsString()
   regionId?: string;
 
+  @ApiPropertyOptional({ example: 'uuid-bodega', description: 'Bodega asignada (ASISTENTE_BODEGA)' })
+  @IsOptional()
+  @IsString()
+  bodegaId?: string;
+
   @ApiPropertyOptional({ example: 'NuevaClave123*', description: 'Nueva contraseña si se desea actualizar' })
   @IsOptional()
   @IsString()
   password?: string;
+
+  @ApiPropertyOptional({ example: 'MOVIL', description: 'Modalidad de operador especial: FIJO o MOVIL' })
+  @IsOptional()
+  @IsString()
+  modalidadPulidor?: string;
+
+  @ApiPropertyOptional({
+    example: [3, 5],
+    description: 'IDs de CatalogoServicio asignados al pulidor móvil (insumos necesarios)',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  servicioIds?: number[];
 }
 
 export class DeleteUsuarioDto {
@@ -171,10 +190,24 @@ export class CreateUsuarioDto {
   @IsString()
   regionId?: string;
 
+  @ApiPropertyOptional({ example: 'uuid-bodega', description: 'Bodega asignada (obligatoria para ASISTENTE_BODEGA)' })
+  @IsOptional()
+  @IsString()
+  bodegaId?: string;
+
   @ApiPropertyOptional({ example: 'MOVIL', description: 'Modalidad de operador especial: FIJO o MOVIL' })
   @IsOptional()
   @IsString()
   modalidadPulidor?: string;
+
+  @ApiPropertyOptional({
+    example: [3, 5],
+    description: 'IDs de CatalogoServicio asignados al pulidor móvil (insumos necesarios)',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  servicioIds?: number[];
 }
 
 export class ListOperadoresDto {

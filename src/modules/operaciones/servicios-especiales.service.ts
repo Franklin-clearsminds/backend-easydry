@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -75,15 +75,8 @@ export class ServiciosEspecialesService {
           where.agenciaId = targetAgencia;
         }
       } else if (isPulidor) {
-        // El pulidor ve los servicios asignados a él; y si es fijo en una agencia, también los servicios de su agencia
-        if (currentUser.agenciaId) {
-          where.OR = [
-            { operadorId: currentUser.id },
-            { agenciaId: currentUser.agenciaId }
-          ];
-        } else {
-          where.operadorId = currentUser.id;
-        }
+        // Los servicios especiales solo le salen al pulidor al que se le asignó la OT
+        where.operadorId = currentUser.id;
       } else if (isCoord && currentUser.regionId) {
         // El coordinador ve únicamente los servicios de su región asignada
         where.regionId = currentUser.regionId;
@@ -190,7 +183,10 @@ export class ServiciosEspecialesService {
     const codigoSE = dto.codigoSE || `SE-${Date.now().toString().slice(-6)}`;
 
     const vInfo = dto.vehiculoInfo || {};
-    const placa = (vInfo.placa || (dto as any).placa || 'ABC-0000').toUpperCase().trim();
+    const placa = (vInfo.placa || (dto as any).placa || '').toUpperCase().trim();
+    if (!placa) {
+      throw new BadRequestException('La placa del vehículo es obligatoria.');
+    }
     const marca = vInfo.marca || (dto as any).marca || null;
     const modelo = vInfo.modelo || (dto as any).modelo || null;
     const color = vInfo.color || (dto as any).color || null;
@@ -210,6 +206,37 @@ export class ServiciosEspecialesService {
       }
     }
 
+    const rolCreator = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
+    const isAdminCreator = rolCreator.includes('ADMIN') || rolCreator.includes('SUPER');
+    const isCoord = (rolCreator.includes('COORD_SERVICIOS_ESPECIALES') || (rolCreator.includes('COORD') && rolCreator.includes('ESPECIALES'))) && !isAdminCreator;
+    const isPulidorCreator = rolCreator.includes('PULIDOR') && !isAdminCreator;
+
+    let finalAgenciaId = dto.agenciaId || null;
+
+    // Validación de asignación de agencia
+    if (isPulidorCreator) {
+      if (currentUser?.agenciaId) {
+        // Pulidor fijo en sede: restringido únicamente a su agencia
+        finalAgenciaId = currentUser.agenciaId;
+      } else {
+        // Pulidor móvil: puede elegir cualquier agencia dentro de su región
+        if (!finalAgenciaId) {
+          throw new BadRequestException('Debe seleccionar la agencia en la cual se realizará el servicio especial.');
+        }
+        if (finalRegionId) {
+          const agenciaSel = await this.prisma.agencia.findUnique({
+            where: { id: finalAgenciaId },
+            select: { id: true, regionId: true },
+          });
+          if (agenciaSel?.regionId && agenciaSel.regionId !== finalRegionId) {
+            throw new BadRequestException('El pulidor móvil solo puede realizar servicios en agencias de su región asignada.');
+          }
+        }
+      }
+    } else if (dto.agenciaId) {
+      finalAgenciaId = dto.agenciaId;
+    }
+
     // Validar asignación de operador: Si el creador es Coordinador, el operador debe ser de su misma región
     if (dto.operadorId && finalRegionId) {
       const operadorAsignado = await this.prisma.user.findUnique({
@@ -219,6 +246,31 @@ export class ServiciosEspecialesService {
       if (operadorAsignado && operadorAsignado.regionId && operadorAsignado.regionId !== finalRegionId) {
         throw new BadRequestException('Solo se pueden asignar servicios especiales a pulidores de su misma región.');
       }
+    }
+
+    let operadorIdFinal = dto.operadorId || null;
+    if (!operadorIdFinal && isPulidorCreator) {
+      operadorIdFinal = creatorId || currentUser?.id || null;
+    }
+    if (isCoord && !operadorIdFinal) {
+      throw new BadRequestException('Debe asignar un pulidor móvil para crear la orden de servicio especial.');
+    }
+
+    // Admin y Super Admin NO tienen inventario propio ni agencia fija; no se valida stock
+    let recetaValidada: any[] | null = null;
+    if (isAdminCreator) {
+      recetaValidada = Array.isArray(dto.recetaInsumos) ? dto.recetaInsumos : null;
+    } else if (operadorIdFinal) {
+      // Para pulidores u operadores asignados por coordinadores, se valida su kit en custodia
+      recetaValidada = await this.assertPulidorTieneInsumosParaOT(
+        operadorIdFinal,
+        dto.recetaInsumos,
+        dto.tipoServicio,
+        finalAgenciaId || undefined,
+        currentUser?.id,
+      );
+    } else {
+      recetaValidada = Array.isArray(dto.recetaInsumos) ? dto.recetaInsumos : null;
     }
 
     const created = await this.prisma.servicioEspecial.create({
@@ -231,14 +283,14 @@ export class ServiciosEspecialesService {
         modelo,
         color,
         clienteNombre,
-        agenciaId: dto.agenciaId || null,
+        agenciaId: finalAgenciaId,
         regionId: finalRegionId,
         regionNombre: finalRegionNombre,
-        operadorId: dto.operadorId || creatorId || null,
+        operadorId: operadorIdFinal,
         prioridad: dto.prioridad || 'Media',
         estado: 'Pendiente',
         videoInicialUrl: dto.videoInicialUrl || null,
-        recetaInsumos: dto.recetaInsumos || null,
+        recetaInsumos: recetaValidada || dto.recetaInsumos || null,
         evidencias: dto.evidencias || null,
         observaciones: dto.observaciones || null,
       },
@@ -252,10 +304,163 @@ export class ServiciosEspecialesService {
     return this._formatItem(created);
   }
 
-  async iniciar(dto: IniciarServicioEspecialDto) {
+  /**
+   * Impide crear OT especial si el kit del pulidor no cubre la receta del servicio
+   * y emite alerta de stock bajo/agotado hacia la bodega de la región y bodega central.
+   */
+  private async assertPulidorTieneInsumosParaOT(
+    operadorId: string,
+    recetaInsumos: any,
+    tipoServicio?: string,
+    agenciaId?: string,
+    emisorId?: string,
+  ): Promise<any[]> {
+    let items: any[] = Array.isArray(recetaInsumos) ? [...recetaInsumos] : [];
+
+    if (items.length === 0 && tipoServicio?.trim()) {
+      const cat = await this.prisma.catalogoServicio.findFirst({
+        where: {
+          OR: [
+            { nombre: { equals: tipoServicio.trim(), mode: 'insensitive' } },
+            { codigo: { equals: tipoServicio.trim(), mode: 'insensitive' } },
+          ],
+        },
+        include: {
+          recetas: {
+            include: {
+              insumo: { select: { id: true, nombre: true, codigoSKU: true } },
+              unidadConsumo: { select: { simbolo: true } },
+            },
+          },
+        },
+      });
+      if (cat?.recetas?.length) {
+        items = cat.recetas.map((r) => ({
+          productoId: r.insumoId,
+          insumoId: r.insumoId,
+          productoSKU: r.insumo?.codigoSKU,
+          codigoSKU: r.insumo?.codigoSKU,
+          productoNombre: r.insumo?.nombre,
+          insumoNombre: r.insumo?.nombre,
+          unidadMedida: r.unidadConsumo?.simbolo || 'u',
+          cantidadSugerida: Number(r.cantidadUsada),
+          cantidad: Number(r.cantidadUsada),
+        }));
+      }
+    }
+
+    const stocks = await this.prisma.stockUbicacion.findMany({
+      where: { pulidorId: operadorId },
+      include: { insumo: { select: { id: true, nombre: true, codigoSKU: true } } },
+    });
+
+    const stockPorInsumo = new Map<string, number>();
+    for (const s of stocks) {
+      stockPorInsumo.set(s.insumoId, (stockPorInsumo.get(s.insumoId) || 0) + Number(s.cantidadActual));
+    }
+
+    const totalKit = Array.from(stockPorInsumo.values()).reduce((a, b) => a + b, 0);
+    if (totalKit <= 0) {
+      throw new BadRequestException(
+        'No puede crear la OT: el pulidor no tiene insumos en su kit. Solicite un despacho antes de registrar el servicio.',
+      );
+    }
+
+    if (items.length === 0) {
+      throw new BadRequestException(
+        'No puede crear la OT: el servicio no tiene receta de insumos configurada o el kit no puede validarse.',
+      );
+    }
+
+    const faltantes: string[] = [];
+    for (const it of items) {
+      const insumoId = String(it.insumoId || it.productoId || '').trim();
+      const need = Number(it.cantidadSugerida ?? it.cantidad ?? 0);
+      if (!insumoId || need <= 0) continue;
+
+      let have = stockPorInsumo.get(insumoId);
+      if (have === undefined) {
+        const sku = String(it.codigoSKU || it.productoSKU || '').trim();
+        const nombre = String(it.productoNombre || it.insumoNombre || it.nombre || '').trim().toLowerCase();
+        const match = stocks.find(
+          (s) =>
+            (sku && s.insumo?.codigoSKU === sku) ||
+            (nombre && s.insumo?.nombre?.toLowerCase() === nombre),
+        );
+        have = match ? Number(match.cantidadActual) : 0;
+      }
+
+      if ((have || 0) < need) {
+        const label = it.productoNombre || it.insumoNombre || it.nombre || it.codigoSKU || insumoId;
+        faltantes.push(`${label}: requiere ${need}, disponible ${have || 0}`);
+      }
+    }
+
+    if (faltantes.length > 0) {
+      // Disparar alertas de stock bajo/agotado hacia la bodega de la región y bodega central
+      try {
+        for (const it of items) {
+          const insumoId = String(it.insumoId || it.productoId || '').trim();
+          const need = Number(it.cantidadSugerida ?? it.cantidad ?? 0);
+          if (!insumoId) continue;
+          const have = stockPorInsumo.get(insumoId) || 0;
+          if (have < need) {
+            const nivelAlerta = have <= 0 ? 'AGOTADO' : 'CRITICO';
+            const existe = await this.prisma.alertaStock.findFirst({
+              where: {
+                insumoId,
+                pulidorId: operadorId,
+                estado: 'PENDIENTE',
+              },
+            });
+            if (!existe) {
+              await this.prisma.alertaStock.create({
+                data: {
+                  insumoId,
+                  nivel: nivelAlerta as any,
+                  estado: 'PENDIENTE',
+                  pulidorId: operadorId,
+                  agenciaId: agenciaId || null,
+                  usuarioEmisorId: emisorId || operadorId,
+                  mensaje: `Stock insuficiente para Servicio Especial "${tipoServicio || 'Especial'}": requiere ${need}, kit tiene ${have}`,
+                  stockReportado: have,
+                },
+              });
+            }
+          }
+        }
+      } catch (errAlerta) {
+        console.warn('No se pudo registrar alerta de stock para pulidor:', errAlerta);
+      }
+
+      throw new BadRequestException(
+        `No puede crear la OT: insumos insuficientes en el kit del pulidor. ${faltantes.join('; ')}`,
+      );
+    }
+
+    return items.map((it) => ({
+      ...it,
+      cantidad: Number(it.cantidadSugerida ?? it.cantidad ?? 0),
+      cantidadSugerida: Number(it.cantidadSugerida ?? it.cantidad ?? 0),
+      insumoId: it.insumoId || it.productoId,
+      codigoSKU: it.codigoSKU || it.productoSKU,
+      insumoNombre: it.insumoNombre || it.productoNombre || it.nombre,
+    }));
+  }
+
+  async iniciar(dto: IniciarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
     if (item.estado.toUpperCase() === 'COMPLETADO' || item.estado.toUpperCase() === 'FINALIZADO') {
       throw new BadRequestException('El servicio especial ya ha sido finalizado.');
+    }
+
+    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
+    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
+    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+
+    // Solo el pulidor asignado a esta OT o un Admin/SuperAdmin puede iniciarla
+    if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
+      throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede iniciar el servicio.');
     }
 
     const data: any = {
@@ -282,8 +487,17 @@ export class ServiciosEspecialesService {
     return this._formatItem(updated);
   }
 
-  async completar(dto: CompletarServicioEspecialDto) {
+  async completar(dto: CompletarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
+
+    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
+    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
+    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+
+    // Solo el pulidor asignado a esta OT o un Admin/SuperAdmin puede completarla
+    if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
+      throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede finalizar el servicio.');
+    }
 
     const data: any = {
       estado: 'Completado',
@@ -319,18 +533,23 @@ export class ServiciosEspecialesService {
     if (item.operadorId && item.recetaInsumos && Array.isArray(item.recetaInsumos)) {
       for (const ins of (item.recetaInsumos as any[])) {
         if (!ins) continue;
-        const cantidadDesc = Number(ins.cantidad || 0);
+        const cantidadDesc = Number(ins.cantidad ?? ins.cantidadSugerida ?? 0);
         if (cantidadDesc <= 0) continue;
 
         try {
+          const insumoId = String(ins.insumoId || ins.productoId || '').trim();
+          const sku = String(ins.codigoSKU || ins.productoSKU || '').trim();
+          const nombre = String(ins.insumoNombre || ins.productoNombre || ins.nombre || '').trim();
+
+          const orConditions: any[] = [];
+          if (insumoId) orConditions.push({ id: insumoId });
+          if (sku) orConditions.push({ codigoSKU: sku });
+          if (nombre) orConditions.push({ nombre: { equals: nombre, mode: 'insensitive' } });
+
+          if (orConditions.length === 0) continue;
+
           const insumoDb = await this.prisma.insumo.findFirst({
-            where: {
-              OR: [
-                { id: ins.insumoId || '' },
-                { nombre: { equals: ins.insumoNombre || ins.nombre || '', mode: 'insensitive' } },
-                { codigoSKU: ins.codigoSKU || '' },
-              ],
-            },
+            where: { OR: orConditions },
           });
 
           if (insumoDb) {
@@ -342,9 +561,10 @@ export class ServiciosEspecialesService {
             });
 
             if (stockPulidor) {
+              const nuevaCant = Math.max(0, Number(stockPulidor.cantidadActual) - cantidadDesc);
               await this.prisma.stockUbicacion.update({
                 where: { id: stockPulidor.id },
-                data: { cantidadActual: { decrement: cantidadDesc } },
+                data: { cantidadActual: nuevaCant },
               });
             }
           }
@@ -383,15 +603,23 @@ export class ServiciosEspecialesService {
   // MÉTODOS AUXILIARES: PULIDORES Y STOCK ZONAL
   // =========================================================================
 
-  async listarPulidoresPorRegion(regionId: string) {
-    return this.prisma.user.findMany({
-      where: {
-        estado: 1,
-        regionId,
-        role: {
-          namerol: { in: ['PULIDOR', 'PULIDOR_MOVIL', 'PULIDOR_FIJO', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'] },
-        },
+  async listarPulidoresPorRegion(regionId?: string, agenciaId?: string) {
+    const where: any = {
+      estado: 1,
+      role: {
+        namerol: { in: ['PULIDOR', 'PULIDOR_MOVIL', 'PULIDOR_FIJO', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'] },
       },
+    };
+    if (agenciaId && String(agenciaId).trim() && String(agenciaId).trim() !== 'null' && String(agenciaId).trim() !== 'undefined') {
+      where.agenciaId = String(agenciaId).trim();
+    } else if (regionId && String(regionId).trim() && String(regionId).trim() !== 'null' && String(regionId).trim() !== 'undefined') {
+      where.OR = [
+        { regionId: String(regionId).trim() },
+        { agencia: { regionId: String(regionId).trim() } },
+      ];
+    }
+    const list = await this.prisma.user.findMany({
+      where,
       select: {
         id: true,
         name: true,
@@ -400,9 +628,27 @@ export class ServiciosEspecialesService {
         regionId: true,
         region: { select: { id: true, nombre: true } },
         agenciaId: true,
-        agencia: { select: { id: true, nombre: true } },
+        agencia: { select: { id: true, nombre: true, regionId: true, codigo: true } },
+        role: { select: { id: true, namerol: true } },
       },
       orderBy: { name: 'asc' },
+    });
+
+    return list.map((p) => {
+      // Pulidor fijo: asignado a una sucursal / agencia en la base de datos (p.agenciaId != null)
+      const esFijo = Boolean(p.agenciaId || p.role?.namerol === 'PULIDOR_FIJO');
+      return {
+        id: p.id,
+        name: p.name,
+        lastname: p.lastname,
+        email: p.email,
+        regionId: p.regionId || p.agencia?.regionId || null,
+        region: p.region,
+        agenciaId: p.agenciaId || null,
+        agencia: p.agencia || null,
+        role: p.role,
+        modalidad: (esFijo ? 'FIJO' : 'MOVIL') as 'FIJO' | 'MOVIL',
+      };
     });
   }
 

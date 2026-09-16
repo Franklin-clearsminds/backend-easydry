@@ -39,20 +39,20 @@ export class CreateInsumoDto {
   @IsPositive()
   contenidoNeto?: number;
 
-  @ApiPropertyOptional({ example: 10.0, description: 'Stock mínimo en bodega central para alerta' })
-  @IsOptional()
+  @ApiProperty({ example: 10.0, description: 'Stock mínimo en bodega central para alerta (obligatorio)' })
   @IsNumber()
-  stockMinimoBodega?: number;
+  @Min(0.001)
+  stockMinimoBodega: number;
 
-  @ApiPropertyOptional({ example: 2.0, description: 'Stock mínimo en agencia para alerta' })
-  @IsOptional()
+  @ApiProperty({ example: 2.0, description: 'Stock mínimo en agencia para alerta (obligatorio)' })
   @IsNumber()
-  stockMinimoAgencia?: number;
+  @Min(0.001)
+  stockMinimoAgencia: number;
 
-  @ApiPropertyOptional({ example: 50.0, description: 'Stock óptimo en bodega central' })
-  @IsOptional()
+  @ApiProperty({ example: 50.0, description: 'Stock óptimo en bodega central (obligatorio)' })
   @IsNumber()
-  stockOptimoBodega?: number;
+  @Min(0.001)
+  stockOptimoBodega: number;
 
   @ApiPropertyOptional({ example: 45.5, description: 'Costo unitario en USD' })
   @IsOptional()
@@ -169,6 +169,13 @@ export class ListInsumosDto {
   @IsOptional()
   @IsString()
   agenciaId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Bodega cuyo stock físico se expone en stockActual (StockUbicacion). Si no se envía: bodega del usuario o Central.',
+  })
+  @IsOptional()
+  @IsString()
+  bodegaId?: string;
 
   @ApiPropertyOptional({ description: 'Filtrar estrictamente a insumos requeridos por servicios' })
   @IsOptional()

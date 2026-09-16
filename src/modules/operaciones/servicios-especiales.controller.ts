@@ -56,15 +56,18 @@ export class ServiciosEspecialesController {
       id: dto.id,
       operadorId: dto.operadorId || user?.id,
       videoInicialUrl: dto.videoInicialUrl,
-    });
+    }, user);
   }
 
   @Post('completar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Finalizar servicio especial con video final y calificación' })
   @ApiResponse({ status: 200, description: 'Servicio especial completado' })
-  async completar(@Body() dto: CompletarServicioEspecialDto) {
-    return this.service.completar(dto);
+  async completar(
+    @Body() dto: CompletarServicioEspecialDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.completar(dto, user);
   }
 
   @Post('delete')
@@ -77,11 +80,20 @@ export class ServiciosEspecialesController {
 
   @Post('pulidores')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar pulidores activos por región' })
-  @ApiResponse({ status: 200, description: 'Lista de pulidores zonales' })
-  async pulidores(@Body() body: { regionId?: string }, @CurrentUser() user: any) {
-    const regionId = body?.regionId || user?.regionId || '';
-    return this.service.listarPulidoresPorRegion(regionId);
+  @ApiOperation({ summary: 'Listar pulidores activos por región o sucursal' })
+  @ApiResponse({ status: 200, description: 'Lista de pulidores zonales o de sucursal' })
+  async pulidores(
+    @Body() body: { regionId?: string; agenciaId?: string },
+    @CurrentUser() user: any,
+  ) {
+    let regionId: string | undefined = undefined;
+    if (body?.regionId && String(body.regionId).trim() && String(body.regionId).trim() !== 'null' && String(body.regionId).trim() !== 'undefined') {
+      regionId = String(body.regionId).trim();
+    } else if (user?.regionId && String(user.regionId).trim() && String(user.regionId).trim() !== 'null' && String(user.regionId).trim() !== 'undefined') {
+      regionId = String(user.regionId).trim();
+    }
+    const agenciaId = body?.agenciaId && String(body.agenciaId).trim() && String(body.agenciaId).trim() !== 'null' ? String(body.agenciaId).trim() : undefined;
+    return this.service.listarPulidoresPorRegion(regionId, agenciaId);
   }
 
   @Post('stock-pulidor')
@@ -89,7 +101,17 @@ export class ServiciosEspecialesController {
   @ApiOperation({ summary: 'Consultar existencias de químicos en custodia del pulidor' })
   @ApiResponse({ status: 200, description: 'Inventario personal del pulidor' })
   async stockPulidor(@Body() body: { pulidorId?: string }, @CurrentUser() user: any) {
-    const pulidorId = body?.pulidorId || user?.id || '';
+    let pulidorId = body?.pulidorId ? String(body.pulidorId).trim() : '';
+    if (!pulidorId && user?.id) {
+      const rol = (user?.role?.namerol || user?.roleDetails?.namerol || user?.role || '').toUpperCase();
+      const isPulidor = rol.includes('PULIDOR');
+      if (isPulidor) {
+        pulidorId = String(user.id);
+      }
+    }
+    if (!pulidorId) {
+      return [];
+    }
     return this.service.obtenerStockPulidor(pulidorId);
   }
 }

@@ -16,9 +16,10 @@ export class RegistrarMovimientoOperativoDto {
   @IsPositive()
   cantidad: number;
 
-  @ApiProperty({ description: 'UUID de la unidad de medida en que se especifica la cantidad' })
+  @ApiPropertyOptional({ description: 'UUID de la unidad de medida (si se omite se usa la del insumo)' })
+  @IsOptional()
   @IsString()
-  unidadId: string;
+  unidadId?: string;
 
   @ApiPropertyOptional({ description: 'UUID de la presentación seleccionada (si aplica)' })
   @IsOptional()
@@ -34,6 +35,21 @@ export class RegistrarMovimientoOperativoDto {
   @IsOptional()
   @IsString()
   ubicacionId?: string;
+
+  @ApiPropertyOptional({ description: 'ID de bodega destino (alias de ubicacionId para ingresos a almacén)' })
+  @IsOptional()
+  @IsString()
+  bodegaId?: string;
+
+  @ApiPropertyOptional({ description: 'Etiqueta o nombre del origen (Proveedor, Bodega X, etc.)' })
+  @IsOptional()
+  @IsString()
+  origenUbicacion?: string;
+
+  @ApiPropertyOptional({ description: 'Etiqueta o nombre del destino (Bodega Y, Agencia Z, etc.)' })
+  @IsOptional()
+  @IsString()
+  destinoUbicacion?: string;
 
   @ApiPropertyOptional({ example: 'FAC-2026-9812', description: 'Número de factura, orden o guía' })
   @IsOptional()
