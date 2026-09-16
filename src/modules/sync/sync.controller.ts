@@ -67,9 +67,19 @@ export class SyncController {
   @ApiOperation({ summary: 'Genera ticket/URL prefirmada para subida binaria desacoplada de fotos (S3/Cloud)' })
   @ApiResponse({ status: 200, description: 'Ticket con URL de subida directa sin saturar JSON' })
   async getMediaTicket(
-    @Body() body: { clientUuid: string; type: 'FOTO_INGRESO' | 'FOTO_SALIDA'; fileName?: string },
+    @Body()
+    body: {
+      clientUuid: string;
+      type: string;
+      fileName?: string;
+      agenciaId?: string;
+      category?: string;
+      maquinariaId?: string;
+      incidenteId?: string;
+      contentType?: string;
+    },
   ) {
-    return this.syncService.generateMediaUploadTicket(body);
+    return this.syncService.generateMediaUploadTicket(body as any);
   }
 
   @Post('media/confirm')
@@ -79,7 +89,14 @@ export class SyncController {
   @ApiOperation({ summary: 'Confirma la subida de foto y la asocia a la orden de trabajo' })
   @ApiResponse({ status: 200, description: 'Foto vinculada con éxito' })
   async confirmMediaUpload(
-    @Body() body: { clientUuid: string; type: 'FOTO_INGRESO' | 'FOTO_SALIDA'; fileUrl: string },
+    @Body() body: {
+      clientUuid: string;
+      type: string;
+      fileUrl: string;
+      category?: string;
+      maquinariaId?: string;
+      incidenteId?: string;
+    },
   ) {
     return this.syncService.confirmMediaUpload(body);
   }

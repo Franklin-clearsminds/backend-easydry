@@ -782,6 +782,7 @@ model IncidenteTecnico {
 
   fechaReporte     DateTime    @default(now())
   fechaSolucion    DateTime?
+  evidencias       EvidenciaIncidente[]
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
@@ -789,6 +790,20 @@ model IncidenteTecnico {
   @@index([reportadoPorId])
   @@index([estado])
   @@index([gravedad])
+}
+
+model EvidenciaIncidente {
+  id          String            @id @default(uuid())
+  incidenteId String
+  incidente   IncidenteTecnico @relation(fields: [incidenteId], references: [id], onDelete: Cascade)
+  tipo        String
+  url         String
+  descripcion String?
+  metadata    Json?
+  creadaEn    DateTime          @default(now())
+
+  @@index([incidenteId])
+  @@index([tipo])
 }
 
 model MantenimientoMaquinaria {

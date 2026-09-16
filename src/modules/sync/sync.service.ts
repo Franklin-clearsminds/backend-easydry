@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException, NotFoundException, Optional } 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { OperacionesService } from '../operaciones/operaciones.service.js';
 import { StorageService } from '../storage/storage.service.js';
+import type { MediaEvidenceType } from '../storage/storage.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { SyncPushDto } from './dto/sync-push.dto.js';
 import { SyncPullQueryDto } from './dto/sync-pull.dto.js';
@@ -909,9 +910,38 @@ export class SyncService {
     };
   }
 
-  async generateMediaUploadTicket(body: { clientUuid: string; type: string; fileName?: string }) {
+  async generateMediaUploadTicket(body: {
+    clientUuid: string;
+    type: string;
+    fileName?: string;
+    agenciaId?: string;
+    category?: any;
+    maquinariaId?: string;
+    incidenteId?: string;
+    contentType?: string;
+  }) {
     if (this.storageService) {
-      return this.storageService.generateUploadTicket(body);
+      let agenciaId = body.agenciaId;
+      if (!agenciaId && body.clientUuid) {
+        const service = await this.prisma.servicioLavado.findFirst({
+          where: { OR: [{ clientUuid: body.clientUuid }, { id: body.clientUuid }] },
+          select: { bahia: { select: { agenciaId: true } } },
+        });
+        if (service?.bahia?.agenciaId) {
+          agenciaId = service.bahia.agenciaId;
+        }
+      }
+
+      return this.storageService.generateUploadTicket({
+        clientUuid: body.clientUuid,
+        type: body.type as MediaEvidenceType,
+        fileName: body.fileName,
+        agenciaId,
+        category: body.category,
+        maquinariaId: body.maquinariaId,
+        incidenteId: body.incidenteId,
+        contentType: body.contentType,
+      });
     }
     const ext = body.fileName?.split('.').pop() || 'jpg';
     const typeClean = String(body.type || 'foto').toLowerCase().replace(/[^a-z0-9_]/g, '_');
@@ -923,12 +953,13 @@ export class SyncService {
       ticketId: `tkt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
       clientUuid: body.clientUuid,
       type: body.type,
+      key: `local/${uniqueFile}`,
       uploadUrl,
       publicUrl,
       driver: 'local' as const,
       expiresInSeconds: 900,
       headers: {
-        'Content-Type': ext === 'png' ? 'image/png' : 'image/jpeg',
+        'Content-Type': ext === 'png' ? 'image/png' : ext === 'mp4' ? 'video/mp4' : 'image/jpeg',
       },
     };
   }
@@ -966,7 +997,39 @@ export class SyncService {
     fileUrl: string;
     descripcion?: string;
     metadata?: any;
+    category?: string;
+    maquinariaId?: string;
+    incidenteId?: string;
   }) {
+    if (body.category === 'MAQUINARIA_INCIDENTE') {
+      const incidenteId = body.incidenteId || body.clientUuid;
+      const incidente = await this.prisma.incidenteTecnico.findUnique({ where: { id: incidenteId } });
+      if (!incidente) {
+        throw new BadRequestException(`No se encontró el incidente con id: ${incidenteId}`);
+      }
+      if (body.maquinariaId && incidente.maquinariaId !== body.maquinariaId) {
+        throw new BadRequestException('El incidente no pertenece a la maquinaria indicada.');
+      }
+      const existing = await this.prisma.evidenciaIncidente.findFirst({
+        where: { incidenteId, tipo: body.type, url: body.fileUrl },
+      });
+      if (existing) return { success: true, status: 'ALREADY_EXISTS', evidenciaId: existing.id, ...body };
+
+      const evidencia = await this.prisma.evidenciaIncidente.create({
+        data: {
+          incidenteId,
+          tipo: body.type,
+          url: body.fileUrl,
+          descripcion: body.descripcion,
+          metadata: body.metadata,
+        },
+      });
+      if (body.type === 'FOTO_INCIDENTE' && !incidente.fotoEvidenciaUrl) {
+        await this.prisma.incidenteTecnico.update({ where: { id: incidenteId }, data: { fotoEvidenciaUrl: body.fileUrl } });
+      }
+      return { success: true, incidenteId, evidenciaId: evidencia.id, type: body.type, fileUrl: body.fileUrl };
+    }
+
     const service = await this.prisma.servicioLavado.findFirst({
       where: {
         OR: [{ clientUuid: body.clientUuid }, { id: body.clientUuid }],
