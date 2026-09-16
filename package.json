@@ -26,6 +26,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:status": "prisma migrate status",
     "prisma:seed": "prisma db seed",
+    "prisma:import-agencias": "tsx prisma/import-datos-agencias.ts",
     "prisma:studio": "prisma studio"
   },
   "dependencies": {

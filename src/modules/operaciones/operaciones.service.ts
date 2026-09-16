@@ -237,18 +237,7 @@ export class OperacionesService {
       }
     }
     if (!bahia) {
-      bahia = await this.prisma.bahia.findFirst({
-        where: { activa: true },
-        include: { agencia: true },
-      });
-      if (!bahia) {
-        bahia = await this.prisma.bahia.findFirst({
-          include: { agencia: true },
-        });
-      }
-    }
-    if (!bahia) {
-      throw new BadRequestException('No se encontró ninguna bahía configurada en el sistema para registrar el servicio.');
+      throw new BadRequestException('Debe indicar una bahía válida de la agencia para registrar el servicio.');
     }
 
     const resolvedBahiaId = bahia.id;
@@ -258,15 +247,7 @@ export class OperacionesService {
     let validOperadorId = operadorId;
     let user = validOperadorId ? await this.prisma.user.findUnique({ where: { id: validOperadorId } }) : null;
     if (!user) {
-      if (bahia.operadorActualId) {
-        user = await this.prisma.user.findUnique({ where: { id: bahia.operadorActualId } });
-      }
-      if (!user) {
-        user = await this.prisma.user.findFirst({ where: { estado: 1 } }) || await this.prisma.user.findFirst();
-      }
-      if (user) {
-        validOperadorId = user.id;
-      }
+      throw new BadRequestException('No se encontró el operador autenticado para registrar el servicio.');
     }
 
     // 3. Resolución Defensiva de Catálogo de Servicio y sus Recetas
@@ -933,11 +914,7 @@ export class OperacionesService {
       }
 
       if (!unidad) {
-        unidad = await this.prisma.unidadMedida.findFirst({ where: { estado: 1 } });
-      }
-
-      if (!unidad) {
-        throw new NotFoundException(`No se encontró una unidad de medida para el insumo "${insumo.nombre}"`);
+        throw new NotFoundException(`No se encontró una unidad de medida para el insumo "${insumo.nombre}". Asigne la unidad en el catálogo.`);
       }
 
       item.unidadConsumoId = unidad.id;

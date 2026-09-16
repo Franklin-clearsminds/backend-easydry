@@ -181,32 +181,25 @@ export class SyncService {
               if (!b) bahiaId = null;
             }
             if (!bahiaId) {
-              // Usar primera bahía de la agencia asignada al operador
-              bahiaId = currentUser?.agencia?.bahias?.[0]?.id;
-            }
-            if (!bahiaId) {
-              // Fallback a primera bahía del sistema
-              const primeraBahia = await this.prisma.bahia.findFirst({ where: { activa: true } });
-              bahiaId = primeraBahia?.id;
+              throw new BadRequestException('Debe indicar una bahía válida de la agencia del operador.');
             }
 
-            if (!bahiaId) {
-              throw new BadRequestException('No hay bahías activas disponibles en el sistema.');
+            const servicioCatalogoId = Number(mut.data?.servicioCatalogoId || mut.data?.serviceId);
+            if (!servicioCatalogoId) {
+              throw new BadRequestException('Debe indicar un servicio del catálogo.');
             }
-
-            // 3. Determinar Servicio de Catálogo
-            let servicioCatalogoId = Number(mut.data?.servicioCatalogoId || mut.data?.serviceId || 1);
             const catalogo = await this.prisma.catalogoServicio.findUnique({
               where: { id: servicioCatalogoId },
             });
-
             if (!catalogo) {
-              const primerCat = await this.prisma.catalogoServicio.findFirst();
-              if (primerCat) servicioCatalogoId = primerCat.id;
+              throw new BadRequestException('El servicio de catálogo indicado no existe.');
             }
 
-            const placa = (mut.data?.placa || mut.data?.vehiclePlate || 'ABC-0000').toUpperCase().trim();
-            const modelo = (mut.data?.modelo || mut.data?.vehicleModel || 'Vehículo General').trim();
+            const placa = String(mut.data?.placa || mut.data?.vehiclePlate || '').toUpperCase().trim();
+            if (!placa) {
+              throw new BadRequestException('La placa del vehículo es obligatoria.');
+            }
+            const modelo = String(mut.data?.modelo || mut.data?.vehicleModel || '').trim();
 
             // Blindaje Huella Operativa: Detección de vehículo ya activo en la misma agencia (Ventana 4 horas)
             const cuatroHorasAtras = new Date(now.getTime() - 4 * 60 * 60 * 1000);
@@ -587,23 +580,30 @@ export class SyncService {
 
             let targetAgenciaId = mutData.agenciaId || currentUser?.agenciaId;
             if (!targetAgenciaId) {
-              const firstAg = await this.prisma.agencia.findFirst({ where: { estado: 1 } });
-              targetAgenciaId = firstAg?.id;
+              throw new BadRequestException('Debe indicar la agencia en la cual se realizará el servicio especial.');
             }
 
             const vInfo = mutData.vehiculoInfo || mutData;
-            const placa = (vInfo.placa || mutData.placa || 'ABC-0000').toUpperCase().trim();
+            const placa = String(vInfo.placa || mutData.placa || '').toUpperCase().trim();
+            if (!placa) {
+              throw new BadRequestException('La placa del vehículo es obligatoria.');
+            }
             const marca = vInfo.marca || mutData.marca || null;
             const modelo = vInfo.modelo || mutData.modelo || null;
             const color = vInfo.color || mutData.color || null;
             const clienteNombre = vInfo.cliente || vInfo.clienteNombre || mutData.cliente || null;
+
+            const tipoServicio = String(mutData.tipoServicio || mutData.servicioNombre || '').trim();
+            if (!tipoServicio) {
+              throw new BadRequestException('El tipo de servicio especial es obligatorio.');
+            }
 
             const codigoSE = mutData.codigoSE || `SE-${Date.now().toString().slice(-6)}`;
             const created = await this.prisma.servicioEspecial.create({
               data: {
                 clientUuid: mut.clientUuid,
                 codigoSE,
-                tipoServicio: String(mutData.tipoServicio || 'PULIDO'),
+                tipoServicio,
                 placa,
                 marca,
                 modelo,

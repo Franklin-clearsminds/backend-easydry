@@ -183,7 +183,10 @@ export class ServiciosEspecialesService {
     const codigoSE = dto.codigoSE || `SE-${Date.now().toString().slice(-6)}`;
 
     const vInfo = dto.vehiculoInfo || {};
-    const placa = (vInfo.placa || (dto as any).placa || 'ABC-0000').toUpperCase().trim();
+    const placa = (vInfo.placa || (dto as any).placa || '').toUpperCase().trim();
+    if (!placa) {
+      throw new BadRequestException('La placa del vehículo es obligatoria.');
+    }
     const marca = vInfo.marca || (dto as any).marca || null;
     const modelo = vInfo.modelo || (dto as any).modelo || null;
     const color = vInfo.color || (dto as any).color || null;

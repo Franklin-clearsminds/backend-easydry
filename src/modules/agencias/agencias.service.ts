@@ -1766,8 +1766,7 @@ export class AgenciasService {
         regionIdToSet = user.regionId;
       }
       if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+        throw new BadRequestException('El supervisor debe tener una región asignada.');
       }
     } else if (
       userRoleCode === 'ASISTENTE_BODEGA' ||
@@ -1992,8 +1991,7 @@ export class AgenciasService {
       agenciaIdToSet = null;
       bodegaIdToSet = null;
       if (!regionIdToSet) {
-        const defaultReg = await this.prisma.region.findFirst({ where: { estado: 1 } });
-        regionIdToSet = defaultReg?.id || null;
+        throw new BadRequestException('El supervisor debe tener una región asignada.');
       }
     } else if (
       userRoleCode === 'ASISTENTE_BODEGA' ||
@@ -2018,7 +2016,10 @@ export class AgenciasService {
       bodegaIdToSet = null;
     }
 
-    const passwordToHash = dto.password?.trim() || 'Admin123*';
+    const passwordToHash = dto.password?.trim();
+    if (!passwordToHash) {
+      throw new BadRequestException('La contraseña es obligatoria para crear el usuario.');
+    }
     const passwordHash = await bcrypt.hash(passwordToHash, 10);
 
     const servicioIdsToSet = Array.isArray(dto.servicioIds)
