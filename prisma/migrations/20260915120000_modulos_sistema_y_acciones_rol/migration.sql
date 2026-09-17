@@ -1,4 +1,11 @@
 -- Catálogo de módulos del sistema (fuente de verdad para permisos de navegación)
+-- Normalize the legacy table originally created as "Role".
+-- IF EXISTS keeps this safe in environments normalized manually beforehand.
+ALTER TABLE IF EXISTS "Role" RENAME TO "roles";
+
+-- The current Role model includes this field, but prior migrations omitted it.
+ALTER TABLE "roles" ADD COLUMN IF NOT EXISTS "descripcion" TEXT;
+
 CREATE TABLE IF NOT EXISTS "modulos_sistema" (
     "id" TEXT NOT NULL,
     "codigo" TEXT NOT NULL,

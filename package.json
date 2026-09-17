@@ -26,7 +26,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:status": "prisma migrate status",
     "prisma:seed": "prisma db seed",
-    "prisma:import-agencias": "tsx prisma/import-datos-agencias.ts",
+    "prisma:import-agencias": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/import-datos-agencias.ts",
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
@@ -73,6 +73,6 @@
     "vitest": "4.1.11"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/seed.ts"
   }
 }
