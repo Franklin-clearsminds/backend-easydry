@@ -194,6 +194,13 @@ export class InventarioController {
     return this.inventarioService.obtenerStockBodegasResumen(dto, user?.id);
   }
 
+  @Post('stock/pulidores-resumen')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resumen consolidado de insumos en kits de pulidores' })
+  async stockPulidoresResumen(@Body() dto: any, @CurrentUser() user: any) {
+    return this.inventarioService.obtenerStockPulidoresResumen(dto, user?.id);
+  }
+
   // ==============================================================
   // MOVIMIENTOS — Compras, Despachos y Recepción
   // ==============================================================
@@ -268,6 +275,13 @@ export class InventarioController {
   ) {
     const targetAgencia = dto.agenciaId || dto.sucursalId || user?.agenciaId || '';
     return this.inventarioService.obtenerDespachosPendientesAgencia(targetAgencia);
+  }
+
+  @Post('despachos/pendientes')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Consultar despachos en tránsito pendientes de confirmación según el usuario actual' })
+  async obtenerDespachosPendientes(@CurrentUser() user: any) {
+    return this.inventarioService.obtenerDespachosPendientes(user?.id);
   }
 
   @Post('movimientos/list')
