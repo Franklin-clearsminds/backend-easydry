@@ -1008,6 +1008,16 @@ model ServicioEspecial {
   fechaFin            DateTime?
   videoInicialUrl     String?
   videoFinalUrl       String?
+
+  // Trazabilidad de pausas y métricas de tiempo
+  tiempoPausaTotalSeg       Int       @default(0) // Segundos acumulados en pausa
+  tiempoEfectivoSeg         Int?                  // Segundos netos de labor tras finalizar
+  fechaUltimaPausa          DateTime?             // Timestamp del inicio de la pausa activa
+  motivoUltimaPausa         String?               // Motivo de la última pausa
+  videoUltimaPausaUrl       String?               // Vídeo de evidencia de la última pausa
+  videoUltimaReanudacionUrl String?               // Vídeo de evidencia de la última reanudación
+  historialPausas           Json?                 // Historial estructurado de todas las pausas
+
   recetaInsumos       Json?
   evidencias          Json?
   notasSupervisor     String?

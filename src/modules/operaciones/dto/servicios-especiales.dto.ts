@@ -157,3 +157,40 @@ export class CompletarServicioEspecialDto {
   @IsOptional()
   observaciones?: string;
 }
+
+export class PausarServicioEspecialDto {
+  @ApiProperty({ description: 'ID o clientUuid del servicio especial' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'Motivo de la pausa del servicio', example: 'Lluvia en bahía exterior' })
+  @IsString()
+  @IsNotEmpty()
+  motivo: string;
+
+  @ApiProperty({ description: 'URL o evidencia en vídeo del estado del vehículo al pausar' })
+  @IsString()
+  @IsNotEmpty()
+  videoPausaUrl: string;
+}
+
+export class ReanudarServicioEspecialDto {
+  @ApiProperty({ description: 'ID o clientUuid del servicio especial' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'URL o evidencia en vídeo del estado del vehículo al reanudar' })
+  @IsString()
+  @IsNotEmpty()
+  videoReanudarUrl: string;
+
+  @ApiPropertyOptional({ description: 'Observaciones al reanudar el trabajo' })
+  @IsString()
+  @IsOptional()
+  observaciones?: string;
+}
+
+
+

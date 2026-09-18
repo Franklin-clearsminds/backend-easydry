@@ -6,6 +6,8 @@ import {
   CreateServicioEspecialDto,
   IniciarServicioEspecialDto,
   CompletarServicioEspecialDto,
+  PausarServicioEspecialDto,
+  ReanudarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -57,6 +59,28 @@ export class ServiciosEspecialesController {
       operadorId: dto.operadorId || user?.id,
       videoInicialUrl: dto.videoInicialUrl,
     }, user);
+  }
+
+  @Post('pausar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Pausar servicio especial con motivo y video de pausa' })
+  @ApiResponse({ status: 200, description: 'Servicio especial pausado exitosamente' })
+  async pausar(
+    @Body() dto: PausarServicioEspecialDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.pausar(dto, user);
+  }
+
+  @Post('reanudar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reanudar servicio especial con video de reanudación' })
+  @ApiResponse({ status: 200, description: 'Servicio especial reanudado exitosamente' })
+  async reanudar(
+    @Body() dto: ReanudarServicioEspecialDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.reanudar(dto, user);
   }
 
   @Post('completar')

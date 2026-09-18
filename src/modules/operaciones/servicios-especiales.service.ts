@@ -6,6 +6,8 @@ import {
   CreateServicioEspecialDto,
   IniciarServicioEspecialDto,
   CompletarServicioEspecialDto,
+  PausarServicioEspecialDto,
+  ReanudarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 
@@ -15,6 +17,32 @@ export class ServiciosEspecialesService {
 
   private _formatItem(item: any) {
     if (!item) return null;
+
+    const formatSeconds = (totalSec: number | null | undefined): string => {
+      if (totalSec === null || totalSec === undefined || totalSec <= 0) return '0 min';
+      const m = Math.floor(totalSec / 60);
+      const h = Math.floor(m / 60);
+      const remM = m % 60;
+      if (h > 0) return `${h}h ${remM}min`;
+      return `${m}min`;
+    };
+
+    let tiempoPausaTotalActual = Number(item.tiempoPausaTotalSeg || 0);
+    if (String(item.estado || '').toLowerCase() === 'pausado' && item.fechaUltimaPausa) {
+      const segsPausaActual = Math.max(0, Math.floor((Date.now() - new Date(item.fechaUltimaPausa).getTime()) / 1000));
+      tiempoPausaTotalActual += segsPausaActual;
+    }
+
+    let tiempoEfectivoCalculado = item.tiempoEfectivoSeg !== null && item.tiempoEfectivoSeg !== undefined
+      ? Number(item.tiempoEfectivoSeg)
+      : null;
+
+    if (tiempoEfectivoCalculado === null && item.fechaInicio) {
+      const hasta = item.fechaFin ? new Date(item.fechaFin).getTime() : Date.now();
+      const brutoSeg = Math.max(0, Math.floor((hasta - new Date(item.fechaInicio).getTime()) / 1000));
+      tiempoEfectivoCalculado = Math.max(0, brutoSeg - tiempoPausaTotalActual);
+    }
+
     return {
       ...item,
       agenciaNombre: item.agencia?.nombre || (item.region?.nombre ? `Zonal ${item.region.nombre}` : 'Servicio Móvil Zonal'),
@@ -23,6 +51,13 @@ export class ServiciosEspecialesService {
       regionNombre: item.region?.nombre || item.regionNombre || '',
       videoInicial: item.videoInicialUrl || null,
       videoFinal: item.videoFinalUrl || null,
+      videoPausa: item.videoUltimaPausaUrl || null,
+      videoReanudacion: item.videoUltimaReanudacionUrl || null,
+      tiempoPausaTotalSeg: tiempoPausaTotalActual,
+      tiempoPausaFormateado: formatSeconds(tiempoPausaTotalActual),
+      tiempoEfectivoSeg: tiempoEfectivoCalculado,
+      tiempoEfectivoFormateado: formatSeconds(tiempoEfectivoCalculado),
+      historialPausas: Array.isArray(item.historialPausas) ? item.historialPausas : [],
       cliente: item.clienteNombre || '',
       vehiculoInfo: {
         placa: item.placa || '',
@@ -487,6 +522,115 @@ export class ServiciosEspecialesService {
     return this._formatItem(updated);
   }
 
+  async pausar(dto: PausarServicioEspecialDto, currentUser?: any) {
+    const item = await this.findOneRaw(dto.id);
+
+    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
+    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
+    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+
+    if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
+      throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede pausar el servicio.');
+    }
+
+    if (String(item.estado || '').toLowerCase() === 'pausado') {
+      throw new BadRequestException('El servicio ya se encuentra pausado.');
+    }
+
+    if (String(item.estado || '').toLowerCase() !== 'en proceso') {
+      throw new BadRequestException('Solo se pueden pausar servicios que se encuentren "En Proceso".');
+    }
+
+    const fechaPausa = new Date();
+    const pauseId = randomUUID();
+    const historialActual: any[] = Array.isArray(item.historialPausas) ? [...item.historialPausas] : [];
+    
+    historialActual.push({
+      id: pauseId,
+      fechaInicio: fechaPausa.toISOString(),
+      fechaFin: null,
+      duracionSegundos: 0,
+      motivo: dto.motivo,
+      videoPausaUrl: dto.videoPausaUrl,
+      videoReanudacionUrl: null,
+      usuarioId: currentUser?.id || null,
+      usuarioNombre: currentUser?.name ? `${currentUser.name} ${currentUser.lastname || ''}`.trim() : null,
+    });
+
+    const updated = await this.prisma.servicioEspecial.update({
+      where: { id: item.id },
+      data: {
+        estado: 'Pausado',
+        fechaUltimaPausa: fechaPausa,
+        motivoUltimaPausa: dto.motivo,
+        videoUltimaPausaUrl: dto.videoPausaUrl,
+        historialPausas: historialActual,
+        version: item.version + 1,
+      },
+      include: {
+        agencia: true,
+        operador: { select: { id: true, name: true, lastname: true, email: true } },
+        region: true,
+      },
+    });
+
+    return this._formatItem(updated);
+  }
+
+  async reanudar(dto: ReanudarServicioEspecialDto, currentUser?: any) {
+    const item = await this.findOneRaw(dto.id);
+
+    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
+    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
+    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+
+    if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
+      throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede reanudar el servicio.');
+    }
+
+    if (String(item.estado || '').toLowerCase() !== 'pausado') {
+      throw new BadRequestException('El servicio no se encuentra pausado.');
+    }
+
+    const fechaReanudar = new Date();
+    let duracionPausaSeg = 0;
+    if (item.fechaUltimaPausa) {
+      duracionPausaSeg = Math.max(0, Math.floor((fechaReanudar.getTime() - new Date(item.fechaUltimaPausa).getTime()) / 1000));
+    }
+    const nuevoTiempoPausaTotalSeg = Number(item.tiempoPausaTotalSeg || 0) + duracionPausaSeg;
+
+    const historialActual: any[] = Array.isArray(item.historialPausas) ? [...item.historialPausas] : [];
+    if (historialActual.length > 0) {
+      const lastIdx = historialActual.length - 1;
+      historialActual[lastIdx] = {
+        ...historialActual[lastIdx],
+        fechaFin: fechaReanudar.toISOString(),
+        duracionSegundos: duracionPausaSeg,
+        videoReanudacionUrl: dto.videoReanudarUrl,
+        observacionesReanudar: dto.observaciones || null,
+      };
+    }
+
+    const updated = await this.prisma.servicioEspecial.update({
+      where: { id: item.id },
+      data: {
+        estado: 'En Proceso',
+        tiempoPausaTotalSeg: nuevoTiempoPausaTotalSeg,
+        fechaUltimaPausa: null,
+        videoUltimaReanudacionUrl: dto.videoReanudarUrl,
+        historialPausas: historialActual,
+        version: item.version + 1,
+      },
+      include: {
+        agencia: true,
+        operador: { select: { id: true, name: true, lastname: true, email: true } },
+        region: true,
+      },
+    });
+
+    return this._formatItem(updated);
+  }
+
   async completar(dto: CompletarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
 
@@ -499,9 +643,36 @@ export class ServiciosEspecialesService {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede finalizar el servicio.');
     }
 
+    const fechaFin = new Date();
+    let tiempoPausaTotal = Number(item.tiempoPausaTotalSeg || 0);
+    const historialActual: any[] = Array.isArray(item.historialPausas) ? [...item.historialPausas] : [];
+
+    // Si estaba pausado al momento de completar, cerrar la pausa activa
+    if (String(item.estado || '').toLowerCase() === 'pausado' && item.fechaUltimaPausa) {
+      const duracionPausaActual = Math.max(0, Math.floor((fechaFin.getTime() - new Date(item.fechaUltimaPausa).getTime()) / 1000));
+      tiempoPausaTotal += duracionPausaActual;
+      if (historialActual.length > 0) {
+        const lastIdx = historialActual.length - 1;
+        historialActual[lastIdx] = {
+          ...historialActual[lastIdx],
+          fechaFin: fechaFin.toISOString(),
+          duracionSegundos: duracionPausaActual,
+        };
+      }
+    }
+
+    // Cálculo del tiempo efectivo de trabajo
+    const fInicio = item.fechaInicio ? new Date(item.fechaInicio).getTime() : fechaFin.getTime();
+    const tiempoBrutoSeg = Math.max(0, Math.floor((fechaFin.getTime() - fInicio) / 1000));
+    const tiempoEfectivoSeg = Math.max(0, tiempoBrutoSeg - tiempoPausaTotal);
+
     const data: any = {
       estado: 'Completado',
-      fechaFin: new Date(),
+      fechaFin,
+      tiempoPausaTotalSeg: tiempoPausaTotal,
+      tiempoEfectivoSeg,
+      fechaUltimaPausa: null,
+      historialPausas: historialActual,
       version: item.version + 1,
     };
 

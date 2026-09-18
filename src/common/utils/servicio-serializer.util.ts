@@ -34,6 +34,25 @@ export function serializeServicioLavado(s: any): any {
     ? (s.deletedAt instanceof Date ? s.deletedAt.toISOString() : String(s.deletedAt))
     : null;
 
+  // Cálculo de duración del servicio general
+  let duracionMinutos: number | null = null;
+  let duracionFormateada = '';
+  if (fechaIngresoStr) {
+    const tIngreso = new Date(fechaIngresoStr).getTime();
+    if (fechaSalidaStr) {
+      const tSalida = new Date(fechaSalidaStr).getTime();
+      duracionMinutos = Math.max(0, Math.round((tSalida - tIngreso) / 60000));
+      const horas = Math.floor(duracionMinutos / 60);
+      const mins = duracionMinutos % 60;
+      duracionFormateada = horas > 0 ? `${horas}h ${mins}min` : `${mins} min`;
+    } else if (String(s.estado || '').toUpperCase() === 'EN_PROCESO' || String(s.estado || '').toUpperCase() === 'INICIADO') {
+      duracionMinutos = Math.max(0, Math.round((Date.now() - tIngreso) / 60000));
+      const horas = Math.floor(duracionMinutos / 60);
+      const mins = duracionMinutos % 60;
+      duracionFormateada = horas > 0 ? `${horas}h ${mins}min` : `${mins} min`;
+    }
+  }
+
   return {
     id: s.id,
     clientUuid: s.clientUuid || s.id,
@@ -64,6 +83,8 @@ export function serializeServicioLavado(s: any): any {
     fecha: fechaIngresoStr.split('T')[0],
     horaIngreso: fechaIngresoStr,
     horaSalida: fechaSalidaStr,
+    duracionMinutos,
+    duracionFormateada,
 
     // Multimedia
     fotoIngresoUrl: s.fotoIngresoUrl || null,

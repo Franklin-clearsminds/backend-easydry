@@ -20,6 +20,8 @@ export type MediaEvidenceType =
   | 'VIDEO_INSPECCION'
   | 'VIDEO_INICIAL'
   | 'VIDEO_FINAL'
+  | 'VIDEO_PAUSA'
+  | 'VIDEO_REANUDAR'
   | 'FICHA_TECNICA'
   | 'DOCUMENTO'
   | 'FOTO_INCIDENTE'
@@ -53,7 +55,7 @@ export interface UploadTicketResponse {
 
 const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
-  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'FICHA_TECNICA',
+  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FICHA_TECNICA',
   'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE',
 ]);
 
@@ -81,15 +83,17 @@ export class StorageService {
 
     const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID');
     const secretAccessKey = this.configService.get<string>('AWS_SECRET_ACCESS_KEY');
+    const endpoint = this.configService.get<string>('AWS_ENDPOINT') || this.configService.get<string>('AWS_S3_ENDPOINT');
     const driver = this.configService.get<string>('STORAGE_DRIVER', 'local').toLowerCase();
 
     if (driver === 's3' && accessKeyId && secretAccessKey) {
       this.s3Client = new S3Client({
         region: this.region,
         credentials: { accessKeyId, secretAccessKey },
+        ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
       });
       this.isS3Configured = true;
-      this.logger.log(`S3 inicializado: ${this.bucketName} (${this.region})`);
+      this.logger.log(`S3 inicializado: ${this.bucketName} (${this.region})${endpoint ? ' [Endpoint: ' + endpoint + ']' : ''}`);
     } else {
       this.isS3Configured = false;
       this.logger.warn('Storage en modo local: STORAGE_DRIVER no es s3 o faltan credenciales AWS.');
@@ -124,7 +128,11 @@ export class StorageService {
         ? 'videos/inicial'
         : type === 'VIDEO_FINAL'
           ? 'videos/final'
-          : isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
+          : type === 'VIDEO_PAUSA'
+            ? 'videos/pausas'
+            : type === 'VIDEO_REANUDAR'
+              ? 'videos/reanudaciones'
+              : isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
       key = `agencias/${agencia}/servicios/${serviceKind}/${serviceId}/${folder}/${filename}`;
     } else if (category === 'MAQUINARIA_FICHA') {
       const folder = isDocument ? 'documentos' : 'fotos';
@@ -211,6 +219,7 @@ export class StorageService {
   }
 
   private defaultCategory(type: MediaEvidenceType): StorageCategory {
+    if (type === 'VIDEO_PAUSA' || type === 'VIDEO_REANUDAR') return 'SERVICIOS_ESPECIALES';
     if (type === 'FICHA_TECNICA' || type === 'DOCUMENTO') return 'MAQUINARIA_FICHA';
     if (type === 'FOTO_INCIDENTE' || type === 'VIDEO_INCIDENTE' || type === 'DOCUMENTO_INCIDENTE') return 'MAQUINARIA_INCIDENTE';
     if (type === 'PDF_CIERRE') return 'DOCUMENTO';
@@ -218,7 +227,10 @@ export class StorageService {
   }
 
   private assertCategorySupportsType(category: StorageCategory, type: MediaEvidenceType): void {
-    const serviceTypes = new Set<MediaEvidenceType>(['FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO', 'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL']);
+    const serviceTypes = new Set<MediaEvidenceType>([
+      'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
+      'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR',
+    ]);
     const valid = category === 'SERVICIOS_GENERALES' || category === 'SERVICIOS_ESPECIALES'
       ? serviceTypes.has(type)
       : category === 'MAQUINARIA_FICHA'
