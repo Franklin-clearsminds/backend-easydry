@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { OperacionesService } from '../operaciones/operaciones.service.js';
+import { ServiciosEspecialesService } from '../operaciones/servicios-especiales.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import type { MediaEvidenceType } from '../storage/storage.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
@@ -27,6 +28,7 @@ export class SyncService {
   constructor(
     private prisma: PrismaService,
     private operacionesService: OperacionesService,
+    private serviciosEspecialesService: ServiciosEspecialesService,
     private storageService: StorageService,
     @Optional() private notifications?: NotificationsService,
   ) {}
@@ -1094,7 +1096,41 @@ export class SyncService {
     category?: string;
     maquinariaId?: string;
     incidenteId?: string;
-  }) {
+    specialAction?: 'START' | 'PAUSE' | 'RESUME';
+    specialOperatorId?: string;
+    pauseReason?: string;
+    resumeNotes?: string;
+  }, currentUser?: any) {
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'START') {
+      const updated = await this.serviciosEspecialesService.iniciar({
+        id: body.clientUuid,
+        operadorId: body.specialOperatorId,
+        videoInicialUrl: body.fileUrl,
+      }, currentUser);
+      return { success: true, action: 'START', ...body, service: updated };
+    }
+
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'PAUSE') {
+      if (!body.pauseReason?.trim()) {
+        throw new BadRequestException('El motivo de la pausa es obligatorio.');
+      }
+      const updated = await this.serviciosEspecialesService.pausar({
+        id: body.clientUuid,
+        motivo: body.pauseReason.trim(),
+        videoPausaUrl: body.fileUrl,
+      }, currentUser);
+      return { success: true, action: 'PAUSE', ...body, service: updated };
+    }
+
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'RESUME') {
+      const updated = await this.serviciosEspecialesService.reanudar({
+        id: body.clientUuid,
+        videoReanudarUrl: body.fileUrl,
+        observaciones: body.resumeNotes,
+      }, currentUser);
+      return { success: true, action: 'RESUME', ...body, service: updated };
+    }
+
     if (body.category === 'MAQUINARIA_INCIDENTE') {
       const incidenteId = body.incidenteId || body.clientUuid;
       const incidente = await this.prisma.incidenteTecnico.findFirst({

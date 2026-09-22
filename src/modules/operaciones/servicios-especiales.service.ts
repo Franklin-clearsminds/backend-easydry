@@ -518,6 +518,14 @@ export class ServiciosEspecialesService {
       throw new BadRequestException('El servicio especial ya ha sido finalizado.');
     }
 
+    if (
+      String(item.estado || '').toLowerCase() === 'en proceso' &&
+      dto.videoInicialUrl &&
+      item.videoInicialUrl === dto.videoInicialUrl
+    ) {
+      return this._formatItem(item);
+    }
+
     const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
     const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
     const isPulidor = rol.includes('PULIDOR') && !isAdmin;
@@ -560,6 +568,13 @@ export class ServiciosEspecialesService {
 
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede pausar el servicio.');
+    }
+
+    if (
+      String(item.estado || '').toLowerCase() === 'pausado' &&
+      item.videoUltimaPausaUrl === dto.videoPausaUrl
+    ) {
+      return this._formatItem(item);
     }
 
     if (String(item.estado || '').toLowerCase() === 'pausado') {
@@ -616,6 +631,13 @@ export class ServiciosEspecialesService {
 
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede reanudar el servicio.');
+    }
+
+    if (
+      String(item.estado || '').toLowerCase() === 'en proceso' &&
+      item.videoUltimaReanudacionUrl === dto.videoReanudarUrl
+    ) {
+      return this._formatItem(item);
     }
 
     if (String(item.estado || '').toLowerCase() !== 'pausado') {

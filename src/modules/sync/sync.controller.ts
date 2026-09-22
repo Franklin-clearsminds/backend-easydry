@@ -96,9 +96,14 @@ export class SyncController {
       category?: string;
       maquinariaId?: string;
       incidenteId?: string;
+      specialAction?: 'START' | 'PAUSE' | 'RESUME';
+      specialOperatorId?: string;
+      pauseReason?: string;
+      resumeNotes?: string;
     },
+    @CurrentUser() user: any,
   ) {
-    return this.syncService.confirmMediaUpload(body);
+    return this.syncService.confirmMediaUpload(body, user);
   }
 
   @Post('media/pending')
