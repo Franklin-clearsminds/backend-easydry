@@ -256,7 +256,6 @@ export class StorageService implements OnModuleInit {
 
     return getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
   }
-  }
 
   public getBucketName(): string { return this.bucketName; }
 
