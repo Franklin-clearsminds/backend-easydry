@@ -1,9 +1,8 @@
-import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
-import path from 'node:path';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export type StorageCategory =
@@ -53,7 +52,7 @@ export interface UploadTicketResponse {
   key: string;
   uploadUrl: string;
   publicUrl: string;
-  driver: 's3' | 'local';
+  driver: 's3';
   expiresInSeconds: number;
   headers: Record<string, string>;
 }
@@ -65,46 +64,46 @@ const ALLOWED_TYPES = new Set<MediaEvidenceType>([
 ]);
 
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
-  private readonly s3Client?: S3Client;
+  private readonly s3Client: S3Client;
   private readonly bucketName: string;
   private readonly region: string;
   private readonly publicUrlPrefix: string;
-  private readonly isS3Configured: boolean;
-  private readonly localRoot: string;
-  private readonly ticketSecret: string;
-  private readonly maxFileSizeBytes: number;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma?: PrismaService,
   ) {
-    this.region = this.configService.get<string>('AWS_REGION', 'us-east-1');
-    this.bucketName = this.configService.get<string>('AWS_S3_BUCKET_NAME', 'easydry-storage-dev');
+    const configured = (this.configService as unknown as { internalConfig?: Record<string, string> }).internalConfig || {};
+    this.region = configured.AWS_REGION?.trim() || '';
+    this.bucketName = configured.AWS_S3_BUCKET_NAME?.trim() || '';
+    if (!this.region || !this.bucketName) {
+      throw new Error('AWS_REGION y AWS_S3_BUCKET_NAME son obligatorios. EasyDry no admite almacenamiento local.');
+    }
     this.publicUrlPrefix = this.configService.get<string>('AWS_S3_PUBLIC_URL_PREFIX')
       || `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
-    this.localRoot = path.resolve(this.configService.get<string>('UPLOAD_DIR', './uploads'));
-    this.ticketSecret = this.configService.get<string>('STORAGE_TICKET_SECRET')
-      || this.configService.get<string>('JWT_SECRET', 'easydry-local-storage');
-    this.maxFileSizeBytes = this.configService.get<number>('MAX_FILE_SIZE_MB', 35) * 1024 * 1024;
+    const accessKeyId = configured.AWS_ACCESS_KEY_ID?.trim();
+    const secretAccessKey = configured.AWS_SECRET_ACCESS_KEY?.trim();
+    if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
+      throw new Error('AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY deben configurarse juntos.');
+    }
 
-    const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID');
-    const secretAccessKey = this.configService.get<string>('AWS_SECRET_ACCESS_KEY');
-    const endpoint = this.configService.get<string>('AWS_ENDPOINT') || this.configService.get<string>('AWS_S3_ENDPOINT');
-    const driver = this.configService.get<string>('STORAGE_DRIVER', 'local').toLowerCase();
+    this.s3Client = new S3Client({
+      region: this.region,
+      ...(accessKeyId && secretAccessKey
+        ? { credentials: { accessKeyId, secretAccessKey } }
+        : {}),
+    });
+  }
 
-    if (driver === 's3' && accessKeyId && secretAccessKey) {
-      this.s3Client = new S3Client({
-        region: this.region,
-        credentials: { accessKeyId, secretAccessKey },
-        ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
-      });
-      this.isS3Configured = true;
-      this.logger.log(`S3 inicializado: ${this.bucketName} (${this.region})${endpoint ? ' [Endpoint: ' + endpoint + ']' : ''}`);
-    } else {
-      this.isS3Configured = false;
-      this.logger.warn('Storage en modo local: STORAGE_DRIVER no es s3 o faltan credenciales AWS.');
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.s3Client.send(new HeadBucketCommand({ Bucket: this.bucketName }));
+      this.logger.log(`S3 verificado: ${this.bucketName} (${this.region})`);
+    } catch (error) {
+      this.logger.error(`No se pudo acceder al bucket S3 ${this.bucketName}.`);
+      throw new Error(`S3 no disponible o sin permisos para el bucket ${this.bucketName}.`, { cause: error });
     }
   }
 
@@ -222,104 +221,34 @@ export class StorageService {
     const { key, contentType } = await this.buildS3Key(dto);
     const expiresInSeconds = 900;
 
-    if (this.isS3Configured && this.s3Client) {
-      const command = new PutObjectCommand({ Bucket: this.bucketName, Key: key, ContentType: contentType });
-      const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
-      return this.ticketResponse(dto, key, uploadUrl, `${this.publicUrlPrefix.replace(/\/$/, '')}/${key}`, 's3', contentType, expiresInSeconds, {
-        'Content-Type': contentType,
-      });
-    }
-
-    const expiresAt = Math.floor(Date.now() / 1000) + expiresInSeconds;
-    const token = this.signLocalTicket(key, expiresAt);
-    const query = `key=${encodeURIComponent(key)}&expires=${expiresAt}&token=${token}`;
-    return this.ticketResponse(dto, key, `/api/v1/storage/local-upload?${query}`, `/uploads/${key}`, 'local', contentType, expiresInSeconds);
-  }
-
-  public verifyLocalTicket(key: string, expires: number, token: string): string {
-    if (!Number.isFinite(expires) || expires < Math.floor(Date.now() / 1000)) {
-      throw new UnauthorizedException('El ticket de subida local expiró.');
-    }
-    const normalizedKey = key.replace(/\\/g, '/');
-    const expected = this.signLocalTicket(normalizedKey, expires);
-    const received = Buffer.from(token || '', 'hex');
-    const expectedBuffer = Buffer.from(expected, 'hex');
-    if (received.length !== expectedBuffer.length || !crypto.timingSafeEqual(received, expectedBuffer)) {
-      throw new UnauthorizedException('Ticket de subida local inválido.');
-    }
-    const target = path.resolve(this.localRoot, ...normalizedKey.split('/'));
-    if (target !== this.localRoot && !target.startsWith(`${this.localRoot}${path.sep}`)) {
-      throw new BadRequestException('Ruta de almacenamiento inválida.');
-    }
-    return target;
-  }
-
-  public async getPresignedDownloadUrl(rawKey: string, expiresInSeconds = 3600): Promise<string> {
-    let key = String(rawKey || '').trim();
-    if (key.includes('amazonaws.com/')) {
-      key = key.split('amazonaws.com/')[1] || key;
-    } else if (key.startsWith('/uploads/')) {
-      key = key.replace(/^\/uploads\//, '');
-    } else if (key.startsWith('uploads/')) {
-      key = key.replace(/^uploads\//, '');
-    }
-    const normalizedKey = key.replace(/^[/\\]+/, '').replace(/\\/g, '/');
-    if (!this.isS3Configured || !this.s3Client) return `/uploads/${normalizedKey}`;
-
-    const isMp4 = normalizedKey.toLowerCase().endsWith('.mp4');
-    const isWebm = normalizedKey.toLowerCase().endsWith('.webm');
-    const overrideContentType = isMp4 ? 'video/mp4' : (isWebm ? 'video/webm' : undefined);
-
-    const command = new GetObjectCommand({
-      Bucket: this.bucketName,
-      Key: normalizedKey,
-      ...(overrideContentType ? { ResponseContentType: overrideContentType } : {}),
+    const lifecycleClass = contentType.startsWith('video/') ? 'video' : contentType === 'application/pdf' ? 'document' : 'image';
+    const tagging = `storage-class=${lifecycleClass}`;
+    const command = new PutObjectCommand({ Bucket: this.bucketName, Key: key, ContentType: contentType, Tagging: tagging });
+    const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+    return this.ticketResponse(dto, key, uploadUrl, `${this.publicUrlPrefix.replace(/\/$/, '')}/${key}`, contentType, expiresInSeconds, {
+      'x-amz-tagging': tagging,
     });
-
-    return getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
   }
 
-  public async getFileStream(key: string): Promise<{ stream: any; contentType?: string; contentLength?: number }> {
-    const normalizedKey = key.replace(/^[/\\]+/, '').replace(/\\/g, '/');
-    if (this.isS3Configured && this.s3Client) {
-      const res = await this.s3Client.send(new GetObjectCommand({ Bucket: this.bucketName, Key: normalizedKey }));
-      return {
-        stream: res.Body,
-        contentType: res.ContentType,
-        contentLength: res.ContentLength,
-      };
-    }
-    const target = path.resolve(this.localRoot, ...normalizedKey.split('/'));
-    if (!target.startsWith(this.localRoot)) throw new BadRequestException('Ruta inválida.');
-    const { createReadStream, statSync } = await import('node:fs');
-    const stat = statSync(target);
-    return {
-      stream: createReadStream(target),
-      contentLength: stat.size,
-    };
+  public async getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
+    const normalizedKey = String(key || '').trim().replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    return getSignedUrl(this.s3Client, new GetObjectCommand({ Bucket: this.bucketName, Key: normalizedKey }), { expiresIn: expiresInSeconds });
   }
 
-  public getMaxFileSizeBytes(): number { return this.maxFileSizeBytes; }
   public getBucketName(): string { return this.bucketName; }
-  public isUsingS3(): boolean { return this.isS3Configured; }
-  public getLocalRoot(): string { return this.localRoot; }
 
-  private ticketResponse(dto: GenerateUploadTicketDto, key: string, uploadUrl: string, publicUrl: string, driver: 's3' | 'local', contentType: string, expiresInSeconds: number, extraHeaders: Record<string, string> = {}): UploadTicketResponse {
+  private ticketResponse(dto: GenerateUploadTicketDto, key: string, uploadUrl: string, publicUrl: string, contentType: string, expiresInSeconds: number, extraHeaders: Record<string, string> = {}): UploadTicketResponse {
     return {
-      ticketId: `tkt_${driver}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+      ticketId: `tkt_s3_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
       clientUuid: dto.clientUuid,
       type: dto.type,
       key,
       uploadUrl,
       publicUrl,
-      driver,
+      driver: 's3',
       expiresInSeconds,
       headers: { 'Content-Type': contentType, ...extraHeaders },
     };
-  }
-
-  private signLocalTicket(key: string, expires: number): string {
-    return crypto.createHmac('sha256', this.ticketSecret).update(`${key}:${expires}`).digest('hex');
   }
 
   private safeSegment(value: string | undefined, fallback: string): string {

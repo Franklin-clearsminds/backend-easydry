@@ -32,7 +32,7 @@ export class SyncController {
   @ApiOperation({ summary: 'Envío de cambios offline del móvil al backend (Idempotente)' })
   @ApiResponse({ status: 200, description: 'Lote o evento procesado con éxito' })
   async pushMutations(
-    @Body() body: any,
+    @Body() body: SyncPushDto,
     @CurrentUser('id') userId: string,
     @Headers('x-operation-id') headerOpId?: string,
     @Headers('idempotency-key') headerIdempotencyKey?: string,

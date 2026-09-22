@@ -2,7 +2,6 @@ import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import express from 'express';
-import path from 'node:path';
 import { AppModule } from './app.module.js';
 import { CryptoService } from './common/crypto/crypto.service.js';
 import { CryptoResponseInterceptor } from './common/interceptors/crypto-response.interceptor.js';
@@ -37,10 +36,6 @@ async function bootstrap() {
   // Asegurar parser express.json previo a nuestro middleware
   app.use(express.json({ limit: '15mb' }));
   app.use(express.urlencoded({ extended: true, limit: '15mb' }));
-
-  // Exponer el fallback local conservando la misma estructura de claves que S3.
-  const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
-  app.use('/uploads', express.static(uploadDir, { fallthrough: false, index: false }));
 
   // Prefijo global de API
   app.setGlobalPrefix('api/v1');

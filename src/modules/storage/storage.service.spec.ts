@@ -1,13 +1,14 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
 import { StorageService } from './storage.service.js';
 
 function createService() {
   return new StorageService(new ConfigService({
-    STORAGE_DRIVER: 'local',
-    UPLOAD_DIR: './uploads-test',
-    STORAGE_TICKET_SECRET: 'test-secret',
+    AWS_REGION: 'us-east-1',
+    AWS_S3_BUCKET_NAME: 'easydry-storage-test',
+    AWS_ACCESS_KEY_ID: 'test-access-key',
+    AWS_SECRET_ACCESS_KEY: 'test-secret-key',
   }));
 }
 
@@ -37,20 +38,12 @@ describe('StorageService', () => {
     })).rejects.toThrow(BadRequestException);
   });
 
-  it('genera un ticket local firmado y rechaza firmas alteradas', async () => {
-    const service = createService();
-    const ticket = await service.generateUploadTicket({
-      agenciaId: 'a-1',
-      clientUuid: 'ot-1',
-      type: 'FOTO_INGRESO',
-      category: 'SERVICIOS_GENERALES',
-    });
-    expect(ticket.driver).toBe('local');
-    const url = new URL(ticket.uploadUrl, 'http://localhost');
-    expect(() => service.verifyLocalTicket(
-      url.searchParams.get('key')!,
-      Number(url.searchParams.get('expires')),
-      `${url.searchParams.get('token')!.slice(0, -1)}0`,
-    )).toThrow(UnauthorizedException);
+  it('rechaza iniciar sin la configuración mínima de S3', () => {
+    expect(() => new StorageService(new ConfigService({}))).toThrow(/AWS_REGION/);
+    expect(() => new StorageService(new ConfigService({
+      AWS_REGION: 'us-east-1',
+      AWS_S3_BUCKET_NAME: 'bucket',
+      AWS_ACCESS_KEY_ID: 'incomplete',
+    }))).toThrow(/deben configurarse juntos/);
   });
 });

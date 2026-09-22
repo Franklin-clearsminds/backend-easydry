@@ -8,6 +8,7 @@ import {
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   ValidateNested,
@@ -105,10 +106,14 @@ export class MutationItemDto {
   @IsNumber()
   timestamp: number;
 
-  @ApiProperty({ type: MutationDataDto })
-  @ValidateNested()
-  @Type(() => MutationDataDto)
-  data: MutationDataDto;
+  @ApiProperty({ type: Object, description: 'Payload específico de la entidad' })
+  @IsObject()
+  data: Record<string, unknown>;
+
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @IsInt()
+  attempts?: number;
 }
 
 export class SyncPushDto {
