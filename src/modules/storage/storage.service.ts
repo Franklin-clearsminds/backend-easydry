@@ -75,8 +75,8 @@ export class StorageService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly prisma?: PrismaService,
   ) {
-    this.region = (this.configService.get<string>('AWS_REGION') ?? '').trim();
-    this.bucketName = (this.configService.get<string>('AWS_S3_BUCKET_NAME') ?? '').trim();
+    this.region = this.configService.get<string>('AWS_REGION')?.trim() || '';
+    this.bucketName = this.configService.get<string>('AWS_S3_BUCKET_NAME')?.trim() || '';
     if (!this.region || !this.bucketName) {
       throw new Error('AWS_REGION y AWS_S3_BUCKET_NAME son obligatorios. EasyDry no admite almacenamiento local.');
     }
@@ -88,11 +88,14 @@ export class StorageService implements OnModuleInit {
       throw new Error('AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY deben configurarse juntos.');
     }
 
+    const endpoint = this.configService.get<string>('AWS_ENDPOINT')?.trim()
+      || this.configService.get<string>('AWS_S3_ENDPOINT')?.trim();
     this.s3Client = new S3Client({
       region: this.region,
       ...(accessKeyId && secretAccessKey
         ? { credentials: { accessKeyId, secretAccessKey } }
         : {}),
+      ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
     });
   }
 
@@ -229,9 +232,30 @@ export class StorageService implements OnModuleInit {
     });
   }
 
-  public async getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
-    const normalizedKey = String(key || '').trim().replace(/^[/\\]+/, '').replace(/\\/g, '/');
-    return getSignedUrl(this.s3Client, new GetObjectCommand({ Bucket: this.bucketName, Key: normalizedKey }), { expiresIn: expiresInSeconds });
+  public async getPresignedDownloadUrl(rawKey: string, expiresInSeconds = 3600): Promise<string> {
+    let key = String(rawKey || '').trim();
+    if (key.includes('amazonaws.com/')) {
+      key = key.split('amazonaws.com/')[1] || key;
+    } else if (key.startsWith('/uploads/')) {
+      key = key.replace(/^\/uploads\//, '');
+    } else if (key.startsWith('uploads/')) {
+      key = key.replace(/^uploads\//, '');
+    }
+    const normalizedKey = key.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    if (!normalizedKey) throw new BadRequestException('La clave del archivo es obligatoria.');
+
+    const isMp4 = normalizedKey.toLowerCase().endsWith('.mp4');
+    const isWebm = normalizedKey.toLowerCase().endsWith('.webm');
+    const overrideContentType = isMp4 ? 'video/mp4' : (isWebm ? 'video/webm' : undefined);
+
+    const command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: normalizedKey,
+      ...(overrideContentType ? { ResponseContentType: overrideContentType } : {}),
+    });
+
+    return getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+  }
   }
 
   public getBucketName(): string { return this.bucketName; }

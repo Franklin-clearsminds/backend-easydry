@@ -44,6 +44,10 @@ describe('StorageService', () => {
 
   it('rechaza iniciar sin la configuración mínima de S3', () => {
     expect(() => new StorageService({ get: () => null } as unknown as ConfigService)).toThrow(/AWS_REGION/);
+    expect(() => new StorageService(new ConfigService({
+      AWS_REGION: '',
+      AWS_S3_BUCKET_NAME: '',
+    }))).toThrow(/AWS_REGION/);
     expect(() => new StorageService({
       get: (key: string) => ({
         AWS_REGION: 'us-east-1',
@@ -51,5 +55,11 @@ describe('StorageService', () => {
         AWS_ACCESS_KEY_ID: 'incomplete',
       }[key] ?? null),
     } as unknown as ConfigService)).toThrow(/deben configurarse juntos/);
+    expect(() => new StorageService(new ConfigService({
+      AWS_REGION: 'us-east-1',
+      AWS_S3_BUCKET_NAME: 'bucket',
+      AWS_ACCESS_KEY_ID: 'incomplete',
+      AWS_SECRET_ACCESS_KEY: '',
+    }))).toThrow(/deben configurarse juntos/);
   });
 });
