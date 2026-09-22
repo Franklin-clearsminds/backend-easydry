@@ -244,6 +244,7 @@ model CatalogoServicio {
   precio            Decimal          @default(0.0) @db.Decimal(10, 2)
   tiempoEstimadoMin Int              @default(30)
   servicios         ServicioLavado[]
+  serviciosEspeciales ServicioEspecial[]
   recetas           RecetaInsumo[]
 }
 
@@ -278,7 +279,9 @@ model RecetaInsumo {
 model ServicioLavado {
   id                 String           @id @default(uuid())
   clientUuid         String           @unique // UUID v4 generado en SQLite por el móvil (CLAVE IDEMPOTENCIA)
+  ordenTrabajoOT     String?          // Número de Orden de Trabajo (ej. OT-9840)
   placa              String
+  marca              String?          // Marca del vehículo (unificado)
   modelo             String
   color              String?
   cliente            String?
@@ -293,6 +296,8 @@ model ServicioLavado {
 
   fotoIngresoUrl     String?
   fotoSalidaUrl      String?
+  videoInicialUrl    String?          // Dirección de vídeo inicial
+  videoFinalUrl      String?          // Dirección de vídeo final
   observaciones      String?
 
   horaIngreso        DateTime         @default(now())
@@ -315,6 +320,7 @@ model ServicioLavado {
   evidencias         EvidenciaServicio[]
 
   @@index([placa])
+  @@index([ordenTrabajoOT])
   @@index([estado])
   @@index([bahiaId])
   @@index([clientUuid])
@@ -518,6 +524,7 @@ model Insumo {
   stockMinimoBodega   Decimal                      @default(10.0) @db.Decimal(10, 2)
   stockMinimoAgencia  Decimal                      @default(2.0)  @db.Decimal(10, 2)
   stockOptimoBodega   Decimal?                     @db.Decimal(10, 2)
+  stockOptimoAgencia  Decimal?                     @default(5.0) @db.Decimal(10, 2)
 
   costoUnitarioUSD    Decimal                      @default(0.0) @db.Decimal(10, 2)
   proveedorPrincipal  String?
@@ -987,9 +994,13 @@ model BahiaOperador {
 model ServicioEspecial {
   id                  String    @id @default(uuid())
   clientUuid          String?   @unique
-  codigoSE            String    @unique // e.g. "SE-2026-001"
+  codigoSE            String    @unique // e.g. "SE-2026-001" o número de OT
+  ordenTrabajoOT      String?   // Número de Orden de Trabajo digitalizado
   tipoServicio        String    // 'Pulido' | 'Micro Pulido' | 'Recubrimiento Cerámico' | 'Lavado de motor' | 'Tratamientos especiales'
+  servicioCatalogoId  Int?
+  catalogo            CatalogoServicio? @relation(fields: [servicioCatalogoId], references: [id])
   clienteNombre       String?
+  cliente             String?   // Alias unificado con ServicioLavado
   placa               String
   marca               String?
   modelo              String?
@@ -1005,11 +1016,26 @@ model ServicioEspecial {
   region              Region?   @relation(fields: [regionId], references: [id])
   regionNombre        String?
   fechaProgramada     DateTime?
+  horaIngreso         String?
   horaEstimada        String?
   fechaInicio         DateTime?
   fechaFin            DateTime?
   videoInicialUrl     String?
   videoFinalUrl       String?
+
+  // Trazabilidad de pausas y métricas de tiempo (EXCLUSIVO DE SERVICIOS ESPECIALES)
+  tiempoPausaTotalSeg       Int       @default(0) // Segundos acumulados en pausa
+  tiempoEfectivoSeg         Int?                  // Segundos netos de labor tras finalizar
+  fechaUltimaPausa          DateTime?             // Timestamp del inicio de la pausa activa
+  motivoUltimaPausa         String?               // Motivo de la última pausa
+  videoUltimaPausaUrl       String?               // Vídeo de evidencia de la última pausa
+  videoPausaUrl             String?               // Dirección directa del vídeo de evidencia de pausa
+  videoUltimaReanudacionUrl String?               // Vídeo de evidencia de la última reanudación
+  videoReanudacionUrl       String?               // Dirección directa del vídeo de reanudación
+  fotosPausaUrls            String[]  @default([]) // Direcciones de evidencias fotográficas de la pausa
+  evidenciasPausa           Json?                 // Registro estructurado de evidencias de pausas
+  historialPausas           Json?                 // Historial estructurado de todas las pausas con sus URLs
+
   recetaInsumos       Json?
   evidencias          Json?
   notasSupervisor     String?
@@ -1024,6 +1050,7 @@ model ServicioEspecial {
 
   @@index([clientUuid])
   @@index([codigoSE])
+  @@index([ordenTrabajoOT])
   @@index([estado])
   @@index([placa])
   @@index([agenciaId])

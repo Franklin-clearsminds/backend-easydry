@@ -791,6 +791,15 @@ export class AgenciasService {
       }
     }
 
+    let finalServicioIds = Array.isArray(dto.servicioIds) ? dto.servicioIds.map(Number) : [];
+    if (dto.tieneServiciosEspeciales) {
+      const especiales = await this.prisma.catalogoServicio.findMany({
+        where: { categoria: 'ESPECIAL' },
+        select: { id: true },
+      });
+      finalServicioIds = Array.from(new Set([...finalServicioIds, ...especiales.map((s) => s.id)]));
+    }
+
     const created = await this.prisma.agencia.create({
       data: {
         codigo: codigoGenerado,
@@ -805,7 +814,7 @@ export class AgenciasService {
         clienteId: clienteIdFinal,
         estado: dto.estado ?? 1,
         tieneServiciosEspeciales: dto.tieneServiciosEspeciales ?? false,
-        servicioIds: Array.isArray(dto.servicioIds) ? dto.servicioIds : [],
+        servicioIds: finalServicioIds,
         serviciosNombres: Array.isArray(dto.serviciosNombres) ? dto.serviciosNombres : [],
       },
       include: {
@@ -938,6 +947,38 @@ export class AgenciasService {
       }
     }
 
+    const tieneEspeciales = dto.tieneServiciosEspeciales !== undefined
+      ? dto.tieneServiciosEspeciales
+      : (agencia as any).tieneServiciosEspeciales;
+
+    let finalServicioIds: number[] | undefined = undefined;
+    if (Array.isArray(dto.servicioIds)) {
+      finalServicioIds = dto.servicioIds.map(Number);
+    } else if (dto.tieneServiciosEspeciales !== undefined) {
+      finalServicioIds = Array.isArray((agencia as any).servicioIds) ? (agencia as any).servicioIds.map(Number) : [];
+    }
+
+    let finalServiciosNombres: string[] | undefined = undefined;
+    if (finalServicioIds !== undefined) {
+      const especiales = await this.prisma.catalogoServicio.findMany({
+        where: { categoria: 'ESPECIAL' },
+        select: { id: true },
+      });
+      const especialIds = new Set(especiales.map((s) => s.id));
+
+      if (tieneEspeciales) {
+        finalServicioIds = Array.from(new Set([...finalServicioIds, ...especialIds]));
+      } else {
+        finalServicioIds = finalServicioIds.filter((id) => !especialIds.has(id));
+      }
+
+      const dbServicios = await this.prisma.catalogoServicio.findMany({
+        where: { id: { in: finalServicioIds } },
+        select: { nombre: true },
+      });
+      finalServiciosNombres = dbServicios.map((s) => s.nombre);
+    }
+
     const updated = await this.prisma.agencia.update({
       where: { id: dto.id },
       data: {
@@ -953,8 +994,8 @@ export class AgenciasService {
         ...(clienteIdFinal !== undefined && { clienteId: clienteIdFinal }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
         ...(dto.tieneServiciosEspeciales !== undefined && { tieneServiciosEspeciales: dto.tieneServiciosEspeciales }),
-        ...(Array.isArray(dto.servicioIds) ? { servicioIds: dto.servicioIds } : {}),
-        ...(Array.isArray(dto.serviciosNombres) ? { serviciosNombres: dto.serviciosNombres } : {}),
+        ...(finalServicioIds !== undefined ? { servicioIds: finalServicioIds } : {}),
+        ...(finalServiciosNombres !== undefined ? { serviciosNombres: finalServiciosNombres } : (Array.isArray(dto.serviciosNombres) ? { serviciosNombres: dto.serviciosNombres } : {})),
       },
       include: {
         cliente: true,
@@ -1054,11 +1095,11 @@ export class AgenciasService {
       return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
     });
 
-    const finalServicioIds = Array.isArray(dto.servicioIds)
-      ? (dto.servicioIds as number[])
+    const serviciosParaSincronizar = Array.isArray(finalServicioIds)
+      ? finalServicioIds
       : (Array.isArray(updated.servicioIds) ? (updated.servicioIds as number[]) : []);
-    if (finalServicioIds.length > 0) {
-      await this.sincronizarStockInsumosPorServicios(updated.id, finalServicioIds);
+    if (serviciosParaSincronizar.length > 0) {
+      await this.sincronizarStockInsumosPorServicios(updated.id, serviciosParaSincronizar);
     }
 
     return {
@@ -1789,6 +1830,28 @@ export class AgenciasService {
       regionIdToSet = bod.regionId || regionIdToSet || user.regionId;
     }
 
+    const checkRolName = (user.role?.namerol || dto.rolNombre || '').toUpperCase();
+    let isPulidorRole = checkRolName.includes('PULIDOR');
+    if (roleIdToSet) {
+      const checkRoleObj = await this.prisma.role.findUnique({ where: { id: roleIdToSet } });
+      if (checkRoleObj?.namerol.toUpperCase().includes('PULIDOR')) {
+        isPulidorRole = true;
+      }
+    }
+
+    let finalServicioIdsUsuario: number[] | undefined = undefined;
+    if (isPulidorRole) {
+      const especiales = await this.prisma.catalogoServicio.findMany({
+        where: { categoria: 'ESPECIAL' },
+        select: { id: true },
+      });
+      finalServicioIdsUsuario = especiales.map((s) => s.id);
+    } else if (dto.servicioIds !== undefined) {
+      finalServicioIdsUsuario = Array.isArray(dto.servicioIds)
+        ? dto.servicioIds.map(Number).filter((n) => !isNaN(n) && n > 0)
+        : [];
+    }
+
     const updatedUser = await this.prisma.user.update({
       where: { id: dto.id },
       data: {
@@ -1801,10 +1864,8 @@ export class AgenciasService {
         ...(regionIdToSet !== undefined && { regionId: regionIdToSet }),
         ...(bodegaIdToSet !== undefined && { bodegaId: bodegaIdToSet }),
         ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet }),
-        ...(dto.servicioIds !== undefined && {
-          servicioIds: Array.isArray(dto.servicioIds)
-            ? dto.servicioIds.map(Number).filter((n) => !isNaN(n) && n > 0)
-            : [],
+        ...(finalServicioIdsUsuario !== undefined && {
+          servicioIds: finalServicioIdsUsuario,
         }),
       },
       include: {
@@ -2022,9 +2083,24 @@ export class AgenciasService {
     }
     const passwordHash = await bcrypt.hash(passwordToHash, 10);
 
-    const servicioIdsToSet = Array.isArray(dto.servicioIds)
+    let servicioIdsToSet = Array.isArray(dto.servicioIds)
       ? dto.servicioIds.map(Number).filter((n) => !isNaN(n) && n > 0)
       : [];
+
+    let isPulidorCreate = (dto.rolNombre || '').toUpperCase().includes('PULIDOR');
+    if (!isPulidorCreate && roleIdToSet) {
+      const roleObj = await this.prisma.role.findUnique({ where: { id: roleIdToSet } });
+      if (roleObj?.namerol.toUpperCase().includes('PULIDOR')) {
+        isPulidorCreate = true;
+      }
+    }
+    if (isPulidorCreate) {
+      const especiales = await this.prisma.catalogoServicio.findMany({
+        where: { categoria: 'ESPECIAL' },
+        select: { id: true },
+      });
+      servicioIdsToSet = especiales.map((s) => s.id);
+    }
 
     const newUser = await this.prisma.user.create({
       data: {
@@ -2185,14 +2261,35 @@ export class AgenciasService {
     };
   }
 
-  async listOperadores(dto: ListOperadoresDto) {
+  async listOperadores(dto: ListOperadoresDto, currentUser?: any) {
+    const rolUsuario = currentUser ? (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || (typeof currentUser?.role === 'string' ? currentUser.role : '')) : '';
+    const isCoordEspeciales = rolUsuario === 'COORD_SERVICIOS_ESPECIALES' || dto.categoriaRol === 'PULIDOR' || dto.rol === 'PULIDOR';
+    const isLider = ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'].includes(rolUsuario);
+
+    const rolesPulidor = ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
+    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía', 'OPERADOR'];
+
+    let targetRoles: string[] = ['LAVADOR', 'PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
+
+    if (isCoordEspeciales) {
+      targetRoles = rolesPulidor;
+    } else if (isLider || dto.categoriaRol === 'LAVADOR' || dto.rol === 'LAVADOR') {
+      targetRoles = rolesLavador;
+    } else if (dto.rol) {
+      targetRoles = [dto.rol];
+    }
+
     const where: any = {
       role: {
-        namerol: { in: ['LAVADOR', 'PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO', 'Pulidor'] }
+        namerol: { in: targetRoles }
       }
     };
 
-    if (dto.agenciaId && dto.agenciaId !== 'Todas') {
+    // Scoping por Agencia:
+    // Si es Líder, SIEMPRE restringido a su propia agencia
+    if (isLider && currentUser?.agenciaId) {
+      where.agenciaId = currentUser.agenciaId;
+    } else if (dto.agenciaId && dto.agenciaId !== 'Todas') {
       where.OR = [
         { agenciaId: dto.agenciaId },
         { agencia: { nombre: dto.agenciaId } }
@@ -2232,21 +2329,31 @@ export class AgenciasService {
       throw new NotFoundException(`Agencia "${dto.agenciaId}" no encontrada`);
     }
 
+    const rolTarget = (dto.rol || 'LAVADOR').trim();
     let role = await this.prisma.role.findFirst({
       where: {
-        OR: [
-          { namerol: 'LAVADOR' },
-          { namerol: dto.rol || 'LAVADOR' }
-        ]
+        namerol: rolTarget
       }
     });
+
     if (!role) {
+      role = await this.prisma.role.findFirst({
+        where: {
+          namerol: rolTarget.toUpperCase().includes('PULIDOR') ? 'PULIDOR' : 'LAVADOR'
+        }
+      });
+    }
+
+    if (!role) {
+      const isPulidorRole = rolTarget.toUpperCase().includes('PULIDOR');
       role = await this.prisma.role.create({
         data: {
-          namerol: 'LAVADOR',
-          descripcion: 'Personal técnico y operativo de lavado y acabado en bahía',
+          namerol: isPulidorRole ? 'PULIDOR' : 'LAVADOR',
+          descripcion: isPulidorRole 
+            ? 'Personal especialista en servicios especiales y pulido' 
+            : 'Personal técnico y operativo de lavado y acabado en bahía',
           estado: 1,
-          permisos: ['servicios', 'bahias', 'sync']
+          permisos: isPulidorRole ? ['servicios_especiales', 'insumos', 'sync'] : ['servicios', 'bahias', 'sync']
         }
       });
     }
@@ -2360,6 +2467,22 @@ export class AgenciasService {
       });
       if (agencia) {
         dataToUpdate.agenciaId = agencia.id;
+      }
+    }
+    if (dto.rol) {
+      const rolTarget = dto.rol.trim();
+      let role = await this.prisma.role.findFirst({
+        where: { namerol: rolTarget }
+      });
+      if (!role) {
+        role = await this.prisma.role.findFirst({
+          where: {
+            namerol: rolTarget.toUpperCase().includes('PULIDOR') ? 'PULIDOR' : 'LAVADOR'
+          }
+        });
+      }
+      if (role) {
+        dataToUpdate.roleId = role.id;
       }
     }
 

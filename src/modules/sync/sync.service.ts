@@ -1155,10 +1155,13 @@ export class SyncService {
       };
     }
 
+    const isIngreso = ['FOTO_INGRESO', 'INGRESO', 'VIDEO_INICIAL', 'VIDEO_INGRESO'].includes(body.type);
+    const isSalida = ['FOTO_SALIDA', 'SALIDA', 'VIDEO_FINAL', 'VIDEO_SALIDA'].includes(body.type);
+
     const dataToUpdate: any = {};
-    if (body.type === 'FOTO_INGRESO' || body.type === 'INGRESO') {
+    if (isIngreso) {
       dataToUpdate.fotoIngresoUrl = body.fileUrl;
-    } else if (body.type === 'FOTO_SALIDA' || body.type === 'SALIDA') {
+    } else if (isSalida) {
       dataToUpdate.fotoSalidaUrl = body.fileUrl;
     }
 

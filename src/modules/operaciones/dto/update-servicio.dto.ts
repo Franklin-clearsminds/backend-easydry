@@ -13,6 +13,11 @@ export class UpdateServicioDto {
   @IsEnum(ServiceStatus)
   estado?: ServiceStatus;
 
+  @ApiPropertyOptional({ example: 'https://storage.../foto-ingreso.jpg' })
+  @IsOptional()
+  @IsString()
+  fotoIngresoUrl?: string;
+
   @ApiPropertyOptional({ example: 'https://storage.../foto-salida.jpg' })
   @IsOptional()
   @IsString()

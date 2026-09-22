@@ -3,13 +3,15 @@ import { ConfigService } from '@nestjs/config';
 import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
+import { PrismaService } from '../prisma/prisma.service.js';
 
 export type StorageCategory =
   | 'SERVICIOS_GENERALES'
   | 'SERVICIOS_ESPECIALES'
   | 'MAQUINARIA_FICHA'
   | 'MAQUINARIA_INCIDENTE'
-  | 'DOCUMENTO';
+  | 'DOCUMENTO'
+  | 'CATALOGO_INSUMOS';
 
 export type MediaEvidenceType =
   | 'FOTO_INGRESO'
@@ -19,12 +21,15 @@ export type MediaEvidenceType =
   | 'VIDEO_INSPECCION'
   | 'VIDEO_INICIAL'
   | 'VIDEO_FINAL'
+  | 'VIDEO_PAUSA'
+  | 'VIDEO_REANUDAR'
   | 'FICHA_TECNICA'
   | 'DOCUMENTO'
   | 'FOTO_INCIDENTE'
   | 'VIDEO_INCIDENTE'
   | 'DOCUMENTO_INCIDENTE'
-  | 'PDF_CIERRE';
+  | 'PDF_CIERRE'
+  | 'IMAGEN_PRODUCTO';
 
 export interface GenerateUploadTicketDto {
   clientUuid?: string;
@@ -32,6 +37,8 @@ export interface GenerateUploadTicketDto {
   servicioId?: string;
   maquinariaId?: string;
   incidenteId?: string;
+  insumoId?: string;
+  insumoNombre?: string;
   category?: StorageCategory;
   type: MediaEvidenceType;
   fileName?: string;
@@ -52,8 +59,8 @@ export interface UploadTicketResponse {
 
 const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
-  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'FICHA_TECNICA',
-  'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE',
+  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FICHA_TECNICA',
+  'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE', 'IMAGEN_PRODUCTO',
 ]);
 
 @Injectable()
@@ -64,7 +71,10 @@ export class StorageService implements OnModuleInit {
   private readonly region: string;
   private readonly publicUrlPrefix: string;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma?: PrismaService,
+  ) {
     this.region = this.configService.get<string>('AWS_REGION')?.trim() || '';
     this.bucketName = this.configService.get<string>('AWS_S3_BUCKET_NAME')?.trim() || '';
     if (!this.region || !this.bucketName) {
@@ -78,11 +88,14 @@ export class StorageService implements OnModuleInit {
       throw new Error('AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY deben configurarse juntos.');
     }
 
+    const endpoint = this.configService.get<string>('AWS_ENDPOINT')?.trim()
+      || this.configService.get<string>('AWS_S3_ENDPOINT')?.trim();
     this.s3Client = new S3Client({
       region: this.region,
       ...(accessKeyId && secretAccessKey
         ? { credentials: { accessKeyId, secretAccessKey } }
         : {}),
+      ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
     });
   }
 
@@ -96,7 +109,7 @@ export class StorageService implements OnModuleInit {
     }
   }
 
-  public buildS3Key(dto: GenerateUploadTicketDto): { key: string; contentType: string } {
+  public async buildS3Key(dto: GenerateUploadTicketDto): Promise<{ key: string; contentType: string }> {
     const type = String(dto.type || '').toUpperCase() as MediaEvidenceType;
     if (!ALLOWED_TYPES.has(type)) {
       throw new BadRequestException(`Tipo de evidencia no soportado: ${dto.type}`);
@@ -105,7 +118,11 @@ export class StorageService implements OnModuleInit {
     const category = dto.category || this.defaultCategory(type);
     this.assertCategorySupportsType(category, type);
 
-    const agencia = this.safeSegment(dto.agenciaId, 'agencia-general');
+    // ── Resolución del nombre real de la agencia ──────────────────────────
+    // El frontend puede enviar un UUID, un nombre de agencia, o un código.
+    // Intentamos resolver el nombre real desde BD para usar como slug de carpeta S3.
+    const agencia = await this.resolveAgenciaSlug(dto.agenciaId);
+
     const serviceId = this.safeSegment(dto.servicioId || dto.clientUuid, 'sin-orden');
     const maquinariaId = this.safeSegment(dto.maquinariaId, 'sin-maquinaria');
     const incidenteId = this.safeSegment(dto.incidenteId || dto.clientUuid, 'sin-incidente');
@@ -118,13 +135,43 @@ export class StorageService implements OnModuleInit {
     const filename = `${timestamp}_${type.toLowerCase()}_${uuid}.${ext}`;
 
     let key: string;
-    if (category === 'SERVICIOS_GENERALES' || category === 'SERVICIOS_ESPECIALES') {
+    if (category === 'CATALOGO_INSUMOS' || type === 'IMAGEN_PRODUCTO') {
+      let rawInsumoName = dto.insumoNombre || '';
+      const candidateId = dto.insumoId || dto.clientUuid || '';
+
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidateId);
+      if (!rawInsumoName && isUuid && this.prisma) {
+        try {
+          const insumoDb = await this.prisma.insumo.findUnique({
+            where: { id: candidateId },
+            select: { nombre: true, codigoSKU: true },
+          });
+          if (insumoDb?.nombre) {
+            rawInsumoName = insumoDb.nombre;
+          }
+        } catch {
+          // fallback
+        }
+      }
+
+      if (!rawInsumoName) {
+        rawInsumoName = candidateId || 'insumo';
+      }
+
+      const insumoSlug = this.safeSegment(rawInsumoName, 'insumo');
+      const finalImageFilename = `${insumoSlug}.${ext}`;
+      key = `catalogo/insumos/${insumoSlug}/${finalImageFilename}`;
+    } else if (category === 'SERVICIOS_GENERALES' || category === 'SERVICIOS_ESPECIALES') {
       const serviceKind = category === 'SERVICIOS_GENERALES' ? 'generales' : 'especiales';
       const folder = type === 'VIDEO_INICIAL'
         ? 'videos/inicial'
         : type === 'VIDEO_FINAL'
           ? 'videos/final'
-          : isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
+          : type === 'VIDEO_PAUSA'
+            ? 'videos/pausas'
+            : type === 'VIDEO_REANUDAR'
+              ? 'videos/reanudaciones'
+              : isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
       key = `agencias/${agencia}/servicios/${serviceKind}/${serviceId}/${folder}/${filename}`;
     } else if (category === 'MAQUINARIA_FICHA') {
       const folder = isDocument ? 'documentos' : 'fotos';
@@ -140,8 +187,40 @@ export class StorageService implements OnModuleInit {
     return { key, contentType };
   }
 
+  /**
+   * Resuelve el agenciaId en un slug legible para usar en rutas S3.
+   * Prioridad:
+   *  1. Si es UUID → busca el nombre real en BD → slugifica
+   *  2. Si es texto (nombre o código) → slugifica directamente
+   *  3. Fallback → 'agencia-general'
+   */
+  private async resolveAgenciaSlug(agenciaId?: string): Promise<string> {
+    if (!agenciaId || !agenciaId.trim()) return 'agencia-general';
+
+    const raw = agenciaId.trim();
+
+    // Es un UUID → intentar resolver desde BD
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw);
+    if (isUuid && this.prisma) {
+      try {
+        const agencia = await this.prisma.agencia.findUnique({
+          where: { id: raw },
+          select: { nombre: true, codigo: true },
+        });
+        if (agencia?.nombre) {
+          return this.safeSegment(agencia.nombre, 'agencia-general');
+        }
+      } catch {
+        // fallback al texto crudo
+      }
+    }
+
+    // Es un nombre/código legible → slugificar directamente
+    return this.safeSegment(raw, 'agencia-general');
+  }
+
   public async generateUploadTicket(dto: GenerateUploadTicketDto): Promise<UploadTicketResponse> {
-    const { key, contentType } = this.buildS3Key(dto);
+    const { key, contentType } = await this.buildS3Key(dto);
     const expiresInSeconds = 900;
 
     const lifecycleClass = contentType.startsWith('video/') ? 'video' : contentType === 'application/pdf' ? 'document' : 'image';
@@ -153,8 +232,29 @@ export class StorageService implements OnModuleInit {
     });
   }
 
-  public async getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
-    return getSignedUrl(this.s3Client, new GetObjectCommand({ Bucket: this.bucketName, Key: key }), { expiresIn: expiresInSeconds });
+  public async getPresignedDownloadUrl(rawKey: string, expiresInSeconds = 3600): Promise<string> {
+    let key = String(rawKey || '').trim();
+    if (key.includes('amazonaws.com/')) {
+      key = key.split('amazonaws.com/')[1] || key;
+    } else if (key.startsWith('/uploads/')) {
+      key = key.replace(/^\/uploads\//, '');
+    } else if (key.startsWith('uploads/')) {
+      key = key.replace(/^uploads\//, '');
+    }
+    const normalizedKey = key.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    if (!normalizedKey) throw new BadRequestException('La clave del archivo es obligatoria.');
+
+    const isMp4 = normalizedKey.toLowerCase().endsWith('.mp4');
+    const isWebm = normalizedKey.toLowerCase().endsWith('.webm');
+    const overrideContentType = isMp4 ? 'video/mp4' : (isWebm ? 'video/webm' : undefined);
+
+    const command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: normalizedKey,
+      ...(overrideContentType ? { ResponseContentType: overrideContentType } : {}),
+    });
+
+    return getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
   }
 
   public getBucketName(): string { return this.bucketName; }
@@ -179,6 +279,8 @@ export class StorageService implements OnModuleInit {
   }
 
   private defaultCategory(type: MediaEvidenceType): StorageCategory {
+    if (type === 'IMAGEN_PRODUCTO') return 'CATALOGO_INSUMOS';
+    if (type === 'VIDEO_PAUSA' || type === 'VIDEO_REANUDAR') return 'SERVICIOS_ESPECIALES';
     if (type === 'FICHA_TECNICA' || type === 'DOCUMENTO') return 'MAQUINARIA_FICHA';
     if (type === 'FOTO_INCIDENTE' || type === 'VIDEO_INCIDENTE' || type === 'DOCUMENTO_INCIDENTE') return 'MAQUINARIA_INCIDENTE';
     if (type === 'PDF_CIERRE') return 'DOCUMENTO';
@@ -186,7 +288,11 @@ export class StorageService implements OnModuleInit {
   }
 
   private assertCategorySupportsType(category: StorageCategory, type: MediaEvidenceType): void {
-    const serviceTypes = new Set<MediaEvidenceType>(['FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO', 'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL']);
+    if (category === 'CATALOGO_INSUMOS' && type === 'IMAGEN_PRODUCTO') return;
+    const serviceTypes = new Set<MediaEvidenceType>([
+      'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
+      'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR',
+    ]);
     const valid = category === 'SERVICIOS_GENERALES' || category === 'SERVICIOS_ESPECIALES'
       ? serviceTypes.has(type)
       : category === 'MAQUINARIA_FICHA'

@@ -356,8 +356,11 @@ export class InventarioService {
     if (dto.stockOptimoBodega < dto.stockMinimoBodega) {
       throw new BadRequestException('El stock óptimo de bodega debe ser mayor o igual al stock mínimo de bodega');
     }
+    if (dto.stockOptimoAgencia !== undefined && dto.stockOptimoAgencia < dto.stockMinimoAgencia) {
+      throw new BadRequestException('El stock óptimo de agencia debe ser mayor o igual al stock mínimo de agencia');
+    }
 
-    return this.prisma.insumo.create({
+    return (this.prisma.insumo as any).create({
       data: {
         codigoSKU: dto.codigoSKU,
         nombre: dto.nombre,
@@ -369,6 +372,7 @@ export class InventarioService {
         stockMinimoBodega: dto.stockMinimoBodega,
         stockMinimoAgencia: dto.stockMinimoAgencia,
         stockOptimoBodega: dto.stockOptimoBodega,
+        stockOptimoAgencia: dto.stockOptimoAgencia ?? 5.0,
         costoUnitarioUSD: dto.costoUnitarioUSD,
         proveedorPrincipal: dto.proveedorPrincipal,
         imagenUrl: dto.imagenUrl,
@@ -381,7 +385,7 @@ export class InventarioService {
   }
 
   async updateInsumo(dto: UpdateInsumoDto) {
-    const insumo = await this.prisma.insumo.findUnique({ where: { id: dto.id } });
+    const insumo: any = await this.prisma.insumo.findUnique({ where: { id: dto.id } });
     if (!insumo) throw new NotFoundException(`Insumo con ID "${dto.id}" no encontrado`);
 
     if (dto.unidadMedidaId) {
@@ -401,8 +405,16 @@ export class InventarioService {
       }
     }
 
+    const minAge = dto.stockMinimoAgencia !== undefined ? Number(dto.stockMinimoAgencia) : Number(insumo.stockMinimoAgencia);
+    const optAge = dto.stockOptimoAgencia !== undefined ? Number(dto.stockOptimoAgencia) : Number(insumo.stockOptimoAgencia ?? 0);
+    if (dto.stockMinimoAgencia !== undefined || dto.stockOptimoAgencia !== undefined) {
+      if (optAge > 0 && optAge < minAge) {
+        throw new BadRequestException('El stock óptimo de agencia debe ser mayor o igual al stock mínimo de agencia');
+      }
+    }
+
     const { id, ...data } = dto;
-    return this.prisma.insumo.update({
+    return (this.prisma.insumo as any).update({
       where: { id },
       data,
       include: {
@@ -686,7 +698,12 @@ export class InventarioService {
 
       const insumosAgencia = insumosDeEstaAgencia.map((ins) => {
         const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
-        const minimo = Number(ins.stockMinimoAgencia) || 2;
+        const cNeto = Number(ins.contenidoNeto) || 1;
+        const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
+        const rawMinimo = Number(ins.stockMinimoAgencia) || 2;
+        const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
+          ? rawMinimo * cNeto
+          : rawMinimo;
         let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Sin Stock' = 'Óptimo';
 
         if (actual <= 0) {
@@ -1233,8 +1250,15 @@ export class InventarioService {
       // Importante: si no hay fila de stock en ESTA bodega → 0 (no usar Insumo.stockActual)
       const actual = stockByInsumo.has(ins.id) ? (stockByInsumo.get(ins.id) as number) : 0;
       const cNeto = Number(ins.contenidoNeto) || 1;
-      const minimo = Number(ins.stockMinimoBodega) || 10;
-      const optimo = Number(ins.stockOptimoBodega) || 50;
+      const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
+      const rawMinimo = Number(ins.stockMinimoBodega) || 10;
+      const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
+        ? rawMinimo * cNeto
+        : rawMinimo;
+      const rawOptimo = Number(ins.stockOptimoBodega) || 50;
+      const optimo = isLiquidOrPowder && cNeto > 1 && rawOptimo < cNeto
+        ? rawOptimo * cNeto
+        : rawOptimo;
       stockTotalUnidades += Math.round((actual / cNeto) * 100) / 100;
 
       const umbralAlerta = Math.round(minimo * (1 + pctAlerta / 100) * 100) / 100;
@@ -1289,6 +1313,174 @@ export class InventarioService {
         porcentajeAlertaConfigurado: pctAlerta,
       },
       insumos: insumosBodega,
+    };
+  }
+
+  async obtenerStockPulidoresResumen(dto: { pulidorId?: string; regionId?: string } = {}, usuarioId?: string) {
+    const wherePulidor: any = {
+      role: { namerol: { in: ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'] } },
+      estado: 1,
+    };
+
+    if (usuarioId) {
+      const usuario = await this.prisma.user.findUnique({
+        where: { id: usuarioId },
+        include: { role: true, region: true },
+      });
+      const userRole = (usuario?.role?.namerol || '').toUpperCase();
+      const isPulidor = userRole.includes('PULIDOR');
+      const isAsistente = userRole.includes('ASISTENTE') && userRole.includes('BODEGA');
+
+      if (isPulidor) {
+        wherePulidor.id = usuarioId;
+      } else if (isAsistente && usuario?.regionId) {
+        wherePulidor.regionId = usuario.regionId;
+      }
+    }
+
+    if (dto.pulidorId) wherePulidor.id = dto.pulidorId;
+    if (dto.regionId) wherePulidor.regionId = dto.regionId;
+
+    const [pulidores, insumos, stocksUbicacion, recetasEspeciales] = await Promise.all([
+      this.prisma.user.findMany({
+        where: wherePulidor,
+        orderBy: [{ name: 'asc' }, { lastname: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          lastname: true,
+          email: true,
+          role: { select: { namerol: true } },
+          regionId: true,
+          region: { select: { id: true, nombre: true } },
+          agenciaId: true,
+          agencia: { select: { id: true, nombre: true } },
+          servicioIds: true,
+        },
+      }),
+      this.prisma.insumo.findMany({
+        where: { estado: 1 },
+        include: {
+          tipoProducto: { select: { id: true, nombre: true } },
+          unidadMedida: { select: { id: true, simbolo: true, nombre: true } },
+          recetas: { select: { catalogoServicioId: true } },
+        },
+        orderBy: { nombre: 'asc' },
+      }),
+      this.prisma.stockUbicacion.findMany({
+        where: {
+          OR: [
+            { tipoUbicacion: { in: ['PULIDOR_MOVIL', 'PULIDOR_FIJO'] } },
+            { pulidorId: { not: null } },
+          ],
+        },
+      }),
+      this.prisma.recetaInsumo.findMany({
+        where: { catalogoServicio: { categoria: 'ESPECIAL' } },
+        select: { insumoId: true },
+      }),
+    ]);
+
+    const insumoIdsEspeciales = new Set(recetasEspeciales.map((r) => r.insumoId));
+
+    const stockMap = new Map<string, number>();
+    for (const s of stocksUbicacion) {
+      if (s.pulidorId) {
+        const key = `${s.pulidorId}_${s.insumoId}`;
+        const prev = stockMap.get(key) ?? 0;
+        stockMap.set(key, prev + Number(s.cantidadActual));
+      }
+    }
+
+    let pulidoresEnAlerta = 0;
+    let insumosCriticosTotal = 0;
+
+    const pulidoresData = pulidores.map((pul) => {
+      let alertaPulidor = false;
+      let criticosPulidor = 0;
+
+      // Todo pulidor (fijo o móvil) maneja todos los servicios especiales y requiere sus insumos
+      const insumosDelPulidor = insumos.filter((ins) => {
+        const actual = stockMap.get(`${pul.id}_${ins.id}`) ?? 0;
+        const esInsumoEspecial = insumoIdsEspeciales.has(ins.id);
+        return esInsumoEspecial || actual > 0;
+      });
+
+      const insumosList = (insumosDelPulidor.length > 0 ? insumosDelPulidor : insumos.slice(0, 10)).map((ins) => {
+        const actual = stockMap.get(`${pul.id}_${ins.id}`) ?? 0;
+        const cNeto = Number(ins.contenidoNeto) || 1;
+        const unidadesActuales = Math.floor(actual / cNeto + 1e-9);
+        const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
+        const rawMinimo = Number(ins.stockMinimoAgencia) || 1;
+        const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
+          ? rawMinimo * cNeto
+          : rawMinimo;
+        let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Sin Stock' = 'Óptimo';
+
+        if (actual <= 0) {
+          estado = 'Sin Stock';
+          alertaPulidor = true;
+          criticosPulidor++;
+          insumosCriticosTotal++;
+        } else if (actual < minimo) {
+          estado = 'Crítico';
+          alertaPulidor = true;
+          criticosPulidor++;
+          insumosCriticosTotal++;
+        } else if (actual <= minimo * 1.2) {
+          estado = 'Bajo';
+          alertaPulidor = true;
+        }
+
+        const deficit = actual < minimo ? minimo - actual : 0;
+
+        return {
+          insumoId: ins.id,
+          id: ins.id,
+          sku: ins.codigoSKU,
+          codigoSKU: ins.codigoSKU,
+          nombre: ins.nombre,
+          categoria: ins.categoria || ins.tipoProducto?.nombre || 'Insumo',
+          tipoProducto: ins.tipoProducto?.nombre || (ins.categoria === 'QUIMICOS_LAVADO' ? 'Líquido' : (ins.categoria === 'CONSUMIBLE' ? 'Consumible' : 'Químico')),
+          unidad: ins.unidadMedida?.simbolo || 'und',
+          contenidoNeto: cNeto,
+          stockActual: actual,
+          stockUnidades: unidadesActuales,
+          stockMinimo: minimo,
+          stockMinimoUnidades: Math.floor(minimo / cNeto + 1e-9) || 1,
+          deficit,
+          estado,
+        };
+      });
+
+      if (alertaPulidor) pulidoresEnAlerta++;
+
+      const esFijo = !!pul.agenciaId || pul.role?.namerol === 'PULIDOR_FIJO';
+
+      return {
+        id: pul.id,
+        nombre: `${pul.name || ''} ${pul.lastname || ''}`.trim() || pul.email,
+        email: pul.email,
+        telefono: null,
+        rol: pul.role?.namerol || 'PULIDOR',
+        tipoPulidor: esFijo ? 'PULIDOR_FIJO' : 'PULIDOR_MOVIL',
+        tipoLabel: esFijo ? `Pulidor Fijo (${pul.agencia?.nombre || 'Sucursal'})` : `Pulidor Móvil (${pul.region?.nombre || 'Ruta'})`,
+        regionId: pul.regionId,
+        regionNombre: pul.region?.nombre || 'Sin Región',
+        agenciaId: pul.agenciaId,
+        agenciaNombre: pul.agencia?.nombre || (esFijo ? 'Sucursal' : 'Móvil / En Ruta'),
+        tieneAlerta: alertaPulidor,
+        insumosCriticos: criticosPulidor,
+        totalInsumos: insumosList.length,
+        insumos: insumosList,
+      };
+    });
+
+    return {
+      totalPulidores: pulidoresData.length,
+      pulidoresEnAlerta,
+      insumosCriticosTotal,
+      pulidores: pulidoresData,
     };
   }
 
@@ -1617,6 +1809,24 @@ export class InventarioService {
           usuarioId,
         },
       });
+
+      // Auto-resolver alertas pendientes si el stock supera el mínimo
+      const ins = await this.prisma.insumo.findUnique({ where: { id: insumoId }, select: { stockMinimoAgencia: true } });
+      const nuevoStockAg = ant + cantidad;
+      if (nuevoStockAg > Number(ins?.stockMinimoAgencia ?? 2)) {
+        await this.prisma.alertaStock.updateMany({
+          where: {
+            insumoId,
+            agenciaId: params.destinoAgenciaId,
+            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          },
+          data: {
+            estado: 'RESUELTO',
+            atendidaEn: new Date(),
+            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockAg}`,
+          },
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -1700,6 +1910,24 @@ export class InventarioService {
           usuarioId,
         },
       });
+
+      // Auto-resolver alertas del pulidor
+      const insP = await this.prisma.insumo.findUnique({ where: { id: insumoId }, select: { stockMinimoAgencia: true } });
+      const nuevoStockP = ant + cantidad;
+      if (nuevoStockP > Number(insP?.stockMinimoAgencia ?? 1)) {
+        await this.prisma.alertaStock.updateMany({
+          where: {
+            insumoId,
+            usuarioEmisorId: params.destinoPulidorId,
+            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          },
+          data: {
+            estado: 'RESUELTO',
+            atendidaEn: new Date(),
+            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockP}`,
+          },
+        }).catch(() => {});
+      }
     }
   }
 
@@ -1798,10 +2026,8 @@ export class InventarioService {
 
     const rol = (usuario.role?.namerol || '').toUpperCase();
     const isSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
-    const isAdmin = rol === 'ADMIN' && !isSuperAdmin;
-    if (isAdmin) {
-      throw new ForbiddenException('Admin no despacha insumos: solo supervisión.');
-    }
+    const isAdmin = rol === 'ADMIN';
+    const isDirector = isSuperAdmin || isAdmin;
 
     const isCoord =
       rol === 'COORD_BODEGA' ||
@@ -1811,11 +2037,11 @@ export class InventarioService {
       rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
     const isLider = rol === 'LIDER' || rol === 'LIDER_AGENCIA' || rol === 'LIDER_OPERADOR';
 
-    if (!isCoord && !isAsistente && !isLider && !isSuperAdmin) {
+    if (!isCoord && !isAsistente && !isLider && !isDirector) {
       throw new ForbiddenException('Tu rol no está autorizado para crear despachos.');
     }
 
-    // Origen = donde está el usuario o selección de Super Admin
+    // Origen = donde está el usuario o selección de Admin / Super Admin
     let origenBodegaId: string | null = null;
     let origenAgenciaId: string | null = null;
     let origenLabel = dto.origenUbicacion || '';
@@ -1826,7 +2052,7 @@ export class InventarioService {
         throw new BadRequestException('El líder debe tener una sucursal asignada para despachar desde su stock.');
       }
       origenLabel = origenLabel || `Agencia ${usuario.agencia?.nombre || origenAgenciaId}`;
-    } else if (isSuperAdmin) {
+    } else if (isDirector) {
       origenBodegaId = dto.origenBodegaId || usuario.bodegaId || null;
       origenAgenciaId = dto.origenAgenciaId || usuario.agenciaId || null;
       if (!origenBodegaId && !origenAgenciaId) {
@@ -1905,7 +2131,7 @@ export class InventarioService {
         include: { region: true, agencia: true, role: true },
       });
       if (!pulidor) throw new NotFoundException(`Pulidor "${destinoPulidorId}" no encontrado`);
-      if (!isCoord && !isSuperAdmin && regionUsuario) {
+      if (!isCoord && !isDirector && regionUsuario) {
         const regPulidor = pulidor.regionId || pulidor.agencia?.regionId;
         if (regPulidor && regPulidor !== regionUsuario) {
           throw new ForbiddenException('Solo puedes despachar a pulidores de tu región.');
@@ -1931,7 +2157,7 @@ export class InventarioService {
       if (origenBodegaId && bodRows[0].id === origenBodegaId) {
         throw new BadRequestException('No puedes despachar hacia la misma bodega de origen.');
       }
-      if (!isCoord && !isSuperAdmin && regionUsuario && bodRows[0].regionId && bodRows[0].regionId !== regionUsuario) {
+      if (!isCoord && !isDirector && regionUsuario && bodRows[0].regionId && bodRows[0].regionId !== regionUsuario) {
         throw new ForbiddenException('Solo puedes despachar a bodegas de tu región.');
       }
       destinoBodegaId = bodRows[0].id;
@@ -1955,7 +2181,7 @@ export class InventarioService {
           if (origenBodegaId && maybeBod[0].id === origenBodegaId) {
             throw new BadRequestException('No puedes despachar hacia la misma bodega de origen.');
           }
-          if (!isCoord && !isSuperAdmin && regionUsuario && maybeBod[0].regionId && maybeBod[0].regionId !== regionUsuario) {
+          if (!isCoord && !isDirector && regionUsuario && maybeBod[0].regionId && maybeBod[0].regionId !== regionUsuario) {
             throw new ForbiddenException('Solo puedes despachar a bodegas de tu región.');
           }
           destinoBodegaId = maybeBod[0].id;
@@ -1979,7 +2205,7 @@ export class InventarioService {
         if (origenAgenciaId && agencia.id === origenAgenciaId) {
           throw new BadRequestException('No puedes despachar hacia tu misma sucursal.');
         }
-        if (!isCoord && !isSuperAdmin && regionUsuario && agencia.regionId && agencia.regionId !== regionUsuario) {
+        if (!isCoord && !isDirector && regionUsuario && agencia.regionId && agencia.regionId !== regionUsuario) {
           throw new ForbiddenException('Solo puedes despachar a sucursales de tu región.');
         }
         destinoAgenciaId = agencia.id;
@@ -2381,6 +2607,10 @@ export class InventarioService {
           { usuarioDespachaId: usuario.id },
           { usuarioRecibeId: usuario.id },
         ];
+        if (usuario.bodegaId) {
+          conditions.push({ destinoBodegaId: usuario.bodegaId });
+          conditions.push({ origenBodegaId: usuario.bodegaId });
+        }
 
         if (usuario.regionId || usuario.region?.nombre) {
           const agenciasRegion = await this.prisma.agencia.findMany({
@@ -2526,6 +2756,7 @@ export class InventarioService {
       const viewerId = usuarioId;
       movimientos = movimientos.filter((m) => {
         if (viewerId && (m.usuarioDespachaId === viewerId || m.usuarioRecibeId === viewerId)) return true;
+        if (viewer?.bodegaId && (String(m.destinoBodegaId) === String(viewer.bodegaId) || String(m.origenBodegaId) === String(viewer.bodegaId))) return true;
         const blob = `${m.destinoUbicacion || ''} ${m.origenUbicacion || ''}`.toLowerCase();
         return regionalFilter.OR.some((cond: any) => {
           const t = cond.destinoUbicacion?.contains || cond.origenUbicacion?.contains;
@@ -2657,6 +2888,48 @@ export class InventarioService {
         usuarioDespacha: { select: { id: true, name: true, lastname: true } },
       },
     });
+  }
+
+  async obtenerDespachosPendientes(usuarioId?: string) {
+    if (!usuarioId) {
+      return this.listDespachos({ estadoDespacho: 'EN_TRANSITO' as any });
+    }
+    const usuario = await this.prisma.user.findUnique({
+      where: { id: usuarioId },
+      include: { role: true, region: true, bodega: true, agencia: true },
+    });
+    const rol = (usuario?.role?.namerol || '').toUpperCase();
+    const isSuperAdmin = rol.includes('SUPER') && rol.includes('ADMIN');
+    const isCoord = rol.includes('COORD') || rol.includes('DISTRIBUIDOR') || rol === 'ADMIN';
+    const isAsistente = rol.includes('ASISTENTE') && rol.includes('BODEGA');
+    const isLider = rol.includes('LIDER') || rol.includes('OPERADOR');
+    const isPulidor = rol.includes('PULIDOR');
+
+    const todos = await this.listDespachos({ estadoDespacho: 'EN_TRANSITO' as any }, usuarioId);
+
+    if (isSuperAdmin || isCoord) {
+      return todos;
+    }
+    if (isAsistente) {
+      return todos.filter((d: any) =>
+        (usuario?.bodegaId && String(d.destinoBodegaId) === String(usuario.bodegaId)) ||
+        d.puedeConfirmar
+      );
+    }
+    if (isLider) {
+      return todos.filter((d: any) =>
+        (usuario?.agenciaId && String(d.destinoAgenciaId) === String(usuario.agenciaId)) ||
+        d.puedeConfirmar
+      );
+    }
+    if (isPulidor && usuario) {
+      return todos.filter((d: any) =>
+        (usuario.id && String(d.destinoPulidorId) === String(usuario.id)) ||
+        (usuario.id && String(d.usuarioRecibeId) === String(usuario.id)) ||
+        d.puedeConfirmar
+      );
+    }
+    return todos.filter((d: any) => d.puedeConfirmar);
   }
 
   async listMovimientos(dto: ListMovimientosDto) {
@@ -4216,7 +4489,12 @@ export class InventarioService {
 
     const insumosResultado = Array.from(insumosMap.values()).map(({ insumo, servicios, consumoMaximo }) => {
       const stockActual = stockPorInsumo.get(insumo.id) ?? 0;
-      const stockMinimo = stockMinimoPorInsumo.get(insumo.id) ?? Number(insumo.stockMinimoAgencia ?? 2);
+      const cNeto = Number(insumo.contenidoNeto) || 1;
+      const isLiquidOrPowder = insumo.unidadMedida?.simbolo === 'ml' || insumo.unidadMedida?.simbolo === 'g';
+      let rawStockMin = stockMinimoPorInsumo.get(insumo.id) ?? Number(insumo.stockMinimoAgencia ?? 2);
+      const stockMinimo = isLiquidOrPowder && cNeto > 1 && rawStockMin < cNeto
+        ? rawStockMin * cNeto
+        : rawStockMin;
       const unidad = insumo.unidadMedida?.simbolo || 'u';
       // Validación contra servicios de la sucursal: si ninguna receta lo usa → No necesario
       // (sigue visible si ya fue enviado / tiene stock en sede)
@@ -4236,12 +4514,12 @@ export class InventarioService {
         estado = 'AGOTADO';
         insumosAgotados++;
         mensajeAlerta = `Agotado: No se pueden realizar ${servicios.map(s => s.nombre).join(', ')}`;
-        alertas.push(`🔴 ${insumo.nombre}: AGOTADO (${stockActual} ${unidad}). Afecta ${servicios.length} servicios.`);
+        alertas.push(`${insumo.nombre}: AGOTADO (${stockActual} ${unidad}). Afecta ${servicios.length} servicios.`);
       } else if (stockActual <= stockMinimo) {
         estado = 'BAJO';
         insumosBajoMinimo++;
         mensajeAlerta = `Stock bajo mínimo (${stockActual.toFixed(2)} de ${stockMinimo} ${unidad}). Reabastecer pronto.`;
-        alertas.push(`⚠️ ${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad} restantes).`);
+        alertas.push(`${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad} restantes).`);
       } else {
         insumosOptimos++;
       }
@@ -4278,6 +4556,7 @@ export class InventarioService {
         stockActual,
         stockMinimo,
         stockMinimoAgencia: stockMinimo,
+        stockOptimoAgencia: Number((insumo as any).stockOptimoAgencia ?? 5),
         stockMinimoBodega: Number(insumo.stockMinimoBodega ?? 0),
         stockOptimoBodega: Number(insumo.stockOptimoBodega ?? 0),
         activo: Number(insumo.estado) === 1,
@@ -4490,12 +4769,12 @@ export class InventarioService {
         estado = 'AGOTADO';
         insumosAgotados++;
         mensajeAlerta = `Agotado: no se pueden realizar ${servicios.map((s) => s.nombre).join(', ')}`;
-        alertas.push(`🔴 ${insumo.nombre}: AGOTADO. Afecta ${servicios.length} servicio(s).`);
+        alertas.push(`${insumo.nombre}: AGOTADO. Afecta ${servicios.length} servicio(s).`);
       } else if (stockActual <= stockMinimo) {
         estado = 'BAJO';
         insumosBajoMinimo++;
         mensajeAlerta = `Stock bajo mínimo (${stockActual.toFixed(2)} de ${stockMinimo} ${unidad}).`;
-        alertas.push(`⚠️ ${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad}).`);
+        alertas.push(`${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad}).`);
       } else {
         insumosOptimos++;
       }
@@ -4526,6 +4805,7 @@ export class InventarioService {
         stockActual,
         stockMinimo,
         stockMinimoAgencia: stockMinimo,
+        stockOptimoAgencia: Number((insumo as any).stockOptimoAgencia ?? 5),
         stockMinimoBodega: Number(insumo.stockMinimoBodega ?? 0),
         stockOptimoBodega: Number(insumo.stockOptimoBodega ?? 0),
         activo: Number(insumo.estado) === 1,
@@ -4685,7 +4965,7 @@ export class InventarioService {
 
         const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
         if (stockPosterior <= 0 && finalUsuarioId) {
-          alertasGeneradas.push(`🚨 ¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
+          alertasGeneradas.push(`¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
           await tx.alertaStock.create({
             data: {
               insumoId: insumo.id,
@@ -4697,7 +4977,7 @@ export class InventarioService {
             },
           });
         } else if (stockPosterior <= stockMinimo && finalUsuarioId) {
-          alertasGeneradas.push(`⚠️ Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
+          alertasGeneradas.push(`Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
           await tx.alertaStock.create({
             data: {
               insumoId: insumo.id,

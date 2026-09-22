@@ -220,6 +220,16 @@ export class ListOperadoresDto {
   @IsOptional()
   @IsNumber()
   estado?: number;
+
+  @ApiPropertyOptional({ example: 'PULIDOR', description: 'Filtrar por rol específico o prefijo' })
+  @IsOptional()
+  @IsString()
+  rol?: string;
+
+  @ApiPropertyOptional({ example: 'PULIDOR', description: 'Filtrar por categoría (PULIDOR o LAVADOR)' })
+  @IsOptional()
+  @IsString()
+  categoriaRol?: string;
 }
 
 export class CreateOperadorDto {

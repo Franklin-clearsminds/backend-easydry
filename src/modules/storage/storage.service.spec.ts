@@ -18,8 +18,8 @@ describe('StorageService', () => {
     ['VIDEO_FINAL', 'SERVICIOS_ESPECIALES', 'servicios/especiales/ot-1/videos/final/', 'video/mp4'],
     ['FOTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'maquinaria/maq-1/incidentes/inc-1/fotos/', 'image/jpeg'],
     ['DOCUMENTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'maquinaria/maq-1/incidentes/inc-1/documentos/', 'application/pdf'],
-  ] as const)('construye la ruta oficial para %s', (type, category, expectedPath, contentType) => {
-    const result = createService().buildS3Key({
+  ] as const)('construye la ruta oficial para %s', async (type, category, expectedPath, contentType) => {
+    const result = await createService().buildS3Key({
       agenciaId: 'AGENCIA 01',
       clientUuid: 'OT-1',
       maquinariaId: 'MAQ-1',
@@ -31,19 +31,23 @@ describe('StorageService', () => {
     expect(result.contentType).toBe(contentType);
   });
 
-  it('rechaza combinaciones de tipo y categoría incompatibles', () => {
-    expect(() => createService().buildS3Key({
+  it('rechaza combinaciones de tipo y categoría incompatibles', async () => {
+    await expect(createService().buildS3Key({
       type: 'DOCUMENTO_INCIDENTE',
       category: 'SERVICIOS_GENERALES',
-    })).toThrow(BadRequestException);
+    })).rejects.toThrow(BadRequestException);
   });
 
   it('rechaza iniciar sin la configuración mínima de S3', () => {
-    expect(() => new StorageService(new ConfigService({}))).toThrow(/AWS_REGION/);
+    expect(() => new StorageService(new ConfigService({
+      AWS_REGION: '',
+      AWS_S3_BUCKET_NAME: '',
+    }))).toThrow(/AWS_REGION/);
     expect(() => new StorageService(new ConfigService({
       AWS_REGION: 'us-east-1',
       AWS_S3_BUCKET_NAME: 'bucket',
       AWS_ACCESS_KEY_ID: 'incomplete',
+      AWS_SECRET_ACCESS_KEY: '',
     }))).toThrow(/deben configurarse juntos/);
   });
 });

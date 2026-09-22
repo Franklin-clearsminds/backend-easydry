@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -16,6 +16,8 @@ import { serializeServicioLavado } from '../../common/utils/servicio-serializer.
 
 @Injectable()
 export class OperacionesService {
+  private readonly logger = new Logger(OperacionesService.name);
+
   constructor(
     private prisma: PrismaService,
     @Optional() private notifications?: NotificationsService,
@@ -391,10 +393,40 @@ export class OperacionesService {
         ? now
         : horaSalidaEstimada;
 
-    const created = await this.prisma.servicioLavado.create({
+    // Validar y resolver el número de OT asignado al servicio (obligatorio y único)
+    let ordenTrabajoOT = createDto.ordenTrabajoOT?.trim().toUpperCase();
+    if (!ordenTrabajoOT && createDto.fotoIngresoUrl) {
+      const match = createDto.fotoIngresoUrl.match(/\/servicios\/(?:generales|especiales)\/([^/]+)\//i);
+      if (match && match[1] && match[1] !== 'sin-orden') {
+        ordenTrabajoOT = match[1].toUpperCase();
+      }
+    }
+
+    if (!ordenTrabajoOT) {
+      throw new BadRequestException('El número de Orden de Trabajo (OT) es obligatorio y debe ser ingresado por el usuario.');
+    }
+
+    // Validar unicidad en Servicios Generales y Servicios Especiales
+    const duplicateGeneral = await this.prisma.servicioLavado.findFirst({
+      where: { ordenTrabajoOT: { equals: ordenTrabajoOT, mode: 'insensitive' }, deletedAt: null },
+    });
+    if (duplicateGeneral) {
+      throw new BadRequestException(`La Orden de Trabajo "${ordenTrabajoOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
+    }
+
+    const duplicateEspecial = await this.prisma.servicioEspecial.findFirst({
+      where: { codigoSE: { equals: ordenTrabajoOT, mode: 'insensitive' }, deletedAt: null },
+    });
+    if (duplicateEspecial) {
+      throw new BadRequestException(`La Orden de Trabajo "${ordenTrabajoOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
+    }
+
+    const created = await (this.prisma.servicioLavado as any).create({
       data: {
         clientUuid,
+        ordenTrabajoOT,
         placa: createDto.placa.toUpperCase().trim(),
+        marca: createDto.marca?.trim() || null,
         modelo: createDto.modelo.trim(),
         color: createDto.color?.trim(),
         cliente: createDto.cliente?.trim(),
@@ -435,6 +467,20 @@ export class OperacionesService {
 
     // 8. Descuento atómico de stock e inserción de Kardex
     await this._ejecutarConsumoInsumos(created, false);
+
+    // 9. Persistir registro en tabla EvidenciaServicio si se adjuntó vídeo o foto de ingreso
+    if (createDto.fotoIngresoUrl) {
+      await this.prisma.evidenciaServicio.create({
+        data: {
+          servicioId: created.id,
+          tipo: 'VIDEO_INGRESO',
+          url: createDto.fotoIngresoUrl,
+          descripcion: 'Vídeo / Foto de Ingreso del Vehículo',
+        },
+      }).catch((err) => {
+        this.logger.warn(`No se pudo registrar EvidenciaServicio en create: ${err?.message}`);
+      });
+    }
 
     const finalCreated = await this.findOneRaw(created.id);
     return serializeServicioLavado(finalCreated);
@@ -541,6 +587,38 @@ export class OperacionesService {
         },
       },
     });
+
+    // Persistir en EvidenciaServicio si se envió vídeo o foto de salida/ingreso
+    if (updateDto.fotoSalidaUrl) {
+      const yaExisteSalida = updated.evidencias?.some((e) => e.url === updateDto.fotoSalidaUrl);
+      if (!yaExisteSalida) {
+        await this.prisma.evidenciaServicio.create({
+          data: {
+            servicioId: updated.id,
+            tipo: 'VIDEO_SALIDA',
+            url: updateDto.fotoSalidaUrl,
+            descripcion: 'Vídeo / Foto de Salida y Acabado del Vehículo',
+          },
+        }).catch((err) => {
+          this.logger.warn(`No se pudo registrar EvidenciaServicio de salida: ${err?.message}`);
+        });
+      }
+    }
+    if (updateDto.fotoIngresoUrl) {
+      const yaExisteIngreso = updated.evidencias?.some((e) => e.url === updateDto.fotoIngresoUrl);
+      if (!yaExisteIngreso) {
+        await this.prisma.evidenciaServicio.create({
+          data: {
+            servicioId: updated.id,
+            tipo: 'VIDEO_INGRESO',
+            url: updateDto.fotoIngresoUrl,
+            descripcion: 'Vídeo / Foto de Ingreso del Vehículo',
+          },
+        }).catch((err) => {
+          this.logger.warn(`No se pudo registrar EvidenciaServicio de ingreso: ${err?.message}`);
+        });
+      }
+    }
 
     return serializeServicioLavado(updated);
   }
@@ -672,7 +750,7 @@ export class OperacionesService {
 
       if (faltantes.length > 0) {
         throw new BadRequestException(
-          `❌ Stock insuficiente en la agencia para finalizar el servicio. Insumos faltantes:\n` +
+          `Stock insuficiente en la agencia para finalizar el servicio. Insumos faltantes:\n` +
             faltantes.map((f) => `  • ${f}`).join('\n'),
         );
       }

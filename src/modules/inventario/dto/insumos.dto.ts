@@ -54,6 +54,12 @@ export class CreateInsumoDto {
   @Min(0.001)
   stockOptimoBodega: number;
 
+  @ApiPropertyOptional({ example: 5.0, description: 'Stock óptimo en agencia para reabastecimiento (opcional/recomendado)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.001)
+  stockOptimoAgencia?: number;
+
   @ApiPropertyOptional({ example: 45.5, description: 'Costo unitario en USD' })
   @IsOptional()
   @IsNumber()
@@ -120,6 +126,11 @@ export class UpdateInsumoDto {
   @IsOptional()
   @IsNumber()
   stockOptimoBodega?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  stockOptimoAgencia?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
