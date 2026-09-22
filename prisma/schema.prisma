@@ -344,6 +344,7 @@ model ConsumoServicio {
 
 model SyncOutboxAudit {
   id         String   @id @default(uuid())
+  mutationId String?  @unique
   clientUuid String
   deviceInfo String?
   entity     String   // "ServicioLavado"
@@ -814,6 +815,7 @@ model Maquinaria {
 
 model IncidenteTecnico {
   id               String      @id @default(uuid())
+  clientUuid       String?     @unique
   maquinariaId     String
   maquinaria       Maquinaria  @relation(fields: [maquinariaId], references: [id], onDelete: Cascade)
   reportadoPorId   String
