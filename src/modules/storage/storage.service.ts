@@ -75,16 +75,15 @@ export class StorageService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly prisma?: PrismaService,
   ) {
-    const configured = (this.configService as unknown as { internalConfig?: Record<string, string> }).internalConfig || {};
-    this.region = configured.AWS_REGION?.trim() || '';
-    this.bucketName = configured.AWS_S3_BUCKET_NAME?.trim() || '';
+    this.region = (this.configService.get<string>('AWS_REGION') ?? '').trim();
+    this.bucketName = (this.configService.get<string>('AWS_S3_BUCKET_NAME') ?? '').trim();
     if (!this.region || !this.bucketName) {
       throw new Error('AWS_REGION y AWS_S3_BUCKET_NAME son obligatorios. EasyDry no admite almacenamiento local.');
     }
     this.publicUrlPrefix = this.configService.get<string>('AWS_S3_PUBLIC_URL_PREFIX')
       || `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
-    const accessKeyId = configured.AWS_ACCESS_KEY_ID?.trim();
-    const secretAccessKey = configured.AWS_SECRET_ACCESS_KEY?.trim();
+    const accessKeyId = (this.configService.get<string>('AWS_ACCESS_KEY_ID') ?? '').trim();
+    const secretAccessKey = (this.configService.get<string>('AWS_SECRET_ACCESS_KEY') ?? '').trim();
     if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
       throw new Error('AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY deben configurarse juntos.');
     }

@@ -3,13 +3,17 @@ import { ConfigService } from '@nestjs/config';
 import { describe, expect, it } from 'vitest';
 import { StorageService } from './storage.service.js';
 
-function createService() {
-  return new StorageService(new ConfigService({
+function createService(overrides?: Record<string, string>) {
+  const config: Record<string, string> = {
     AWS_REGION: 'us-east-1',
     AWS_S3_BUCKET_NAME: 'easydry-storage-test',
     AWS_ACCESS_KEY_ID: 'test-access-key',
     AWS_SECRET_ACCESS_KEY: 'test-secret-key',
-  }));
+    ...overrides,
+  };
+  return new StorageService({
+    get: (key: string) => config[key] ?? null,
+  } as unknown as ConfigService);
 }
 
 describe('StorageService', () => {
@@ -39,11 +43,13 @@ describe('StorageService', () => {
   });
 
   it('rechaza iniciar sin la configuración mínima de S3', () => {
-    expect(() => new StorageService(new ConfigService({}))).toThrow(/AWS_REGION/);
-    expect(() => new StorageService(new ConfigService({
-      AWS_REGION: 'us-east-1',
-      AWS_S3_BUCKET_NAME: 'bucket',
-      AWS_ACCESS_KEY_ID: 'incomplete',
-    }))).toThrow(/deben configurarse juntos/);
+    expect(() => new StorageService({ get: () => null } as unknown as ConfigService)).toThrow(/AWS_REGION/);
+    expect(() => new StorageService({
+      get: (key: string) => ({
+        AWS_REGION: 'us-east-1',
+        AWS_S3_BUCKET_NAME: 'bucket',
+        AWS_ACCESS_KEY_ID: 'incomplete',
+      }[key] ?? null),
+    } as unknown as ConfigService)).toThrow(/deben configurarse juntos/);
   });
 });

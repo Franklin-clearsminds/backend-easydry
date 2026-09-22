@@ -151,7 +151,7 @@ export class SyncService {
     for (const mut of mutations) {
       try {
         const processedMutation = mut.mutationId
-          ? await this.prisma.syncOutboxAudit.findUnique({ where: { mutationId: mut.mutationId } })
+          ? await this.prisma.syncOutboxAudit.findFirst({ where: { mutationId: mut.mutationId } })
           : null;
         if (processedMutation) {
           results.push({
@@ -513,7 +513,7 @@ export class SyncService {
         ) {
           const mutData = mut.data || {};
           const incidentAction = String(mut.action || 'CREATE').toUpperCase();
-          const existingIncident = await this.prisma.incidenteTecnico.findUnique({
+          const existingIncident = await this.prisma.incidenteTecnico.findFirst({
             where: { clientUuid: mut.clientUuid },
           });
           if (incidentAction === 'CREATE' && existingIncident) {
