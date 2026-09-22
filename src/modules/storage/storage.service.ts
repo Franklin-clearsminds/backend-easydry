@@ -223,13 +223,21 @@ export class StorageService implements OnModuleInit {
     const { key, contentType } = await this.buildS3Key(dto);
     const expiresInSeconds = 900;
 
-    const lifecycleClass = contentType.startsWith('video/') ? 'video' : contentType === 'application/pdf' ? 'document' : 'image';
-    const tagging = `storage-class=${lifecycleClass}`;
-    const command = new PutObjectCommand({ Bucket: this.bucketName, Key: key, ContentType: contentType, Tagging: tagging });
-    const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
-    return this.ticketResponse(dto, key, uploadUrl, `${this.publicUrlPrefix.replace(/\/$/, '')}/${key}`, contentType, expiresInSeconds, {
-      'x-amz-tagging': tagging,
+    const command = new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+      ContentType: contentType,
     });
+    const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+    return this.ticketResponse(
+      dto,
+      key,
+      uploadUrl,
+      `${this.publicUrlPrefix.replace(/\/$/, '')}/${key}`,
+      contentType,
+      expiresInSeconds,
+      {}
+    );
   }
 
   public async getPresignedDownloadUrl(rawKey: string, expiresInSeconds = 3600): Promise<string> {

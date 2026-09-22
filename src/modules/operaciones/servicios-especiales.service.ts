@@ -58,8 +58,9 @@ export class ServiciosEspecialesService {
       tiempoEfectivoSeg: tiempoEfectivoCalculado,
       tiempoEfectivoFormateado: formatSeconds(tiempoEfectivoCalculado),
       historialPausas: Array.isArray(item.historialPausas) ? item.historialPausas : [],
-      ordenTrabajoOT: item.codigoSE,
-      numeroOrden: item.codigoSE,
+      ordenTrabajoOT: item.ordenTrabajoOT || item.codigoSE || item.id,
+      codigoSE: item.codigoSE || item.ordenTrabajoOT || item.id,
+      numeroOrden: item.ordenTrabajoOT || item.codigoSE || item.id,
       categoriaServicio: 'ESPECIAL',
       servicioNombre: item.tipoServicio,
       servicio: item.tipoServicio,
@@ -200,7 +201,7 @@ export class ServiciosEspecialesService {
   async findOneRaw(id: string) {
     const item = await this.prisma.servicioEspecial.findFirst({
       where: {
-        OR: [{ id }, { clientUuid: id }, { codigoSE: id }],
+        OR: [{ id }, { clientUuid: id }, { codigoSE: id }, { ordenTrabajoOT: id }],
       },
       include: {
         agencia: true,
@@ -334,6 +335,7 @@ export class ServiciosEspecialesService {
 
     const created = await this.prisma.servicioEspecial.create({
       data: {
+        id: rawOT,
         clientUuid,
         codigoSE,
         ordenTrabajoOT: codigoSE,
