@@ -347,8 +347,8 @@ export class AgenciasController {
   @Post('operadores/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar operadores registrados en base de datos' })
-  async listOperadores(@Body() dto: ListOperadoresDto) {
-    return this.agenciasService.listOperadores(dto);
+  async listOperadores(@Body() dto: ListOperadoresDto, @CurrentUser() user?: any) {
+    return this.agenciasService.listOperadores(dto, user);
   }
 
   @Post('operadores/create')
@@ -391,7 +391,7 @@ export class AgenciasController {
 
   private _requireAgenciaManager(user: any, accion: string) {
     const rol = this._getRole(user);
-    if (!['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER_AGENCIA', 'LIDER', 'APROBADOR', 'GERENTE'].includes(rol)) {
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER_AGENCIA', 'LIDER', 'APROBADOR', 'GERENTE', 'COORD_SERVICIOS_ESPECIALES'].includes(rol)) {
       throw new ForbiddenException(`No tiene permisos para ${accion}`);
     }
   }

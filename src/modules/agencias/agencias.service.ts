@@ -2261,14 +2261,35 @@ export class AgenciasService {
     };
   }
 
-  async listOperadores(dto: ListOperadoresDto) {
+  async listOperadores(dto: ListOperadoresDto, currentUser?: any) {
+    const rolUsuario = currentUser ? (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || (typeof currentUser?.role === 'string' ? currentUser.role : '')) : '';
+    const isCoordEspeciales = rolUsuario === 'COORD_SERVICIOS_ESPECIALES' || dto.categoriaRol === 'PULIDOR' || dto.rol === 'PULIDOR';
+    const isLider = ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'].includes(rolUsuario);
+
+    const rolesPulidor = ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
+    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía', 'OPERADOR'];
+
+    let targetRoles: string[] = ['LAVADOR', 'PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
+
+    if (isCoordEspeciales) {
+      targetRoles = rolesPulidor;
+    } else if (isLider || dto.categoriaRol === 'LAVADOR' || dto.rol === 'LAVADOR') {
+      targetRoles = rolesLavador;
+    } else if (dto.rol) {
+      targetRoles = [dto.rol];
+    }
+
     const where: any = {
       role: {
-        namerol: { in: ['LAVADOR', 'PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO', 'Pulidor'] }
+        namerol: { in: targetRoles }
       }
     };
 
-    if (dto.agenciaId && dto.agenciaId !== 'Todas') {
+    // Scoping por Agencia:
+    // Si es Líder, SIEMPRE restringido a su propia agencia
+    if (isLider && currentUser?.agenciaId) {
+      where.agenciaId = currentUser.agenciaId;
+    } else if (dto.agenciaId && dto.agenciaId !== 'Todas') {
       where.OR = [
         { agenciaId: dto.agenciaId },
         { agencia: { nombre: dto.agenciaId } }
@@ -2308,21 +2329,31 @@ export class AgenciasService {
       throw new NotFoundException(`Agencia "${dto.agenciaId}" no encontrada`);
     }
 
+    const rolTarget = (dto.rol || 'LAVADOR').trim();
     let role = await this.prisma.role.findFirst({
       where: {
-        OR: [
-          { namerol: 'LAVADOR' },
-          { namerol: dto.rol || 'LAVADOR' }
-        ]
+        namerol: rolTarget
       }
     });
+
     if (!role) {
+      role = await this.prisma.role.findFirst({
+        where: {
+          namerol: rolTarget.toUpperCase().includes('PULIDOR') ? 'PULIDOR' : 'LAVADOR'
+        }
+      });
+    }
+
+    if (!role) {
+      const isPulidorRole = rolTarget.toUpperCase().includes('PULIDOR');
       role = await this.prisma.role.create({
         data: {
-          namerol: 'LAVADOR',
-          descripcion: 'Personal técnico y operativo de lavado y acabado en bahía',
+          namerol: isPulidorRole ? 'PULIDOR' : 'LAVADOR',
+          descripcion: isPulidorRole 
+            ? 'Personal especialista en servicios especiales y pulido' 
+            : 'Personal técnico y operativo de lavado y acabado en bahía',
           estado: 1,
-          permisos: ['servicios', 'bahias', 'sync']
+          permisos: isPulidorRole ? ['servicios_especiales', 'insumos', 'sync'] : ['servicios', 'bahias', 'sync']
         }
       });
     }
@@ -2436,6 +2467,22 @@ export class AgenciasService {
       });
       if (agencia) {
         dataToUpdate.agenciaId = agencia.id;
+      }
+    }
+    if (dto.rol) {
+      const rolTarget = dto.rol.trim();
+      let role = await this.prisma.role.findFirst({
+        where: { namerol: rolTarget }
+      });
+      if (!role) {
+        role = await this.prisma.role.findFirst({
+          where: {
+            namerol: rolTarget.toUpperCase().includes('PULIDOR') ? 'PULIDOR' : 'LAVADOR'
+          }
+        });
+      }
+      if (role) {
+        dataToUpdate.roleId = role.id;
       }
     }
 

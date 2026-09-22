@@ -14,7 +14,16 @@ export function serializeServicioLavado(s: any): any {
   const bahiaCodigo = s.bahia?.codigo || s.bahiaCodigo || '';
   const agenciaNombre = s.bahia?.agencia?.nombre || s.agenciaNombre || s.sucursalNombre || '';
   const servicioNombre = s.catalogo?.nombre || s.servicioNombre || 'Lavado General';
-  const ordenTrabajoOT = s.ordenTrabajoOT || (s.id ? `OT-${s.id.substring(0, 6).toUpperCase()}` : 'OT-9800');
+  let ordenTrabajoOT = s.ordenTrabajoOT;
+  if (!ordenTrabajoOT && (s.fotoIngresoUrl || s.fotoSalidaUrl)) {
+    const match = (s.fotoIngresoUrl || s.fotoSalidaUrl).match(/\/servicios\/(?:generales|especiales)\/([^/]+)\//i);
+    if (match && match[1] && match[1] !== 'sin-orden') {
+      ordenTrabajoOT = match[1].toUpperCase();
+    }
+  }
+  if (!ordenTrabajoOT) {
+    ordenTrabajoOT = s.id ? `OT-${s.id.substring(0, 6).toUpperCase()}` : 'OT-9800';
+  }
   const numeroOrden = s.numeroOrden || ordenTrabajoOT;
   const marca = s.marca || (s.modelo ? s.modelo.split(' ')[0] : 'General');
 
@@ -90,8 +99,10 @@ export function serializeServicioLavado(s: any): any {
     fotoIngresoUrl: s.fotoIngresoUrl || null,
     fotoSalidaUrl: s.fotoSalidaUrl || null,
     foto: s.fotoSalidaUrl || s.fotoIngresoUrl || null,
-    video: s.videoUrl || null,
-    videoUrl: s.videoUrl || null,
+    video: s.fotoSalidaUrl || s.videoFinalUrl || null,
+    videoUrl: s.fotoSalidaUrl || s.videoFinalUrl || null,
+    videoInicialUrl: s.videoInicialUrl || (s.fotoIngresoUrl && (s.fotoIngresoUrl.includes('.mp4') || s.fotoIngresoUrl.includes('video'))) ? s.fotoIngresoUrl : (s.videoInicial || s.fotoIngresoUrl || null),
+    videoFinalUrl: s.videoFinalUrl || (s.fotoSalidaUrl && (s.fotoSalidaUrl.includes('.mp4') || s.fotoSalidaUrl.includes('video'))) ? s.fotoSalidaUrl : (s.videoFinal || s.fotoSalidaUrl || null),
 
     // Observaciones y Notas
     observaciones: s.observaciones || null,

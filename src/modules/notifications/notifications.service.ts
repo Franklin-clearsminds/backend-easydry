@@ -88,7 +88,7 @@ export class NotificationsService {
     if (tokens.length > 0) {
       await this.sendPushNotification({
         to: tokens,
-        title: `🚨 Alerta Crítica Taller: ${params.maquinariaCodigo}`,
+        title: `Alerta Crítica Taller: ${params.maquinariaCodigo}`,
         body: `Incidente: ${params.titulo} (Gravedad: ${params.gravedad})`,
         data: {
           type: 'INCIDENTE_CRITICO',
@@ -122,7 +122,7 @@ export class NotificationsService {
     if (tokens.length > 0) {
       await this.sendPushNotification({
         to: tokens,
-        title: `⚠️ Stock Crítico: ${params.insumoNombre}`,
+        title: `Stock Crítico: ${params.insumoNombre}`,
         body: `El insumo ha alcanzado el nivel de alerta: ${params.nivel}`,
         data: { type: 'ALERTA_STOCK' },
       });

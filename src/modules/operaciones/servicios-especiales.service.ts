@@ -58,7 +58,15 @@ export class ServiciosEspecialesService {
       tiempoEfectivoSeg: tiempoEfectivoCalculado,
       tiempoEfectivoFormateado: formatSeconds(tiempoEfectivoCalculado),
       historialPausas: Array.isArray(item.historialPausas) ? item.historialPausas : [],
+      ordenTrabajoOT: item.codigoSE,
+      numeroOrden: item.codigoSE,
+      categoriaServicio: 'ESPECIAL',
+      servicioNombre: item.tipoServicio,
+      servicio: item.tipoServicio,
       cliente: item.clienteNombre || '',
+      horaIngreso: item.horaIngreso || null,
+      horaEstimada: item.horaEstimada || null,
+      horaSalida: item.horaEstimada || null,
       vehiculoInfo: {
         placa: item.placa || '',
         marca: item.marca || '',
@@ -215,7 +223,26 @@ export class ServiciosEspecialesService {
 
   async create(dto: CreateServicioEspecialDto, creatorId?: string, currentUser?: any) {
     const clientUuid = dto.clientUuid || randomUUID();
-    const codigoSE = dto.codigoSE || `SE-${Date.now().toString().slice(-6)}`;
+    const rawOT = (dto.ordenTrabajoOT || dto.codigoSE || '').trim().toUpperCase();
+    if (!rawOT) {
+      throw new BadRequestException('El número de Orden de Trabajo (OT) es obligatorio y debe ser ingresado por el usuario.');
+    }
+
+    const duplicateEspecial = await this.prisma.servicioEspecial.findFirst({
+      where: { codigoSE: { equals: rawOT, mode: 'insensitive' }, deletedAt: null },
+    });
+    if (duplicateEspecial) {
+      throw new BadRequestException(`La Orden de Trabajo "${rawOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
+    }
+
+    const duplicateGeneral = await this.prisma.servicioLavado.findFirst({
+      where: { ordenTrabajoOT: { equals: rawOT, mode: 'insensitive' }, deletedAt: null },
+    });
+    if (duplicateGeneral) {
+      throw new BadRequestException(`La Orden de Trabajo "${rawOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
+    }
+
+    const codigoSE = rawOT;
 
     const vInfo = dto.vehiculoInfo || {};
     const placa = (vInfo.placa || (dto as any).placa || '').toUpperCase().trim();
@@ -291,12 +318,9 @@ export class ServiciosEspecialesService {
       throw new BadRequestException('Debe asignar un pulidor móvil para crear la orden de servicio especial.');
     }
 
-    // Admin y Super Admin NO tienen inventario propio ni agencia fija; no se valida stock
+    // Validar existencias del kit en custodia del pulidor asignado (móvil o fijo)
     let recetaValidada: any[] | null = null;
-    if (isAdminCreator) {
-      recetaValidada = Array.isArray(dto.recetaInsumos) ? dto.recetaInsumos : null;
-    } else if (operadorIdFinal) {
-      // Para pulidores u operadores asignados por coordinadores, se valida su kit en custodia
+    if (operadorIdFinal) {
       recetaValidada = await this.assertPulidorTieneInsumosParaOT(
         operadorIdFinal,
         dto.recetaInsumos,
@@ -312,18 +336,23 @@ export class ServiciosEspecialesService {
       data: {
         clientUuid,
         codigoSE,
+        ordenTrabajoOT: codigoSE,
         tipoServicio: dto.tipoServicio.trim(),
         placa,
         marca,
         modelo,
         color,
         clienteNombre,
+        cliente: clienteNombre,
         agenciaId: finalAgenciaId,
+        bahiaId: dto.bahiaId || null,
         regionId: finalRegionId,
         regionNombre: finalRegionNombre,
         operadorId: operadorIdFinal,
         prioridad: dto.prioridad || 'Media',
         estado: 'Pendiente',
+        horaIngreso: dto.horaIngreso || null,
+        horaEstimada: dto.horaEstimada || null,
         videoInicialUrl: dto.videoInicialUrl || null,
         recetaInsumos: recetaValidada || dto.recetaInsumos || null,
         evidencias: dto.evidencias || null,
@@ -564,6 +593,7 @@ export class ServiciosEspecialesService {
         fechaUltimaPausa: fechaPausa,
         motivoUltimaPausa: dto.motivo,
         videoUltimaPausaUrl: dto.videoPausaUrl,
+        videoPausaUrl: dto.videoPausaUrl,
         historialPausas: historialActual,
         version: item.version + 1,
       },
@@ -618,6 +648,7 @@ export class ServiciosEspecialesService {
         tiempoPausaTotalSeg: nuevoTiempoPausaTotalSeg,
         fechaUltimaPausa: null,
         videoUltimaReanudacionUrl: dto.videoReanudarUrl,
+        videoReanudacionUrl: dto.videoReanudarUrl,
         historialPausas: historialActual,
         version: item.version + 1,
       },
@@ -732,11 +763,53 @@ export class ServiciosEspecialesService {
             });
 
             if (stockPulidor) {
-              const nuevaCant = Math.max(0, Number(stockPulidor.cantidadActual) - cantidadDesc);
+              const stockAnterior = Number(stockPulidor.cantidadActual || 0);
+              const nuevaCant = Math.max(0, stockAnterior - cantidadDesc);
               await this.prisma.stockUbicacion.update({
                 where: { id: stockPulidor.id },
                 data: { cantidadActual: nuevaCant },
               });
+
+              // Registrar Kardex para trazabilidad contable
+              await this.prisma.kardexMovimiento.create({
+                data: {
+                  insumoId: insumoDb.id,
+                  ubicacionId: `PULIDOR_${item.operadorId}`,
+                  tipoMovimiento: 'CONSUMO_SERVICIO_ESPECIAL',
+                  cantidad: -cantidadDesc,
+                  stockAnterior,
+                  stockPosterior: nuevaCant,
+                  costoUnitario: Number(insumoDb.costoUnitarioUSD || 0),
+                  costoTotal: Number(((insumoDb.costoUnitarioUSD ? Number(insumoDb.costoUnitarioUSD) : 0) * cantidadDesc).toFixed(2)),
+                  referenciaId: item.codigoSE || item.id,
+                  usuarioId: item.operadorId,
+                },
+              }).catch(() => {});
+
+              // Generar Alerta de inventario en BD si cae bajo el mínimo
+              const minimo = Number(insumoDb.stockMinimoAgencia ?? 1);
+              if (nuevaCant <= minimo) {
+                const alertaExistente = await this.prisma.alertaStock.findFirst({
+                  where: {
+                    insumoId: insumoDb.id,
+                    usuarioEmisorId: item.operadorId,
+                    estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+                  },
+                });
+                if (!alertaExistente) {
+                  const nivel = nuevaCant === 0 ? 'AGOTADO' : nuevaCant < minimo * 0.5 ? 'CRITICO' : 'BAJO';
+                  await this.prisma.alertaStock.create({
+                    data: {
+                      insumoId: insumoDb.id,
+                      nivel,
+                      agenciaId: item.agenciaId || null,
+                      usuarioEmisorId: item.operadorId,
+                      mensaje: `Stock bajo en kit del pulidor al finalizar servicio ${item.codigoSE || item.id}. Insumo: ${insumoDb.nombre}. Stock actual: ${nuevaCant.toFixed(2)}`,
+                      stockReportado: nuevaCant,
+                    },
+                  }).catch(() => {});
+                }
+              }
             }
           }
         } catch {

@@ -1,6 +1,7 @@
-import { Body, Controller, HttpCode, HttpStatus, PayloadTooLargeException, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, PayloadTooLargeException, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
@@ -20,6 +21,47 @@ export class StorageController {
   @ApiResponse({ status: 200, description: 'Ticket de subida generado' })
   getUploadTicket(@Body() dto: GenerateUploadTicketDto) {
     return this.storageService.generateUploadTicket(dto);
+  }
+
+  @Get('presigned-url')
+  @ApiOperation({ summary: 'Obtiene la URL prefirmada temporal para visualizar o reproducir un archivo' })
+  async getPresignedUrl(@Query('key') rawKey: string): Promise<{ url: string }> {
+    if (!rawKey) throw new BadRequestException('Parámetro key es obligatorio.');
+    const url = await this.storageService.getPresignedDownloadUrl(rawKey, 3600);
+    return { url };
+  }
+
+  @Get('file')
+  @ApiOperation({ summary: 'Obtiene o visualiza un archivo almacenado en S3 o Local con soporte de streaming y Rangos' })
+  async getFile(@Query('key') rawKey: string, @Res() res: Response): Promise<void> {
+    if (!rawKey) throw new BadRequestException('Parámetro key es obligatorio.');
+
+    let key = String(rawKey).trim();
+    if (key.includes('amazonaws.com/')) {
+      key = key.split('amazonaws.com/')[1] || key;
+    } else if (key.startsWith('/uploads/')) {
+      key = key.replace(/^\/uploads\//, '');
+    } else if (key.startsWith('uploads/')) {
+      key = key.replace(/^uploads\//, '');
+    }
+    key = key.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+
+    try {
+      if (this.storageService.isUsingS3()) {
+        const presignedUrl = await this.storageService.getPresignedDownloadUrl(key, 3600);
+        return res.redirect(HttpStatus.FOUND, presignedUrl);
+      }
+
+      // Modo Local con soporte nativo de Range Requests (HTTP 206) para video/audio
+      const target = path.resolve(this.storageService.getLocalRoot(), ...key.split('/'));
+      if (!target.startsWith(this.storageService.getLocalRoot()) || !existsSync(target)) {
+        res.status(HttpStatus.NOT_FOUND).json({ message: 'Archivo no encontrado.' });
+        return;
+      }
+      return res.sendFile(target, { acceptRanges: true, maxAge: 86400000 });
+    } catch (err: any) {
+      res.status(HttpStatus.NOT_FOUND).json({ message: 'Archivo no encontrado.', error: err?.message });
+    }
   }
 
   @Put('local-upload')

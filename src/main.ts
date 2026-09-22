@@ -92,7 +92,7 @@ async function bootstrap() {
   const port = process.env.PORT || 3000;
   await app.listen(port);
 
-  logger.log(`🚀 Servidor EasyDry backend ejecutándose en: http://localhost:${port}/api/v1`);
-  logger.log(`📖 Documentación Swagger interactiva disponible en: http://localhost:${port}/api/docs`);
+  logger.log(`Servidor EasyDry backend ejecutándose en: http://localhost:${port}/api/v1`);
+  logger.log(`Documentación Swagger interactiva disponible en: http://localhost:${port}/api/docs`);
 }
 bootstrap();

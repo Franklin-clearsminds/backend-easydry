@@ -3,12 +3,22 @@ import { IsNotEmpty, IsString, IsInt, IsOptional, IsEnum } from 'class-validator
 import { ServiceStatus } from '@prisma/client';
 
 export class CreateServicioDto {
+  @ApiPropertyOptional({ example: 'OT-9840', description: 'Número de Orden de Trabajo (OT)' })
+  @IsOptional()
+  @IsString()
+  ordenTrabajoOT?: string;
+
   @ApiProperty({ example: 'PDF-4589', description: 'Placa del vehículo' })
   @IsString()
   @IsNotEmpty()
   placa: string;
 
-  @ApiProperty({ example: 'Toyota Rav4', description: 'Modelo del vehículo' })
+  @ApiPropertyOptional({ example: 'Toyota', description: 'Marca del vehículo' })
+  @IsOptional()
+  @IsString()
+  marca?: string;
+
+  @ApiProperty({ example: 'Rav4', description: 'Modelo del vehículo' })
   @IsString()
   @IsNotEmpty()
   modelo: string;

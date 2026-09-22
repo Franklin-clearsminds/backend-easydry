@@ -356,8 +356,11 @@ export class InventarioService {
     if (dto.stockOptimoBodega < dto.stockMinimoBodega) {
       throw new BadRequestException('El stock óptimo de bodega debe ser mayor o igual al stock mínimo de bodega');
     }
+    if (dto.stockOptimoAgencia !== undefined && dto.stockOptimoAgencia < dto.stockMinimoAgencia) {
+      throw new BadRequestException('El stock óptimo de agencia debe ser mayor o igual al stock mínimo de agencia');
+    }
 
-    return this.prisma.insumo.create({
+    return (this.prisma.insumo as any).create({
       data: {
         codigoSKU: dto.codigoSKU,
         nombre: dto.nombre,
@@ -369,6 +372,7 @@ export class InventarioService {
         stockMinimoBodega: dto.stockMinimoBodega,
         stockMinimoAgencia: dto.stockMinimoAgencia,
         stockOptimoBodega: dto.stockOptimoBodega,
+        stockOptimoAgencia: dto.stockOptimoAgencia ?? 5.0,
         costoUnitarioUSD: dto.costoUnitarioUSD,
         proveedorPrincipal: dto.proveedorPrincipal,
         imagenUrl: dto.imagenUrl,
@@ -381,7 +385,7 @@ export class InventarioService {
   }
 
   async updateInsumo(dto: UpdateInsumoDto) {
-    const insumo = await this.prisma.insumo.findUnique({ where: { id: dto.id } });
+    const insumo: any = await this.prisma.insumo.findUnique({ where: { id: dto.id } });
     if (!insumo) throw new NotFoundException(`Insumo con ID "${dto.id}" no encontrado`);
 
     if (dto.unidadMedidaId) {
@@ -401,8 +405,16 @@ export class InventarioService {
       }
     }
 
+    const minAge = dto.stockMinimoAgencia !== undefined ? Number(dto.stockMinimoAgencia) : Number(insumo.stockMinimoAgencia);
+    const optAge = dto.stockOptimoAgencia !== undefined ? Number(dto.stockOptimoAgencia) : Number(insumo.stockOptimoAgencia ?? 0);
+    if (dto.stockMinimoAgencia !== undefined || dto.stockOptimoAgencia !== undefined) {
+      if (optAge > 0 && optAge < minAge) {
+        throw new BadRequestException('El stock óptimo de agencia debe ser mayor o igual al stock mínimo de agencia');
+      }
+    }
+
     const { id, ...data } = dto;
-    return this.prisma.insumo.update({
+    return (this.prisma.insumo as any).update({
       where: { id },
       data,
       include: {
@@ -686,7 +698,12 @@ export class InventarioService {
 
       const insumosAgencia = insumosDeEstaAgencia.map((ins) => {
         const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
-        const minimo = Number(ins.stockMinimoAgencia) || 2;
+        const cNeto = Number(ins.contenidoNeto) || 1;
+        const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
+        const rawMinimo = Number(ins.stockMinimoAgencia) || 2;
+        const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
+          ? rawMinimo * cNeto
+          : rawMinimo;
         let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Sin Stock' = 'Óptimo';
 
         if (actual <= 0) {
@@ -1233,8 +1250,15 @@ export class InventarioService {
       // Importante: si no hay fila de stock en ESTA bodega → 0 (no usar Insumo.stockActual)
       const actual = stockByInsumo.has(ins.id) ? (stockByInsumo.get(ins.id) as number) : 0;
       const cNeto = Number(ins.contenidoNeto) || 1;
-      const minimo = Number(ins.stockMinimoBodega) || 10;
-      const optimo = Number(ins.stockOptimoBodega) || 50;
+      const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
+      const rawMinimo = Number(ins.stockMinimoBodega) || 10;
+      const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
+        ? rawMinimo * cNeto
+        : rawMinimo;
+      const rawOptimo = Number(ins.stockOptimoBodega) || 50;
+      const optimo = isLiquidOrPowder && cNeto > 1 && rawOptimo < cNeto
+        ? rawOptimo * cNeto
+        : rawOptimo;
       stockTotalUnidades += Math.round((actual / cNeto) * 100) / 100;
 
       const umbralAlerta = Math.round(minimo * (1 + pctAlerta / 100) * 100) / 100;
@@ -1386,7 +1410,11 @@ export class InventarioService {
         const actual = stockMap.get(`${pul.id}_${ins.id}`) ?? 0;
         const cNeto = Number(ins.contenidoNeto) || 1;
         const unidadesActuales = Math.floor(actual / cNeto + 1e-9);
-        const minimo = Number(ins.stockMinimoAgencia) || 1;
+        const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
+        const rawMinimo = Number(ins.stockMinimoAgencia) || 1;
+        const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
+          ? rawMinimo * cNeto
+          : rawMinimo;
         let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Sin Stock' = 'Óptimo';
 
         if (actual <= 0) {
@@ -1781,6 +1809,24 @@ export class InventarioService {
           usuarioId,
         },
       });
+
+      // Auto-resolver alertas pendientes si el stock supera el mínimo
+      const ins = await this.prisma.insumo.findUnique({ where: { id: insumoId }, select: { stockMinimoAgencia: true } });
+      const nuevoStockAg = ant + cantidad;
+      if (nuevoStockAg > Number(ins?.stockMinimoAgencia ?? 2)) {
+        await this.prisma.alertaStock.updateMany({
+          where: {
+            insumoId,
+            agenciaId: params.destinoAgenciaId,
+            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          },
+          data: {
+            estado: 'RESUELTO',
+            atendidaEn: new Date(),
+            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockAg}`,
+          },
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -1864,6 +1910,24 @@ export class InventarioService {
           usuarioId,
         },
       });
+
+      // Auto-resolver alertas del pulidor
+      const insP = await this.prisma.insumo.findUnique({ where: { id: insumoId }, select: { stockMinimoAgencia: true } });
+      const nuevoStockP = ant + cantidad;
+      if (nuevoStockP > Number(insP?.stockMinimoAgencia ?? 1)) {
+        await this.prisma.alertaStock.updateMany({
+          where: {
+            insumoId,
+            usuarioEmisorId: params.destinoPulidorId,
+            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          },
+          data: {
+            estado: 'RESUELTO',
+            atendidaEn: new Date(),
+            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockP}`,
+          },
+        }).catch(() => {});
+      }
     }
   }
 
@@ -4425,7 +4489,12 @@ export class InventarioService {
 
     const insumosResultado = Array.from(insumosMap.values()).map(({ insumo, servicios, consumoMaximo }) => {
       const stockActual = stockPorInsumo.get(insumo.id) ?? 0;
-      const stockMinimo = stockMinimoPorInsumo.get(insumo.id) ?? Number(insumo.stockMinimoAgencia ?? 2);
+      const cNeto = Number(insumo.contenidoNeto) || 1;
+      const isLiquidOrPowder = insumo.unidadMedida?.simbolo === 'ml' || insumo.unidadMedida?.simbolo === 'g';
+      let rawStockMin = stockMinimoPorInsumo.get(insumo.id) ?? Number(insumo.stockMinimoAgencia ?? 2);
+      const stockMinimo = isLiquidOrPowder && cNeto > 1 && rawStockMin < cNeto
+        ? rawStockMin * cNeto
+        : rawStockMin;
       const unidad = insumo.unidadMedida?.simbolo || 'u';
       // Validación contra servicios de la sucursal: si ninguna receta lo usa → No necesario
       // (sigue visible si ya fue enviado / tiene stock en sede)
@@ -4445,12 +4514,12 @@ export class InventarioService {
         estado = 'AGOTADO';
         insumosAgotados++;
         mensajeAlerta = `Agotado: No se pueden realizar ${servicios.map(s => s.nombre).join(', ')}`;
-        alertas.push(`🔴 ${insumo.nombre}: AGOTADO (${stockActual} ${unidad}). Afecta ${servicios.length} servicios.`);
+        alertas.push(`${insumo.nombre}: AGOTADO (${stockActual} ${unidad}). Afecta ${servicios.length} servicios.`);
       } else if (stockActual <= stockMinimo) {
         estado = 'BAJO';
         insumosBajoMinimo++;
         mensajeAlerta = `Stock bajo mínimo (${stockActual.toFixed(2)} de ${stockMinimo} ${unidad}). Reabastecer pronto.`;
-        alertas.push(`⚠️ ${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad} restantes).`);
+        alertas.push(`${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad} restantes).`);
       } else {
         insumosOptimos++;
       }
@@ -4487,6 +4556,7 @@ export class InventarioService {
         stockActual,
         stockMinimo,
         stockMinimoAgencia: stockMinimo,
+        stockOptimoAgencia: Number((insumo as any).stockOptimoAgencia ?? 5),
         stockMinimoBodega: Number(insumo.stockMinimoBodega ?? 0),
         stockOptimoBodega: Number(insumo.stockOptimoBodega ?? 0),
         activo: Number(insumo.estado) === 1,
@@ -4699,12 +4769,12 @@ export class InventarioService {
         estado = 'AGOTADO';
         insumosAgotados++;
         mensajeAlerta = `Agotado: no se pueden realizar ${servicios.map((s) => s.nombre).join(', ')}`;
-        alertas.push(`🔴 ${insumo.nombre}: AGOTADO. Afecta ${servicios.length} servicio(s).`);
+        alertas.push(`${insumo.nombre}: AGOTADO. Afecta ${servicios.length} servicio(s).`);
       } else if (stockActual <= stockMinimo) {
         estado = 'BAJO';
         insumosBajoMinimo++;
         mensajeAlerta = `Stock bajo mínimo (${stockActual.toFixed(2)} de ${stockMinimo} ${unidad}).`;
-        alertas.push(`⚠️ ${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad}).`);
+        alertas.push(`${insumo.nombre}: Stock bajo (${stockActual.toFixed(2)} ${unidad}).`);
       } else {
         insumosOptimos++;
       }
@@ -4735,6 +4805,7 @@ export class InventarioService {
         stockActual,
         stockMinimo,
         stockMinimoAgencia: stockMinimo,
+        stockOptimoAgencia: Number((insumo as any).stockOptimoAgencia ?? 5),
         stockMinimoBodega: Number(insumo.stockMinimoBodega ?? 0),
         stockOptimoBodega: Number(insumo.stockOptimoBodega ?? 0),
         activo: Number(insumo.estado) === 1,
@@ -4894,7 +4965,7 @@ export class InventarioService {
 
         const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
         if (stockPosterior <= 0 && finalUsuarioId) {
-          alertasGeneradas.push(`🚨 ¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
+          alertasGeneradas.push(`¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
           await tx.alertaStock.create({
             data: {
               insumoId: insumo.id,
@@ -4906,7 +4977,7 @@ export class InventarioService {
             },
           });
         } else if (stockPosterior <= stockMinimo && finalUsuarioId) {
-          alertasGeneradas.push(`⚠️ Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
+          alertasGeneradas.push(`Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
           await tx.alertaStock.create({
             data: {
               insumoId: insumo.id,
