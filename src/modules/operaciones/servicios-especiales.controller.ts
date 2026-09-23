@@ -8,6 +8,7 @@ import {
   CompletarServicioEspecialDto,
   PausarServicioEspecialDto,
   ReanudarServicioEspecialDto,
+  ReasignarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -92,6 +93,17 @@ export class ServiciosEspecialesController {
     @CurrentUser() user: any,
   ) {
     return this.service.completar(dto, user);
+  }
+
+  @Post('reasignar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reasignar servicio especial a otro pulidor' })
+  @ApiResponse({ status: 200, description: 'Servicio especial reasignado' })
+  async reasignar(
+    @Body() dto: ReasignarServicioEspecialDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.reasignar(dto, user);
   }
 
   @Post('delete')

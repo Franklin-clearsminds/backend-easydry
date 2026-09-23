@@ -8,6 +8,7 @@ import {
   CompletarServicioEspecialDto,
   PausarServicioEspecialDto,
   ReanudarServicioEspecialDto,
+  ReasignarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 
@@ -201,7 +202,12 @@ export class ServiciosEspecialesService {
   async findOneRaw(id: string) {
     const item = await this.prisma.servicioEspecial.findFirst({
       where: {
-        OR: [{ id }, { clientUuid: id }, { codigoSE: id }, { ordenTrabajoOT: id }],
+        OR: [
+          { id },
+          { clientUuid: id },
+          { codigoSE: { equals: id, mode: 'insensitive' } },
+          { ordenTrabajoOT: { equals: id, mode: 'insensitive' } },
+        ],
       },
       include: {
         agencia: true,
@@ -328,6 +334,7 @@ export class ServiciosEspecialesService {
         dto.tipoServicio,
         finalAgenciaId || undefined,
         currentUser?.id,
+        'crear',
       );
     } else {
       recetaValidada = Array.isArray(dto.recetaInsumos) ? dto.recetaInsumos : null;
@@ -370,6 +377,53 @@ export class ServiciosEspecialesService {
     return this._formatItem(created);
   }
 
+  async reasignar(dto: ReasignarServicioEspecialDto, currentUser?: any) {
+    const item = await this.findOneRaw(dto.id);
+    const estado = String(item.estado || '').toUpperCase();
+    if (estado.includes('COMPLET') || estado.includes('FINAL') || estado.includes('CANCEL')) {
+      throw new BadRequestException('No se puede reasignar un servicio finalizado o cancelado.');
+    }
+
+    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
+    const puedeReasignar =
+      rol.includes('COORD') ||
+      rol.includes('ADMIN') ||
+      rol.includes('SUPER') ||
+      rol.includes('GERENTE');
+    if (!puedeReasignar) {
+      throw new ForbiddenException('Solo el coordinador puede reasignar este servicio.');
+    }
+
+    const rawOp = dto.operadorId == null ? '' : String(dto.operadorId).trim();
+    const operadorIdFinal = !rawOp || rawOp === '0' || rawOp === 'null' ? null : rawOp;
+
+    if (operadorIdFinal) {
+      await this.assertPulidorTieneInsumosParaOT(
+        operadorIdFinal,
+        dto.recetaInsumos || item.recetaInsumos,
+        dto.tipoServicio || item.tipoServicio,
+        item.agenciaId || undefined,
+        currentUser?.id,
+        'reasignar',
+      );
+    }
+
+    const updated = await this.prisma.servicioEspecial.update({
+      where: { id: item.id },
+      data: {
+        operadorId: operadorIdFinal,
+        version: item.version + 1,
+      },
+      include: {
+        agencia: true,
+        operador: { select: { id: true, name: true, lastname: true, email: true } },
+        region: true,
+      },
+    });
+
+    return this._formatItem(updated);
+  }
+
   /**
    * Impide crear OT especial si el kit del pulidor no cubre la receta del servicio
    * y emite alerta de stock bajo/agotado hacia la bodega de la región y bodega central.
@@ -380,15 +434,21 @@ export class ServiciosEspecialesService {
     tipoServicio?: string,
     agenciaId?: string,
     emisorId?: string,
+    contexto: 'crear' | 'reasignar' = 'crear',
   ): Promise<any[]> {
+    const prefijo = contexto === 'reasignar'
+      ? 'No se puede reasignar'
+      : 'No puede crear la OT';
     let items: any[] = Array.isArray(recetaInsumos) ? [...recetaInsumos] : [];
 
     if (items.length === 0 && tipoServicio?.trim()) {
+      const term = tipoServicio.trim();
       const cat = await this.prisma.catalogoServicio.findFirst({
         where: {
           OR: [
-            { nombre: { equals: tipoServicio.trim(), mode: 'insensitive' } },
-            { codigo: { equals: tipoServicio.trim(), mode: 'insensitive' } },
+            { nombre: { equals: term, mode: 'insensitive' } },
+            { codigo: { equals: term, mode: 'insensitive' } },
+            { nombre: { contains: term, mode: 'insensitive' } },
           ],
         },
         include: {
@@ -422,43 +482,52 @@ export class ServiciosEspecialesService {
 
     const stockPorInsumo = new Map<string, number>();
     for (const s of stocks) {
-      stockPorInsumo.set(s.insumoId, (stockPorInsumo.get(s.insumoId) || 0) + Number(s.cantidadActual));
+      stockPorInsumo.set(String(s.insumoId), (stockPorInsumo.get(String(s.insumoId)) || 0) + Number(s.cantidadActual));
+      if (s.insumo?.codigoSKU) {
+        stockPorInsumo.set(String(s.insumo.codigoSKU).toLowerCase(), (stockPorInsumo.get(String(s.insumo.codigoSKU).toLowerCase()) || 0) + Number(s.cantidadActual));
+      }
     }
 
-    const totalKit = Array.from(stockPorInsumo.values()).reduce((a, b) => a + b, 0);
+    const totalKit = stocks.reduce((a, s) => a + Number(s.cantidadActual || 0), 0);
     if (totalKit <= 0) {
       throw new BadRequestException(
-        'No puede crear la OT: el pulidor no tiene insumos en su kit. Solicite un despacho antes de registrar el servicio.',
+        `${prefijo}: el pulidor no tiene insumos en su kit. Solicite un despacho antes de asignarle el servicio.`,
       );
     }
 
     if (items.length === 0) {
       throw new BadRequestException(
-        'No puede crear la OT: el servicio no tiene receta de insumos configurada o el kit no puede validarse.',
+        `${prefijo}: el servicio no tiene receta de insumos configurada o el kit no puede validarse.`,
       );
     }
 
+    const resolveHave = (it: any): number => {
+      const ids = [it.insumoId, it.productoId, it.id]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+      for (const id of ids) {
+        if (stockPorInsumo.has(id)) return stockPorInsumo.get(id) || 0;
+        if (stockPorInsumo.has(id.toLowerCase())) return stockPorInsumo.get(id.toLowerCase()) || 0;
+      }
+      const sku = String(it.codigoSKU || it.productoSKU || it.sku || '').trim().toLowerCase();
+      if (sku && stockPorInsumo.has(sku)) return stockPorInsumo.get(sku) || 0;
+      const nombre = String(it.productoNombre || it.insumoNombre || it.nombre || '').trim().toLowerCase();
+      const match = stocks.find((s) => {
+        const sSku = String(s.insumo?.codigoSKU || '').trim().toLowerCase();
+        const sName = String(s.insumo?.nombre || '').trim().toLowerCase();
+        return (sku && sSku === sku) || (nombre && sName === nombre);
+      });
+      return match ? Number(match.cantidadActual) : 0;
+    };
+
     const faltantes: string[] = [];
     for (const it of items) {
-      const insumoId = String(it.insumoId || it.productoId || '').trim();
       const need = Number(it.cantidadSugerida ?? it.cantidad ?? 0);
-      if (!insumoId || need <= 0) continue;
-
-      let have = stockPorInsumo.get(insumoId);
-      if (have === undefined) {
-        const sku = String(it.codigoSKU || it.productoSKU || '').trim();
-        const nombre = String(it.productoNombre || it.insumoNombre || it.nombre || '').trim().toLowerCase();
-        const match = stocks.find(
-          (s) =>
-            (sku && s.insumo?.codigoSKU === sku) ||
-            (nombre && s.insumo?.nombre?.toLowerCase() === nombre),
-        );
-        have = match ? Number(match.cantidadActual) : 0;
-      }
-
-      if ((have || 0) < need) {
-        const label = it.productoNombre || it.insumoNombre || it.nombre || it.codigoSKU || insumoId;
-        faltantes.push(`${label}: requiere ${need}, disponible ${have || 0}`);
+      if (need <= 0) continue;
+      const have = resolveHave(it);
+      if (have < need) {
+        const label = it.productoNombre || it.insumoNombre || it.nombre || it.codigoSKU || it.productoId || 'Insumo';
+        faltantes.push(`${label}: requiere ${need}, disponible ${have}`);
       }
     }
 
@@ -500,7 +569,7 @@ export class ServiciosEspecialesService {
       }
 
       throw new BadRequestException(
-        `No puede crear la OT: insumos insuficientes en el kit del pulidor. ${faltantes.join('; ')}`,
+        `${prefijo}: insumos insuficientes en el kit del pulidor. ${faltantes.join('; ')}`,
       );
     }
 
@@ -572,15 +641,35 @@ export class ServiciosEspecialesService {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede pausar el servicio.');
     }
 
-    if (
-      String(item.estado || '').toLowerCase() === 'pausado' &&
-      item.videoUltimaPausaUrl === dto.videoPausaUrl
-    ) {
-      return this._formatItem(item);
-    }
-
     if (String(item.estado || '').toLowerCase() === 'pausado') {
-      throw new BadRequestException('El servicio ya se encuentra pausado.');
+      if (!dto.videoPausaUrl || item.videoUltimaPausaUrl === dto.videoPausaUrl) {
+        return this._formatItem(item);
+      }
+      const historialActual: any[] = Array.isArray(item.historialPausas) ? [...item.historialPausas] : [];
+      if (historialActual.length > 0) {
+        const lastIdx = historialActual.length - 1;
+        historialActual[lastIdx] = {
+          ...historialActual[lastIdx],
+          videoPausaUrl: dto.videoPausaUrl,
+          motivo: dto.motivo || historialActual[lastIdx].motivo,
+        };
+      }
+      const updated = await this.prisma.servicioEspecial.update({
+        where: { id: item.id },
+        data: {
+          videoUltimaPausaUrl: dto.videoPausaUrl,
+          videoPausaUrl: dto.videoPausaUrl,
+          motivoUltimaPausa: dto.motivo || item.motivoUltimaPausa,
+          historialPausas: historialActual,
+          version: item.version + 1,
+        },
+        include: {
+          agencia: true,
+          operador: { select: { id: true, name: true, lastname: true, email: true } },
+          region: true,
+        },
+      });
+      return this._formatItem(updated);
     }
 
     if (String(item.estado || '').toLowerCase() !== 'en proceso') {
@@ -635,14 +724,28 @@ export class ServiciosEspecialesService {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede reanudar el servicio.');
     }
 
-    if (
-      String(item.estado || '').toLowerCase() === 'en proceso' &&
-      item.videoUltimaReanudacionUrl === dto.videoReanudarUrl
-    ) {
-      return this._formatItem(item);
+    const estadoActual = String(item.estado || '').toLowerCase();
+    if (estadoActual === 'en proceso') {
+      if (!dto.videoReanudarUrl || item.videoUltimaReanudacionUrl === dto.videoReanudarUrl) {
+        return this._formatItem(item);
+      }
+      const updated = await this.prisma.servicioEspecial.update({
+        where: { id: item.id },
+        data: {
+          videoUltimaReanudacionUrl: dto.videoReanudarUrl,
+          videoReanudacionUrl: dto.videoReanudarUrl,
+          version: item.version + 1,
+        },
+        include: {
+          agencia: true,
+          operador: { select: { id: true, name: true, lastname: true, email: true } },
+          region: true,
+        },
+      });
+      return this._formatItem(updated);
     }
 
-    if (String(item.estado || '').toLowerCase() !== 'pausado') {
+    if (estadoActual !== 'pausado') {
       throw new BadRequestException('El servicio no se encuentra pausado.');
     }
 
@@ -696,6 +799,26 @@ export class ServiciosEspecialesService {
     // Solo el pulidor asignado a esta OT o un Admin/SuperAdmin puede completarla
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede finalizar el servicio.');
+    }
+
+    if (String(item.estado || '').toLowerCase() === 'completado') {
+      const data: any = { version: item.version + 1 };
+      if (dto.videoFinalUrl && dto.videoFinalUrl !== item.videoFinalUrl) data.videoFinalUrl = dto.videoFinalUrl;
+      if (dto.observaciones) {
+        data.observaciones = dto.observaciones;
+        data.notasOperador = dto.observaciones;
+      }
+      if (Object.keys(data).length === 1) return this._formatItem(item);
+      const already = await this.prisma.servicioEspecial.update({
+        where: { id: item.id },
+        data,
+        include: {
+          agencia: true,
+          operador: { select: { id: true, name: true, lastname: true, email: true } },
+          region: true,
+        },
+      });
+      return this._formatItem(already);
     }
 
     const fechaFin = new Date();
