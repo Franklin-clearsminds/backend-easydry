@@ -26,6 +26,25 @@ export function serializeServicioLavado(s: any): any {
   }
   const numeroOrden = s.numeroOrden || ordenTrabajoOT;
   const marca = s.marca || (s.modelo ? s.modelo.split(' ')[0] : 'General');
+  const isVideoUrl = (value: unknown): value is string => {
+    if (typeof value !== 'string') return false;
+    const clean = value.split('?')[0].toLowerCase();
+    return /\.(mp4|mov|m4v|webm)$/.test(clean) || clean.includes('/videos/');
+  };
+  const isDemoMediaUrl = (value: unknown): boolean =>
+    typeof value === 'string' && /^(mock:)|images\.unsplash\.com|assets\.mixkit\.co|gtv-videos-bucket\/sample/i.test(value);
+  const safeMediaUrl = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim() && !isDemoMediaUrl(value) ? value : null;
+  const rawFotoIngreso = safeMediaUrl(s.fotoIngresoUrl);
+  const rawFotoSalida = safeMediaUrl(s.fotoSalidaUrl);
+  const fotoIngresoUrl = isVideoUrl(rawFotoIngreso) ? null : rawFotoIngreso;
+  const fotoSalidaUrl = isVideoUrl(rawFotoSalida) ? null : rawFotoSalida;
+  const videoInicialUrl = safeMediaUrl(s.videoInicialUrl)
+    || safeMediaUrl(s.videoInicial)
+    || (isVideoUrl(rawFotoIngreso) ? rawFotoIngreso : null);
+  const videoFinalUrl = safeMediaUrl(s.videoFinalUrl)
+    || safeMediaUrl(s.videoFinal)
+    || (isVideoUrl(rawFotoSalida) ? rawFotoSalida : null);
 
   const fechaIngresoStr = s.horaIngreso
     ? (s.horaIngreso instanceof Date ? s.horaIngreso.toISOString() : String(s.horaIngreso))
@@ -96,13 +115,13 @@ export function serializeServicioLavado(s: any): any {
     duracionFormateada,
 
     // Multimedia
-    fotoIngresoUrl: s.fotoIngresoUrl || null,
-    fotoSalidaUrl: s.fotoSalidaUrl || null,
-    foto: s.fotoSalidaUrl || s.fotoIngresoUrl || null,
-    video: s.fotoSalidaUrl || s.videoFinalUrl || null,
-    videoUrl: s.fotoSalidaUrl || s.videoFinalUrl || null,
-    videoInicialUrl: s.videoInicialUrl || (s.fotoIngresoUrl && (s.fotoIngresoUrl.includes('.mp4') || s.fotoIngresoUrl.includes('video'))) ? s.fotoIngresoUrl : (s.videoInicial || s.fotoIngresoUrl || null),
-    videoFinalUrl: s.videoFinalUrl || (s.fotoSalidaUrl && (s.fotoSalidaUrl.includes('.mp4') || s.fotoSalidaUrl.includes('video'))) ? s.fotoSalidaUrl : (s.videoFinal || s.fotoSalidaUrl || null),
+    fotoIngresoUrl,
+    fotoSalidaUrl,
+    foto: fotoSalidaUrl || fotoIngresoUrl,
+    video: videoFinalUrl || videoInicialUrl,
+    videoUrl: videoFinalUrl || videoInicialUrl,
+    videoInicialUrl,
+    videoFinalUrl,
 
     // Observaciones y Notas
     observaciones: s.observaciones || null,

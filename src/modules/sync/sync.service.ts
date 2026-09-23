@@ -12,6 +12,12 @@ import { ServiceStatus } from '@prisma/client';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
 
+const publicMediaUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return /^https:\/\//i.test(normalized) ? normalized : undefined;
+};
+
 export interface SyncMutationResult {
   mutationId: string;
   clientUuid: string;
@@ -323,8 +329,8 @@ export class SyncService {
                   operadorId: userId,
                   horaIngreso: sanitizedHoraIngreso,
                   horaSalida: estadoFinal === ServiceStatus.FINALIZADO ? now : null,
-                  fotoIngresoUrl: mut.data?.fotoIngresoUrl || mut.data?.evidenceInLocalUri,
-                  fotoSalidaUrl: mut.data?.fotoSalidaUrl || mut.data?.evidenceOutLocalUri,
+                  fotoIngresoUrl: publicMediaUrl(mut.data?.fotoIngresoUrl),
+                  fotoSalidaUrl: publicMediaUrl(mut.data?.fotoSalidaUrl),
                   observaciones: mut.data?.observaciones || mut.data?.notes,
                   syncedAt: now,
                 },
@@ -358,7 +364,7 @@ export class SyncService {
                 await this.operacionesService.update(nuevoServicio.id, {
                   id: nuevoServicio.id,
                   estado: ServiceStatus.FINALIZADO,
-                  fotoSalidaUrl: mut.data?.fotoSalidaUrl || mut.data?.evidenceOutLocalUri,
+                  fotoSalidaUrl: publicMediaUrl(mut.data?.fotoSalidaUrl),
                   observaciones: mut.data?.observaciones || mut.data?.notes,
                 }, true); // isOfflineSync = true
               } catch (e: any) {
@@ -469,7 +475,7 @@ export class SyncService {
             const updated = await this.operacionesService.update(existing.id, {
               id: existing.id,
               estado: estadoNuevo,
-              fotoSalidaUrl: mut.data?.fotoSalidaUrl || mut.data?.evidenceOutLocalUri || existing.fotoSalidaUrl,
+              fotoSalidaUrl: publicMediaUrl(mut.data?.fotoSalidaUrl) || existing.fotoSalidaUrl || undefined,
               observaciones: observacionesFinales,
             }, true); // isOfflineSync = true
 
@@ -1122,6 +1128,10 @@ export class SyncService {
     pauseReason?: string;
     resumeNotes?: string;
   }, currentUser?: any) {
+    if (!this.storageService.isManagedPublicUrl(body.fileUrl)) {
+      throw new BadRequestException('La evidencia debe corresponder a un archivo subido por EasyDry al bucket configurado.');
+    }
+
     if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'START') {
       const updated = await this.serviciosEspecialesService.iniciar({
         id: body.clientUuid,
@@ -1198,7 +1208,9 @@ export class SyncService {
     );
     const yaVinculadaEnColumnas =
       (body.type === 'FOTO_INGRESO' && service.fotoIngresoUrl === body.fileUrl) ||
-      (body.type === 'FOTO_SALIDA' && service.fotoSalidaUrl === body.fileUrl);
+      (body.type === 'FOTO_SALIDA' && service.fotoSalidaUrl === body.fileUrl) ||
+      (['VIDEO_INICIAL', 'VIDEO_INGRESO'].includes(body.type) && service.videoInicialUrl === body.fileUrl) ||
+      (['VIDEO_FINAL', 'VIDEO_SALIDA'].includes(body.type) && service.videoFinalUrl === body.fileUrl);
 
     if (yaVinculadaEnEvidencias || yaVinculadaEnColumnas) {
       return {
@@ -1212,14 +1224,15 @@ export class SyncService {
       };
     }
 
-    const isIngreso = ['FOTO_INGRESO', 'INGRESO', 'VIDEO_INICIAL', 'VIDEO_INGRESO'].includes(body.type);
-    const isSalida = ['FOTO_SALIDA', 'SALIDA', 'VIDEO_FINAL', 'VIDEO_SALIDA'].includes(body.type);
-
     const dataToUpdate: any = {};
-    if (isIngreso) {
+    if (['FOTO_INGRESO', 'INGRESO'].includes(body.type)) {
       dataToUpdate.fotoIngresoUrl = body.fileUrl;
-    } else if (isSalida) {
+    } else if (['FOTO_SALIDA', 'SALIDA'].includes(body.type)) {
       dataToUpdate.fotoSalidaUrl = body.fileUrl;
+    } else if (['VIDEO_INICIAL', 'VIDEO_INGRESO'].includes(body.type)) {
+      dataToUpdate.videoInicialUrl = body.fileUrl;
+    } else if (['VIDEO_FINAL', 'VIDEO_SALIDA'].includes(body.type)) {
+      dataToUpdate.videoFinalUrl = body.fileUrl;
     }
 
     const updated = await this.prisma.servicioLavado.update({

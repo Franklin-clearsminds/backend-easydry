@@ -134,14 +134,23 @@ export class StorageService implements OnModuleInit {
     const videoExtension = requestedExtension === 'mov' || requestedExtension === 'm4v'
       ? requestedExtension
       : 'mp4';
-    const ext = isVideo ? videoExtension : isDocument ? 'pdf' : 'jpg';
+    const imageExtension = requestedExtension && ['jpg', 'jpeg', 'png', 'webp'].includes(requestedExtension)
+      ? requestedExtension
+      : 'jpg';
+    const ext = isVideo ? videoExtension : isDocument ? 'pdf' : imageExtension;
     const contentType = isVideo
       ? videoExtension === 'mov'
         ? 'video/quicktime'
         : videoExtension === 'm4v'
           ? 'video/x-m4v'
           : 'video/mp4'
-      : isDocument ? 'application/pdf' : 'image/jpeg';
+      : isDocument
+        ? 'application/pdf'
+        : imageExtension === 'png'
+          ? 'image/png'
+          : imageExtension === 'webp'
+            ? 'image/webp'
+            : 'image/jpeg';
     const filename = `${timestamp}_${type.toLowerCase()}_${uuid}.${ext}`;
 
     let key: string;
@@ -276,6 +285,12 @@ export class StorageService implements OnModuleInit {
   }
 
   public getBucketName(): string { return this.bucketName; }
+
+  public isManagedPublicUrl(rawUrl: string): boolean {
+    const url = String(rawUrl || '').trim();
+    const prefix = this.publicUrlPrefix.replace(/\/$/, '');
+    return Boolean(prefix && url.startsWith(`${prefix}/`));
+  }
 
   private ticketResponse(dto: GenerateUploadTicketDto, key: string, uploadUrl: string, publicUrl: string, contentType: string, expiresInSeconds: number, extraHeaders: Record<string, string> = {}): UploadTicketResponse {
     return {

@@ -57,6 +57,29 @@ describe('StorageService', () => {
     expect(result.contentType).toBe('video/quicktime');
   });
 
+  it('conserva la extensión y el MIME real de una fotografía PNG', async () => {
+    const result = await createService().buildS3Key({
+      agenciaId: 'AGENCIA 01',
+      servicioId: 'OT-2026-101',
+      clientUuid: 'uuid-local',
+      type: 'FOTO_INGRESO',
+      category: 'SERVICIOS_GENERALES',
+      fileName: 'captura.png',
+    });
+
+    expect(result.key).toMatch(/\.png$/);
+    expect(result.contentType).toBe('image/png');
+  });
+
+  it('acepta solamente URLs públicas pertenecientes al bucket configurado', () => {
+    const service = createService();
+    expect(service.isManagedPublicUrl(
+      'https://easydry-storage-test.s3.us-east-1.amazonaws.com/agencias/agencia-01/foto.jpg',
+    )).toBe(true);
+    expect(service.isManagedPublicUrl('https://images.unsplash.com/foto.jpg')).toBe(false);
+    expect(service.isManagedPublicUrl('file:///data/user/0/foto.jpg')).toBe(false);
+  });
+
   it('rechaza iniciar sin la configuración mínima de S3', () => {
     expect(() => new StorageService({ get: () => null } as unknown as ConfigService)).toThrow(/AWS_REGION/);
     expect(() => new StorageService(new ConfigService({
