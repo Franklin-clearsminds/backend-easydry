@@ -133,6 +133,7 @@ model User {
   servicioIds   Json?
 
   estado        Int      @default(1) // 0 desactivo, 1 activo
+  avatarUrl     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -156,6 +157,8 @@ model User {
   movimientosInventarioGlobal MovimientoInventarioGlobal[] @relation("ResponsableMovimientoGlobal")
   bahiaOperadores       BahiaOperador[]           @relation("BahiaOperador")
   bahiaOperadorAsignaciones BahiaOperador[]      @relation("BahiaOperadorAsignador")
+  incidentesAsignados   IncidenteTecnico[]        @relation("TecnicoAsignadoIncidente")
+  movimientosMaquinaria MovimientoMaquinaria[]    @relation("ResponsableMovimientoMaquinaria")
 
   @@index([email])
   @@index([roleId])
@@ -194,6 +197,9 @@ model Agencia {
   regionId     String?
   regionRel    Region?  @relation(fields: [regionId], references: [id])
 
+  /// OPERATIVA | TALLER_NACIONAL | TALLER_REGIONAL
+  tipoUbicacion String  @default("OPERATIVA")
+
   bahias       Bahia[]
   usuarios     User[]
   stocks       StockUbicacion[]
@@ -201,6 +207,9 @@ model Agencia {
   maquinarias          Maquinaria[]
   solicitudesAprobacion SolicitudAprobacion[]
   serviciosEspeciales   ServicioEspecial[]
+  incidentesDestinoTaller IncidenteTecnico[] @relation("DestinoTallerIncidente")
+  movimientosMaquinariaOrigen  MovimientoMaquinaria[] @relation("MovimientoOrigenAgencia")
+  movimientosMaquinariaDestino MovimientoMaquinaria[] @relation("MovimientoDestinoAgencia")
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -209,6 +218,7 @@ model Agencia {
   @@index([regionId])
   @@index([estado])
   @@index([clienteId])
+  @@index([tipoUbicacion])
 }
 
 model Bahia {
@@ -810,6 +820,7 @@ model Maquinaria {
 
   incidentes      IncidenteTecnico[]
   mantenimientos  MantenimientoMaquinaria[]
+  movimientos     MovimientoMaquinaria[]
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -838,6 +849,13 @@ model IncidenteTecnico {
   resueltoPorId    String?
   resueltoPor      User?       @relation("ResueltoPor", fields: [resueltoPorId], references: [id])
 
+  tecnicoAsignadoId String?
+  tecnicoAsignado   User?      @relation("TecnicoAsignadoIncidente", fields: [tecnicoAsignadoId], references: [id])
+  fechaAsignacion   DateTime?
+
+  destinoTallerId  String?
+  destinoTaller    Agencia?    @relation("DestinoTallerIncidente", fields: [destinoTallerId], references: [id])
+
   fechaReporte     DateTime    @default(now())
   fechaSolucion    DateTime?
   evidencias       EvidenciaIncidente[]
@@ -848,6 +866,8 @@ model IncidenteTecnico {
   @@index([reportadoPorId])
   @@index([estado])
   @@index([gravedad])
+  @@index([tecnicoAsignadoId])
+  @@index([destinoTallerId])
 }
 
 model EvidenciaIncidente {
@@ -879,6 +899,7 @@ model MantenimientoMaquinaria {
 
   fechaMantenimiento   DateTime    @default(now())
   proximoMantenimiento DateTime?
+  evidencias           EvidenciaMantenimiento[]
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 
@@ -886,6 +907,41 @@ model MantenimientoMaquinaria {
   @@index([tecnicoId])
   @@index([tipo])
   @@index([estado])
+}
+
+model EvidenciaMantenimiento {
+  id               String                 @id @default(uuid())
+  mantenimientoId  String
+  mantenimiento    MantenimientoMaquinaria @relation(fields: [mantenimientoId], references: [id], onDelete: Cascade)
+  tipo             String
+  url              String
+  descripcion      String?
+  metadata         Json?
+  creadaEn         DateTime               @default(now())
+
+  @@index([mantenimientoId])
+  @@index([tipo])
+}
+
+model MovimientoMaquinaria {
+  id                String     @id @default(uuid())
+  maquinariaId      String
+  maquinaria        Maquinaria @relation(fields: [maquinariaId], references: [id], onDelete: Cascade)
+  origenAgenciaId   String?
+  origenAgencia     Agencia?   @relation("MovimientoOrigenAgencia", fields: [origenAgenciaId], references: [id])
+  destinoAgenciaId  String?
+  destinoAgencia    Agencia?   @relation("MovimientoDestinoAgencia", fields: [destinoAgenciaId], references: [id])
+  origenBahiaId     String?
+  destinoBahiaId    String?
+  motivo            String
+  usuarioId         String?
+  usuario           User?      @relation("ResponsableMovimientoMaquinaria", fields: [usuarioId], references: [id])
+  fecha             DateTime   @default(now())
+
+  @@index([maquinariaId])
+  @@index([origenAgenciaId])
+  @@index([destinoAgenciaId])
+  @@index([fecha])
 }
 
 // =========================================================================

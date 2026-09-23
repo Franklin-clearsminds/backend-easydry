@@ -313,14 +313,16 @@ export class SyncService {
               nuevoServicio = await this.prisma.servicioLavado.create({
                 data: {
                   clientUuid: mut.clientUuid,
+                  ordenTrabajoOT: String(mut.data?.ordenTrabajoOT || mut.data?.numeroOrden || '').trim() || undefined,
                   placa,
+                  marca: mut.data?.marca?.trim() || undefined,
                   modelo,
                   color: mut.data?.color?.trim(),
                   cliente: mut.data?.cliente?.trim() || mut.data?.clientName?.trim(),
                   estado: estadoInicial,
                   bahiaId,
                   servicioCatalogoId,
-                  operadorId: userId,
+                  operadorId: String(mut.data?.operadorId || userId),
                   horaIngreso: sanitizedHoraIngreso,
                   horaSalida: estadoFinal === ServiceStatus.FINALIZADO ? now : null,
                   fotoIngresoUrl: mut.data?.fotoIngresoUrl || mut.data?.evidenceInLocalUri,
@@ -1015,6 +1017,7 @@ export class SyncService {
 
   async generateMediaUploadTicket(body: {
     clientUuid: string;
+    userId?: string;
     type: string;
     fileName?: string;
     agenciaId?: string;
@@ -1040,13 +1043,18 @@ export class SyncService {
         agenciaId = incident.maquinaria.agenciaId || agenciaId;
       }
     }
-    if (!agenciaId && body.clientUuid) {
+    if (body.clientUuid) {
       const service = await this.prisma.servicioLavado.findFirst({
         where: { OR: [{ clientUuid: body.clientUuid }, { id: body.clientUuid }] },
-        select: { bahia: { select: { agenciaId: true } } },
+        select: { ordenTrabajoOT: true, bahia: { select: { agenciaId: true } } },
       });
-      if (service?.bahia?.agenciaId) {
-        agenciaId = service.bahia.agenciaId;
+      if (service) {
+        if (!agenciaId && service.bahia?.agenciaId) {
+          agenciaId = service.bahia.agenciaId;
+        }
+        if (!servicioId && (body.category === 'SERVICIOS_GENERALES' || !body.category)) {
+          servicioId = service.ordenTrabajoOT || servicioId;
+        }
       }
     }
 
@@ -1070,6 +1078,7 @@ export class SyncService {
 
     return this.storageService.generateUploadTicket({
       clientUuid: body.clientUuid,
+      userId: body.userId,
       type: body.type as MediaEvidenceType,
       fileName: body.fileName,
       agenciaId,
@@ -1117,7 +1126,7 @@ export class SyncService {
     category?: string;
     maquinariaId?: string;
     incidenteId?: string;
-    specialAction?: 'START' | 'PAUSE' | 'RESUME';
+    specialAction?: 'START' | 'PAUSE' | 'RESUME' | 'FINISH';
     specialOperatorId?: string;
     pauseReason?: string;
     resumeNotes?: string;
@@ -1150,6 +1159,15 @@ export class SyncService {
         observaciones: body.resumeNotes,
       }, currentUser);
       return { success: true, action: 'RESUME', ...body, service: updated };
+    }
+
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'FINISH') {
+      const updated = await this.serviciosEspecialesService.completar({
+        id: body.clientUuid,
+        videoFinalUrl: body.fileUrl,
+        observaciones: body.resumeNotes,
+      }, currentUser);
+      return { success: true, action: 'FINISH', ...body, service: updated };
     }
 
     if (body.category === 'MAQUINARIA_INCIDENTE') {
@@ -1218,8 +1236,10 @@ export class SyncService {
     const dataToUpdate: any = {};
     if (isIngreso) {
       dataToUpdate.fotoIngresoUrl = body.fileUrl;
+      if (body.type.includes('VIDEO')) dataToUpdate.videoInicialUrl = body.fileUrl;
     } else if (isSalida) {
       dataToUpdate.fotoSalidaUrl = body.fileUrl;
+      if (body.type.includes('VIDEO')) dataToUpdate.videoFinalUrl = body.fileUrl;
     }
 
     const updated = await this.prisma.servicioLavado.update({

@@ -35,6 +35,19 @@ describe('StorageService', () => {
     expect(result.contentType).toBe(contentType);
   });
 
+  it('guarda la foto de perfil en una ruta fija por usuario', async () => {
+    const userId = '16f400ca-04b5-40a2-af7f-becfd850037c';
+    const result = await createService().buildS3Key({
+      userId,
+      clientUuid: userId,
+      type: 'FOTO_PERFIL',
+      category: 'PERFIL_USUARIO',
+      fileName: 'cualquier-nombre.png',
+    });
+    expect(result.key).toBe(`usuarios/${userId}/perfil/avatar.jpg`);
+    expect(result.contentType).toBe('image/jpeg');
+  });
+
   it('rechaza combinaciones de tipo y categoría incompatibles', async () => {
     await expect(createService().buildS3Key({
       type: 'DOCUMENTO_INCIDENTE',

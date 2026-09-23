@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -10,8 +10,10 @@ export type StorageCategory =
   | 'SERVICIOS_ESPECIALES'
   | 'MAQUINARIA_FICHA'
   | 'MAQUINARIA_INCIDENTE'
+  | 'MAQUINARIA_MANTENIMIENTO'
   | 'DOCUMENTO'
-  | 'CATALOGO_INSUMOS';
+  | 'CATALOGO_INSUMOS'
+  | 'PERFIL_USUARIO';
 
 export type MediaEvidenceType =
   | 'FOTO_INGRESO'
@@ -29,10 +31,12 @@ export type MediaEvidenceType =
   | 'VIDEO_INCIDENTE'
   | 'DOCUMENTO_INCIDENTE'
   | 'PDF_CIERRE'
-  | 'IMAGEN_PRODUCTO';
+  | 'IMAGEN_PRODUCTO'
+  | 'FOTO_PERFIL';
 
 export interface GenerateUploadTicketDto {
   clientUuid?: string;
+  userId?: string;
   agenciaId?: string;
   servicioId?: string;
   maquinariaId?: string;
@@ -60,7 +64,7 @@ export interface UploadTicketResponse {
 const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
   'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FICHA_TECNICA',
-  'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE', 'IMAGEN_PRODUCTO',
+  'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE', 'IMAGEN_PRODUCTO', 'FOTO_PERFIL',
 ]);
 
 @Injectable()
@@ -134,18 +138,33 @@ export class StorageService implements OnModuleInit {
     const videoExtension = requestedExtension === 'mov' || requestedExtension === 'm4v'
       ? requestedExtension
       : 'mp4';
-    const ext = isVideo ? videoExtension : isDocument ? 'pdf' : 'jpg';
+    const imageExt = requestedExtension === 'png' || requestedExtension === 'webp' || requestedExtension === 'jpeg'
+      ? (requestedExtension === 'jpeg' ? 'jpg' : requestedExtension)
+      : 'jpg';
+    const ext = isVideo ? videoExtension : isDocument ? 'pdf' : imageExt;
     const contentType = isVideo
       ? videoExtension === 'mov'
         ? 'video/quicktime'
         : videoExtension === 'm4v'
           ? 'video/x-m4v'
           : 'video/mp4'
-      : isDocument ? 'application/pdf' : 'image/jpeg';
+      : isDocument
+        ? 'application/pdf'
+        : ext === 'png'
+          ? 'image/png'
+          : ext === 'webp'
+            ? 'image/webp'
+            : 'image/jpeg';
     const filename = `${timestamp}_${type.toLowerCase()}_${uuid}.${ext}`;
 
     let key: string;
-    if (category === 'CATALOGO_INSUMOS' || type === 'IMAGEN_PRODUCTO') {
+    if (category === 'PERFIL_USUARIO' || type === 'FOTO_PERFIL') {
+      const userId = this.profileUserId(dto.userId || dto.clientUuid);
+      return {
+        key: `usuarios/${userId}/perfil/avatar.jpg`,
+        contentType: 'image/jpeg',
+      };
+    } else if (category === 'CATALOGO_INSUMOS' || type === 'IMAGEN_PRODUCTO') {
       let rawInsumoName = dto.insumoNombre || '';
       const candidateId = dto.insumoId || dto.clientUuid || '';
 
@@ -189,6 +208,9 @@ export class StorageService implements OnModuleInit {
     } else if (category === 'MAQUINARIA_INCIDENTE') {
       const folder = isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
       key = `agencias/${agencia}/maquinaria/${maquinariaId}/incidentes/${incidenteId}/${folder}/${filename}`;
+    } else if (category === 'MAQUINARIA_MANTENIMIENTO') {
+      const folder = isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
+      key = `agencias/${agencia}/maquinaria/${maquinariaId}/mantenimientos/${folder}/${filename}`;
     } else {
       const now = new Date();
       key = `agencias/${agencia}/documentos/cierres/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${filename}`;
@@ -230,7 +252,17 @@ export class StorageService implements OnModuleInit {
   }
 
   public async generateUploadTicket(dto: GenerateUploadTicketDto): Promise<UploadTicketResponse> {
-    const { key, contentType } = await this.buildS3Key(dto);
+    const type = String(dto.type || '').toUpperCase();
+    if (type === 'FOTO_PERFIL' || dto.category === 'PERFIL_USUARIO') {
+      await this.deleteUserProfileImages(dto.userId || dto.clientUuid);
+    }
+
+    const { key, contentType } = await this.buildS3Key({
+      ...dto,
+      ...(type === 'FOTO_PERFIL' || dto.category === 'PERFIL_USUARIO'
+        ? { fileName: 'avatar.jpg', contentType: 'image/jpeg' }
+        : {}),
+    });
     const expiresInSeconds = 900;
 
     const command = new PutObjectCommand({
@@ -277,6 +309,32 @@ export class StorageService implements OnModuleInit {
 
   public getBucketName(): string { return this.bucketName; }
 
+  public profileObjectKey(userId?: string): string {
+    return `usuarios/${this.profileUserId(userId)}/perfil/avatar.jpg`;
+  }
+
+  public async deleteUserProfileImages(userId?: string): Promise<void> {
+    const prefix = `usuarios/${this.profileUserId(userId)}/perfil/`;
+    try {
+      const listed = await this.s3Client.send(new ListObjectsV2Command({
+        Bucket: this.bucketName,
+        Prefix: prefix,
+      }));
+      const objects = (listed.Contents || [])
+        .map((item) => item.Key)
+        .filter((key): key is string => Boolean(key));
+      if (!objects.length) return;
+
+      await this.s3Client.send(new DeleteObjectsCommand({
+        Bucket: this.bucketName,
+        Delete: { Objects: objects.map((Key) => ({ Key })), Quiet: true },
+      }));
+      this.logger.log(`Avatar anterior eliminado: ${prefix} (${objects.length})`);
+    } catch (error) {
+      this.logger.warn(`No se pudieron eliminar avatares previos en ${prefix}`, error as Error);
+    }
+  }
+
   private ticketResponse(dto: GenerateUploadTicketDto, key: string, uploadUrl: string, publicUrl: string, contentType: string, expiresInSeconds: number, extraHeaders: Record<string, string> = {}): UploadTicketResponse {
     return {
       ticketId: `tkt_s3_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
@@ -291,12 +349,21 @@ export class StorageService implements OnModuleInit {
     };
   }
 
+  private profileUserId(value?: string): string {
+    const raw = String(value || '').trim().toLowerCase();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+      return raw;
+    }
+    return this.safeSegment(raw, 'usuario');
+  }
+
   private safeSegment(value: string | undefined, fallback: string): string {
     const normalized = String(value || fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
     return normalized || fallback;
   }
 
   private defaultCategory(type: MediaEvidenceType): StorageCategory {
+    if (type === 'FOTO_PERFIL') return 'PERFIL_USUARIO';
     if (type === 'IMAGEN_PRODUCTO') return 'CATALOGO_INSUMOS';
     if (type === 'VIDEO_PAUSA' || type === 'VIDEO_REANUDAR') return 'SERVICIOS_ESPECIALES';
     if (type === 'FICHA_TECNICA' || type === 'DOCUMENTO') return 'MAQUINARIA_FICHA';
@@ -306,7 +373,9 @@ export class StorageService implements OnModuleInit {
   }
 
   private assertCategorySupportsType(category: StorageCategory, type: MediaEvidenceType): void {
+    if (category === 'PERFIL_USUARIO' && type === 'FOTO_PERFIL') return;
     if (category === 'CATALOGO_INSUMOS' && type === 'IMAGEN_PRODUCTO') return;
+    if (category === 'MAQUINARIA_MANTENIMIENTO' && (type === 'FOTO_INCIDENTE' || type === 'DOCUMENTO' || type === 'FICHA_TECNICA' || type === 'VIDEO_INCIDENTE')) return;
     const serviceTypes = new Set<MediaEvidenceType>([
       'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
       'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR',

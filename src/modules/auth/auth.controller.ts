@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { AuthService } from './auth.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
+import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
 
@@ -38,5 +39,15 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'No autorizado' })
   async getMe(@CurrentUser('id') userId: string) {
     return this.authService.getMe(userId);
+  }
+
+  @Post('profile')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Actualizar perfil del usuario autenticado (avatar S3 y datos básicos)' })
+  @ApiResponse({ status: 200, description: 'Perfil actualizado' })
+  async updateProfile(@CurrentUser('id') userId: string, @Body() dto: UpdateProfileDto) {
+    return this.authService.updateProfile(userId, dto);
   }
 }

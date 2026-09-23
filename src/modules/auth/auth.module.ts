@@ -6,6 +6,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtStrategy } from './jwt.strategy.js';
 import { RolesGuard } from './guards/roles.guard.js';
+import { StorageModule } from '../storage/storage.module.js';
 
 @Global()
 @Module({
@@ -21,6 +22,7 @@ import { RolesGuard } from './guards/roles.guard.js';
         },
       }),
     }),
+    StorageModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, RolesGuard],

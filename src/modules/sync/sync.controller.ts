@@ -79,8 +79,15 @@ export class SyncController {
       incidenteId?: string;
       contentType?: string;
     },
+    @CurrentUser('id') userId: string,
   ) {
-    return this.syncService.generateMediaUploadTicket(body as any);
+    if (body.type === 'FOTO_PERFIL' || body.category === 'PERFIL_USUARIO') {
+      body.clientUuid = userId;
+    }
+    return this.syncService.generateMediaUploadTicket({
+      ...body,
+      userId: body.type === 'FOTO_PERFIL' || body.category === 'PERFIL_USUARIO' ? userId : undefined,
+    } as any);
   }
 
   @Post('media/confirm')
@@ -97,7 +104,7 @@ export class SyncController {
       category?: string;
       maquinariaId?: string;
       incidenteId?: string;
-      specialAction?: 'START' | 'PAUSE' | 'RESUME';
+      specialAction?: 'START' | 'PAUSE' | 'RESUME' | 'FINISH';
       specialOperatorId?: string;
       pauseReason?: string;
       resumeNotes?: string;

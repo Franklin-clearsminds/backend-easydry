@@ -814,6 +814,7 @@ export class AgenciasService {
         clienteId: clienteIdFinal,
         estado: dto.estado ?? 1,
         tieneServiciosEspeciales: dto.tieneServiciosEspeciales ?? false,
+        tipoUbicacion: dto.tipoUbicacion || 'OPERATIVA',
         servicioIds: finalServicioIds,
         serviciosNombres: Array.isArray(dto.serviciosNombres) ? dto.serviciosNombres : [],
       },
@@ -994,6 +995,7 @@ export class AgenciasService {
         ...(clienteIdFinal !== undefined && { clienteId: clienteIdFinal }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
         ...(dto.tieneServiciosEspeciales !== undefined && { tieneServiciosEspeciales: dto.tieneServiciosEspeciales }),
+        ...(dto.tipoUbicacion !== undefined && { tipoUbicacion: dto.tipoUbicacion }),
         ...(finalServicioIds !== undefined ? { servicioIds: finalServicioIds } : {}),
         ...(finalServiciosNombres !== undefined ? { serviciosNombres: finalServiciosNombres } : (Array.isArray(dto.serviciosNombres) ? { serviciosNombres: dto.serviciosNombres } : {})),
       },
@@ -2225,6 +2227,8 @@ export class AgenciasService {
         servicioIds: true,
         bodegaId: true,
         bodega: { select: { id: true, codigo: true, nombre: true } },
+        avatarUrl: true,
+        updatedAt: true,
       },
       orderBy: { name: 'asc' },
     });
@@ -2265,7 +2269,8 @@ export class AgenciasService {
       promedioDiario: 0,
       ranking: 1,
       email: u.email,
-      avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
+      avatar: u.avatarUrl ? `${u.avatarUrl}${u.avatarUrl.includes('?') ? '&' : '?'}v=${u.updatedAt ? new Date(u.updatedAt).getTime() : Date.now()}` : '',
+      avatarUrl: u.avatarUrl ? `${u.avatarUrl}${u.avatarUrl.includes('?') ? '&' : '?'}v=${u.updatedAt ? new Date(u.updatedAt).getTime() : Date.now()}` : '',
     };
   }
 

@@ -167,6 +167,16 @@ export class ReportarIncidenteDto {
   @IsOptional()
   @IsString()
   fotoEvidenciaUrl?: string;
+
+  @ApiPropertyOptional({ description: 'URLs de fotos/videos del daño' })
+  @IsOptional()
+  @IsArray()
+  evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
+
+  @ApiPropertyOptional({ description: 'ID del taller destino (nacional o regional)' })
+  @IsOptional()
+  @IsString()
+  destinoTallerId?: string;
 }
 
 export class ResolverIncidenteDto {
@@ -184,6 +194,16 @@ export class ResolverIncidenteDto {
   @IsOptional()
   @IsString()
   estado?: string;
+
+  @ApiPropertyOptional({ description: 'Repuestos utilizados en la reparación' })
+  @IsOptional()
+  @IsString()
+  repuestosUtilizados?: string;
+
+  @ApiPropertyOptional({ description: 'Fotos, videos y PDFs de la reparación' })
+  @IsOptional()
+  @IsArray()
+  evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
 }
 
 export class ListIncidentesDto {
@@ -237,6 +257,16 @@ export class RegistrarMantenimientoDto {
   @IsOptional()
   @IsString()
   proximoMantenimiento?: string;
+
+  @ApiPropertyOptional({ description: 'Fotos, videos y PDFs del mantenimiento' })
+  @IsOptional()
+  @IsArray()
+  evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
+
+  @ApiPropertyOptional({ description: 'ID del técnico asignado (si no es el usuario actual)' })
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
 }
 
 export class ListMantenimientosDto {
@@ -254,4 +284,62 @@ export class ListMantenimientosDto {
   @IsOptional()
   @IsString()
   tipo?: string;
+}
+
+export class AsignarIncidenteDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  incidenteId: string;
+
+  @ApiPropertyOptional({ description: 'Técnico destino. Si se omite, se auto-asigna el usuario actual (Ejecutar yo).' })
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
+
+  @ApiPropertyOptional({ description: 'Taller nacional o regional de destino' })
+  @IsOptional()
+  @IsString()
+  destinoTallerId?: string;
+}
+
+export class AsignarMantenimientoDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  mantenimientoId: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
+}
+
+export class TransferirMaquinariaDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  maquinariaId: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  destinoAgenciaId: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinoBahiaId?: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  motivo: string;
+}
+
+export class ListMovimientosMaquinariaDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  maquinariaId?: string;
 }
