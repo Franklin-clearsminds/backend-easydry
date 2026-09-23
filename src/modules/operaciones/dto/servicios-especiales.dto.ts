@@ -220,6 +220,26 @@ export class PausarServicioEspecialDto {
   videoPausaUrl: string;
 }
 
+export class ReasignarServicioEspecialDto {
+  @ApiProperty({ description: 'ID, OT o clientUuid del servicio especial' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiPropertyOptional({ description: 'ID del pulidor. Vacío o 0 deja el servicio sin asignar' })
+  @IsOptional()
+  operadorId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Receta del servicio para validar el kit del pulidor' })
+  @IsOptional()
+  recetaInsumos?: any;
+
+  @ApiPropertyOptional({ description: 'Nombre del servicio especial' })
+  @IsString()
+  @IsOptional()
+  tipoServicio?: string;
+}
+
 export class ReanudarServicioEspecialDto {
   @ApiProperty({ description: 'ID o clientUuid del servicio especial' })
   @IsString()

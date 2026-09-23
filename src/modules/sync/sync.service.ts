@@ -1132,6 +1132,7 @@ export class SyncService {
     category?: string;
     maquinariaId?: string;
     incidenteId?: string;
+    servicioId?: string;
     specialAction?: 'START' | 'PAUSE' | 'RESUME' | 'FINISH';
     specialOperatorId?: string;
     pauseReason?: string;
@@ -1141,9 +1142,10 @@ export class SyncService {
       throw new BadRequestException('La evidencia debe corresponder a un archivo subido por EasyDry al bucket configurado.');
     }
 
+    const specialServiceKey = body.servicioId || body.clientUuid;
     if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'START') {
       const updated = await this.serviciosEspecialesService.iniciar({
-        id: body.clientUuid,
+        id: specialServiceKey,
         operadorId: body.specialOperatorId,
         videoInicialUrl: body.fileUrl,
       }, currentUser);
@@ -1155,7 +1157,7 @@ export class SyncService {
         throw new BadRequestException('El motivo de la pausa es obligatorio.');
       }
       const updated = await this.serviciosEspecialesService.pausar({
-        id: body.clientUuid,
+        id: specialServiceKey,
         motivo: body.pauseReason.trim(),
         videoPausaUrl: body.fileUrl,
       }, currentUser);
@@ -1164,7 +1166,7 @@ export class SyncService {
 
     if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'RESUME') {
       const updated = await this.serviciosEspecialesService.reanudar({
-        id: body.clientUuid,
+        id: specialServiceKey,
         videoReanudarUrl: body.fileUrl,
         observaciones: body.resumeNotes,
       }, currentUser);
@@ -1173,7 +1175,7 @@ export class SyncService {
 
     if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'FINISH') {
       const updated = await this.serviciosEspecialesService.completar({
-        id: body.clientUuid,
+        id: specialServiceKey,
         videoFinalUrl: body.fileUrl,
         observaciones: body.resumeNotes,
       }, currentUser);

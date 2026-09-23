@@ -104,6 +104,7 @@ export class SyncController {
       category?: string;
       maquinariaId?: string;
       incidenteId?: string;
+      servicioId?: string;
       specialAction?: 'START' | 'PAUSE' | 'RESUME' | 'FINISH';
       specialOperatorId?: string;
       pauseReason?: string;
