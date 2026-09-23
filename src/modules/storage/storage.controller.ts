@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post,
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
+import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { StorageService } from './storage.service.js';
 import type { GenerateUploadTicketDto } from './storage.service.js';
 
@@ -16,7 +17,11 @@ export class StorageController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Genera un ticket de subida S3' })
   @ApiResponse({ status: 200, description: 'Ticket de subida generado' })
-  getUploadTicket(@Body() dto: GenerateUploadTicketDto) {
+  getUploadTicket(@Body() dto: GenerateUploadTicketDto, @CurrentUser('id') userId: string) {
+    if (dto.type === 'FOTO_PERFIL' || dto.category === 'PERFIL_USUARIO') {
+      dto.userId = userId;
+      dto.clientUuid = userId;
+    }
     return this.storageService.generateUploadTicket(dto);
   }
 

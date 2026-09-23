@@ -12,6 +12,10 @@ import {
   ListIncidentesDto,
   RegistrarMantenimientoDto,
   ListMantenimientosDto,
+  AsignarIncidenteDto,
+  AsignarMantenimientoDto,
+  TransferirMaquinariaDto,
+  ListMovimientosMaquinariaDto,
 } from './dto/maquinaria.dto.js';
 
 @ApiTags('Taller & Maquinaria (100% POST)')
@@ -96,5 +100,49 @@ export class MaquinariaController {
   @ApiOperation({ summary: 'Historial de mantenimientos técnicos preventivos y correctivos' })
   async listMantenimientos(@Body() dto: ListMantenimientosDto) {
     return this.maquinariaService.listMantenimientos(dto);
+  }
+
+  @Post('incidentes/asignar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Asignar incidente a técnico o auto-asignarse (Ejecutar yo)' })
+  async asignarIncidente(
+    @Body() dto: AsignarIncidenteDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.maquinariaService.asignarIncidente(dto, userId);
+  }
+
+  @Post('mantenimientos/asignar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Asignar mantenimiento a técnico o auto-asignarse' })
+  async asignarMantenimiento(
+    @Body() dto: AsignarMantenimientoDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.maquinariaService.asignarMantenimiento(dto, userId);
+  }
+
+  @Post('transferir')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Transferir maquinaria a agencia operativa o taller (nacional/regional)' })
+  async transferir(
+    @Body() dto: TransferirMaquinariaDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.maquinariaService.transferirMaquinaria(dto, userId);
+  }
+
+  @Post('movimientos/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Historial de transferencias de maquinaria' })
+  async listMovimientos(@Body() dto: ListMovimientosMaquinariaDto) {
+    return this.maquinariaService.listMovimientos(dto);
+  }
+
+  @Post('talleres/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar talleres nacional y regionales' })
+  async listTalleres() {
+    return this.maquinariaService.listTalleres();
   }
 }

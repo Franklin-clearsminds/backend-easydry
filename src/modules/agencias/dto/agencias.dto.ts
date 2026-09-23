@@ -89,6 +89,12 @@ export class CreateAgenciaDto {
   @IsOptional()
   @IsBoolean()
   tieneServiciosEspeciales?: boolean;
+
+  @ApiPropertyOptional({ example: 'OPERATIVA', enum: ['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'])
+  tipoUbicacion?: string;
 }
 
 export class UpdateAgenciaDto {
@@ -184,6 +190,12 @@ export class UpdateAgenciaDto {
   @IsOptional()
   @IsBoolean()
   tieneServiciosEspeciales?: boolean;
+
+  @ApiPropertyOptional({ example: 'OPERATIVA', enum: ['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'])
+  tipoUbicacion?: string;
 }
 
 export class ListAgenciasDto {

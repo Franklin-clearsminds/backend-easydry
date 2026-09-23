@@ -1,9 +1,11 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
+import { UpdateProfileDto } from './dto/update-profile.dto.js';
+import { StorageService } from '../storage/storage.service.js';
 
 @Injectable()
 export class AuthService {
@@ -11,6 +13,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private storageService: StorageService,
   ) {}
 
   private generateTokens(user: { id: string; email: string; roleId: string }) {
@@ -119,6 +122,8 @@ export class AuthService {
         bodegaNombre: user.bodega?.nombre,
         servicioIds: Array.isArray(user.servicioIds) ? user.servicioIds : [],
         estado: user.estado,
+        avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
+        avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
       },
     };
   }
@@ -200,6 +205,8 @@ export class AuthService {
         bodegaNombre: user.bodega?.nombre,
         servicioIds: Array.isArray(user.servicioIds) ? user.servicioIds : [],
         estado: user.estado,
+        avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
+        avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
       },
     };
   }
@@ -230,7 +237,9 @@ export class AuthService {
         region: {
           select: { id: true, codigo: true, nombre: true },
         },
+        avatarUrl: true,
         createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -257,6 +266,91 @@ export class AuthService {
       modulos: role?.permisos ?? [],
       acciones: role?.acciones ?? null,
       roleDetails: role,
+      avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
+      avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
     };
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('Usuario no encontrado');
+    }
+
+    const data: { avatarUrl?: string | null; name?: string; lastname?: string; email?: string } = {};
+
+    if (dto.avatarUrl !== undefined) {
+      const avatarUrl = dto.avatarUrl.trim();
+      if (!avatarUrl) {
+        data.avatarUrl = null;
+        await this.storageService.deleteUserProfileImages(userId);
+      } else if (avatarUrl.startsWith('data:') || avatarUrl.startsWith('blob:')) {
+        throw new BadRequestException('La foto de perfil debe subirse a S3. No se aceptan imágenes embebidas.');
+      } else if (!this.isStoredAvatarUrl(avatarUrl)) {
+        throw new BadRequestException('La URL de avatar no corresponde a un archivo de S3.');
+      } else {
+        data.avatarUrl = this.normalizeAvatarUrl(avatarUrl);
+      }
+    }
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('El nombre no puede estar vacío.');
+      data.name = name;
+    }
+    if (dto.lastname !== undefined) {
+      data.lastname = dto.lastname.trim();
+    }
+    if (dto.email !== undefined) {
+      const email = dto.email.trim().toLowerCase();
+      if (email !== user.email) {
+        const taken = await this.prisma.user.findFirst({
+          where: { email, id: { not: userId } },
+          select: { id: true },
+        });
+        if (taken) throw new BadRequestException('El correo ya está en uso.');
+      }
+      data.email = email;
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+
+    return {
+      success: true,
+      user: await this.getMe(userId),
+    };
+  }
+
+  private versionedAvatar(url?: string | null, updatedAt?: Date | null): string {
+    if (!url) return '';
+    const stamp = updatedAt instanceof Date && !isNaN(updatedAt.getTime()) ? updatedAt.getTime() : Date.now();
+    return `${url}${url.includes('?') ? '&' : '?'}v=${stamp}`;
+  }
+
+  private isStoredAvatarUrl(value: string): boolean {
+    if (value.includes('amazonaws.com/') || value.startsWith('usuarios/') || value.includes('/usuarios/')) {
+      return true;
+    }
+    try {
+      const parsed = new URL(value, 'http://localhost');
+      const key = decodeURIComponent(parsed.searchParams.get('key') || '');
+      return key.startsWith('usuarios/');
+    } catch {
+      return false;
+    }
+  }
+
+  private normalizeAvatarUrl(value: string): string {
+    try {
+      const parsed = new URL(value, 'http://localhost');
+      const key = decodeURIComponent(parsed.searchParams.get('key') || '');
+      if (key.startsWith('usuarios/')) return key.split('?')[0];
+    } catch {
+      // keep original
+    }
+    return value.split('?')[0];
   }
 }
