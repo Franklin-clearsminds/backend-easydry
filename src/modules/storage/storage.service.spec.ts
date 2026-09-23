@@ -42,6 +42,21 @@ describe('StorageService', () => {
     })).rejects.toThrow(BadRequestException);
   });
 
+  it('conserva contenedor MOV y MIME real en videos seleccionados desde iOS', async () => {
+    const result = await createService().buildS3Key({
+      agenciaId: 'AGENCIA 01',
+      servicioId: 'OT-2026-100',
+      clientUuid: 'uuid-local',
+      type: 'VIDEO_INICIAL',
+      category: 'SERVICIOS_ESPECIALES',
+      fileName: 'captura.mov',
+    });
+
+    expect(result.key).toContain('agencias/agencia-01/servicios/especiales/ot-2026-100/videos/inicial/');
+    expect(result.key).toMatch(/\.mov$/);
+    expect(result.contentType).toBe('video/quicktime');
+  });
+
   it('rechaza iniciar sin la configuración mínima de S3', () => {
     expect(() => new StorageService({ get: () => null } as unknown as ConfigService)).toThrow(/AWS_REGION/);
     expect(() => new StorageService(new ConfigService({

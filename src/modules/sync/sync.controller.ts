@@ -73,6 +73,7 @@ export class SyncController {
       type: string;
       fileName?: string;
       agenciaId?: string;
+      servicioId?: string;
       category?: string;
       maquinariaId?: string;
       incidenteId?: string;

@@ -130,8 +130,18 @@ export class StorageService implements OnModuleInit {
     const timestamp = Date.now();
     const isVideo = type.startsWith('VIDEO_');
     const isDocument = type === 'DOCUMENTO' || type === 'DOCUMENTO_INCIDENTE' || type === 'PDF_CIERRE';
-    const ext = isVideo ? 'mp4' : isDocument ? 'pdf' : 'jpg';
-    const contentType = isVideo ? 'video/mp4' : isDocument ? 'application/pdf' : 'image/jpeg';
+    const requestedExtension = String(dto.fileName || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+    const videoExtension = requestedExtension === 'mov' || requestedExtension === 'm4v'
+      ? requestedExtension
+      : 'mp4';
+    const ext = isVideo ? videoExtension : isDocument ? 'pdf' : 'jpg';
+    const contentType = isVideo
+      ? videoExtension === 'mov'
+        ? 'video/quicktime'
+        : videoExtension === 'm4v'
+          ? 'video/x-m4v'
+          : 'video/mp4'
+      : isDocument ? 'application/pdf' : 'image/jpeg';
     const filename = `${timestamp}_${type.toLowerCase()}_${uuid}.${ext}`;
 
     let key: string;

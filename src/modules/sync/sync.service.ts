@@ -1018,12 +1018,14 @@ export class SyncService {
     type: string;
     fileName?: string;
     agenciaId?: string;
+    servicioId?: string;
     category?: any;
     maquinariaId?: string;
     incidenteId?: string;
     contentType?: string;
   }) {
     let agenciaId = body.agenciaId;
+    let servicioId = body.servicioId;
     let maquinariaId = body.maquinariaId;
     let incidenteId = body.incidenteId;
     if (body.category === 'MAQUINARIA_INCIDENTE' && (body.incidenteId || body.clientUuid)) {
@@ -1048,11 +1050,30 @@ export class SyncService {
       }
     }
 
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.clientUuid) {
+      const specialService = await this.prisma.servicioEspecial.findFirst({
+        where: {
+          OR: [
+            { id: body.clientUuid },
+            { clientUuid: body.clientUuid },
+            { codigoSE: body.clientUuid },
+            { ordenTrabajoOT: body.clientUuid },
+          ],
+        },
+        select: { id: true, clientUuid: true, codigoSE: true, ordenTrabajoOT: true, agenciaId: true },
+      });
+      if (specialService) {
+        agenciaId = specialService.agenciaId || agenciaId;
+        servicioId = specialService.ordenTrabajoOT || specialService.codigoSE || specialService.id;
+      }
+    }
+
     return this.storageService.generateUploadTicket({
       clientUuid: body.clientUuid,
       type: body.type as MediaEvidenceType,
       fileName: body.fileName,
       agenciaId,
+      servicioId,
       category: body.category,
       maquinariaId,
       incidenteId,
