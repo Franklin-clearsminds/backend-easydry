@@ -2742,7 +2742,8 @@ export class InventarioService {
       ).filter(Boolean);
       if (terms.length) {
         movimientos = movimientos.filter((m) =>
-          terms.some((t: string) => String(m.destinoUbicacion || '').toLowerCase().includes(t)),
+          terms.some((t: string) => String(m.destinoUbicacion || '').toLowerCase().includes(t)) ||
+          (targetAgencyFilter && String(m.destinoAgenciaId || '') === String(targetAgencyFilter)),
         );
       }
     }
@@ -2861,9 +2862,13 @@ export class InventarioService {
       if (agencia.codigo) searchTerms.push(agencia.codigo);
     }
 
-    const orConditions = searchTerms.map((term) => ({
-      destinoUbicacion: { contains: term, mode: 'insensitive' as const },
-    }));
+    const orConditions: any[] = [
+      { destinoAgenciaId: agenciaId },
+      ...(agencia ? [{ destinoAgenciaId: agencia.id }] : []),
+      ...searchTerms.map((term) => ({
+        destinoUbicacion: { contains: term, mode: 'insensitive' as const },
+      })),
+    ];
 
     return this.prisma.movimientoInventario.findMany({
       where: {
@@ -2886,6 +2891,7 @@ export class InventarioService {
           },
         },
         usuarioDespacha: { select: { id: true, name: true, lastname: true } },
+        usuarioRecibe: { select: { id: true, name: true, lastname: true } },
       },
     });
   }

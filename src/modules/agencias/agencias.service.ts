@@ -1234,10 +1234,18 @@ export class AgenciasService {
       where,
       include: {
         agencia: {
-          select: { id: true, codigo: true, nombre: true, region: true },
+          select: { id: true, codigo: true, nombre: true, region: true, maxLavadoresPorBahia: true },
         },
         operadorActual: {
           select: { id: true, name: true, lastname: true, email: true },
+        },
+        operadores: {
+          where: { activo: true },
+          include: {
+            operador: {
+              select: { id: true, name: true, lastname: true, email: true },
+            },
+          },
         },
         _count: {
           select: { servicios: true },
