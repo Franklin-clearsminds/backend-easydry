@@ -18,6 +18,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { AprobacionesModule } from './modules/aprobaciones/aprobaciones.module.js';
 import { AppScheduleModule } from './modules/schedule/schedule.module.js';
 import { DeviceThrottlerGuard } from './common/guards/throttler-behind-proxy.guard.js';
+import { RetosModule } from './modules/retos/retos.module.js';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { DeviceThrottlerGuard } from './common/guards/throttler-behind-proxy.gua
     MaquinariaModule,
     AnalyticsModule,
     AprobacionesModule,
+    RetosModule,
   ],
   providers: [
     {

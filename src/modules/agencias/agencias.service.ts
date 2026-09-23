@@ -414,6 +414,33 @@ export class AgenciasService {
       orderBy: { nombre: 'asc' },
     });
 
+    const inicioMes = new Date();
+    inicioMes.setDate(1);
+    inicioMes.setHours(0, 0, 0, 0);
+    const serviciosMes = list.length
+      ? await this.prisma.servicioLavado.findMany({
+          where: {
+            deletedAt: null,
+            horaIngreso: { gte: inicioMes },
+            estado: { not: 'CANCELADO' },
+            bahia: { agenciaId: { in: list.map((agencia) => agencia.id) } },
+          },
+          select: {
+            estado: true,
+            bahia: { select: { agenciaId: true } },
+          },
+        })
+      : [];
+
+    const productividadPorAgencia = new Map<string, { total: number; completados: number }>();
+    serviciosMes.forEach((servicio) => {
+      const agenciaId = servicio.bahia.agenciaId;
+      const actual = productividadPorAgencia.get(agenciaId) || { total: 0, completados: 0 };
+      actual.total += 1;
+      if (servicio.estado === 'FINALIZADO' || servicio.estado === 'APROBADO') actual.completados += 1;
+      productividadPorAgencia.set(agenciaId, actual);
+    });
+
     return list.map((a) => {
       const ger = a.usuarios?.find((u) => {
         const r = (u.role?.namerol || '').toUpperCase();
@@ -423,8 +450,12 @@ export class AgenciasService {
         const r = (u.role?.namerol || '').toUpperCase();
         return r === 'LIDER' || r.includes('LIDER') || r.includes('LÍDER');
       });
+      const metrica = productividadPorAgencia.get(a.id);
       return {
         ...a,
+        productividad: metrica?.total
+          ? Number(((metrica.completados / metrica.total) * 100).toFixed(1))
+          : 0,
         responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
         gerenteId: ger?.id || null,
         gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,

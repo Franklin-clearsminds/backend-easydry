@@ -1114,6 +1114,32 @@ model ServicioEspecial {
   @@index([regionId])
 }
 
+// -----------------------------------------------------------------------
+// Retos de productividad/comerciales administrados desde la plataforma.
+// PostgreSQL es la única fuente de verdad; no se precargan retos en clientes.
+// -----------------------------------------------------------------------
+model Reto {
+  id              String   @id @default(uuid())
+  titulo          String
+  descripcion     String?
+  premio          String?
+  fechaInicio     DateTime @db.Date
+  fechaFin        DateTime @db.Date
+  regiones        String[] @default([])
+  marcas          String[] @default([])
+  sucursalesIds   String[] @default([])
+  creadoPorId     String?
+  creadorNombre   String?
+  creadorRol      String?
+  estado          String   @default("ACTIVO")
+  criterios       String[] @default([])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([estado])
+  @@index([fechaInicio, fechaFin])
+}
+
 
 
 
