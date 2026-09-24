@@ -253,12 +253,14 @@ export class AgenciasController {
 
   @Post('bahias/asignar-operador')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Asignar operador dinámico a una bahía con registro en historial (ADMIN, SUPERVISOR, LIDER)' })
+  @ApiOperation({ summary: 'Asignar operador dinámico a una bahía con registro en historial (SUPER_ADMIN, ADMIN)' })
   @ApiResponse({ status: 200, description: 'Bahía actualizada con nuevo operador asignado' })
   async asignarOperador(
     @Body() dto: AsignarOperadorBahiaDto,
     @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
+    this._requireAdmin(user, 'asignar operadores a bahías');
     return this.agenciasService.asignarOperadorABahia(dto, userId);
   }
 
@@ -280,12 +282,14 @@ export class AgenciasController {
 
   @Post('bahias/desasignar-operador')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Desasignar un operador específico de una bahía' })
+  @ApiOperation({ summary: 'Desasignar un operador específico de una bahía (SUPER_ADMIN, ADMIN)' })
   @ApiResponse({ status: 200, description: 'Bahía actualizada sin el operador desasignado' })
   async desasignarOperador(
     @Body() dto: DesasignarOperadorBahiaDto,
     @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
+    this._requireAdmin(user, 'desasignar operadores de bahías');
     return this.agenciasService.desasignarOperadorDeBahia(dto, userId);
   }
 
@@ -321,7 +325,7 @@ export class AgenciasController {
   @ApiOperation({ summary: 'Actualizar datos y estado de usuario (SUPER_ADMIN, ADMIN)' })
   async updateUsuario(@Body() dto: UpdateUsuarioDto, @CurrentUser() user: any) {
     this._requireAdmin(user, 'actualizar usuarios');
-    return this.agenciasService.updateUsuario(dto);
+    return this.agenciasService.updateUsuario(dto, user);
   }
 
   @Post('usuarios/create')
@@ -353,17 +357,17 @@ export class AgenciasController {
 
   @Post('operadores/create')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Registrar nuevo operador y asignarlo a agencia y bahía en BD' })
+  @ApiOperation({ summary: 'Registrar nuevo operador y asignarlo a agencia y bahía en BD (SUPER_ADMIN, ADMIN)' })
   async createOperador(@Body() dto: CreateOperadorDto, @CurrentUser() user: any) {
-    this._requireAgenciaManager(user, 'crear operadores');
+    this._requireAdmin(user, 'crear operadores');
     return this.agenciasService.createOperador(dto, user?.id);
   }
 
   @Post('operadores/update')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Actualizar operador y su asignación de bahía en BD' })
+  @ApiOperation({ summary: 'Actualizar operador y su asignación de bahía en BD (SUPER_ADMIN, ADMIN)' })
   async updateOperador(@Body() dto: UpdateOperadorDto, @CurrentUser() user: any) {
-    this._requireAgenciaManager(user, 'editar operadores');
+    this._requireAdmin(user, 'editar operadores');
     return this.agenciasService.updateOperador(dto, user?.id);
   }
 

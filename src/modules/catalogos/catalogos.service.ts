@@ -86,14 +86,29 @@ export class CatalogosService {
       orderBy: { codigo: 'asc' },
     });
 
+    // cantidadSugerida viaja en la unidad base del insumo: es lo que descuenta el stock al registrar la OT.
+    const conCantidadBase = servicios.map((servicio) => ({
+      ...servicio,
+      recetas: servicio.recetas.map((receta) => {
+        const factor = receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : 1;
+        return {
+          ...receta,
+          productoSKU: receta.insumo?.codigoSKU,
+          productoNombre: receta.insumo?.nombre,
+          unidadMedida: receta.insumo?.unidadMedida?.simbolo || receta.unidadConsumo?.simbolo || 'u',
+          cantidadSugerida: Number(receta.cantidadUsada) * (factor || 1),
+        };
+      }),
+    }));
+
     if (agenciaCtx) {
       return {
-        servicios,
+        servicios: conCantidadBase,
         agencia: agenciaCtx,
       };
     }
 
-    return servicios;
+    return conCantidadBase;
   }
 
   async createServicio(dto: CreateCatalogoServicioDto) {

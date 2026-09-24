@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { StorageService } from '../storage/storage.service.js';
 
 @Injectable()
@@ -90,6 +91,15 @@ export class AuthService {
 
     const { accessToken, refreshToken } = this.generateTokens(user);
 
+    const bahiaAsignada = await this.prisma.bahiaOperador.findFirst({
+      where: { operadorId: user.id, activo: true },
+      include: { bahia: { select: { id: true, nombre: true } } },
+      orderBy: { fechaAsignacion: 'desc' },
+    });
+
+    const rolLogin = (user.role?.namerol || '').toUpperCase();
+    const esPulidorLogin = rolLogin.includes('PULIDOR') || rolLogin === 'OPERADOR_SERVICIOS_ESPECIALES';
+
     return {
       success: true,
       accessToken,
@@ -121,6 +131,9 @@ export class AuthService {
         bodega: user.bodega,
         bodegaNombre: user.bodega?.nombre,
         servicioIds: Array.isArray(user.servicioIds) ? user.servicioIds : [],
+        bahiaId: bahiaAsignada?.bahiaId,
+        bahiaNombre: bahiaAsignada?.bahia?.nombre,
+        modalidadPulidor: esPulidorLogin ? (user.agenciaId ? 'FIJO' : 'MOVIL') : undefined,
         estado: user.estado,
         avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
         avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
@@ -172,8 +185,15 @@ export class AuthService {
       throw new UnauthorizedException('El rol asignado al usuario se encuentra deshabilitado.');
     }
 
-    // Rotación de tokens: nuevo accessToken y nuevo refreshToken
     const tokens = this.generateTokens(user);
+
+    const bahiaAsignada = await this.prisma.bahiaOperador.findFirst({
+      where: { operadorId: user.id, activo: true },
+      include: { bahia: { select: { id: true, nombre: true } } },
+      orderBy: { fechaAsignacion: 'desc' },
+    });
+    const rolRefresh = (user.role?.namerol || '').toUpperCase();
+    const esPulidorLogin = rolRefresh.includes('PULIDOR') || rolRefresh === 'OPERADOR_SERVICIOS_ESPECIALES';
 
     return {
       success: true,
@@ -204,6 +224,9 @@ export class AuthService {
         bodega: user.bodega,
         bodegaNombre: user.bodega?.nombre,
         servicioIds: Array.isArray(user.servicioIds) ? user.servicioIds : [],
+        bahiaId: bahiaAsignada?.bahiaId,
+        bahiaNombre: bahiaAsignada?.bahia?.nombre,
+        modalidadPulidor: esPulidorLogin ? (user.agenciaId ? 'FIJO' : 'MOVIL') : undefined,
         estado: user.estado,
         avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
         avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
@@ -269,6 +292,27 @@ export class AuthService {
       avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
       avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
     };
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('Usuario no encontrado');
+    }
+
+    const actualValida = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!actualValida) {
+      throw new BadRequestException('La contraseña actual es incorrecta.');
+    }
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException('La nueva contraseña debe ser distinta de la actual.');
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await bcrypt.hash(dto.newPassword, 10) },
+    });
+    return { ok: true, message: 'Contraseña actualizada correctamente.' };
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {

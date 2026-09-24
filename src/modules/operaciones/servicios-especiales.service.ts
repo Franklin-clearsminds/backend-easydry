@@ -44,6 +44,11 @@ export class ServiciosEspecialesService {
       tiempoEfectivoCalculado = Math.max(0, brutoSeg - tiempoPausaTotalActual);
     }
 
+    // Tiempo total = tiempo pausado + tiempo efectivo (equivale a fin - inicio).
+    const tiempoTotalCalculado = tiempoEfectivoCalculado === null
+      ? null
+      : tiempoEfectivoCalculado + tiempoPausaTotalActual;
+
     return {
       ...item,
       agenciaNombre: item.agencia?.nombre || (item.region?.nombre ? `Zonal ${item.region.nombre}` : 'Servicio Móvil Zonal'),
@@ -58,6 +63,9 @@ export class ServiciosEspecialesService {
       tiempoPausaFormateado: formatSeconds(tiempoPausaTotalActual),
       tiempoEfectivoSeg: tiempoEfectivoCalculado,
       tiempoEfectivoFormateado: formatSeconds(tiempoEfectivoCalculado),
+      tiempoTotalSeg: tiempoTotalCalculado,
+      tiempoTotalFormateado: formatSeconds(tiempoTotalCalculado),
+      creadoPorNombre: item.creadoPorNombre || null,
       historialPausas: Array.isArray(item.historialPausas) ? item.historialPausas : [],
       ordenTrabajoOT: item.ordenTrabajoOT || item.codigoSE || item.id,
       codigoSE: item.codigoSE || item.ordenTrabajoOT || item.id,
@@ -358,6 +366,10 @@ export class ServiciosEspecialesService {
         regionId: finalRegionId,
         regionNombre: finalRegionNombre,
         operadorId: operadorIdFinal,
+        creadoPorId: creatorId || currentUser?.id || null,
+        creadoPorNombre: currentUser
+          ? `${currentUser.name || ''} ${currentUser.lastname || ''}`.replace(/(CI:[^)]*)/, '').trim() || null
+          : null,
         prioridad: dto.prioridad || 'Media',
         estado: 'Pendiente',
         horaIngreso: dto.horaIngreso || null,
@@ -455,23 +467,27 @@ export class ServiciosEspecialesService {
           recetas: {
             include: {
               insumo: { select: { id: true, nombre: true, codigoSKU: true } },
-              unidadConsumo: { select: { simbolo: true } },
+              unidadConsumo: { select: { simbolo: true, factorBase: true } },
             },
           },
         },
       });
       if (cat?.recetas?.length) {
-        items = cat.recetas.map((r) => ({
-          productoId: r.insumoId,
-          insumoId: r.insumoId,
-          productoSKU: r.insumo?.codigoSKU,
-          codigoSKU: r.insumo?.codigoSKU,
-          productoNombre: r.insumo?.nombre,
-          insumoNombre: r.insumo?.nombre,
-          unidadMedida: r.unidadConsumo?.simbolo || 'u',
-          cantidadSugerida: Number(r.cantidadUsada),
-          cantidad: Number(r.cantidadUsada),
-        }));
+        items = cat.recetas.map((r) => {
+          const factor = r.unidadConsumo?.factorBase ? Number(r.unidadConsumo.factorBase) : 1;
+          const cantidadBase = Number(r.cantidadUsada) * (factor || 1);
+          return {
+            productoId: r.insumoId,
+            insumoId: r.insumoId,
+            productoSKU: r.insumo?.codigoSKU,
+            codigoSKU: r.insumo?.codigoSKU,
+            productoNombre: r.insumo?.nombre,
+            insumoNombre: r.insumo?.nombre,
+            unidadMedida: r.unidadConsumo?.simbolo || 'u',
+            cantidadSugerida: cantidadBase,
+            cantidad: cantidadBase,
+          };
+        });
       }
     }
 
@@ -641,8 +657,12 @@ export class ServiciosEspecialesService {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede pausar el servicio.');
     }
 
+    // Solo se aceptan enlaces reales (S3). Una ruta local del dispositivo (file://) no sirve
+    // a nadie más: el enlace correcto llega después, al confirmarse la subida del video.
+    const videoPausaUrl = this._esUrlRemota(dto.videoPausaUrl) ? dto.videoPausaUrl : undefined;
+
     if (String(item.estado || '').toLowerCase() === 'pausado') {
-      if (!dto.videoPausaUrl || item.videoUltimaPausaUrl === dto.videoPausaUrl) {
+      if (!videoPausaUrl || item.videoUltimaPausaUrl === videoPausaUrl) {
         return this._formatItem(item);
       }
       const historialActual: any[] = Array.isArray(item.historialPausas) ? [...item.historialPausas] : [];
@@ -650,15 +670,15 @@ export class ServiciosEspecialesService {
         const lastIdx = historialActual.length - 1;
         historialActual[lastIdx] = {
           ...historialActual[lastIdx],
-          videoPausaUrl: dto.videoPausaUrl,
+          videoPausaUrl,
           motivo: dto.motivo || historialActual[lastIdx].motivo,
         };
       }
       const updated = await this.prisma.servicioEspecial.update({
         where: { id: item.id },
         data: {
-          videoUltimaPausaUrl: dto.videoPausaUrl,
-          videoPausaUrl: dto.videoPausaUrl,
+          videoUltimaPausaUrl: videoPausaUrl,
+          videoPausaUrl,
           motivoUltimaPausa: dto.motivo || item.motivoUltimaPausa,
           historialPausas: historialActual,
           version: item.version + 1,
@@ -686,7 +706,7 @@ export class ServiciosEspecialesService {
       fechaFin: null,
       duracionSegundos: 0,
       motivo: dto.motivo,
-      videoPausaUrl: dto.videoPausaUrl,
+      videoPausaUrl: videoPausaUrl ?? null,
       videoReanudacionUrl: null,
       usuarioId: currentUser?.id || null,
       usuarioNombre: currentUser?.name ? `${currentUser.name} ${currentUser.lastname || ''}`.trim() : null,
@@ -698,8 +718,9 @@ export class ServiciosEspecialesService {
         estado: 'Pausado',
         fechaUltimaPausa: fechaPausa,
         motivoUltimaPausa: dto.motivo,
-        videoUltimaPausaUrl: dto.videoPausaUrl,
-        videoPausaUrl: dto.videoPausaUrl,
+        // Una pausa nueva no hereda el video de la pausa anterior.
+        videoUltimaPausaUrl: videoPausaUrl ?? null,
+        videoPausaUrl: videoPausaUrl ?? null,
         historialPausas: historialActual,
         version: item.version + 1,
       },
@@ -724,16 +745,27 @@ export class ServiciosEspecialesService {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede reanudar el servicio.');
     }
 
+    // Solo enlaces reales (S3): las rutas locales (file://) se ignoran, el enlace llega al confirmar la subida.
+    const videoReanudarUrl = this._esUrlRemota(dto.videoReanudarUrl) ? dto.videoReanudarUrl : undefined;
+
     const estadoActual = String(item.estado || '').toLowerCase();
     if (estadoActual === 'en proceso') {
-      if (!dto.videoReanudarUrl || item.videoUltimaReanudacionUrl === dto.videoReanudarUrl) {
+      if (!videoReanudarUrl || item.videoUltimaReanudacionUrl === videoReanudarUrl) {
         return this._formatItem(item);
+      }
+      // Ya estaba reanudado: el video se vincula al último ciclo del historial (antes solo
+      // se actualizaban los campos sueltos y el historial conservaba la ruta local).
+      const historialEnProceso: any[] = Array.isArray(item.historialPausas) ? [...item.historialPausas] : [];
+      if (historialEnProceso.length > 0) {
+        const lastIdx = historialEnProceso.length - 1;
+        historialEnProceso[lastIdx] = { ...historialEnProceso[lastIdx], videoReanudacionUrl: videoReanudarUrl };
       }
       const updated = await this.prisma.servicioEspecial.update({
         where: { id: item.id },
         data: {
-          videoUltimaReanudacionUrl: dto.videoReanudarUrl,
-          videoReanudacionUrl: dto.videoReanudarUrl,
+          videoUltimaReanudacionUrl: videoReanudarUrl,
+          videoReanudacionUrl: videoReanudarUrl,
+          historialPausas: historialEnProceso,
           version: item.version + 1,
         },
         include: {
@@ -763,7 +795,7 @@ export class ServiciosEspecialesService {
         ...historialActual[lastIdx],
         fechaFin: fechaReanudar.toISOString(),
         duracionSegundos: duracionPausaSeg,
-        videoReanudacionUrl: dto.videoReanudarUrl,
+        videoReanudacionUrl: videoReanudarUrl ?? null,
         observacionesReanudar: dto.observaciones || null,
       };
     }
@@ -774,8 +806,9 @@ export class ServiciosEspecialesService {
         estado: 'En Proceso',
         tiempoPausaTotalSeg: nuevoTiempoPausaTotalSeg,
         fechaUltimaPausa: null,
-        videoUltimaReanudacionUrl: dto.videoReanudarUrl,
-        videoReanudacionUrl: dto.videoReanudarUrl,
+        // Un ciclo nuevo no hereda el video de reanudación del anterior.
+        videoUltimaReanudacionUrl: videoReanudarUrl ?? null,
+        videoReanudacionUrl: videoReanudarUrl ?? null,
         historialPausas: historialActual,
         version: item.version + 1,
       },
@@ -786,6 +819,79 @@ export class ServiciosEspecialesService {
       },
     });
 
+    return this._formatItem(updated);
+  }
+
+  private _esUrlRemota(url?: string | null): boolean {
+    return !!url && /^https?:\/\//i.test(String(url).trim());
+  }
+
+  /**
+   * Vincula el video (ya subido a S3) de una pausa o de una reanudación al ciclo correcto del
+   * historial. Lo usa la confirmación de subida de la app. Es idempotente y NUNCA cambia el estado
+   * del servicio salvo que la pausa/reanudación aún no se hubiera registrado (caso sin conexión):
+   * una confirmación tardía o repetida ya no vuelve a pausar, ni falla para siempre.
+   */
+  async adjuntarVideoCiclo(
+    tipo: 'PAUSA' | 'REANUDACION',
+    params: { id: string; url: string; motivo?: string; observaciones?: string; capturadoEn?: string },
+    currentUser?: any,
+  ) {
+    const item = await this.findOneRaw(params.id);
+    const estado = String(item.estado || '').toLowerCase();
+
+    // Pausa/reanudación aún no registrada en el servidor (se hizo sin conexión): flujo completo.
+    if (tipo === 'PAUSA' && estado === 'pausado') {
+      return this.pausar({ id: params.id, motivo: params.motivo || '', videoPausaUrl: params.url } as any, currentUser);
+    }
+    if (tipo === 'REANUDACION' && estado === 'pausado') {
+      return this.reanudar({ id: params.id, videoReanudarUrl: params.url, observaciones: params.observaciones } as any, currentUser);
+    }
+
+    const campo = tipo === 'PAUSA' ? 'videoPausaUrl' : 'videoReanudacionUrl';
+    const historial: any[] = Array.isArray(item.historialPausas) ? [...item.historialPausas] : [];
+
+    // Ciclo más reciente que todavía no tiene un video real vinculado.
+    let idx = -1;
+    for (let i = historial.length - 1; i >= 0; i--) {
+      if (!this._esUrlRemota(historial[i]?.[campo])) {
+        idx = i;
+        break;
+      }
+    }
+
+    if (idx === -1) {
+      if (tipo === 'PAUSA' && estado === 'en proceso') {
+        // ¿Es una pausa nueva hecha sin conexión, o una confirmación tardía de un ciclo ya cerrado?
+        const ultimo = historial[historial.length - 1];
+        const capturadoEn = params.capturadoEn ? new Date(params.capturadoEn) : null;
+        const esNueva = historial.length === 0
+          || (!!capturadoEn && !Number.isNaN(capturadoEn.getTime()) && !!ultimo?.fechaFin
+              && capturadoEn.getTime() > new Date(ultimo.fechaFin).getTime());
+        if (esNueva) {
+          return this.pausar({ id: params.id, motivo: params.motivo || '', videoPausaUrl: params.url } as any, currentUser);
+        }
+      }
+      // Ya estaba vinculado (o no hay ciclo al que atarlo): no hay nada que hacer.
+      return this._formatItem(item);
+    }
+
+    historial[idx] = { ...historial[idx], [campo]: params.url };
+    const esUltimo = idx === historial.length - 1;
+    const updated = await this.prisma.servicioEspecial.update({
+      where: { id: item.id },
+      data: {
+        historialPausas: historial,
+        ...(esUltimo && tipo === 'PAUSA' ? { videoUltimaPausaUrl: params.url, videoPausaUrl: params.url } : {}),
+        ...(esUltimo && tipo === 'REANUDACION' ? { videoUltimaReanudacionUrl: params.url, videoReanudacionUrl: params.url } : {}),
+        version: item.version + 1,
+      },
+      include: {
+        agencia: true,
+        operador: { select: { id: true, name: true, lastname: true, email: true } },
+        region: true,
+      },
+    });
     return this._formatItem(updated);
   }
 
@@ -802,6 +908,11 @@ export class ServiciosEspecialesService {
     }
 
     if (String(item.estado || '').toLowerCase() === 'completado') {
+      try {
+        await this.descontarKitPulidorSiPendiente(item.id);
+      } catch (error: any) {
+        console.warn(`[ServiciosEspeciales] No se pudo descontar el kit del servicio ${item.codigoSE || item.id}: ${error?.message || error}`);
+      }
       const data: any = { version: item.version + 1 };
       if (dto.videoFinalUrl && dto.videoFinalUrl !== item.videoFinalUrl) data.videoFinalUrl = dto.videoFinalUrl;
       if (dto.observaciones) {
@@ -878,94 +989,141 @@ export class ServiciosEspecialesService {
       },
     });
 
-    // Descuento automático de químicos del stock en custodia del Pulidor
-    if (item.operadorId && item.recetaInsumos && Array.isArray(item.recetaInsumos)) {
-      for (const ins of (item.recetaInsumos as any[])) {
-        if (!ins) continue;
-        const cantidadDesc = Number(ins.cantidad ?? ins.cantidadSugerida ?? 0);
-        if (cantidadDesc <= 0) continue;
-
-        try {
-          const insumoId = String(ins.insumoId || ins.productoId || '').trim();
-          const sku = String(ins.codigoSKU || ins.productoSKU || '').trim();
-          const nombre = String(ins.insumoNombre || ins.productoNombre || ins.nombre || '').trim();
-
-          const orConditions: any[] = [];
-          if (insumoId) orConditions.push({ id: insumoId });
-          if (sku) orConditions.push({ codigoSKU: sku });
-          if (nombre) orConditions.push({ nombre: { equals: nombre, mode: 'insensitive' } });
-
-          if (orConditions.length === 0) continue;
-
-          const insumoDb = await this.prisma.insumo.findFirst({
-            where: { OR: orConditions },
-          });
-
-          if (insumoDb) {
-            const stockPulidor = await this.prisma.stockUbicacion.findFirst({
-              where: {
-                insumoId: insumoDb.id,
-                pulidorId: item.operadorId,
-              },
-            });
-
-            if (stockPulidor) {
-              const stockAnterior = Number(stockPulidor.cantidadActual || 0);
-              const nuevaCant = Math.max(0, stockAnterior - cantidadDesc);
-              await this.prisma.stockUbicacion.update({
-                where: { id: stockPulidor.id },
-                data: { cantidadActual: nuevaCant },
-              });
-
-              // Registrar Kardex para trazabilidad contable
-              await this.prisma.kardexMovimiento.create({
-                data: {
-                  insumoId: insumoDb.id,
-                  ubicacionId: `PULIDOR_${item.operadorId}`,
-                  tipoMovimiento: 'CONSUMO_SERVICIO_ESPECIAL',
-                  cantidad: -cantidadDesc,
-                  stockAnterior,
-                  stockPosterior: nuevaCant,
-                  costoUnitario: Number(insumoDb.costoUnitarioUSD || 0),
-                  costoTotal: Number(((insumoDb.costoUnitarioUSD ? Number(insumoDb.costoUnitarioUSD) : 0) * cantidadDesc).toFixed(2)),
-                  referenciaId: item.codigoSE || item.id,
-                  usuarioId: item.operadorId,
-                },
-              }).catch(() => {});
-
-              // Generar Alerta de inventario en BD si cae bajo el mínimo
-              const minimo = Number(insumoDb.stockMinimoAgencia ?? 1);
-              if (nuevaCant <= minimo) {
-                const alertaExistente = await this.prisma.alertaStock.findFirst({
-                  where: {
-                    insumoId: insumoDb.id,
-                    usuarioEmisorId: item.operadorId,
-                    estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
-                  },
-                });
-                if (!alertaExistente) {
-                  const nivel = nuevaCant === 0 ? 'AGOTADO' : nuevaCant < minimo * 0.5 ? 'CRITICO' : 'BAJO';
-                  await this.prisma.alertaStock.create({
-                    data: {
-                      insumoId: insumoDb.id,
-                      nivel,
-                      agenciaId: item.agenciaId || null,
-                      usuarioEmisorId: item.operadorId,
-                      mensaje: `Stock bajo en kit del pulidor al finalizar servicio ${item.codigoSE || item.id}. Insumo: ${insumoDb.nombre}. Stock actual: ${nuevaCant.toFixed(2)}`,
-                      stockReportado: nuevaCant,
-                    },
-                  }).catch(() => {});
-                }
-              }
-            }
-          }
-        } catch {
-          // Descuento no bloqueante
-        }
-      }
+    try {
+      await this.descontarKitPulidorSiPendiente(item.id);
+    } catch (error: any) {
+      console.warn(`[ServiciosEspeciales] No se pudo descontar el kit del servicio ${item.codigoSE || item.id}: ${error?.message || error}`);
     }
 
     return this._formatItem(updated);
+  }
+
+  /**
+   * Descuenta del kit del pulidor la receta de un servicio especial completado.
+   * Idempotente: se ejecuta una sola vez por servicio aunque llegue por la API y por la cola offline.
+   */
+  async descontarKitPulidorSiPendiente(servicioId: string) {
+    const item = await this.prisma.servicioEspecial.findUnique({ where: { id: servicioId } });
+    if (!item?.operadorId || !Array.isArray(item.recetaInsumos)) return;
+    if (String(item.estado || '').toLowerCase() !== 'completado') return;
+
+    const operadorId = item.operadorId;
+    const referencia = item.codigoSE || item.id;
+    const referencias = [item.codigoSE, item.id].filter(Boolean) as string[];
+    const alertas: Array<{ insumoId: string; nombre: string; nuevaCant: number; minimo: number }> = [];
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 AS ok FROM pg_advisory_xact_lock(hashtext(${`SE_KIT_${item.id}`}))`;
+
+      const yaDescontado = await tx.kardexMovimiento.findFirst({
+        where: { tipoMovimiento: 'CONSUMO_SERVICIO_ESPECIAL', referenciaId: { in: referencias } },
+        select: { id: true },
+      });
+      if (yaDescontado) return;
+
+      for (const ins of item.recetaInsumos as any[]) {
+        if (!ins) continue;
+        const cantidadDesc = Number(ins.cantidad ?? ins.cantidadSugerida ?? 0);
+        if (!Number.isFinite(cantidadDesc) || cantidadDesc <= 0) continue;
+
+        // Resolución estricta por ID: la receta capturada al crear la OT siempre trae el
+        // insumoId real (viene del catálogo). Evitamos el fallback por SKU/nombre porque
+        // podía engancharse a un producto distinto si el SKU o el nombre se reutilizaban.
+        const insumoId = String(ins.insumoId || ins.productoId || '').trim();
+        if (!insumoId) {
+          throw new BadRequestException(
+            `No se pudo descontar el kit del pulidor: la línea de receta "${ins.insumoNombre || ins.productoNombre || ins.nombre || '(sin nombre)'}" no tiene un insumo identificado.`,
+          );
+        }
+
+        const insumoDb = await tx.insumo.findUnique({
+          where: { id: insumoId },
+          include: { unidadMedida: { select: { simbolo: true } } },
+        });
+        if (!insumoDb) {
+          throw new BadRequestException(
+            `No se pudo descontar el kit del pulidor: el insumo "${insumoId}" de la receta ya no existe.`,
+          );
+        }
+
+        const stockPulidor = await tx.stockUbicacion.findFirst({
+          where: { insumoId: insumoDb.id, pulidorId: operadorId },
+        });
+        if (!stockPulidor) continue;
+
+        const decremented = await tx.stockUbicacion.update({
+          where: { id: stockPulidor.id },
+          data: { cantidadActual: { decrement: cantidadDesc } },
+        });
+        const stockAnterior = Number(decremented.cantidadActual) + cantidadDesc;
+        let nuevaCant = Number(decremented.cantidadActual);
+        if (nuevaCant < 0) {
+          await tx.stockUbicacion.update({ where: { id: stockPulidor.id }, data: { cantidadActual: 0 } });
+          nuevaCant = 0;
+        }
+
+        const costoUnit = Number(insumoDb.costoUnitarioUSD || 0);
+        await tx.kardexMovimiento.create({
+          data: {
+            insumoId: insumoDb.id,
+            ubicacionId: `PULIDOR_${operadorId}`,
+            tipoMovimiento: 'CONSUMO_SERVICIO_ESPECIAL',
+            cantidad: -cantidadDesc,
+            stockAnterior,
+            stockPosterior: nuevaCant,
+            costoUnitario: costoUnit,
+            costoTotal: Number((costoUnit * cantidadDesc).toFixed(2)),
+            referenciaId: referencia,
+            usuarioId: operadorId,
+          },
+        });
+
+        // Snapshot congelado: sobrevive a que el producto cambie de nombre/SKU
+        // o a que la receta lo reemplace por otro más adelante.
+        await tx.consumoServicioEspecial.create({
+          data: {
+            servicioEspecialId: item.id,
+            insumoId: insumoDb.id,
+            cantidadUsada: cantidadDesc,
+            pulidorId: operadorId,
+            insumoNombre: insumoDb.nombre,
+            insumoSKU: insumoDb.codigoSKU,
+            unidadSimbolo: insumoDb.unidadMedida?.simbolo || String(ins.unidadMedida || ''),
+          },
+        });
+
+        const minimo = Number(insumoDb.stockMinimoAgencia ?? 1);
+        if (nuevaCant <= minimo) {
+          alertas.push({ insumoId: insumoDb.id, nombre: insumoDb.nombre, nuevaCant, minimo });
+        }
+      }
+    }, { timeout: 20000 });
+
+    for (const alerta of alertas) {
+      try {
+        const alertaExistente = await this.prisma.alertaStock.findFirst({
+          where: {
+            insumoId: alerta.insumoId,
+            usuarioEmisorId: operadorId,
+            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          },
+        });
+        if (alertaExistente) continue;
+        const nivel = alerta.nuevaCant === 0 ? 'AGOTADO' : alerta.nuevaCant < alerta.minimo * 0.5 ? 'CRITICO' : 'BAJO';
+        await this.prisma.alertaStock.create({
+          data: {
+            insumoId: alerta.insumoId,
+            nivel,
+            agenciaId: item.agenciaId || null,
+            usuarioEmisorId: operadorId,
+            mensaje: `Stock bajo en kit del pulidor al finalizar servicio ${referencia}. Insumo: ${alerta.nombre}. Stock actual: ${alerta.nuevaCant.toFixed(2)}`,
+            stockReportado: alerta.nuevaCant,
+          },
+        });
+      } catch {
+        // Alerta no bloqueante
+      }
+    }
   }
 
   async softDelete(id: string, motivo?: string) {

@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
@@ -23,6 +24,27 @@ export class StorageController {
       dto.clientUuid = userId;
     }
     return this.storageService.generateUploadTicket(dto);
+  }
+
+  @Post('upload')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Sube un archivo a S3 a través del backend (evita CORS del navegador)' })
+  async uploadFile(
+    @UploadedFile() file: { buffer?: Buffer; mimetype?: string } | undefined,
+    @Body() dto: GenerateUploadTicketDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('El archivo de evidencia es obligatorio.');
+    }
+    if (dto.type === 'FOTO_PERFIL' || dto.category === 'PERFIL_USUARIO') {
+      dto.userId = userId;
+      dto.clientUuid = userId;
+    }
+    return this.storageService.uploadObject(dto, file.buffer, file.mimetype || dto.contentType);
   }
 
   @Get('presigned-url')

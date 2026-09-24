@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsPositive } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsPositive, IsArray } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DataGridQueryDto } from '../../../common/dto/data-grid.dto.js';
 
@@ -60,6 +60,12 @@ export class RegistrarMovimientoOperativoDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'URLs S3 de evidencia fotográfica del ingreso u otro movimiento' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidenciasUrls?: string[];
 }
 
 export class ListMovimientosGlobalesDto extends DataGridQueryDto {

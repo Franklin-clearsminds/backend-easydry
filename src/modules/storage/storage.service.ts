@@ -1,13 +1,15 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DeleteObjectsCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetBucketLocationCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
+import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export type StorageCategory =
   | 'SERVICIOS_GENERALES'
   | 'SERVICIOS_ESPECIALES'
+  | 'MAQUINARIA_IMAGEN'
   | 'MAQUINARIA_FICHA'
   | 'MAQUINARIA_INCIDENTE'
   | 'MAQUINARIA_MANTENIMIENTO'
@@ -25,6 +27,7 @@ export type MediaEvidenceType =
   | 'VIDEO_FINAL'
   | 'VIDEO_PAUSA'
   | 'VIDEO_REANUDAR'
+  | 'FOTO_MAQUINA'
   | 'FICHA_TECNICA'
   | 'DOCUMENTO'
   | 'FOTO_INCIDENTE'
@@ -32,6 +35,8 @@ export type MediaEvidenceType =
   | 'DOCUMENTO_INCIDENTE'
   | 'PDF_CIERRE'
   | 'IMAGEN_PRODUCTO'
+  | 'FOTO_AJUSTE_INVENTARIO'
+  | 'FOTO_INGRESO_INVENTARIO'
   | 'FOTO_PERFIL';
 
 export interface GenerateUploadTicketDto {
@@ -40,7 +45,11 @@ export interface GenerateUploadTicketDto {
   agenciaId?: string;
   servicioId?: string;
   maquinariaId?: string;
+  maquinariaNombre?: string;
+  maquinariaCodigo?: string;
   incidenteId?: string;
+  incidenteFase?: 'fallas' | 'resoluciones';
+  mantenimientoId?: string;
   insumoId?: string;
   insumoNombre?: string;
   category?: StorageCategory;
@@ -63,17 +72,18 @@ export interface UploadTicketResponse {
 
 const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
-  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FICHA_TECNICA',
-  'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE', 'IMAGEN_PRODUCTO', 'FOTO_PERFIL',
+  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FOTO_MAQUINA', 'FICHA_TECNICA',
+  'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE', 'IMAGEN_PRODUCTO', 'FOTO_AJUSTE_INVENTARIO', 'FOTO_INGRESO_INVENTARIO', 'FOTO_PERFIL',
 ]);
 
 @Injectable()
 export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
-  private readonly s3Client: S3Client;
+  private s3Client: S3Client;
   private readonly bucketName: string;
-  private readonly region: string;
-  private readonly publicUrlPrefix: string;
+  private region: string;
+  private publicUrlPrefix: string;
+  private regionResolved = false;
 
   constructor(
     private readonly configService: ConfigService,
@@ -94,8 +104,19 @@ export class StorageService implements OnModuleInit {
 
     const endpoint = this.configService.get<string>('AWS_ENDPOINT')?.trim()
       || this.configService.get<string>('AWS_S3_ENDPOINT')?.trim();
-    this.s3Client = new S3Client({
-      region: this.region,
+    this.s3Client = this.createS3Client(this.region, accessKeyId, secretAccessKey, endpoint);
+  }
+
+  private createS3Client(
+    region: string,
+    accessKeyId = (this.configService.get<string>('AWS_ACCESS_KEY_ID') ?? '').trim(),
+    secretAccessKey = (this.configService.get<string>('AWS_SECRET_ACCESS_KEY') ?? '').trim(),
+    endpoint = this.configService.get<string>('AWS_ENDPOINT')?.trim()
+      || this.configService.get<string>('AWS_S3_ENDPOINT')?.trim(),
+  ): S3Client {
+    return new S3Client({
+      region,
+      followRegionRedirects: true,
       ...(accessKeyId && secretAccessKey
         ? { credentials: { accessKeyId, secretAccessKey } }
         : {}),
@@ -103,13 +124,87 @@ export class StorageService implements OnModuleInit {
     });
   }
 
+  private bucketRegionFromError(error: unknown): string | null {
+    const err = error as {
+      $metadata?: { httpStatusCode?: number };
+      $response?: { headers?: Record<string, string> };
+      BucketRegion?: string;
+      cause?: {
+        $metadata?: { httpStatusCode?: number };
+        $response?: { headers?: Record<string, string> };
+        BucketRegion?: string;
+      };
+    };
+    const headers = err?.$response?.headers || err?.cause?.$response?.headers || {};
+    const region = (
+      headers['x-amz-bucket-region']
+      || headers['X-Amz-Bucket-Region']
+      || err?.BucketRegion
+      || err?.cause?.BucketRegion
+      || ''
+    ).trim();
+    return region || null;
+  }
+
+  private applyBucketRegion(actualRegion: string): void {
+    const region = actualRegion.trim() || 'us-east-1';
+    if (region === this.region) return;
+    this.logger.warn(`El bucket ${this.bucketName} está en ${region}, no en ${this.region}. Recreando el cliente S3.`);
+    this.region = region;
+    this.publicUrlPrefix = `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
+    this.s3Client.destroy();
+    this.s3Client = this.createS3Client(this.region);
+  }
+
+  private async ensureBucketRegion(): Promise<void> {
+    if (this.regionResolved) return;
+    try {
+      const loc = await this.s3Client.send(new GetBucketLocationCommand({ Bucket: this.bucketName }));
+      this.applyBucketRegion(loc.LocationConstraint || 'us-east-1');
+      this.regionResolved = true;
+    } catch (error) {
+      const redirected = this.bucketRegionFromError(error);
+      if (redirected) {
+        this.applyBucketRegion(redirected);
+        this.regionResolved = true;
+      }
+    }
+  }
+
   async onModuleInit(): Promise<void> {
+    await this.ensureBucketRegion();
     try {
       await this.s3Client.send(new HeadBucketCommand({ Bucket: this.bucketName }));
       this.logger.log(`S3 verificado: ${this.bucketName} (${this.region})`);
+      return;
     } catch (error) {
-      this.logger.error(`No se pudo acceder al bucket S3 ${this.bucketName}.`);
-      throw new Error(`S3 no disponible o sin permisos para el bucket ${this.bucketName}.`, { cause: error });
+      const redirectedRegion = this.bucketRegionFromError(error);
+      if (redirectedRegion && redirectedRegion !== this.region) {
+        this.logger.warn(
+          `El bucket ${this.bucketName} está en ${redirectedRegion}, no en ${this.region}. Recreando el cliente S3.`,
+        );
+        this.region = redirectedRegion;
+        this.publicUrlPrefix = this.configService.get<string>('AWS_S3_PUBLIC_URL_PREFIX')
+          || `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
+        this.s3Client.destroy();
+        this.s3Client = this.createS3Client(this.region);
+        try {
+          await this.s3Client.send(new HeadBucketCommand({ Bucket: this.bucketName }));
+          this.logger.log(`S3 verificado: ${this.bucketName} (${this.region})`);
+          return;
+        } catch (retryError) {
+          this.logger.error(
+            `S3 sigue sin responder en ${this.region}. El API arranca; las subidas se reintentarán al usarse.`,
+            retryError instanceof Error ? retryError.message : retryError,
+          );
+          return;
+        }
+      }
+
+      this.logger.error(
+        `No se pudo verificar el bucket S3 ${this.bucketName} (${this.region}). El API arranca igual.`,
+        error instanceof Error ? error.message : error,
+      );
     }
   }
 
@@ -128,7 +223,6 @@ export class StorageService implements OnModuleInit {
     const agencia = await this.resolveAgenciaSlug(dto.agenciaId);
 
     const serviceId = this.safeSegment(dto.servicioId || dto.clientUuid, 'sin-orden');
-    const maquinariaId = this.safeSegment(dto.maquinariaId, 'sin-maquinaria');
     const incidenteId = this.safeSegment(dto.incidenteId || dto.clientUuid, 'sin-incidente');
     const uuid = crypto.randomUUID().slice(0, 8);
     const timestamp = Date.now();
@@ -164,6 +258,11 @@ export class StorageService implements OnModuleInit {
         key: `usuarios/${userId}/perfil/avatar.jpg`,
         contentType: 'image/jpeg',
       };
+    } else if (type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO') {
+      const insumoSlug = this.safeSegment(dto.insumoNombre || dto.insumoId, 'insumo');
+      const agenciaSeg = agencia || this.safeSegment(dto.agenciaId || dto.servicioId, 'bodega');
+      const folder = type === 'FOTO_INGRESO_INVENTARIO' ? 'ingresos' : 'reajustes';
+      key = `agencias/${agenciaSeg}/inventario/${folder}/${insumoSlug}/${filename}`;
     } else if (category === 'CATALOGO_INSUMOS' || type === 'IMAGEN_PRODUCTO') {
       let rawInsumoName = dto.insumoNombre || '';
       const candidateId = dto.insumoId || dto.clientUuid || '';
@@ -202,15 +301,27 @@ export class StorageService implements OnModuleInit {
               ? 'videos/reanudaciones'
               : isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
       key = `agencias/${agencia}/servicios/${serviceKind}/${serviceId}/${folder}/${filename}`;
-    } else if (category === 'MAQUINARIA_FICHA') {
-      const folder = isDocument ? 'documentos' : 'fotos';
-      key = `agencias/${agencia}/maquinaria/${maquinariaId}/ficha-tecnica/${folder}/${filename}`;
-    } else if (category === 'MAQUINARIA_INCIDENTE') {
+    } else if (
+      category === 'MAQUINARIA_IMAGEN'
+      || category === 'MAQUINARIA_FICHA'
+      || category === 'MAQUINARIA_INCIDENTE'
+      || category === 'MAQUINARIA_MANTENIMIENTO'
+      || type === 'FOTO_MAQUINA'
+      || type === 'FICHA_TECNICA'
+    ) {
+      const equipo = await this.resolveMaquinariaSlug(dto);
       const folder = isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
-      key = `agencias/${agencia}/maquinaria/${maquinariaId}/incidentes/${incidenteId}/${folder}/${filename}`;
-    } else if (category === 'MAQUINARIA_MANTENIMIENTO') {
-      const folder = isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
-      key = `agencias/${agencia}/maquinaria/${maquinariaId}/mantenimientos/${folder}/${filename}`;
+      if (category === 'MAQUINARIA_IMAGEN' || type === 'FOTO_MAQUINA') {
+        key = `agencias/maquinaria/${equipo}/imagen/${filename}`;
+      } else if (category === 'MAQUINARIA_FICHA' || type === 'FICHA_TECNICA') {
+        key = `agencias/maquinaria/${equipo}/ficha-tecnica/${filename}`;
+      } else if (category === 'MAQUINARIA_MANTENIMIENTO') {
+        const mantId = this.safeSegment(dto.mantenimientoId || dto.clientUuid, 'sin-id');
+        key = `agencias/maquinaria/${equipo}/mantenimientos/${mantId}/${folder}/${filename}`;
+      } else {
+        const fase = this.incidenteFase(dto);
+        key = `agencias/maquinaria/${equipo}/incidentes/${incidenteId}/${fase}/${folder}/${filename}`;
+      }
     } else {
       const now = new Date();
       key = `agencias/${agencia}/documentos/cierres/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${filename}`;
@@ -251,7 +362,45 @@ export class StorageService implements OnModuleInit {
     return this.safeSegment(raw, 'agencia-general');
   }
 
+  private incidenteFase(dto: GenerateUploadTicketDto): 'fallas' | 'resoluciones' {
+    const raw = String(dto.incidenteFase || '').trim().toLowerCase();
+    if (raw === 'resoluciones' || raw === 'resolucion' || raw === 'reparacion' || raw === 'solucion') {
+      return 'resoluciones';
+    }
+    return 'fallas';
+  }
+
+  /**
+   * Carpeta estable del equipo, independiente de la agencia.
+   * Prioridad: código → BD (si llega UUID) → nombre → id.
+   */
+  private async resolveMaquinariaSlug(dto: GenerateUploadTicketDto): Promise<string> {
+    const codigo = String(dto.maquinariaCodigo || '').trim();
+    if (codigo) return this.safeSegment(codigo, 'equipo');
+
+    const candidateId = String(dto.maquinariaId || '').trim();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidateId);
+    if (isUuid && this.prisma) {
+      try {
+        const maquina = await this.prisma.maquinaria.findUnique({
+          where: { id: candidateId },
+          select: { codigo: true, nombre: true },
+        });
+        if (maquina?.codigo) return this.safeSegment(maquina.codigo, 'equipo');
+        if (maquina?.nombre) return this.safeSegment(maquina.nombre, 'equipo');
+      } catch {
+        // fallback
+      }
+    }
+
+    const nombre = String(dto.maquinariaNombre || dto.insumoNombre || '').trim();
+    if (nombre) return this.safeSegment(nombre, 'equipo');
+    if (candidateId) return this.safeSegment(candidateId, 'equipo');
+    return 'equipo';
+  }
+
   public async generateUploadTicket(dto: GenerateUploadTicketDto): Promise<UploadTicketResponse> {
+    await this.ensureBucketRegion();
     const type = String(dto.type || '').toUpperCase();
     if (type === 'FOTO_PERFIL' || dto.category === 'PERFIL_USUARIO') {
       await this.deleteUserProfileImages(dto.userId || dto.clientUuid);
@@ -282,7 +431,33 @@ export class StorageService implements OnModuleInit {
     );
   }
 
+  public async uploadObject(
+    dto: GenerateUploadTicketDto,
+    body: Buffer,
+    contentType?: string,
+  ): Promise<{ key: string; publicUrl: string }> {
+    await this.ensureBucketRegion();
+    const built = await this.buildS3Key({
+      ...dto,
+      contentType: contentType || dto.contentType,
+    });
+    await this.s3Client.send(new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: built.key,
+      Body: body,
+      ContentType: contentType || built.contentType,
+    }));
+    if (String(contentType || built.contentType || '').toLowerCase().startsWith('image/')) {
+      void this.generarMiniaturaDesdeBuffer(built.key, body);
+    }
+    return {
+      key: built.key,
+      publicUrl: `${this.publicUrlPrefix.replace(/\/$/, '')}/${built.key}`,
+    };
+  }
+
   public async getPresignedDownloadUrl(rawKey: string, expiresInSeconds = 3600): Promise<string> {
+    await this.ensureBucketRegion();
     let key = String(rawKey || '').trim();
     if (key.includes('amazonaws.com/')) {
       key = key.split('amazonaws.com/')[1] || key;
@@ -305,6 +480,63 @@ export class StorageService implements OnModuleInit {
     });
 
     return getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  MINIATURAS: cada foto tiene una copia liviana en `thumbs/<clave-original>.jpg`
+  //  (480 px de ancho, JPEG). Los listados cargan la miniatura y la foto completa solo
+  //  se descarga al abrirla. La ruta es determinística: no requiere columnas en la base.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private static readonly THUMB_WIDTH = 480;
+  private static readonly IMAGE_KEY = /\.(jpe?g|png|webp|heic|heif)$/i;
+
+  public thumbnailKeyFor(key: string): string {
+    return `thumbs/${String(key).replace(/^[/\\]+/, '').replace(/\.[^./]+$/, '')}.jpg`;
+  }
+
+  private async escribirMiniatura(key: string, original: Buffer): Promise<void> {
+    const thumb = await sharp(original, { failOn: 'none' })
+      .rotate()
+      .resize({ width: StorageService.THUMB_WIDTH, withoutEnlargement: true })
+      .jpeg({ quality: 72, mozjpeg: true })
+      .toBuffer();
+    await this.ensureBucketRegion();
+    await this.s3Client.send(new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: this.thumbnailKeyFor(key),
+      Body: thumb,
+      ContentType: 'image/jpeg',
+    }));
+  }
+
+  /** Genera la miniatura desde los bytes ya disponibles. Nunca lanza: una falla solo se registra. */
+  public async generarMiniaturaDesdeBuffer(key: string, original: Buffer): Promise<void> {
+    try {
+      if (!StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/')) return;
+      await this.escribirMiniatura(key, original);
+    } catch (error: unknown) {
+      this.logger.warn(`No se pudo generar la miniatura de ${key}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  /** Genera la miniatura de una foto que el cliente ya subió a S3 (descarga, reduce y guarda). Nunca lanza. */
+  public async generarMiniaturaDesdeUrl(fileUrl: string): Promise<void> {
+    try {
+      const prefix = this.publicUrlPrefix.replace(/\/$/, '');
+      const url = String(fileUrl || '').trim();
+      if (!prefix || !url.startsWith(`${prefix}/`)) return;
+      const key = decodeURIComponent(url.slice(prefix.length + 1).split('?')[0]);
+      if (!StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/')) return;
+
+      await this.ensureBucketRegion();
+      const object = await this.s3Client.send(new GetObjectCommand({ Bucket: this.bucketName, Key: key }));
+      const bytes = await object.Body?.transformToByteArray();
+      if (!bytes) return;
+      await this.escribirMiniatura(key, Buffer.from(bytes));
+    } catch (error: unknown) {
+      this.logger.warn(`No se pudo generar la miniatura de ${fileUrl}: ${error instanceof Error ? error.message : error}`);
+    }
   }
 
   public getBucketName(): string { return this.bucketName; }
@@ -370,8 +602,9 @@ export class StorageService implements OnModuleInit {
 
   private defaultCategory(type: MediaEvidenceType): StorageCategory {
     if (type === 'FOTO_PERFIL') return 'PERFIL_USUARIO';
-    if (type === 'IMAGEN_PRODUCTO') return 'CATALOGO_INSUMOS';
+    if (type === 'IMAGEN_PRODUCTO' || type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO') return 'CATALOGO_INSUMOS';
     if (type === 'VIDEO_PAUSA' || type === 'VIDEO_REANUDAR') return 'SERVICIOS_ESPECIALES';
+    if (type === 'FOTO_MAQUINA') return 'MAQUINARIA_IMAGEN';
     if (type === 'FICHA_TECNICA' || type === 'DOCUMENTO') return 'MAQUINARIA_FICHA';
     if (type === 'FOTO_INCIDENTE' || type === 'VIDEO_INCIDENTE' || type === 'DOCUMENTO_INCIDENTE') return 'MAQUINARIA_INCIDENTE';
     if (type === 'PDF_CIERRE') return 'DOCUMENTO';
@@ -380,7 +613,8 @@ export class StorageService implements OnModuleInit {
 
   private assertCategorySupportsType(category: StorageCategory, type: MediaEvidenceType): void {
     if (category === 'PERFIL_USUARIO' && type === 'FOTO_PERFIL') return;
-    if (category === 'CATALOGO_INSUMOS' && type === 'IMAGEN_PRODUCTO') return;
+    if (category === 'CATALOGO_INSUMOS' && (type === 'IMAGEN_PRODUCTO' || type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO')) return;
+    if (category === 'MAQUINARIA_IMAGEN' && type === 'FOTO_MAQUINA') return;
     if (category === 'MAQUINARIA_MANTENIMIENTO' && (type === 'FOTO_INCIDENTE' || type === 'DOCUMENTO' || type === 'FICHA_TECNICA' || type === 'VIDEO_INCIDENTE')) return;
     const serviceTypes = new Set<MediaEvidenceType>([
       'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',

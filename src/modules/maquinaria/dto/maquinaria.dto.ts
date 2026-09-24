@@ -1,4 +1,5 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray, IsInt, Min, ArrayMinSize } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateMaquinariaDto {
@@ -41,6 +42,11 @@ export class CreateMaquinariaDto {
   @IsOptional()
   @IsString()
   fotoUrl?: string;
+
+  @ApiPropertyOptional({ description: 'URL S3 de la imagen de ficha técnica' })
+  @IsOptional()
+  @IsString()
+  fichaTecnicaUrl?: string;
 
   @ApiPropertyOptional({ example: 120 })
   @IsOptional()
@@ -98,6 +104,11 @@ export class UpdateMaquinariaDto {
   @IsOptional()
   @IsString()
   fotoUrl?: string;
+
+  @ApiPropertyOptional({ description: 'URL S3 de la imagen de ficha técnica' })
+  @IsOptional()
+  @IsString()
+  fichaTecnicaUrl?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -253,12 +264,24 @@ export class RegistrarMantenimientoDto {
   @IsNumber()
   costoTotal?: number;
 
+  @ApiPropertyOptional({ description: 'Fecha programada de la visita' })
+  @IsOptional()
+  @IsString()
+  fechaProgramada?: string;
+
   @ApiPropertyOptional({ description: 'Fecha sugerida para el próximo mantenimiento' })
   @IsOptional()
   @IsString()
   proximoMantenimiento?: string;
 
-  @ApiPropertyOptional({ description: 'Fotos, videos y PDFs del mantenimiento' })
+  @ApiPropertyOptional({ description: 'Cada cuántos días se debe repetir. 0 = única vez' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  frecuenciaDias?: number;
+
+  @ApiPropertyOptional({ description: 'Fotos, videos y PDFs. Opcional al agendar.' })
   @IsOptional()
   @IsArray()
   evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
@@ -267,6 +290,28 @@ export class RegistrarMantenimientoDto {
   @IsOptional()
   @IsString()
   tecnicoId?: string;
+}
+
+export class EjecutarMantenimientoDto {
+  @ApiProperty({ description: 'ID del mantenimiento a ejecutar' })
+  @IsString()
+  @IsNotEmpty()
+  mantenimientoId: string;
+
+  @ApiPropertyOptional({ description: 'Informe del trabajo realizado' })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fechaFin?: string;
+
+  @ApiProperty({ description: 'Evidencias del trabajo. Debe incluir al menos una imagen.' })
+  @IsArray()
+  @ArrayMinSize(1)
+  evidencias: Array<{ tipo: string; url: string; descripcion?: string }>;
 }
 
 export class ListMantenimientosDto {

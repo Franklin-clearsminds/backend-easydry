@@ -11,6 +11,7 @@ import {
   ResolverIncidenteDto,
   ListIncidentesDto,
   RegistrarMantenimientoDto,
+  EjecutarMantenimientoDto,
   ListMantenimientosDto,
   AsignarIncidenteDto,
   AsignarMantenimientoDto,
@@ -93,6 +94,16 @@ export class MaquinariaController {
     @CurrentUser('id') userId: string,
   ) {
     return this.maquinariaService.registrarMantenimiento(dto, userId);
+  }
+
+  @Post('mantenimientos/ejecutar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Ejecutar un mantenimiento agendado. Requiere al menos una imagen.' })
+  async ejecutarMantenimiento(
+    @Body() dto: EjecutarMantenimientoDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.maquinariaService.ejecutarMantenimiento(dto, userId);
   }
 
   @Post('mantenimientos/list')

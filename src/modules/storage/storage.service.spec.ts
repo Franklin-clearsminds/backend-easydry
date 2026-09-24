@@ -20,8 +20,8 @@ describe('StorageService', () => {
   it.each([
     ['VIDEO_INICIAL', 'SERVICIOS_GENERALES', 'servicios/generales/ot-1/videos/inicial/', 'video/mp4'],
     ['VIDEO_FINAL', 'SERVICIOS_ESPECIALES', 'servicios/especiales/ot-1/videos/final/', 'video/mp4'],
-    ['FOTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'maquinaria/maq-1/incidentes/inc-1/fotos/', 'image/jpeg'],
-    ['DOCUMENTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'maquinaria/maq-1/incidentes/inc-1/documentos/', 'application/pdf'],
+    ['FOTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'agencias/maquinaria/maq-1/incidentes/inc-1/fallas/fotos/', 'image/jpeg'],
+    ['DOCUMENTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'agencias/maquinaria/maq-1/incidentes/inc-1/fallas/documentos/', 'application/pdf'],
   ] as const)('construye la ruta oficial para %s', async (type, category, expectedPath, contentType) => {
     const result = await createService().buildS3Key({
       agenciaId: 'AGENCIA 01',
@@ -31,8 +31,37 @@ describe('StorageService', () => {
       type,
       category,
     });
-    expect(result.key).toContain(`agencias/agencia-01/${expectedPath}`);
+    expect(result.key).toContain(expectedPath);
     expect(result.contentType).toBe(contentType);
+  });
+
+  it('guarda foto y ficha de maquinaria en una carpeta fija del equipo', async () => {
+    const foto = await createService().buildS3Key({
+      maquinariaCodigo: 'MQ-HIDRO-01',
+      maquinariaNombre: 'Hidrolavadora Costa',
+      type: 'FOTO_MAQUINA',
+      category: 'MAQUINARIA_IMAGEN',
+      fileName: 'equipo.jpg',
+    });
+    const ficha = await createService().buildS3Key({
+      maquinariaCodigo: 'MQ-HIDRO-01',
+      type: 'FICHA_TECNICA',
+      category: 'MAQUINARIA_FICHA',
+      fileName: 'ficha.png',
+    });
+    expect(foto.key).toContain('agencias/maquinaria/mq-hidro-01/imagen/');
+    expect(ficha.key).toContain('agencias/maquinaria/mq-hidro-01/ficha-tecnica/');
+  });
+
+  it('separa evidencias de falla y de resolución del mismo incidente', async () => {
+    const resolucion = await createService().buildS3Key({
+      maquinariaCodigo: 'MQ-HIDRO-01',
+      incidenteId: 'INC-9',
+      incidenteFase: 'resoluciones',
+      type: 'FOTO_INCIDENTE',
+      category: 'MAQUINARIA_INCIDENTE',
+    });
+    expect(resolucion.key).toContain('agencias/maquinaria/mq-hidro-01/incidentes/inc-9/resoluciones/fotos/');
   });
 
   it('guarda la foto de perfil en una ruta fija por usuario', async () => {

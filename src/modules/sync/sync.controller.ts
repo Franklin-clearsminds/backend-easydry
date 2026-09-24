@@ -109,6 +109,7 @@ export class SyncController {
       specialOperatorId?: string;
       pauseReason?: string;
       resumeNotes?: string;
+      capturedAt?: string;
     },
     @CurrentUser() user: any,
   ) {

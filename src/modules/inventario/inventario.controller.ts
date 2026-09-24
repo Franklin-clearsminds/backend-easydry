@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { InventarioService } from './inventario.service.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
@@ -8,7 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto, DetailEnvaseDto } from './dto/envases.dto.js';
 import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidades.dto.js';
 import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, DetailInsumoDto } from './dto/insumos.dto.js';
-import { ListStockDto, AjusteStockDto } from './dto/stock.dto.js';
+import { ListStockDto, AjusteStockDto, ReajusteStockDto } from './dto/stock.dto.js';
 import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, RechazarDespachoDto, ListMovimientosDto } from './dto/movimientos.dto.js';
 import { ListKardexDto } from './dto/kardex.dto.js';
 import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto } from './dto/alertas.dto.js';
@@ -135,7 +135,20 @@ export class InventarioController {
   @ApiOperation({ summary: 'Ajuste manual de stock por conteo físico, merma o daño (deja trazabilidad)' })
   @ApiResponse({ status: 404, description: 'Registro de stock no encontrado' })
   async ajusteStock(@Body() dto: AjusteStockDto, @CurrentUser() user: any) {
+    this._requireRolBodega(user, 'ajustar stock');
     return this.inventarioService.ajusteStock(dto, user.id);
+  }
+
+  @Post('stock/reajuste')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reajuste de stock con auditoría (quién, cuándo, por qué) y foto de evidencia',
+    description: 'Solo SUPER_ADMIN, ADMIN, COORD_BODEGA y ASISTENTE_BODEGA. El asistente solo en su bodega y en las agencias y pulidores de su región.',
+  })
+  @ApiResponse({ status: 403, description: 'Rol o bodega no autorizados' })
+  @ApiResponse({ status: 400, description: 'Datos incompletos o cantidad inválida' })
+  async reajustarStock(@Body() dto: ReajusteStockDto, @CurrentUser() user: any) {
+    return this.inventarioService.reajustarStock(dto, user);
   }
 
   @Post('stock/resumen')
@@ -424,6 +437,7 @@ export class InventarioController {
       'Registrar movimiento operativo (Entrada, Consumo, Merma) con cálculo automático en unidad base y prevención de saldo negativo',
   })
   async registrarMovimiento(@Body() dto: RegistrarMovimientoOperativoDto, @CurrentUser() user: any) {
+    this._requireRolBodega(user, 'registrar movimientos de inventario');
     return this.inventarioService.registrarMovimientoGlobal(dto, user?.id || user?.sub);
   }
 
@@ -502,5 +516,21 @@ export class InventarioController {
   ) {
     const agenciaId = dto?.agenciaId || user?.agenciaId || user?.sucursalId;
     return this.inventarioService.consumirInsumosServicio({ ...dto, agenciaId }, user?.id || user?.sub);
+  }
+
+  // ==============================================================
+  // HELPERS DE PERMISOS POR ROL
+  // ==============================================================
+
+  /** Roles que pueden modificar stock a mano: administración y bodega. */
+  private _requireRolBodega(user: any, accion: string) {
+    const rol = String(
+      user?.roleDetails?.namerol || user?.role?.namerol || (typeof user?.role === 'string' ? user.role : ''),
+    ).toUpperCase();
+    if (!['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA', 'ASISTENTE_BODEGA'].includes(rol)) {
+      throw new ForbiddenException(
+        `Solo Super Admin, Admin, Coordinador de Bodega o Asistente de Bodega pueden ${accion}.`,
+      );
+    }
   }
 }

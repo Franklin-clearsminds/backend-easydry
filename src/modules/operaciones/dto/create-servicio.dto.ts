@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsInt, IsOptional, IsEnum } from 'class-validator';
+import { IsNotEmpty, IsString, IsInt, IsOptional, IsEnum, IsArray } from 'class-validator';
 import { ServiceStatus } from '@prisma/client';
 
 export class CreateServicioDto {
@@ -38,9 +38,28 @@ export class CreateServicioDto {
   @IsNotEmpty()
   bahiaId: string;
 
+  @ApiPropertyOptional({
+    example: 'lavador-uuid-01',
+    description:
+      'Lavador que realiza el servicio (elegido en la app). Debe pertenecer a la misma agencia que la bahía. ' +
+      'Si no se indica, la OT queda a nombre de quien la registra.',
+  })
+  @IsOptional()
+  @IsString()
+  operadorId?: string;
+
   @ApiProperty({ example: 1 })
   @IsInt()
   servicioCatalogoId: number;
+
+  @ApiPropertyOptional({
+    example: [1, 4],
+    description: 'Servicios generales adicionales para la misma OT y vehículo. Se crea una fila por servicio.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  servicioCatalogoIds?: number[];
 
   @ApiPropertyOptional({ enum: ServiceStatus, default: ServiceStatus.EN_ESPERA })
   @IsOptional()

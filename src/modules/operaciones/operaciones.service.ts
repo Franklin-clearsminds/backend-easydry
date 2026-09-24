@@ -10,6 +10,7 @@ import {
   EliminarRecetaItemDto,
   SimularConsumoDto,
 } from './dto/receta.dto.js';
+import { ListConsumosServicioDto } from './dto/consumos-servicio.dto.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
@@ -180,7 +181,12 @@ export class OperacionesService {
           include: {
             recetas: {
               include: {
-                insumo: { select: { id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true, costoUnitarioUSD: true } },
+                insumo: {
+                  select: {
+                    id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true, costoUnitarioUSD: true,
+                    unidadMedida: { select: { simbolo: true } },
+                  },
+                },
                 unidadConsumo: { select: { codigo: true, simbolo: true, factorBase: true } },
               },
             },
@@ -210,6 +216,137 @@ export class OperacionesService {
   async findOne(id: string) {
     const servicio = await this.findOneRaw(id);
     return serializeServicioLavado(servicio);
+  }
+
+  async consumirInsumosSiPendiente(servicioId: string, isOfflineSync = false) {
+    const servicio = await this.findOneRaw(servicioId);
+    if (servicio.consumos && servicio.consumos.length > 0) return;
+    await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
+  }
+
+  /**
+   * Una OT general puede tener varios servicios (una fila por servicio) siempre que sea
+   * el mismo vehículo y no se repita un servicio ya registrado en esa OT.
+   */
+  private async _validarOTServicioGeneral(ordenTrabajoOT: string, placa: string, catalogoIds: number[]) {
+    const normalizarPlaca = (value?: string | null) => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const placaNueva = normalizarPlaca(placa);
+
+    const otEspecial = await this.prisma.servicioEspecial.findFirst({
+      where: { codigoSE: { equals: ordenTrabajoOT, mode: 'insensitive' }, deletedAt: null },
+      select: { id: true },
+    });
+    if (otEspecial) {
+      throw new BadRequestException(`La Orden de Trabajo "${ordenTrabajoOT}" ya está registrada como servicio especial. Ingrese otro número de OT.`);
+    }
+
+    const existentes = await this.prisma.servicioLavado.findMany({
+      where: {
+        ordenTrabajoOT: { equals: ordenTrabajoOT, mode: 'insensitive' },
+        deletedAt: null,
+        estado: { not: ServiceStatus.CANCELADO },
+      },
+      select: { placa: true, servicioCatalogoId: true, catalogo: { select: { nombre: true } } },
+    });
+    if (existentes.length === 0) return;
+
+    const otroVehiculo = existentes.find((s) => normalizarPlaca(s.placa) !== placaNueva);
+    if (otroVehiculo) {
+      throw new BadRequestException(
+        `La Orden de Trabajo "${ordenTrabajoOT}" pertenece al vehículo ${otroVehiculo.placa}. Solo se pueden agregar servicios del mismo vehículo.`,
+      );
+    }
+
+    const repetido = existentes.find((s) => catalogoIds.includes(Number(s.servicioCatalogoId)));
+    if (repetido) {
+      throw new BadRequestException(
+        `El servicio "${repetido.catalogo?.nombre || repetido.servicioCatalogoId}" ya está registrado en la OT "${ordenTrabajoOT}".`,
+      );
+    }
+  }
+
+  /**
+   * Crea una o varias filas de servicio general para la misma OT y vehículo.
+   * Con varios servicios valida primero el stock combinado para no dejar la OT a medias.
+   */
+  async createMultiple(createDto: CreateServicioDto, operadorId: string) {
+    const ids = Array.from(new Set(
+      [...(createDto.servicioCatalogoIds || []), createDto.servicioCatalogoId]
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ));
+    if (ids.length <= 1) {
+      return this.create({ ...createDto, servicioCatalogoId: ids[0] ?? createDto.servicioCatalogoId }, operadorId);
+    }
+
+    const ordenTrabajoOT = createDto.ordenTrabajoOT?.trim().toUpperCase();
+    if (!ordenTrabajoOT) {
+      throw new BadRequestException('El número de Orden de Trabajo (OT) es obligatorio y debe ser ingresado por el usuario.');
+    }
+    await this._validarOTServicioGeneral(ordenTrabajoOT, createDto.placa, ids);
+
+    const bahia = await this.prisma.bahia.findFirst({
+      where: { OR: [{ id: createDto.bahiaId }, { nombre: { equals: createDto.bahiaId, mode: 'insensitive' } }] },
+      select: { agenciaId: true },
+    });
+    const catalogos = await this.prisma.catalogoServicio.findMany({
+      where: { id: { in: ids } },
+      include: { recetas: { include: { insumo: true, unidadConsumo: true } } },
+    });
+    const faltantesCatalogo = ids.filter((id) => !catalogos.some((c) => c.id === id));
+    if (faltantesCatalogo.length > 0) {
+      throw new BadRequestException(`Servicios no encontrados en el catálogo: ${faltantesCatalogo.join(', ')}.`);
+    }
+    if (catalogos.some((c) => c.categoria !== 'GENERAL')) {
+      throw new BadRequestException('Solo se pueden registrar varios servicios en la misma OT para servicios generales.');
+    }
+
+    if (bahia?.agenciaId) {
+      const requerido = new Map<string, { nombre: string; simbolo: string; cantidad: number }>();
+      for (const catalogo of catalogos) {
+        for (const receta of catalogo.recetas) {
+          if (receta.esOpcional) continue;
+          const cantidad = this._convertirAUnidadBase(
+            Number(receta.cantidadUsada),
+            receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+          );
+          const prev = requerido.get(receta.insumoId);
+          requerido.set(receta.insumoId, {
+            nombre: receta.insumo.nombre,
+            simbolo: receta.unidadConsumo?.simbolo || 'und',
+            cantidad: (prev?.cantidad || 0) + cantidad,
+          });
+        }
+      }
+      const faltantes: string[] = [];
+      for (const [insumoId, req] of requerido) {
+        const stock = await this._getStockAgencia(insumoId, bahia.agenciaId);
+        const disponible = Number(stock?.cantidadActual ?? 0);
+        if (disponible < req.cantidad) {
+          faltantes.push(`"${req.nombre}": disponible ${disponible.toFixed(2)} ${req.simbolo}, requerido ${req.cantidad.toFixed(2)} ${req.simbolo}`);
+        }
+      }
+      if (faltantes.length > 0) {
+        throw new BadRequestException(
+          `No se pueden iniciar los servicios: Stock insuficiente en la agencia para los insumos obligatorios:\n` +
+            faltantes.map((f) => `  • ${f}`).join('\n') +
+            `\nPor favor solicite suministros a Bodega Central antes de crear la OT.`,
+        );
+      }
+    }
+
+    const baseUuid = createDto.clientUuid || randomUUID();
+    const creados: any[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      creados.push(await this.create({
+        ...createDto,
+        ordenTrabajoOT,
+        servicioCatalogoId: ids[i],
+        servicioCatalogoIds: undefined,
+        clientUuid: i === 0 ? baseUuid : `${baseUuid}-${i + 1}`,
+      }, operadorId));
+    }
+    return creados;
   }
 
   async create(createDto: CreateServicioDto, operadorId: string) {
@@ -245,11 +382,21 @@ export class OperacionesService {
     const resolvedBahiaId = bahia.id;
     const agenciaId = bahia.agenciaId;
 
-    // 2. Resolución Defensiva de Operador (Verifica existencia de User para FK)
-    let validOperadorId = operadorId;
+    // 2. Resolución de Operador: si la app indicó qué lavador realiza el servicio
+    //    (createDto.operadorId), la OT se le atribuye a él -siempre que sea de la misma
+    //    agencia que la bahía-. Si no se indicó, se atribuye a quien está autenticado.
+    let validOperadorId = createDto.operadorId || operadorId;
     let user = validOperadorId ? await this.prisma.user.findUnique({ where: { id: validOperadorId } }) : null;
     if (!user) {
       throw new BadRequestException('No se encontró el operador autenticado para registrar el servicio.');
+    }
+    if (createDto.operadorId) {
+      if (String(user.agenciaId || '') !== String(agenciaId || '')) {
+        throw new BadRequestException('El lavador seleccionado no pertenece a la agencia de la bahía indicada.');
+      }
+      if (user.estado !== 1) {
+        throw new BadRequestException('El lavador seleccionado está inactivo y no puede recibir nuevas OTs.');
+      }
     }
 
     // 3. Resolución Defensiva de Catálogo de Servicio y sus Recetas
@@ -406,19 +553,23 @@ export class OperacionesService {
       throw new BadRequestException('El número de Orden de Trabajo (OT) es obligatorio y debe ser ingresado por el usuario.');
     }
 
-    // Validar unicidad en Servicios Generales y Servicios Especiales
-    const duplicateGeneral = await this.prisma.servicioLavado.findFirst({
-      where: { ordenTrabajoOT: { equals: ordenTrabajoOT, mode: 'insensitive' }, deletedAt: null },
-    });
-    if (duplicateGeneral) {
-      throw new BadRequestException(`La Orden de Trabajo "${ordenTrabajoOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
-    }
+    await this._validarOTServicioGeneral(ordenTrabajoOT, createDto.placa, [resolvedCatalogoId]);
 
-    const duplicateEspecial = await this.prisma.servicioEspecial.findFirst({
-      where: { codigoSE: { equals: ordenTrabajoOT, mode: 'insensitive' }, deletedAt: null },
-    });
-    if (duplicateEspecial) {
-      throw new BadRequestException(`La Orden de Trabajo "${ordenTrabajoOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
+    // La evidencia de ingreso es del vehículo: un servicio agregado a una OT existente la hereda.
+    let fotoIngresoUrl = createDto.fotoIngresoUrl || undefined;
+    let videoInicialHeredado: string | undefined;
+    if (!fotoIngresoUrl) {
+      const hermana = await this.prisma.servicioLavado.findFirst({
+        where: {
+          ordenTrabajoOT: { equals: ordenTrabajoOT, mode: 'insensitive' },
+          deletedAt: null,
+          OR: [{ fotoIngresoUrl: { not: null } }, { videoInicialUrl: { not: null } }],
+        },
+        select: { fotoIngresoUrl: true, videoInicialUrl: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      fotoIngresoUrl = hermana?.fotoIngresoUrl || undefined;
+      videoInicialHeredado = hermana?.videoInicialUrl || undefined;
     }
 
     const created = await (this.prisma.servicioLavado as any).create({
@@ -440,7 +591,8 @@ export class OperacionesService {
         horaIngreso: now,
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,
         horaSalida: horaSalidaFinal,
-        fotoIngresoUrl: createDto.fotoIngresoUrl,
+        fotoIngresoUrl,
+        videoInicialUrl: videoInicialHeredado,
         fotoSalidaUrl: createDto.fotoSalidaUrl,
         observaciones: observacionesFinales,
         syncedAt: now,
@@ -453,7 +605,12 @@ export class OperacionesService {
           include: {
             recetas: {
               include: {
-                insumo: { select: { id: true, codigoSKU: true, nombre: true, costoUnitarioUSD: true } },
+                insumo: {
+                  select: {
+                    id: true, codigoSKU: true, nombre: true, costoUnitarioUSD: true,
+                    unidadMedida: { select: { simbolo: true } },
+                  },
+                },
                 unidadConsumo: { select: { id: true, codigo: true, simbolo: true, factorBase: true } },
               },
             },
@@ -469,12 +626,12 @@ export class OperacionesService {
     await this._ejecutarConsumoInsumos(created, false);
 
     // 9. Persistir registro en tabla EvidenciaServicio si se adjuntó vídeo o foto de ingreso
-    if (createDto.fotoIngresoUrl) {
+    if (fotoIngresoUrl || videoInicialHeredado) {
       await this.prisma.evidenciaServicio.create({
         data: {
           servicioId: created.id,
           tipo: 'VIDEO_INGRESO',
-          url: createDto.fotoIngresoUrl,
+          url: (fotoIngresoUrl || videoInicialHeredado) as string,
           descripcion: 'Vídeo / Foto de Ingreso del Vehículo',
         },
       }).catch((err) => {
@@ -825,6 +982,11 @@ export class OperacionesService {
             cantidadUsada: cantidadADescontar,
             stockUbicacionId: stock.id,
             agenciaId,
+            // Snapshot congelado: el producto pudo cambiar de nombre/SKU, o la receta
+            // pudo reemplazarlo por otro, después de este consumo. Esto no cambia.
+            insumoNombre: receta.insumo?.nombre || '',
+            insumoSKU: receta.insumo?.codigoSKU || '',
+            unidadSimbolo: receta.insumo?.unidadMedida?.simbolo || receta.unidadConsumo?.simbolo || '',
           },
         });
       });
@@ -956,7 +1118,7 @@ export class OperacionesService {
   //  RECETAS DE INSUMOS POR CATÁLOGO DE SERVICIO
   // ============================================================
 
-  async asignarReceta(dto: AsignarRecetaDto) {
+  async asignarReceta(dto: AsignarRecetaDto, usuarioId?: string) {
     // Verificar que el catálogo existe
     const catalogo = await this.prisma.catalogoServicio.findUnique({
       where: { id: dto.catalogoServicioId },
@@ -965,10 +1127,26 @@ export class OperacionesService {
       throw new NotFoundException(`Catálogo de servicio con ID ${dto.catalogoServicioId} no encontrado`);
     }
 
+    // Estado ANTES del cambio, para poder registrar el historial (qué salió, qué cambió).
+    const recetaAnterior = await this.prisma.recetaInsumo.findMany({
+      where: { catalogoServicioId: dto.catalogoServicioId },
+      include: {
+        insumo: { select: { nombre: true, codigoSKU: true } },
+        unidadConsumo: { select: { simbolo: true } },
+      },
+    });
+    const anteriorPorInsumo = new Map(recetaAnterior.map((r) => [r.insumoId, r]));
+    const loteId = randomUUID();
+    const historial: any[] = [];
+
     if (!dto.items || dto.items.length === 0) {
-      await this.prisma.recetaInsumo.deleteMany({
-        where: { catalogoServicioId: dto.catalogoServicioId },
-      });
+      for (const anterior of recetaAnterior) {
+        historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'ELIMINADO', anterior.insumoId, anterior.insumo.nombre, anterior.insumo.codigoSKU, anterior.unidadConsumo.simbolo, Number(anterior.cantidadUsada), null, usuarioId));
+      }
+      await this.prisma.$transaction([
+        ...(historial.length > 0 ? [this.prisma.recetaInsumoHistorial.createMany({ data: historial })] : []),
+        this.prisma.recetaInsumo.deleteMany({ where: { catalogoServicioId: dto.catalogoServicioId } }),
+      ]);
       return {
         catalogoServicioId: dto.catalogoServicioId,
         catalogoNombre: catalogo.nombre,
@@ -978,6 +1156,7 @@ export class OperacionesService {
     }
 
     // Validar insumos y resolver unidades con fallback robusto
+    const insumosPorId = new Map<string, any>();
     for (const item of dto.items) {
       const insumo = await this.prisma.insumo.findUnique({ where: { id: item.insumoId } });
       if (!insumo) throw new NotFoundException(`Insumo con ID "${item.insumoId}" no encontrado`);
@@ -996,30 +1175,35 @@ export class OperacionesService {
       }
 
       item.unidadConsumoId = unidad.id;
+      insumosPorId.set(item.insumoId, { insumo, unidad });
     }
 
-    // Sincronizar: eliminar de la receta los insumos que ya no estén en dto.items
-    const incomingInsumoIds = dto.items.map((i) => i.insumoId);
+    // Líneas que salen de la receta (estaban antes, no vienen en el nuevo guardado)
+    const incomingInsumoIds = new Set(dto.items.map((i) => i.insumoId));
+    for (const anterior of recetaAnterior) {
+      if (!incomingInsumoIds.has(anterior.insumoId)) {
+        historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'ELIMINADO', anterior.insumoId, anterior.insumo.nombre, anterior.insumo.codigoSKU, anterior.unidadConsumo.simbolo, Number(anterior.cantidadUsada), null, usuarioId));
+      }
+    }
     await this.prisma.recetaInsumo.deleteMany({
       where: {
         catalogoServicioId: dto.catalogoServicioId,
-        insumoId: { notIn: incomingInsumoIds },
+        insumoId: { notIn: Array.from(incomingInsumoIds) },
       },
     });
 
     // Upsert cada línea de receta
     const resultados = [];
     for (const item of dto.items) {
-      const existing = await this.prisma.recetaInsumo.findUnique({
-        where: {
-          catalogoServicioId_insumoId: {
-            catalogoServicioId: dto.catalogoServicioId,
-            insumoId: item.insumoId,
-          },
-        },
-      });
+      const { insumo, unidad } = insumosPorId.get(item.insumoId)!;
+      const existing = anteriorPorInsumo.get(item.insumoId);
 
       if (existing) {
+        const cambioCantidad = Number(existing.cantidadUsada) !== Number(item.cantidadUsada);
+        const cambioUnidad = existing.unidadConsumoId !== item.unidadConsumoId;
+        if (cambioCantidad || cambioUnidad) {
+          historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'MODIFICADO', item.insumoId, insumo.nombre, insumo.codigoSKU, unidad.simbolo, Number(existing.cantidadUsada), Number(item.cantidadUsada), usuarioId));
+        }
         const updated = await this.prisma.recetaInsumo.update({
           where: { id: existing.id },
           data: {
@@ -1035,6 +1219,7 @@ export class OperacionesService {
         });
         resultados.push(updated);
       } else {
+        historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'AGREGADO', item.insumoId, insumo.nombre, insumo.codigoSKU, unidad.simbolo, null, Number(item.cantidadUsada), usuarioId));
         const created = await this.prisma.recetaInsumo.create({
           data: {
             catalogoServicioId: dto.catalogoServicioId,
@@ -1053,12 +1238,235 @@ export class OperacionesService {
       }
     }
 
+    if (historial.length > 0) {
+      await this.prisma.recetaInsumoHistorial.createMany({ data: historial });
+    }
+
     return {
       catalogoServicioId: dto.catalogoServicioId,
       catalogoNombre: catalogo.nombre,
       categoria: catalogo.categoria,
       recetaActualizada: resultados,
     };
+  }
+
+  private _historialRecetaEntry(
+    catalogoServicioId: number,
+    loteId: string,
+    tipoCambio: 'AGREGADO' | 'MODIFICADO' | 'ELIMINADO',
+    insumoId: string,
+    insumoNombre: string,
+    insumoSKU: string,
+    unidadSimbolo: string,
+    cantidadAnterior: number | null,
+    cantidadNueva: number | null,
+    usuarioId?: string,
+  ) {
+    return {
+      catalogoServicioId,
+      loteId,
+      tipoCambio,
+      insumoId,
+      insumoNombre,
+      insumoSKU,
+      unidadSimbolo,
+      cantidadAnterior,
+      cantidadNueva,
+      usuarioId: usuarioId || null,
+    };
+  }
+
+  /**
+   * Libro de consumo por OT: una fila por OT con los insumos que descontó, tanto de
+   * lavado general (agencia) como de servicios especiales (kit del pulidor).
+   * Los insumos salen del snapshot congelado al momento del consumo.
+   */
+  async listConsumosPorServicio(dto: ListConsumosServicioDto) {
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+    const tipo = dto.tipo ?? 'TODOS';
+    const busqueda = dto.busqueda?.trim();
+    // Tope de líneas a agrupar en memoria; el filtro por fechas mantiene el volumen acotado.
+    const LIMITE_LINEAS = 5000;
+
+    const createdAt: any = {};
+    if (dto.fechaDesde) createdAt.gte = new Date(`${dto.fechaDesde}T00:00:00`);
+    if (dto.fechaHasta) createdAt.lte = new Date(`${dto.fechaHasta}T23:59:59.999`);
+    const rango = Object.keys(createdAt).length > 0 ? { createdAt } : {};
+
+    const insumoSelect = {
+      select: { nombre: true, codigoSKU: true, unidadMedida: { select: { simbolo: true } } },
+    };
+    const operadorSelect = { select: { name: true, lastname: true } };
+    const nombreOperador = (u?: { name?: string | null; lastname?: string | null } | null) =>
+      u ? `${u.name || ''} ${u.lastname || ''}`.replace(/\(CI:[^)]*\)/, '').trim() : '';
+
+    const whereGeneral: any = { ...rango };
+    if (dto.agenciaId) whereGeneral.agenciaId = dto.agenciaId;
+    if (busqueda) {
+      whereGeneral.OR = [
+        { insumoNombre: { contains: busqueda, mode: 'insensitive' } },
+        { insumo: { nombre: { contains: busqueda, mode: 'insensitive' } } },
+        { servicio: { ordenTrabajoOT: { contains: busqueda, mode: 'insensitive' } } },
+        { servicio: { placa: { contains: busqueda, mode: 'insensitive' } } },
+        { servicio: { catalogo: { nombre: { contains: busqueda, mode: 'insensitive' } } } },
+      ];
+    }
+
+    const whereEspecial: any = { ...rango };
+    if (dto.agenciaId) whereEspecial.servicioEspecial = { agenciaId: dto.agenciaId };
+    if (busqueda) {
+      whereEspecial.OR = [
+        { insumoNombre: { contains: busqueda, mode: 'insensitive' } },
+        { insumo: { nombre: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { codigoSE: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { ordenTrabajoOT: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { placa: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { tipoServicio: { contains: busqueda, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [generales, especiales] = await Promise.all([
+      tipo === 'ESPECIAL' ? [] : this.prisma.consumoServicio.findMany({
+        where: whereGeneral,
+        orderBy: { createdAt: 'desc' },
+        take: LIMITE_LINEAS,
+        include: {
+          insumo: insumoSelect,
+          servicio: {
+            select: {
+              id: true,
+              ordenTrabajoOT: true,
+              placa: true,
+              catalogo: { select: { nombre: true } },
+              bahia: { select: { agencia: { select: { nombre: true } } } },
+              operador: operadorSelect,
+            },
+          },
+        },
+      }),
+      tipo === 'GENERAL' ? [] : this.prisma.consumoServicioEspecial.findMany({
+        where: whereEspecial,
+        orderBy: { createdAt: 'desc' },
+        take: LIMITE_LINEAS,
+        include: {
+          insumo: insumoSelect,
+          servicioEspecial: {
+            select: {
+              id: true,
+              codigoSE: true,
+              ordenTrabajoOT: true,
+              tipoServicio: true,
+              placa: true,
+              agencia: { select: { nombre: true } },
+              operador: operadorSelect,
+            },
+          },
+        },
+      }),
+    ]);
+
+    type ItemConsumo = {
+      servicioNombre: string;
+      insumoNombre: string;
+      insumoSKU: string;
+      cantidad: number;
+      unidadSimbolo: string;
+      fecha: Date;
+    };
+    type GrupoOT = {
+      key: string;
+      origen: 'GENERAL' | 'ESPECIAL';
+      codigoOT: string;
+      placa: string;
+      agenciaNombre: string;
+      responsable: string;
+      fecha: Date;
+      servicios: string[];
+      items: ItemConsumo[];
+    };
+    const grupos = new Map<string, GrupoOT>();
+
+    const agregar = (
+      key: string,
+      base: Omit<GrupoOT, 'key' | 'fecha' | 'servicios' | 'items'>,
+      item: ItemConsumo,
+    ) => {
+      let g = grupos.get(key);
+      if (!g) {
+        g = { key, ...base, fecha: item.fecha, servicios: [], items: [] };
+        grupos.set(key, g);
+      }
+      if (item.fecha > g.fecha) g.fecha = item.fecha;
+      if (!g.servicios.includes(item.servicioNombre)) g.servicios.push(item.servicioNombre);
+      g.items.push(item);
+    };
+
+    for (const c of generales) {
+      const ot = (c.servicio?.ordenTrabajoOT || '').trim().toUpperCase();
+      const placa = c.servicio?.placa || '';
+      // Una OT general puede tener varios servicios (una fila por servicio): comparten OT y placa.
+      const key = ot ? `G|${ot}|${placa.toUpperCase()}` : `G|${c.servicio?.id || c.servicioId}`;
+      agregar(
+        key,
+        {
+          origen: 'GENERAL',
+          codigoOT: c.servicio?.ordenTrabajoOT || '',
+          placa,
+          agenciaNombre: c.servicio?.bahia?.agencia?.nombre || '',
+          responsable: nombreOperador(c.servicio?.operador),
+        },
+        {
+          servicioNombre: c.servicio?.catalogo?.nombre || 'Servicio',
+          insumoNombre: c.insumoNombre || c.insumo?.nombre || 'Insumo',
+          insumoSKU: c.insumoSKU || c.insumo?.codigoSKU || '',
+          cantidad: Number(c.cantidadUsada),
+          unidadSimbolo: c.unidadSimbolo || c.insumo?.unidadMedida?.simbolo || '',
+          fecha: c.createdAt,
+        },
+      );
+    }
+
+    for (const c of especiales) {
+      const se = c.servicioEspecial;
+      agregar(
+        `E|${se?.id || c.servicioEspecialId}`,
+        {
+          origen: 'ESPECIAL',
+          codigoOT: se?.ordenTrabajoOT || se?.codigoSE || '',
+          placa: se?.placa || '',
+          agenciaNombre: se?.agencia?.nombre || 'Pulidor móvil',
+          responsable: nombreOperador(se?.operador),
+        },
+        {
+          servicioNombre: se?.tipoServicio || 'Servicio especial',
+          insumoNombre: c.insumoNombre || c.insumo?.nombre || 'Insumo',
+          insumoSKU: c.insumoSKU || c.insumo?.codigoSKU || '',
+          cantidad: Number(c.cantidadUsada),
+          unidadSimbolo: c.unidadSimbolo || c.insumo?.unidadMedida?.simbolo || '',
+          fecha: c.createdAt,
+        },
+      );
+    }
+
+    const todos = Array.from(grupos.values()).sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
+    const inicio = (page - 1) * pageSize;
+    return {
+      data: todos.slice(inicio, inicio + pageSize),
+      total: todos.length,
+      page,
+      pageSize,
+    };
+  }
+
+  async listRecetaHistorial(dto: ListRecetaDto) {
+    return this.prisma.recetaInsumoHistorial.findMany({
+      where: { catalogoServicioId: dto.catalogoServicioId },
+      include: {
+        usuario: { select: { id: true, name: true, lastname: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   async listReceta(dto: ListRecetaDto) {
@@ -1090,13 +1498,17 @@ export class OperacionesService {
     return catalogo;
   }
 
-  async eliminarRecetaItem(dto: EliminarRecetaItemDto) {
+  async eliminarRecetaItem(dto: EliminarRecetaItemDto, usuarioId?: string) {
     const receta = await this.prisma.recetaInsumo.findUnique({
       where: {
         catalogoServicioId_insumoId: {
           catalogoServicioId: dto.catalogoServicioId,
           insumoId: dto.insumoId,
         },
+      },
+      include: {
+        insumo: { select: { nombre: true, codigoSKU: true } },
+        unidadConsumo: { select: { simbolo: true } },
       },
     });
 
@@ -1106,7 +1518,23 @@ export class OperacionesService {
       );
     }
 
-    await this.prisma.recetaInsumo.delete({ where: { id: receta.id } });
+    await this.prisma.$transaction([
+      this.prisma.recetaInsumoHistorial.create({
+        data: this._historialRecetaEntry(
+          dto.catalogoServicioId,
+          randomUUID(),
+          'ELIMINADO',
+          receta.insumoId,
+          receta.insumo.nombre,
+          receta.insumo.codigoSKU,
+          receta.unidadConsumo.simbolo,
+          Number(receta.cantidadUsada),
+          null,
+          usuarioId,
+        ),
+      }),
+      this.prisma.recetaInsumo.delete({ where: { id: receta.id } }),
+    ]);
     return { ok: true, message: 'Insumo eliminado de la receta correctamente' };
   }
 

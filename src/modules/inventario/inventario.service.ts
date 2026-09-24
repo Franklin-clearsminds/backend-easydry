@@ -10,7 +10,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto } from './dto/envases.dto.js';
 import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidades.dto.js';
 import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto } from './dto/insumos.dto.js';
-import { ListStockDto, AjusteStockDto } from './dto/stock.dto.js';
+import { ListStockDto, AjusteStockDto, ReajusteStockDto } from './dto/stock.dto.js';
 import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, ListMovimientosDto } from './dto/movimientos.dto.js';
 import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto } from './dto/alertas.dto.js';
 import { ListKardexDto } from './dto/kardex.dto.js';
@@ -610,6 +610,290 @@ export class InventarioService {
     return updated;
   }
 
+  async reajustarStock(dto: ReajusteStockDto, currentUser?: any) {
+    await this.ensureMovimientoGlobalRutaColumns();
+    const usuarioId = currentUser?.id || currentUser?.sub;
+    if (!usuarioId) {
+      throw new UnauthorizedException('Debes iniciar sesión para reajustar stock.');
+    }
+
+    const usuario = await this.prisma.user.findUnique({
+      where: { id: usuarioId },
+      include: { role: true, bodega: { select: { id: true, nombre: true, regionId: true } } },
+    });
+    const role = String(usuario?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
+    const isSuper = role === 'SUPER_ADMIN' || (role.includes('SUPER') && role.includes('ADMIN'));
+    const isAdmin = role === 'ADMIN';
+    const isCoord = role === 'COORD_BODEGA' || (role.includes('COORD') && role.includes('BODEGA')) || role === 'DISTRIBUIDOR';
+    const isAsistente = role === 'ASISTENTE_BODEGA' || (role.includes('ASISTENTE') && role.includes('BODEGA'));
+
+    if (!isSuper && !isAdmin && !isCoord && !isAsistente) {
+      throw new ForbiddenException(
+        'Solo Super Admin, Admin, Coordinador de Bodega o Asistente de Bodega pueden reajustar stock.',
+      );
+    }
+
+    const cantidadContada = Number(dto.cantidadContada);
+    if (!Number.isFinite(cantidadContada) || cantidadContada < 0) {
+      throw new BadRequestException('La cantidad contada debe ser un número mayor o igual a 0.');
+    }
+
+    const motivoTexto = String(dto.motivoTexto || '').trim();
+    if (motivoTexto.length < 10) {
+      throw new BadRequestException('Escribe por qué se aumenta o disminuye el stock (mínimo 10 caracteres).');
+    }
+
+    const evidenciaUrl = String(dto.evidenciaUrl || '').trim();
+    if (!evidenciaUrl || !/^https?:\/\//i.test(evidenciaUrl)) {
+      throw new BadRequestException('La foto de evidencia del reajuste es obligatoria y debe estar en S3.');
+    }
+
+    const includeStock = {
+      insumo: { include: { unidadMedida: true } },
+      bodega: true,
+      agencia: true,
+      pulidor: { select: { id: true, name: true, lastname: true, email: true, agenciaId: true } },
+    } as const;
+    let stocks: any[] = [];
+
+    if (dto.stockUbicacionId) {
+      const one = await this.prisma.stockUbicacion.findUnique({
+        where: { id: dto.stockUbicacionId },
+        include: includeStock,
+      });
+      if (one) stocks = [one];
+    }
+
+    if (stocks.length === 0 && dto.insumoId && dto.bodegaId) {
+      stocks = await this.prisma.stockUbicacion.findMany({
+        where: { insumoId: dto.insumoId, bodegaId: dto.bodegaId },
+        include: includeStock,
+      });
+    }
+    if (stocks.length === 0 && dto.insumoId && dto.agenciaId) {
+      stocks = await this.prisma.stockUbicacion.findMany({
+        where: { insumoId: dto.insumoId, agenciaId: dto.agenciaId, tipoUbicacion: 'AGENCIA' },
+        include: includeStock,
+      });
+    }
+    if (stocks.length === 0 && dto.insumoId && dto.pulidorId) {
+      stocks = await this.prisma.stockUbicacion.findMany({
+        where: {
+          insumoId: dto.insumoId,
+          pulidorId: dto.pulidorId,
+          tipoUbicacion: { in: ['PULIDOR_FIJO', 'PULIDOR_MOVIL'] },
+        },
+        include: includeStock,
+      });
+    }
+
+    const stock = stocks[0] || null;
+    const insumoId = stock?.insumoId || dto.insumoId;
+    const bodegaId = stock?.bodegaId || dto.bodegaId || null;
+    const agenciaId = stock?.agenciaId || dto.agenciaId || null;
+    const pulidorId = stock?.pulidorId || dto.pulidorId || null;
+    if (!insumoId || (!bodegaId && !agenciaId && !pulidorId)) {
+      throw new BadRequestException('Indica el insumo y la ubicación (bodega, agencia o pulidor) a reajustar.');
+    }
+
+    // Alcance del asistente: su bodega asignada, o agencias y pulidores de su región.
+    if (isAsistente) {
+      if (bodegaId) {
+        if (!usuario?.bodegaId || usuario.bodegaId !== bodegaId) {
+          throw new ForbiddenException('El asistente de bodega solo puede reajustar el stock de su bodega asignada.');
+        }
+      } else {
+        const regionAsistente = usuario?.bodega?.regionId || usuario?.regionId || null;
+        if (!regionAsistente) {
+          throw new ForbiddenException('Tu usuario no tiene región asignada para reajustar agencias o pulidores.');
+        }
+        let regionDestino: string | null = null;
+        if (agenciaId) {
+          const ag = await this.prisma.agencia.findUnique({ where: { id: agenciaId }, select: { regionId: true } });
+          regionDestino = ag?.regionId || null;
+        } else if (pulidorId) {
+          const pu = await this.prisma.user.findUnique({
+            where: { id: pulidorId },
+            select: { regionId: true, agencia: { select: { regionId: true } } },
+          });
+          regionDestino = pu?.regionId || pu?.agencia?.regionId || null;
+        }
+        if (!regionDestino || regionDestino !== regionAsistente) {
+          throw new ForbiddenException('El asistente de bodega solo puede reajustar agencias y pulidores de su región.');
+        }
+      }
+    }
+
+    const [bodega, agencia, pulidor] = await Promise.all([
+      bodegaId
+        ? (stock?.bodega || this.prisma.bodega.findUnique({ where: { id: bodegaId } }))
+        : Promise.resolve(null),
+      agenciaId
+        ? (stock?.agencia || this.prisma.agencia.findUnique({ where: { id: agenciaId }, select: { id: true, nombre: true, codigo: true } }))
+        : Promise.resolve(null),
+      pulidorId
+        ? (stock?.pulidor || this.prisma.user.findUnique({
+            where: { id: pulidorId },
+            select: { id: true, name: true, lastname: true, email: true, agenciaId: true },
+          }))
+        : Promise.resolve(null),
+    ]);
+
+    if (bodegaId && !bodega) throw new NotFoundException(`Bodega ${bodegaId} no encontrada.`);
+    if (agenciaId && !agencia) throw new NotFoundException(`Agencia ${agenciaId} no encontrada.`);
+    if (pulidorId && !pulidor) throw new NotFoundException(`Pulidor ${pulidorId} no encontrado.`);
+
+    const tipoUbicacion = pulidorId
+      ? (pulidor?.agenciaId ? 'PULIDOR_FIJO' : 'PULIDOR_MOVIL')
+      : agenciaId
+        ? 'AGENCIA'
+        : 'BODEGA_CENTRAL';
+    const ubicacionId = String(bodegaId || agenciaId || pulidorId);
+    const ubicacionNombre = bodega?.nombre
+      || agencia?.nombre
+      || `${pulidor?.name || ''} ${pulidor?.lastname || ''}`.trim()
+      || pulidor?.email
+      || 'Ubicación';
+
+    const insumo = stock?.insumo || await this.prisma.insumo.findUnique({
+      where: { id: insumoId },
+      include: { unidadMedida: true },
+    });
+    if (!insumo) {
+      throw new NotFoundException(`Insumo ${insumoId} no encontrado.`);
+    }
+
+    const stockAnterior = stocks.reduce((sum, row) => sum + Number(row.cantidadActual || 0), 0);
+    const delta = Math.round((cantidadContada - stockAnterior) * 10000) / 10000;
+    if (Math.abs(delta) < 0.0001) {
+      throw new BadRequestException('La cantidad contada es igual al stock actual. No hay nada que reajustar.');
+    }
+
+    const motivoCorto = delta > 0 ? 'Aumento de inventario' : 'Disminución de inventario';
+    const codigoTipo = delta > 0 ? 'POSITIVE_ADJUSTMENT' : 'NEGATIVE_ADJUSTMENT';
+    let tipoMov = await this.prisma.tipoMovimientoInventario.findFirst({ where: { codigo: codigoTipo } });
+    if (!tipoMov) {
+      tipoMov = await this.prisma.tipoMovimientoInventario.create({
+        data: {
+          codigo: codigoTipo,
+          nombre: delta > 0 ? 'Ajuste (+)' : 'Ajuste (−)',
+          descripcion: 'Reajuste de stock por conteo físico',
+          esEntrada: delta > 0,
+          estado: 1,
+        },
+      });
+    }
+
+    const unidadId = insumo.unidadMedidaId;
+    if (!unidadId) {
+      throw new BadRequestException('El insumo no tiene unidad de medida configurada.');
+    }
+    const responsableNombre = `${usuario?.name || ''} ${usuario?.lastname || ''}`.trim() || usuario?.email || usuarioId;
+    const observaciones = `[REAJUSTE] ${motivoCorto}. ${motivoTexto} | ${responsableNombre}`;
+    const numeroComprobante = `AJU-${Date.now().toString().slice(-8)}-${Math.floor(Math.random() * 100)}`;
+
+    const resultado = await this.prisma.$transaction(async (tx) => {
+      let stockId = stock?.id;
+      if (stockId) {
+        await tx.stockUbicacion.update({
+          where: { id: stockId },
+          data: { cantidadActual: cantidadContada },
+        });
+        for (const extra of stocks.slice(1)) {
+          await tx.stockUbicacion.update({
+            where: { id: extra.id },
+            data: { cantidadActual: 0 },
+          });
+        }
+      } else {
+        const created = await tx.stockUbicacion.create({
+          data: {
+            insumoId,
+            tipoUbicacion,
+            bodegaId: bodegaId || undefined,
+            agenciaId: agenciaId || undefined,
+            pulidorId: pulidorId || undefined,
+            cantidadActual: cantidadContada,
+            cantidadMinima: Number(
+              tipoUbicacion === 'AGENCIA'
+                ? (insumo.stockMinimoAgencia || 0)
+                : (insumo.stockMinimoBodega || 0),
+            ),
+          },
+        });
+        stockId = created.id;
+      }
+
+      if (tipoUbicacion === 'BODEGA_CENTRAL') {
+        const stockCatalogoNuevo = Math.max(0, Number(insumo.stockActual) + delta);
+        await tx.insumo.update({
+          where: { id: insumoId },
+          data: { stockActual: stockCatalogoNuevo },
+        });
+      }
+
+      const movGlobal = await tx.movimientoInventarioGlobal.create({
+        data: {
+          numeroComprobante,
+          tipoMovimientoId: tipoMov.id,
+          insumoId,
+          cantidad: Math.abs(delta),
+          unidadId,
+          cantidadBase: delta,
+          stockAnterior,
+          stockNuevo: cantidadContada,
+          ubicacionId,
+          origenUbicacion: ubicacionNombre,
+          destinoUbicacion: delta > 0 ? 'Reajuste (+)' : 'Reajuste (−)',
+          responsableId: usuarioId,
+          referencia: motivoCorto,
+          observaciones,
+          evidenciasUrls: [evidenciaUrl],
+          stockUbicacionId: stockId,
+          cantidadContada,
+        },
+        include: {
+          insumo: { select: { id: true, codigoSKU: true, nombre: true } },
+          tipoMovimiento: true,
+          unidad: true,
+          responsable: { select: { id: true, name: true, lastname: true, email: true } },
+        },
+      });
+
+      await tx.kardexMovimiento.create({
+        data: {
+          insumoId,
+          ubicacionId,
+          tipoMovimiento: codigoTipo,
+          cantidad: delta,
+          stockAnterior,
+          stockPosterior: cantidadContada,
+          costoUnitario: insumo.costoUnitarioUSD,
+          costoTotal: Number(insumo.costoUnitarioUSD || 0) * Math.abs(delta),
+          referenciaId: numeroComprobante,
+          usuarioId,
+        },
+      });
+
+      return movGlobal;
+    });
+
+    return {
+      ...resultado,
+      bodega: bodega ? { id: bodega.id, nombre: bodega.nombre } : null,
+      agencia: agencia ? { id: agencia.id, nombre: agencia.nombre } : null,
+      pulidor: pulidor
+        ? { id: pulidor.id, nombre: `${pulidor.name || ''} ${pulidor.lastname || ''}`.trim() || pulidor.email }
+        : null,
+      ubicacion: { id: ubicacionId, nombre: ubicacionNombre, tipo: tipoUbicacion },
+      motivo: motivoCorto,
+      motivoTexto,
+      evidenciaUrl,
+      realizadoPor: responsableNombre,
+      realizadoEn: resultado.fechaMovimiento || resultado.createdAt,
+    };
+  }
+
 
   async obtenerStockAgenciasResumen(dto: { agenciaId?: string; region?: string } = {}, usuarioId?: string) {
     const whereAgencia: any = { estado: 1 };
@@ -729,7 +1013,9 @@ export class InventarioService {
           nombre: ins.nombre,
           tipoProducto: ins.tipoProducto?.nombre || 'General',
           unidad: ins.unidadMedida?.simbolo || 'u',
+          contenidoNeto: cNeto,
           stockActual: actual,
+          stockUnidades: Math.round((actual / cNeto) * 100) / 100,
           stockMinimo: minimo,
           deficit,
           estado,
@@ -2916,6 +3202,13 @@ export class InventarioService {
     if (isSuperAdmin || isCoord) {
       return todos;
     }
+    if (isPulidor && usuario) {
+      return todos.filter((d: any) =>
+        (usuario.id && String(d.destinoPulidorId) === String(usuario.id)) ||
+        (usuario.id && String(d.usuarioRecibeId) === String(usuario.id)) ||
+        d.puedeConfirmar
+      );
+    }
     if (isAsistente) {
       return todos.filter((d: any) =>
         (usuario?.bodegaId && String(d.destinoBodegaId) === String(usuario.bodegaId)) ||
@@ -2925,13 +3218,6 @@ export class InventarioService {
     if (isLider) {
       return todos.filter((d: any) =>
         (usuario?.agenciaId && String(d.destinoAgenciaId) === String(usuario.agenciaId)) ||
-        d.puedeConfirmar
-      );
-    }
-    if (isPulidor && usuario) {
-      return todos.filter((d: any) =>
-        (usuario.id && String(d.destinoPulidorId) === String(usuario.id)) ||
-        (usuario.id && String(d.usuarioRecibeId) === String(usuario.id)) ||
         d.puedeConfirmar
       );
     }
@@ -3510,6 +3796,15 @@ export class InventarioService {
       await this.prisma.$executeRawUnsafe(
         `ALTER TABLE "MovimientoInventarioGlobal" ADD COLUMN IF NOT EXISTS "destinoUbicacion" TEXT`,
       );
+      await this.prisma.$executeRawUnsafe(
+        `ALTER TABLE "MovimientoInventarioGlobal" ADD COLUMN IF NOT EXISTS "evidenciasUrls" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]`,
+      );
+      await this.prisma.$executeRawUnsafe(
+        `ALTER TABLE "MovimientoInventarioGlobal" ADD COLUMN IF NOT EXISTS "stockUbicacionId" TEXT`,
+      );
+      await this.prisma.$executeRawUnsafe(
+        `ALTER TABLE "MovimientoInventarioGlobal" ADD COLUMN IF NOT EXISTS "cantidadContada" DECIMAL(12,4)`,
+      );
     } catch (_) {
       /* columnas ya existen o sin permisos — listado sigue enriqueciendo en memoria */
     }
@@ -3815,6 +4110,9 @@ export class InventarioService {
           motivoId: dtoNorm.motivoId || null,
           referencia: dtoNorm.referencia || null,
           observaciones: dtoNorm.observaciones || null,
+          evidenciasUrls: Array.isArray(dtoNorm.evidenciasUrls)
+            ? dtoNorm.evidenciasUrls.map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u))
+            : [],
         },
         include: {
           insumo: { select: { id: true, codigoSKU: true, nombre: true } },
@@ -3969,6 +4267,8 @@ export class InventarioService {
     mode: 'ALL' | 'FILTER' | 'NONE';
     ubicacionIds?: string[];
     incluirSinUbicacion?: boolean;
+    /** Además del alcance por ubicación, ve los movimientos que él mismo registró (p. ej. reajustes de agencias o pulidores). */
+    responsableId?: string;
   }> {
     if (!usuarioId) return { mode: 'ALL' };
 
@@ -4004,6 +4304,7 @@ export class InventarioService {
         mode: 'FILTER',
         ubicacionIds: [...new Set(ids)],
         incluirSinUbicacion: true,
+        responsableId: usuarioId,
       };
     }
 
@@ -4014,7 +4315,7 @@ export class InventarioService {
     if (isAsistente) {
       const bodegaId = (usuario?.bodegaId || '').toString().trim();
       if (!bodegaId) return { mode: 'NONE' };
-      return { mode: 'FILTER', ubicacionIds: [bodegaId], incluirSinUbicacion: false };
+      return { mode: 'FILTER', ubicacionIds: [bodegaId], incluirSinUbicacion: false, responsableId: usuarioId };
     }
 
     // Otros roles con bodega asignada → solo esa bodega
@@ -4027,7 +4328,7 @@ export class InventarioService {
 
   private aplicarFiltroUbicacionKardex(
     where: any,
-    scope: { mode: 'ALL' | 'FILTER' | 'NONE'; ubicacionIds?: string[]; incluirSinUbicacion?: boolean },
+    scope: { mode: 'ALL' | 'FILTER' | 'NONE'; ubicacionIds?: string[]; incluirSinUbicacion?: boolean; responsableId?: string },
   ): any {
     if (scope.mode === 'ALL') return where;
     if (scope.mode === 'NONE') {
@@ -4035,9 +4336,10 @@ export class InventarioService {
     }
 
     const ids = scope.ubicacionIds || [];
-    const ubicacionClause = scope.incluirSinUbicacion
-      ? { OR: [{ ubicacionId: { in: ids } }, { ubicacionId: null }] }
-      : { ubicacionId: { in: ids } };
+    const alternativas: any[] = [{ ubicacionId: { in: ids } }];
+    if (scope.incluirSinUbicacion) alternativas.push({ ubicacionId: null });
+    if (scope.responsableId) alternativas.push({ responsableId: scope.responsableId });
+    const ubicacionClause = { OR: alternativas };
 
     return {
       ...where,

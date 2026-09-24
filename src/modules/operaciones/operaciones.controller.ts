@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { OperacionesService } from './operaciones.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -6,6 +6,7 @@ import { UpdateServicioDto } from './dto/update-servicio.dto.js';
 import { QueryServiciosDto } from './dto/query-servicios.dto.js';
 import { DetailServicioDto } from './dto/detail-servicio.dto.js';
 import { AsignarRecetaDto, ListRecetaDto, EliminarRecetaItemDto, SimularConsumoDto } from './dto/receta.dto.js';
+import { ListConsumosServicioDto } from './dto/consumos-servicio.dto.js';
 import { AprobarServicioDto, RechazarServicioDto, AprobarTodosDto } from './dto/aprobaciones.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -49,13 +50,16 @@ export class OperacionesController {
 
   @Post('servicios/create')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Registrar nuevo ingreso de vehículo a bahía (POST)' })
+  @ApiOperation({
+    summary: 'Registrar nuevo ingreso de vehículo a bahía (POST)',
+    description: 'Con servicioCatalogoIds (2 o más) crea una fila por servicio en la misma OT y devuelve un arreglo.',
+  })
   @ApiResponse({ status: 201, description: 'Servicio registrado con éxito. Incluye receta del catálogo.' })
   async create(
     @Body() createDto: CreateServicioDto,
     @CurrentUser('id') userId: string,
   ) {
-    return this.operacionesService.create(createDto, userId);
+    return this.operacionesService.createMultiple(createDto, userId);
   }
 
   @Post('servicios/update')
@@ -143,8 +147,8 @@ export class OperacionesController {
   })
   @ApiResponse({ status: 200, description: 'Receta asignada/actualizada' })
   @ApiResponse({ status: 404, description: 'Catálogo o insumo no encontrado' })
-  async asignarReceta(@Body() dto: AsignarRecetaDto) {
-    return this.operacionesService.asignarReceta(dto);
+  async asignarReceta(@Body() dto: AsignarRecetaDto, @CurrentUser('id') userId: string) {
+    return this.operacionesService.asignarReceta(dto, userId);
   }
 
   @Post('catalogos/recetas/list')
@@ -159,8 +163,31 @@ export class OperacionesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Quitar un insumo de la receta de un servicio (COORD_BODEGA / ADMIN)' })
   @ApiResponse({ status: 404, description: 'Receta no encontrada' })
-  async eliminarRecetaItem(@Body() dto: EliminarRecetaItemDto) {
-    return this.operacionesService.eliminarRecetaItem(dto);
+  async eliminarRecetaItem(@Body() dto: EliminarRecetaItemDto, @CurrentUser('id') userId: string) {
+    return this.operacionesService.eliminarRecetaItem(dto, userId);
+  }
+
+  @Post('catalogos/recetas/historial')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Historial de cambios de la receta de un servicio del catálogo (SUPER_ADMIN, ADMIN, COORD_BODEGA, ASISTENTE_BODEGA)',
+    description: 'Cada cambio de receta (agregar, modificar cantidad, quitar un insumo) queda registrado con fecha, quién lo hizo, y el producto/cantidad exactos involucrados.',
+  })
+  @ApiResponse({ status: 200, description: 'Historial de cambios de receta, más reciente primero' })
+  async listRecetaHistorial(@Body() dto: ListRecetaDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'ver el historial de cambios de receta');
+    return this.operacionesService.listRecetaHistorial(dto);
+  }
+
+  @Post('consumos/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Consumo de insumos por servicio realizado (SUPER_ADMIN, ADMIN, COORD_BODEGA, ASISTENTE_BODEGA)',
+    description: 'Lista, por cada OT de lavado general y de servicios especiales, qué producto y qué cantidad se descontó, con filtros por tipo, agencia, fechas y búsqueda.',
+  })
+  async listConsumosPorServicio(@Body() dto: ListConsumosServicioDto, @CurrentUser() user: any) {
+    this._requireAdmin(user, 'ver el consumo de insumos por servicio');
+    return this.operacionesService.listConsumosPorServicio(dto);
   }
 
   @Post('servicios/simular-consumo')
@@ -173,5 +200,20 @@ export class OperacionesController {
   })
   async simularConsumo(@Body() dto: SimularConsumoDto) {
     return this.operacionesService.simularConsumo(dto);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  //  HELPERS DE PERMISOS POR ROL
+  // ──────────────────────────────────────────────────────────────────
+
+  private _getRole(user: any): string {
+    return user?.role?.namerol || user?.roleDetails?.namerol || (typeof user?.role === 'string' ? user.role : '');
+  }
+
+  private _requireAdmin(user: any, accion: string) {
+    const rol = this._getRole(user);
+    if (!['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA', 'ASISTENTE_BODEGA'].includes(rol)) {
+      throw new ForbiddenException(`No tiene permisos para ${accion}`);
+    }
   }
 }

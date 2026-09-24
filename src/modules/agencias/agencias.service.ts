@@ -1692,7 +1692,7 @@ export class AgenciasService {
     };
   }
 
-  async updateUsuario(dto: UpdateUsuarioDto) {
+  async updateUsuario(dto: UpdateUsuarioDto, actor?: any) {
     const user = await this.prisma.user.findUnique({ where: { id: dto.id }, include: { role: true } });
     if (!user) {
       throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
@@ -1700,6 +1700,21 @@ export class AgenciasService {
 
     if (user.role?.namerol === 'SUPER_ADMIN') {
       throw new ForbiddenException('El usuario Super Administrador es de sistema y no puede gestionarse desde la aplicación.');
+    }
+
+    // Reinicio de contraseña: reglas de quién puede reiniciar a quién.
+    const nuevaPassword = dto.password?.trim();
+    if (nuevaPassword) {
+      if (nuevaPassword.length < 6) {
+        throw new BadRequestException('La contraseña debe tener al menos 6 caracteres.');
+      }
+      const rolActor = actor?.roleDetails?.namerol || actor?.role?.namerol || (typeof actor?.role === 'string' ? actor.role : '');
+      if (actor?.id && actor.id === user.id) {
+        throw new ForbiddenException('Para cambiar su propia contraseña use su perfil (se solicita la contraseña actual).');
+      }
+      if (user.role?.namerol === 'ADMIN' && rolActor !== 'SUPER_ADMIN') {
+        throw new ForbiddenException('Solo el Super Administrador puede reiniciar la contraseña de un Administrador.');
+      }
     }
 
     let roleIdToSet: string | undefined = undefined;

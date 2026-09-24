@@ -8,6 +8,7 @@ import {
   ResolverIncidenteDto,
   ListIncidentesDto,
   RegistrarMantenimientoDto,
+  EjecutarMantenimientoDto,
   ListMantenimientosDto,
   AsignarIncidenteDto,
   AsignarMantenimientoDto,
@@ -25,7 +26,38 @@ export class MaquinariaService {
   // MAQUINARIA
   // ==============================================================
 
+  private async ensureFichaTecnicaColumn(): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(
+        `ALTER TABLE "Maquinaria" ADD COLUMN IF NOT EXISTS "fichaTecnicaUrl" TEXT`,
+      );
+    } catch (_) {}
+  }
+
+  private async persistFichaTecnicaUrl(id: string, fichaTecnicaUrl?: string | null): Promise<void> {
+    if (fichaTecnicaUrl === undefined) return;
+    await this.prisma.$executeRaw`
+      UPDATE "Maquinaria" SET "fichaTecnicaUrl" = ${fichaTecnicaUrl} WHERE "id" = ${id}
+    `;
+  }
+
+  private async attachFichaTecnicaUrls<T extends { id: string; fichaTecnicaUrl?: string | null }>(items: T[]): Promise<T[]> {
+    if (!items.length) return items;
+    if (Object.prototype.hasOwnProperty.call(items[0], 'fichaTecnicaUrl')) return items;
+    try {
+      const rows = await this.prisma.$queryRaw<{ id: string; fichaTecnicaUrl: string | null }[]>`
+        SELECT "id", "fichaTecnicaUrl" FROM "Maquinaria"
+      `;
+      const map = new Map(rows.map(row => [row.id, row.fichaTecnicaUrl]));
+      for (const item of items) {
+        item.fichaTecnicaUrl = map.get(item.id) || null;
+      }
+    } catch (_) {}
+    return items;
+  }
+
   async list(dto: ListMaquinariaDto) {
+    await this.ensureFichaTecnicaColumn();
     const where: any = {};
 
     if (dto.agenciaId) where.agenciaId = dto.agenciaId;
@@ -59,6 +91,7 @@ export class MaquinariaService {
       }),
       this.prisma.maquinaria.count({ where }),
     ]);
+    await this.attachFichaTecnicaUrls(items);
 
     return {
       success: true,
@@ -68,6 +101,7 @@ export class MaquinariaService {
   }
 
   async create(dto: CreateMaquinariaDto) {
+    await this.ensureFichaTecnicaColumn();
     const existing = await this.prisma.maquinaria.findUnique({
       where: { codigo: dto.codigo },
     });
@@ -94,6 +128,8 @@ export class MaquinariaService {
         bahia: { select: { id: true, nombre: true } },
       },
     });
+    await this.persistFichaTecnicaUrl(item.id, dto.fichaTecnicaUrl);
+    (item as { fichaTecnicaUrl?: string }).fichaTecnicaUrl = dto.fichaTecnicaUrl;
 
     return {
       success: true,
@@ -102,6 +138,7 @@ export class MaquinariaService {
   }
 
   async update(dto: UpdateMaquinariaDto) {
+    await this.ensureFichaTecnicaColumn();
     const existing = await this.prisma.maquinaria.findUnique({
       where: { id: dto.id },
     });
@@ -109,7 +146,7 @@ export class MaquinariaService {
       throw new NotFoundException(`Equipo con id ${dto.id} no encontrado`);
     }
 
-    const { id, ...data } = dto;
+    const { id, fichaTecnicaUrl, ...data } = dto;
     const updated = await this.prisma.maquinaria.update({
       where: { id },
       data,
@@ -118,6 +155,12 @@ export class MaquinariaService {
         bahia: { select: { id: true, nombre: true } },
       },
     });
+    await this.persistFichaTecnicaUrl(id, fichaTecnicaUrl);
+    (updated as { fichaTecnicaUrl?: string }).fichaTecnicaUrl =
+      fichaTecnicaUrl !== undefined ? fichaTecnicaUrl : (updated as { fichaTecnicaUrl?: string }).fichaTecnicaUrl;
+    if (fichaTecnicaUrl === undefined) {
+      await this.attachFichaTecnicaUrls([updated as { id: string; fichaTecnicaUrl?: string | null }]);
+    }
 
     return {
       success: true,
@@ -286,7 +329,29 @@ export class MaquinariaService {
   // MANTENIMIENTOS TÉCNICOS
   // ==============================================================
 
+  private async ensureFrecuenciaMantenimientoColumn(): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(
+        `ALTER TABLE "MantenimientoMaquinaria" ADD COLUMN IF NOT EXISTS "frecuenciaDias" INTEGER`,
+      );
+    } catch (_) {}
+  }
+
+  private addDays(base: Date, days: number): Date {
+    const next = new Date(base);
+    next.setDate(next.getDate() + days);
+    return next;
+  }
+
+  private async persistFrecuenciaDias(id: string, frecuenciaDias?: number | null): Promise<void> {
+    if (frecuenciaDias === undefined) return;
+    await this.prisma.$executeRaw`
+      UPDATE "MantenimientoMaquinaria" SET "frecuenciaDias" = ${frecuenciaDias} WHERE "id" = ${id}
+    `;
+  }
+
   async registrarMantenimiento(dto: RegistrarMantenimientoDto, userId: string) {
+    await this.ensureFrecuenciaMantenimientoColumn();
     const maquinaria = await this.prisma.maquinaria.findUnique({
       where: { id: dto.maquinariaId },
     });
@@ -302,24 +367,35 @@ export class MaquinariaService {
         }))
       : [];
 
+    const fechaProgramada = dto.fechaProgramada ? new Date(dto.fechaProgramada) : new Date();
+    const frecuenciaDias = dto.frecuenciaDias != null ? Number(dto.frecuenciaDias) : 0;
+    const proximo = dto.proximoMantenimiento
+      ? new Date(dto.proximoMantenimiento)
+      : frecuenciaDias > 0
+        ? this.addDays(fechaProgramada, frecuenciaDias)
+        : undefined;
+
     const mantenimiento = await this.prisma.mantenimientoMaquinaria.create({
       data: {
         maquinariaId: dto.maquinariaId,
         tecnicoId: dto.tecnicoId || userId,
         tipo: dto.tipo || 'PREVENTIVO',
-        estado: 'FINALIZADO',
+        estado: 'PENDIENTE',
         observaciones: dto.observaciones,
         repuestosUsados: dto.repuestosUsados || undefined,
         costoTotal: dto.costoTotal ? dto.costoTotal : undefined,
-        proximoMantenimiento: dto.proximoMantenimiento ? new Date(dto.proximoMantenimiento) : undefined,
+        fechaMantenimiento: fechaProgramada,
+        proximoMantenimiento: proximo,
         evidencias: evidenciasMant.length ? { create: evidenciasMant } : undefined,
       },
       include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true } },
-        tecnico: { select: { id: true, name: true } },
+        maquinaria: { select: { id: true, codigo: true, nombre: true, agencia: { select: { id: true, nombre: true } } } },
+        tecnico: { select: { id: true, name: true, lastname: true } },
         evidencias: true,
       },
     });
+    await this.persistFrecuenciaDias(mantenimiento.id, frecuenciaDias);
+    (mantenimiento as { frecuenciaDias?: number }).frecuenciaDias = frecuenciaDias;
 
     return {
       success: true,
@@ -327,7 +403,78 @@ export class MaquinariaService {
     };
   }
 
+  async ejecutarMantenimiento(dto: EjecutarMantenimientoDto, userId: string) {
+    await this.ensureFrecuenciaMantenimientoColumn();
+    const existing = await this.prisma.mantenimientoMaquinaria.findUnique({
+      where: { id: dto.mantenimientoId },
+    });
+    if (!existing) {
+      throw new NotFoundException(`Mantenimiento ${dto.mantenimientoId} no encontrado`);
+    }
+
+    const evidencias = Array.isArray(dto.evidencias)
+      ? dto.evidencias.filter((e) => e?.url).map((e) => ({
+          tipo: String(e.tipo || 'FOTO').toUpperCase(),
+          url: e.url,
+          descripcion: e.descripcion || null,
+        }))
+      : [];
+    const tieneImagen = evidencias.some((e) =>
+      e.tipo.includes('FOTO') || e.tipo.includes('IMAGEN') || e.tipo === 'IMAGE',
+    );
+    if (!tieneImagen) {
+      throw new BadRequestException('Para ejecutar el mantenimiento debes adjuntar al menos una imagen.');
+    }
+
+    const fechaFin = dto.fechaFin ? new Date(dto.fechaFin) : new Date();
+    let frecuenciaDias = Number((existing as { frecuenciaDias?: number }).frecuenciaDias || 0);
+    if (!frecuenciaDias) {
+      try {
+        const rows = await this.prisma.$queryRaw<{ frecuenciaDias: number | null }[]>`
+          SELECT "frecuenciaDias" FROM "MantenimientoMaquinaria" WHERE "id" = ${dto.mantenimientoId}
+        `;
+        frecuenciaDias = Number(rows[0]?.frecuenciaDias || 0);
+      } catch (_) {}
+    }
+    const proximo = frecuenciaDias > 0 ? this.addDays(fechaFin, frecuenciaDias) : existing.proximoMantenimiento;
+
+    const updated = await this.prisma.mantenimientoMaquinaria.update({
+      where: { id: dto.mantenimientoId },
+      data: {
+        estado: 'FINALIZADO',
+        observaciones: dto.observaciones || existing.observaciones,
+        fechaMantenimiento: fechaFin,
+        proximoMantenimiento: proximo || undefined,
+        evidencias: evidencias.length ? { create: evidencias } : undefined,
+      },
+      include: {
+        maquinaria: { select: { id: true, codigo: true, nombre: true, agencia: { select: { id: true, nombre: true } } } },
+        tecnico: { select: { id: true, name: true, lastname: true } },
+        evidencias: true,
+      },
+    });
+
+    if (frecuenciaDias > 0 && proximo) {
+      const siguiente = await this.prisma.mantenimientoMaquinaria.create({
+        data: {
+          maquinariaId: existing.maquinariaId,
+          tecnicoId: existing.tecnicoId || userId,
+          tipo: existing.tipo,
+          estado: 'PENDIENTE',
+          observaciones: existing.observaciones,
+          fechaMantenimiento: proximo,
+          proximoMantenimiento: this.addDays(proximo, frecuenciaDias),
+        },
+      });
+      await this.persistFrecuenciaDias(siguiente.id, frecuenciaDias);
+    }
+
+    (updated as { frecuenciaDias?: number }).frecuenciaDias = frecuenciaDias;
+    return { success: true, data: updated };
+  }
+
   async listMantenimientos(dto: ListMantenimientosDto) {
+    await this.ensureFrecuenciaMantenimientoColumn();
     const where: any = {};
     if (dto.maquinariaId) where.maquinariaId = dto.maquinariaId;
     if (dto.tecnicoId) where.tecnicoId = dto.tecnicoId;
@@ -343,6 +490,18 @@ export class MaquinariaService {
       orderBy: { fechaMantenimiento: 'desc' },
       take: 200,
     });
+
+    if (items.length && !Object.prototype.hasOwnProperty.call(items[0], 'frecuenciaDias')) {
+      try {
+        const rows = await this.prisma.$queryRaw<{ id: string; frecuenciaDias: number | null }[]>`
+          SELECT "id", "frecuenciaDias" FROM "MantenimientoMaquinaria"
+        `;
+        const map = new Map(rows.map(row => [row.id, row.frecuenciaDias]));
+        for (const item of items) {
+          (item as { frecuenciaDias?: number | null }).frecuenciaDias = map.get(item.id) ?? 0;
+        }
+      } catch (_) {}
+    }
 
     return {
       success: true,

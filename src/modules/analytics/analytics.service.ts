@@ -219,12 +219,15 @@ export class AnalyticsService {
       granTotalCostoUSD += costoSubtotal;
 
       if (!acumuladoPorInsumo[insumoId]) {
+        // Nombre/SKU/unidad: preferir el snapshot congelado al momento del consumo
+        // (sobrevive a que el producto cambie de nombre/SKU). Cae al dato actual
+        // solo para registros creados antes de que existiera el snapshot.
         acumuladoPorInsumo[insumoId] = {
           insumoId,
-          codigoSKU: c.insumo.codigoSKU,
-          nombre: c.insumo.nombre,
+          codigoSKU: c.insumoSKU || c.insumo.codigoSKU,
+          nombre: c.insumoNombre || c.insumo.nombre,
           categoria: c.insumo.categoria,
-          simboloUnidad: c.insumo.unidadMedida?.simbolo || 'u',
+          simboloUnidad: c.unidadSimbolo || c.insumo.unidadMedida?.simbolo || 'u',
           cantidadTotal: 0,
           costoUnitario: costoUnit,
           costoTotalUSD: 0,

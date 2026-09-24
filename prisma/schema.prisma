@@ -159,6 +159,7 @@ model User {
   bahiaOperadorAsignaciones BahiaOperador[]      @relation("BahiaOperadorAsignador")
   incidentesAsignados   IncidenteTecnico[]        @relation("TecnicoAsignadoIncidente")
   movimientosMaquinaria MovimientoMaquinaria[]    @relation("ResponsableMovimientoMaquinaria")
+  cambiosReceta         RecetaInsumoHistorial[]   @relation("UsuarioCambioReceta")
 
   @@index([email])
   @@index([roleId])
@@ -256,6 +257,7 @@ model CatalogoServicio {
   servicios         ServicioLavado[]
   serviciosEspeciales ServicioEspecial[]
   recetas           RecetaInsumo[]
+  recetasHistorial  RecetaInsumoHistorial[]
 }
 
 // -----------------------------------------------------------------------
@@ -352,10 +354,77 @@ model ConsumoServicio {
   stockUbicacionId String?
   agenciaId        String?        // Agencia donde se realizó el servicio
 
+  // Snapshot congelado al momento del consumo: sobrevive a que el producto
+  // cambie de nombre/SKU o a que la receta lo reemplace por otro más adelante.
+  insumoNombre     String         @default("")
+  insumoSKU        String         @default("")
+  unidadSimbolo    String         @default("")
+
   createdAt        DateTime       @default(now())
 
   @@index([servicioId])
   @@index([insumoId])
+}
+
+// -----------------------------------------------------------------------
+// Historial de insumos descontados al completar un servicio especial (kit del pulidor)
+// Equivalente a ConsumoServicio pero para ServicioEspecial.
+// -----------------------------------------------------------------------
+model ConsumoServicioEspecial {
+  id                 String           @id @default(uuid())
+  servicioEspecialId String
+  servicioEspecial   ServicioEspecial @relation(fields: [servicioEspecialId], references: [id], onDelete: Cascade)
+  insumoId           String
+  insumo             Insumo           @relation(fields: [insumoId], references: [id])
+
+  cantidadUsada      Decimal          @db.Decimal(10, 4)
+  pulidorId          String
+
+  // Snapshot congelado al momento del consumo (ver ConsumoServicio).
+  insumoNombre       String           @default("")
+  insumoSKU          String           @default("")
+  unidadSimbolo      String           @default("")
+
+  createdAt          DateTime         @default(now())
+
+  @@index([servicioEspecialId])
+  @@index([insumoId])
+  @@index([pulidorId])
+}
+
+enum TipoCambioReceta {
+  AGREGADO
+  MODIFICADO
+  ELIMINADO
+}
+
+// -----------------------------------------------------------------------
+// Auditoría de cambios a la receta de un servicio: qué insumo/cantidad
+// entró, cuál salió, cuándo y quién lo hizo. `loteId` agrupa los cambios
+// de un mismo guardado (p. ej. "se quitó A y se agregó B" quedan juntos).
+// -----------------------------------------------------------------------
+model RecetaInsumoHistorial {
+  id                 String            @id @default(uuid())
+  catalogoServicioId Int
+  catalogoServicio   CatalogoServicio  @relation(fields: [catalogoServicioId], references: [id], onDelete: Cascade)
+  loteId             String
+
+  tipoCambio         TipoCambioReceta
+  insumoId           String
+  insumo             Insumo            @relation(fields: [insumoId], references: [id])
+  insumoNombre       String
+  insumoSKU          String
+  unidadSimbolo      String
+  cantidadAnterior   Decimal?          @db.Decimal(10, 4)
+  cantidadNueva      Decimal?          @db.Decimal(10, 4)
+
+  usuarioId          String?
+  usuario            User?             @relation("UsuarioCambioReceta", fields: [usuarioId], references: [id])
+
+  createdAt          DateTime          @default(now())
+
+  @@index([catalogoServicioId])
+  @@index([loteId])
 }
 
 model SyncOutboxAudit {
@@ -507,6 +576,9 @@ model MovimientoInventarioGlobal {
   motivo            MotivoMovimientoInventario? @relation(fields: [motivoId], references: [id])
   referencia        String?
   observaciones     String?
+  evidenciasUrls    String[]                    @default([])
+  stockUbicacionId  String?
+  cantidadContada   Decimal?                    @db.Decimal(12, 4)
   fechaMovimiento   DateTime                    @default(now())
   createdAt         DateTime                    @default(now())
 
@@ -546,6 +618,8 @@ model Insumo {
   alertas             AlertaStock[]
   recetas             RecetaInsumo[]
   consumos            ConsumoServicio[]
+  consumosEspeciales  ConsumoServicioEspecial[]
+  recetasHistorial    RecetaInsumoHistorial[]
   kardex              KardexMovimiento[]
   presentaciones      PresentacionInsumo[]
   movimientosGlobales MovimientoInventarioGlobal[]
@@ -810,8 +884,9 @@ model Maquinaria {
   modelo          String?
   serie           String?
   estadoOperativo String   @default("OPERATIVA") // "OPERATIVA" | "EN_MANTENIMIENTO" | "DE_BAJA"
-  fotoUrl         String?
-  horasUso        Int      @default(0)
+  fotoUrl           String?
+  fichaTecnicaUrl   String?
+  horasUso          Int      @default(0)
 
   agenciaId       String?
   agencia         Agencia? @relation(fields: [agenciaId], references: [id])
@@ -899,6 +974,7 @@ model MantenimientoMaquinaria {
 
   fechaMantenimiento   DateTime    @default(now())
   proximoMantenimiento DateTime?
+  frecuenciaDias       Int?
   evidencias           EvidenciaMantenimiento[]
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
@@ -1067,6 +1143,9 @@ model ServicioEspecial {
   agencia             Agencia?  @relation(fields: [agenciaId], references: [id])
   operadorId          String?
   operador            User?     @relation("OperadorServicioEspecial", fields: [operadorId], references: [id])
+  // Quién creó la OT (puede ser distinto del pulidor asignado). Dato congelado al crear.
+  creadoPorId         String?
+  creadoPorNombre     String?
   bahiaId             String?
   regionId            String?
   region              Region?   @relation(fields: [regionId], references: [id])
@@ -1103,6 +1182,8 @@ model ServicioEspecial {
   deletedAt           DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+
+  consumos            ConsumoServicioEspecial[]
 
   @@index([clientUuid])
   @@index([codigoSE])

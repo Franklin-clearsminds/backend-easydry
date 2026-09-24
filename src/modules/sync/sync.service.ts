@@ -237,7 +237,10 @@ export class SyncService {
               ? await this.prisma.bahia.findUnique({ where: { id: bahiaId }, select: { agenciaId: true } })
               : null;
             const targetAgenciaId = bahiaObj?.agenciaId || currentUser?.agenciaId || currentUser?.agencia?.id;
+            const otMutacion = String(mut.data?.ordenTrabajoOT || mut.data?.numeroOrden || '').trim();
 
+            // Una OT general puede tener varios servicios (una fila por servicio): las filas
+            // activas de la misma OT no son duplicados, salvo que repitan el mismo servicio.
             const duplicateActive = await this.prisma.servicioLavado.findFirst({
               where: {
                 placa,
@@ -246,6 +249,15 @@ export class SyncService {
                 horaIngreso: { gte: cuatroHorasAtras },
                 deletedAt: null,
                 NOT: { clientUuid: mut.clientUuid },
+                ...(otMutacion
+                  ? {
+                      OR: [
+                        { ordenTrabajoOT: null },
+                        { NOT: { ordenTrabajoOT: { equals: otMutacion, mode: 'insensitive' } } },
+                        { servicioCatalogoId },
+                      ],
+                    }
+                  : {}),
               },
             });
 
@@ -314,6 +326,36 @@ export class SyncService {
               }
             }
 
+            // Servicios agregados a una OT existente heredan la evidencia de ingreso de la OT.
+            const hermanaOT = otMutacion
+              ? await this.prisma.servicioLavado.findFirst({
+                  where: {
+                    ordenTrabajoOT: { equals: otMutacion, mode: 'insensitive' },
+                    placa,
+                    deletedAt: null,
+                    OR: [{ videoInicialUrl: { not: null } }, { fotoIngresoUrl: { not: null } }],
+                  },
+                  select: { videoInicialUrl: true, fotoIngresoUrl: true },
+                  orderBy: { createdAt: 'asc' },
+                })
+              : null;
+
+            // Blindaje Agencia: si la app indicó qué lavador realiza el servicio, debe
+            // pertenecer a la misma agencia que la bahía y estar activo. Si no se indicó,
+            // la OT se atribuye a quien está autenticado (comportamiento previo).
+            if (mut.data?.operadorId) {
+              const lavador = await this.prisma.user.findUnique({ where: { id: String(mut.data.operadorId) } });
+              if (!lavador) {
+                throw new BadRequestException('El lavador seleccionado no existe.');
+              }
+              if (targetAgenciaId && String(lavador.agenciaId || '') !== String(targetAgenciaId)) {
+                throw new BadRequestException('El lavador seleccionado no pertenece a la agencia de la bahía indicada.');
+              }
+              if (lavador.estado !== 1) {
+                throw new BadRequestException('El lavador seleccionado está inactivo y no puede recibir nuevas OTs.');
+              }
+            }
+
             let nuevoServicio: any;
             try {
               nuevoServicio = await this.prisma.servicioLavado.create({
@@ -331,7 +373,9 @@ export class SyncService {
                   operadorId: String(mut.data?.operadorId || userId),
                   horaIngreso: sanitizedHoraIngreso,
                   horaSalida: estadoFinal === ServiceStatus.FINALIZADO ? now : null,
-                  fotoIngresoUrl: publicMediaUrl(mut.data?.fotoIngresoUrl),
+                  fotoIngresoUrl: publicMediaUrl(mut.data?.fotoIngresoUrl) || hermanaOT?.fotoIngresoUrl || undefined,
+                  videoInicialUrl:
+                    publicMediaUrl(mut.data?.videoInicialUrl || mut.data?.videoUrl) || hermanaOT?.videoInicialUrl || undefined,
                   fotoSalidaUrl: publicMediaUrl(mut.data?.fotoSalidaUrl),
                   observaciones: mut.data?.observaciones || mut.data?.notes,
                   syncedAt: now,
@@ -358,6 +402,12 @@ export class SyncService {
                 }
               }
               throw createErr;
+            }
+
+            try {
+              await this.operacionesService.consumirInsumosSiPendiente(nuevoServicio.id, true);
+            } catch (e: any) {
+              this.logger.warn(`Advertencia al descontar insumos de orden offline: ${e.message}`);
             }
 
             // Si se creó directamente como finalizado, invocar hook oficial de descuento de insumos con No-Block Policy
@@ -707,6 +757,10 @@ export class SyncService {
                 clienteNombre,
                 agenciaId: targetAgenciaId,
                 operadorId: userId,
+                creadoPorId: userId,
+                creadoPorNombre: currentUser
+                  ? `${currentUser.name || ''} ${currentUser.lastname || ''}`.replace(/(CI:[^)]*)/, '').trim() || null
+                  : null,
                 prioridad: mutData.prioridad || 'Media',
                 estado: mutData.estado || 'Pendiente',
                 recetaInsumos: mutData.recetaInsumos || null,
@@ -756,7 +810,8 @@ export class SyncService {
               syncedAt: now,
             };
             if (mutData.estado) updateData.estado = mutData.estado;
-            if (mutData.fechaInicio) updateData.fechaInicio = new Date(mutData.fechaInicio);
+            // La hora de inicio se fija una sola vez (la primera que llegue: API o cola offline).
+            if (mutData.fechaInicio && !existing.fechaInicio) updateData.fechaInicio = new Date(mutData.fechaInicio);
             if (mutData.fechaFin) updateData.fechaFin = new Date(mutData.fechaFin);
             if (mutData.evidencias) updateData.evidencias = mutData.evidencias;
             if (mutData.calificacionCalidad !== undefined) updateData.calificacionCalidad = Number(mutData.calificacionCalidad);
@@ -766,6 +821,14 @@ export class SyncService {
               where: { id: existing.id },
               data: updateData,
             });
+
+            if (String(updated.estado || '').toLowerCase() === 'completado') {
+              try {
+                await this.serviciosEspecialesService.descontarKitPulidorSiPendiente(updated.id);
+              } catch (e: any) {
+                this.logger.warn(`Advertencia al descontar kit del pulidor (sync ${updated.codigoSE || updated.id}): ${e.message}`);
+              }
+            }
 
             await this.prisma.syncOutboxAudit.create({
               data: {
@@ -960,7 +1023,7 @@ export class SyncService {
         recetas: {
           include: {
             insumo: { select: { id: true, codigoSKU: true, nombre: true } },
-            unidadConsumo: { select: { id: true, codigo: true, nombre: true, simbolo: true } },
+            unidadConsumo: { select: { id: true, codigo: true, nombre: true, simbolo: true, factorBase: true } },
           },
         },
       },
@@ -1012,8 +1075,11 @@ export class SyncService {
         recetas: c.recetas.map((r) => ({
           insumoId: r.insumoId,
           insumoNombre: r.insumo.nombre,
+          productoSKU: r.insumo.codigoSKU,
           cantidad: Number(r.cantidadUsada),
+          cantidadSugerida: Number(r.cantidadUsada) * (Number(r.unidadConsumo?.factorBase) || 1),
           unidad: r.unidadConsumo.codigo,
+          esOpcional: r.esOpcional,
         })),
       })),
       bahias,
@@ -1030,23 +1096,31 @@ export class SyncService {
     servicioId?: string;
     category?: any;
     maquinariaId?: string;
+    maquinariaNombre?: string;
+    maquinariaCodigo?: string;
     incidenteId?: string;
+    incidenteFase?: 'fallas' | 'resoluciones';
+    mantenimientoId?: string;
     contentType?: string;
   }) {
     let agenciaId = body.agenciaId;
     let servicioId = body.servicioId;
     let maquinariaId = body.maquinariaId;
+    let maquinariaNombre = body.maquinariaNombre;
+    let maquinariaCodigo = body.maquinariaCodigo;
     let incidenteId = body.incidenteId;
     if (body.category === 'MAQUINARIA_INCIDENTE' && (body.incidenteId || body.clientUuid)) {
       const incidentReference = body.incidenteId || body.clientUuid;
       const incident = await this.prisma.incidenteTecnico.findFirst({
         where: { OR: [{ id: incidentReference }, { clientUuid: incidentReference }] },
-        select: { id: true, maquinariaId: true, maquinaria: { select: { agenciaId: true } } },
+        select: { id: true, maquinariaId: true, maquinaria: { select: { agenciaId: true, codigo: true, nombre: true } } },
       });
       if (incident) {
         incidenteId = incident.id;
         maquinariaId = incident.maquinariaId;
-        agenciaId = incident.maquinaria.agenciaId || agenciaId;
+        agenciaId = incident.maquinaria?.agenciaId || agenciaId;
+        maquinariaCodigo = incident.maquinaria?.codigo || maquinariaCodigo;
+        maquinariaNombre = incident.maquinaria?.nombre || maquinariaNombre;
       }
     }
     if (body.clientUuid) {
@@ -1091,7 +1165,11 @@ export class SyncService {
       servicioId,
       category: body.category,
       maquinariaId,
+      maquinariaNombre,
+      maquinariaCodigo,
       incidenteId,
+      incidenteFase: body.incidenteFase,
+      mantenimientoId: body.mantenimientoId,
       contentType: body.contentType,
     });
   }
@@ -1137,9 +1215,15 @@ export class SyncService {
     specialOperatorId?: string;
     pauseReason?: string;
     resumeNotes?: string;
+    capturedAt?: string;
   }, currentUser?: any) {
     if (!this.storageService.isManagedPublicUrl(body.fileUrl)) {
       throw new BadRequestException('La evidencia debe corresponder a un archivo subido por EasyDry al bucket configurado.');
+    }
+
+    // Fotos: se genera en segundo plano la miniatura liviana para los listados.
+    if (String(body.type || '').startsWith('FOTO_')) {
+      void this.storageService.generarMiniaturaDesdeUrl(body.fileUrl);
     }
 
     const specialServiceKey = body.servicioId || body.clientUuid;
@@ -1156,19 +1240,21 @@ export class SyncService {
       if (!body.pauseReason?.trim()) {
         throw new BadRequestException('El motivo de la pausa es obligatorio.');
       }
-      const updated = await this.serviciosEspecialesService.pausar({
+      const updated = await this.serviciosEspecialesService.adjuntarVideoCiclo('PAUSA', {
         id: specialServiceKey,
+        url: body.fileUrl,
         motivo: body.pauseReason.trim(),
-        videoPausaUrl: body.fileUrl,
+        capturadoEn: body.capturedAt,
       }, currentUser);
       return { success: true, action: 'PAUSE', ...body, service: updated };
     }
 
     if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'RESUME') {
-      const updated = await this.serviciosEspecialesService.reanudar({
+      const updated = await this.serviciosEspecialesService.adjuntarVideoCiclo('REANUDACION', {
         id: specialServiceKey,
-        videoReanudarUrl: body.fileUrl,
+        url: body.fileUrl,
         observaciones: body.resumeNotes,
+        capturadoEn: body.capturedAt,
       }, currentUser);
       return { success: true, action: 'RESUME', ...body, service: updated };
     }
@@ -1259,6 +1345,25 @@ export class SyncService {
       where: { id: service.id },
       data: dataToUpdate,
     });
+
+    // La evidencia de ingreso es del vehículo: se comparte con los demás servicios de la misma OT.
+    const columnaIngreso = dataToUpdate.videoInicialUrl
+      ? 'videoInicialUrl'
+      : dataToUpdate.fotoIngresoUrl
+        ? 'fotoIngresoUrl'
+        : null;
+    if (columnaIngreso && service.ordenTrabajoOT) {
+      await this.prisma.servicioLavado.updateMany({
+        where: {
+          id: { not: service.id },
+          ordenTrabajoOT: { equals: service.ordenTrabajoOT, mode: 'insensitive' },
+          placa: service.placa,
+          deletedAt: null,
+          [columnaIngreso]: null,
+        },
+        data: { [columnaIngreso]: body.fileUrl },
+      });
+    }
 
     // Guardar en colección 1-a-N EvidenciaServicio para inspección completa
     const evidencia = await this.prisma.evidenciaServicio.create({
