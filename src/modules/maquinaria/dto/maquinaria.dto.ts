@@ -1,4 +1,5 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray, IsInt, Min, ArrayMinSize } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray, IsInt, IsBoolean, Min, ArrayMinSize } from 'class-validator';
+import { PaginacionDto } from './trazabilidad.dto.js';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -115,12 +116,19 @@ export class UpdateMaquinariaDto {
   @IsNumber()
   horasUso?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Días de adelanto permitidos para ejecutar un mantenimiento' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  ventanaAdelantoDias?: number;
+
+  @ApiPropertyOptional({ description: 'Solo informativo: cambiar agencia o bahía se hace con /maquinaria/transferir' })
   @IsOptional()
   @IsString()
   agenciaId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Solo informativo: cambiar agencia o bahía se hace con /maquinaria/transferir' })
   @IsOptional()
   @IsString()
   bahiaId?: string;
@@ -151,9 +159,24 @@ export class ListMaquinariaDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ description: 'true = solo activas, false = solo desactivadas' })
+  @IsOptional()
+  @IsBoolean()
+  activa?: boolean;
+
+  @ApiPropertyOptional({ description: 'Máquinas asignadas a este pulidor / líder operador' })
+  @IsOptional()
+  @IsString()
+  operadorAsignadoId?: string;
 }
 
 export class ReportarIncidenteDto {
+  @ApiPropertyOptional({ description: 'UUID generado por el cliente; también nombra la carpeta de evidencias en S3' })
+  @IsOptional()
+  @IsString()
+  clientUuid?: string;
+
   @ApiProperty({ description: 'ID de la máquina afectada' })
   @IsString()
   @IsNotEmpty()
@@ -203,7 +226,7 @@ export class ResolverIncidenteDto {
 
   @ApiPropertyOptional({ example: 'RESUELTO', enum: ['RESUELTO', 'CANCELADO'] })
   @IsOptional()
-  @IsString()
+  @IsIn(['RESUELTO', 'CANCELADO'])
   estado?: string;
 
   @ApiPropertyOptional({ description: 'Repuestos utilizados en la reparación' })
@@ -217,7 +240,12 @@ export class ResolverIncidenteDto {
   evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
 }
 
-export class ListIncidentesDto {
+export class ListIncidentesDto extends PaginacionDto {
+  @ApiPropertyOptional({ description: 'Solo incidencias sin asignar (No atendidas)' })
+  @IsOptional()
+  @IsBoolean()
+  soloNoAtendidas?: boolean;
+
   @ApiPropertyOptional({ description: 'Filtro por máquina' })
   @IsOptional()
   @IsString()
@@ -264,7 +292,7 @@ export class RegistrarMantenimientoDto {
   @IsNumber()
   costoTotal?: number;
 
-  @ApiPropertyOptional({ description: 'Fecha programada de la visita' })
+  @ApiPropertyOptional({ description: 'Fecha programada del mantenimiento (por defecto, ahora)' })
   @IsOptional()
   @IsString()
   fechaProgramada?: string;
@@ -314,7 +342,22 @@ export class EjecutarMantenimientoDto {
   evidencias: Array<{ tipo: string; url: string; descripcion?: string }>;
 }
 
-export class ListMantenimientosDto {
+export class ListMantenimientosDto extends PaginacionDto {
+  @ApiPropertyOptional({ description: 'Solo mantenimientos vencidos sin ejecutar (No atendidos)' })
+  @IsOptional()
+  @IsBoolean()
+  soloNoAtendidos?: boolean;
+
+  @ApiPropertyOptional({ description: 'Filtro por estado (PENDIENTE, EN_PROCESO, FINALIZADO)' })
+  @IsOptional()
+  @IsString()
+  estado?: string;
+
+  @ApiPropertyOptional({ description: 'Filtro por agencia actual de la máquina' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
   @ApiPropertyOptional({ description: 'Filtro por máquina' })
   @IsOptional()
   @IsString()
@@ -382,7 +425,7 @@ export class TransferirMaquinariaDto {
   motivo: string;
 }
 
-export class ListMovimientosMaquinariaDto {
+export class ListMovimientosMaquinariaDto extends PaginacionDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

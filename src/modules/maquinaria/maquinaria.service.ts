@@ -1,5 +1,15 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { StorageService, type InspectedEvidence } from '../storage/storage.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import {
   CreateMaquinariaDto,
   UpdateMaquinariaDto,
@@ -15,622 +25,1403 @@ import {
   TransferirMaquinariaDto,
   ListMovimientosMaquinariaDto,
 } from './dto/maquinaria.dto.js';
+import {
+  AgregarEvidenciaDto,
+  AsignarOperadorDto,
+  ConfigurarVentanaDto,
+  DetalleMaquinariaDto,
+  EditarIncidenteDto,
+  EditarMantenimientoDto,
+  EvidenciaInputDto,
+  HistorialMaquinariaDto,
+  PaginacionDto,
+  SetActivaMaquinariaDto,
+  type TipoEventoMaquinaria,
+} from './dto/trazabilidad.dto.js';
+import {
+  Actor,
+  addDays,
+  assertRegion,
+  esAdmin,
+  esCoordMantenimiento,
+  esOperador,
+  esTecnico,
+  ROL,
+  ROLES_OPERADOR,
+  startOfDay,
+} from './maquinaria.permisos.js';
+
+type Tx = Prisma.TransactionClient;
+
+/** Máquina con la agencia/región en la que está ahora. */
+interface MaquinaCtx {
+  id: string;
+  codigo: string;
+  nombre: string;
+  activa: boolean;
+  agenciaId: string | null;
+  bahiaId: string | null;
+  operadorAsignadoId: string | null;
+  ventanaAdelantoDias: number;
+  estadoOperativo: string;
+  agencia: { id: string; nombre: string; regionId: string | null } | null;
+}
+
+interface EvidenciaVerificada extends InspectedEvidence {
+  url: string;
+  descripcion: string | null;
+}
+
+const SIN_REGION = '__sin_region__';
+const NADA = '__ninguno__';
+const GRAVEDAD_RANK: Record<string, number> = { CRITICA: 0, ALTA: 1, MEDIA: 2, BAJA: 3 };
+const MAX_MULTIMEDIA = 10;
 
 @Injectable()
 export class MaquinariaService {
   private readonly logger = new Logger(MaquinariaService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+    private readonly notifications: NotificationsService,
+  ) {}
+
+  // ==============================================================
+  // Utilidades comunes
+  // ==============================================================
+
+  private readonly includeMaquinaCtx = {
+    agencia: { select: { id: true, nombre: true, regionId: true } },
+  } as const;
+
+  private async cargarMaquina(id: string): Promise<MaquinaCtx> {
+    const m = await this.prisma.maquinaria.findUnique({
+      where: { id },
+      include: this.includeMaquinaCtx,
+    });
+    if (!m) throw new NotFoundException(`Equipo ${id} no encontrado`);
+    return m as unknown as MaquinaCtx;
+  }
+
+  private regionDe(m: MaquinaCtx): string | null {
+    return m.agencia?.regionId ?? null;
+  }
+
+  private assertActiva(m: MaquinaCtx): void {
+    if (!m.activa) {
+      throw new BadRequestException(`La máquina ${m.codigo} está desactivada y no acepta nuevos registros.`);
+    }
+  }
+
+  /** Línea de tiempo: nunca se edita ni se borra (también protegido con un trigger en la base). */
+  private async registrarEvento(
+    tx: Tx,
+    m: Pick<MaquinaCtx, 'id' | 'agenciaId' | 'agencia'>,
+    tipo: TipoEventoMaquinaria,
+    actorId: string | null,
+    entidadId?: string | null,
+    datos?: Record<string, unknown>,
+  ): Promise<void> {
+    await tx.maquinariaEvento.create({
+      data: {
+        maquinariaId: m.id,
+        tipo,
+        actorId,
+        agenciaId: m.agenciaId ?? null,
+        regionId: m.agencia?.regionId ?? null,
+        entidadId: entidadId ?? null,
+        datos: datos ? (JSON.parse(JSON.stringify(datos)) as Prisma.InputJsonValue) : undefined,
+      },
+    });
+  }
+
+  private norm(v: unknown): unknown {
+    if (v === undefined || v === '') return null;
+    if (v instanceof Date) return v.toISOString();
+    if (v && typeof v === 'object' && typeof (v as { toString?: unknown }).toString === 'function' && (v as { constructor?: { name?: string } }).constructor?.name === 'Decimal') {
+      return String(v);
+    }
+    return v;
+  }
+
+  /** Cambios campo a campo: { campo: { antes, despues } } solo de lo que realmente cambió. */
+  private diff(antes: Record<string, unknown>, despues: Record<string, unknown>, campos: string[]) {
+    const cambios: Record<string, { antes: unknown; despues: unknown }> = {};
+    for (const campo of campos) {
+      if (!(campo in despues) || despues[campo] === undefined) continue;
+      const a = this.norm(antes[campo]);
+      const d = this.norm(despues[campo]);
+      if (JSON.stringify(a) !== JSON.stringify(d)) cambios[campo] = { antes: a, despues: d };
+    }
+    return cambios;
+  }
+
+  private pagina(dto: PaginacionDto) {
+    const pageSize = Math.min(Math.max(dto.pageSize ?? 200, 1), 200);
+    const page = Math.max(dto.page ?? 1, 1);
+    return { page, pageSize, skip: (page - 1) * pageSize };
+  }
+
+  private shortName(u?: { name?: string | null; lastname?: string | null } | null): string {
+    return [u?.name, u?.lastname].filter(Boolean).join(' ');
+  }
+
+  // ==============================================================
+  // Alcance de lo que cada rol puede ver
+  // ==============================================================
+
+  private scopeMaquinaria(actor: Actor): Prisma.MaquinariaWhereInput {
+    if (esAdmin(actor) || actor.rol === ROL.COORD_BODEGA) return {};
+    if (esCoordMantenimiento(actor)) return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
+    if (esTecnico(actor)) {
+      return {
+        OR: [
+          { incidentes: { some: { tecnicoAsignadoId: actor.id } } },
+          { mantenimientos: { some: { tecnicoId: actor.id } } },
+        ],
+      };
+    }
+    if (esOperador(actor)) return { operadorAsignadoId: actor.id };
+    return { id: NADA };
+  }
+
+  private scopeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
+    if (esAdmin(actor)) return {};
+    if (esCoordMantenimiento(actor)) return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    if (esTecnico(actor)) return { tecnicoAsignadoId: actor.id };
+    if (esOperador(actor)) {
+      return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
+    }
+    return { id: NADA };
+  }
+
+  private scopeMantenimientos(actor: Actor): Prisma.MantenimientoMaquinariaWhereInput {
+    if (esAdmin(actor)) return {};
+    if (esCoordMantenimiento(actor)) return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    if (esTecnico(actor)) return { tecnicoId: actor.id };
+    return { id: NADA };
+  }
+
+  /** Falla si el actor no puede ver esta máquina (mismo criterio que la lista). */
+  private async assertPuedeVerMaquina(actor: Actor, maquinariaId: string): Promise<void> {
+    const ok = await this.prisma.maquinaria.count({ where: { id: maquinariaId, ...this.scopeMaquinaria(actor) } });
+    if (!ok) throw new ForbiddenException('No tienes acceso a esta máquina.');
+  }
+
+  /** Solo técnicos o el coordinador de mantenimiento, de la misma región de la máquina. */
+  private async validarResponsable(userId: string, regionMaquina: string | null): Promise<void> {
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, estado: true, regionId: true, role: { select: { namerol: true } } },
+    });
+    if (!u || u.estado !== 1) throw new NotFoundException('El técnico indicado no existe o está inactivo.');
+    if (u.role.namerol !== ROL.TECNICO && u.role.namerol !== ROL.COORD_MANTENIMIENTO) {
+      throw new BadRequestException('Solo se puede asignar a un técnico o al coordinador de mantenimiento.');
+    }
+    if (!regionMaquina || u.regionId !== regionMaquina) {
+      throw new BadRequestException('El técnico debe pertenecer a la misma región que la máquina.');
+    }
+  }
+
+  // ==============================================================
+  // Evidencias (foto o video de 13 a 30 s, más un documento)
+  // ==============================================================
+
+  private async verificarEvidencias(
+    maquina: Pick<MaquinaCtx, 'codigo'>,
+    inputs: EvidenciaInputDto[] | undefined,
+    opts: { completa: boolean },
+  ): Promise<EvidenciaVerificada[]> {
+    const vistos = new Set<string>();
+    const unicos = (inputs || []).filter((e) => {
+      const url = String(e?.url || '').trim();
+      if (!url || vistos.has(url)) return false;
+      vistos.add(url);
+      return true;
+    });
+
+    const prefix = this.storage.maquinariaPrefix(maquina.codigo);
+    const verificadas: EvidenciaVerificada[] = [];
+    for (const e of unicos) {
+      const info = await this.storage.inspectEvidence(e.url, { prefix });
+      if (info.kind === 'IMAGEN') void this.storage.generarVariantes(e.url);
+      verificadas.push({ ...info, url: e.url, descripcion: e.descripcion?.trim() || null });
+    }
+
+    const multimedia = verificadas.filter((e) => e.kind !== 'DOCUMENTO').length;
+    const documentos = verificadas.filter((e) => e.kind === 'DOCUMENTO').length;
+    if (multimedia > MAX_MULTIMEDIA) {
+      throw new BadRequestException(`Máximo ${MAX_MULTIMEDIA} fotos o videos por registro.`);
+    }
+    if (documentos > 1) {
+      throw new BadRequestException('Solo se permite un documento por registro.');
+    }
+    if (opts.completa) {
+      if (multimedia < 1) throw new BadRequestException('Adjunta al menos una foto o un video.');
+      if (documentos !== 1) throw new BadRequestException('Adjunta un documento (PDF).');
+    }
+    return verificadas;
+  }
+
+  private tipoEvidencia(kind: EvidenciaVerificada['kind'], contexto: 'INCIDENTE' | 'MANTENIMIENTO'): string {
+    if (contexto === 'INCIDENTE') {
+      return kind === 'VIDEO' ? 'VIDEO_INCIDENTE' : kind === 'DOCUMENTO' ? 'DOCUMENTO_INCIDENTE' : 'FOTO_INCIDENTE';
+    }
+    return kind === 'VIDEO' ? 'VIDEO' : kind === 'DOCUMENTO' ? 'DOCUMENTO' : 'FOTO';
+  }
+
+  private evidenciaData(
+    e: EvidenciaVerificada,
+    contexto: 'INCIDENTE' | 'MANTENIMIENTO',
+    etapa: string,
+    actorId: string,
+  ) {
+    return {
+      tipo: this.tipoEvidencia(e.kind, contexto),
+      url: e.url,
+      descripcion: e.descripcion,
+      etapa,
+      s3Key: e.key,
+      mimeType: e.mimeType,
+      tamanoBytes: e.sizeBytes,
+      duracionSeg: e.durationSeconds ?? null,
+      subidoPorId: actorId,
+      metadata: {
+        kind: e.kind,
+        mimeType: e.mimeType,
+        sizeBytes: e.sizeBytes,
+        ...(e.durationSeconds != null ? { durationSeconds: e.durationSeconds } : {}),
+      } as Prisma.InputJsonValue,
+    };
+  }
+
+  private resumenEvidencias(evs: EvidenciaVerificada[]) {
+    return evs.map((e) => ({ key: e.key, kind: e.kind, sizeBytes: e.sizeBytes, durationSeconds: e.durationSeconds }));
+  }
 
   // ==============================================================
   // MAQUINARIA
   // ==============================================================
 
-  private async ensureFichaTecnicaColumn(): Promise<void> {
-    try {
-      await this.prisma.$executeRawUnsafe(
-        `ALTER TABLE "Maquinaria" ADD COLUMN IF NOT EXISTS "fichaTecnicaUrl" TEXT`,
-      );
-    } catch (_) {}
-  }
-
-  private async persistFichaTecnicaUrl(id: string, fichaTecnicaUrl?: string | null): Promise<void> {
-    if (fichaTecnicaUrl === undefined) return;
-    await this.prisma.$executeRaw`
-      UPDATE "Maquinaria" SET "fichaTecnicaUrl" = ${fichaTecnicaUrl} WHERE "id" = ${id}
-    `;
-  }
-
-  private async attachFichaTecnicaUrls<T extends { id: string; fichaTecnicaUrl?: string | null }>(items: T[]): Promise<T[]> {
-    if (!items.length) return items;
-    if (Object.prototype.hasOwnProperty.call(items[0], 'fichaTecnicaUrl')) return items;
-    try {
-      const rows = await this.prisma.$queryRaw<{ id: string; fichaTecnicaUrl: string | null }[]>`
-        SELECT "id", "fichaTecnicaUrl" FROM "Maquinaria"
-      `;
-      const map = new Map(rows.map(row => [row.id, row.fichaTecnicaUrl]));
-      for (const item of items) {
-        item.fichaTecnicaUrl = map.get(item.id) || null;
-      }
-    } catch (_) {}
-    return items;
-  }
-
-  async list(dto: ListMaquinariaDto) {
-    await this.ensureFichaTecnicaColumn();
-    const where: any = {};
-
-    if (dto.agenciaId) where.agenciaId = dto.agenciaId;
-    if (dto.bahiaId) where.bahiaId = dto.bahiaId;
-    if (dto.tipo) where.tipo = dto.tipo;
-    if (dto.estadoOperativo) where.estadoOperativo = dto.estadoOperativo;
-
-    if (dto.search) {
-      where.OR = [
-        { codigo: { contains: dto.search, mode: 'insensitive' } },
-        { nombre: { contains: dto.search, mode: 'insensitive' } },
-        { marca: { contains: dto.search, mode: 'insensitive' } },
-        { modelo: { contains: dto.search, mode: 'insensitive' } },
-      ];
+  /**
+   * La foto y la ficha técnica son imágenes que ya deben estar en S3, dentro de la carpeta de la máquina
+   * (maquinaria/{codigo}/perfil/foto|ficha-tecnica/). No se guarda ninguna URL que no se haya verificado.
+   */
+  private async verificarImagenPerfil(
+    codigo: string,
+    url: string | null | undefined,
+    carpeta: 'foto' | 'ficha-tecnica',
+  ): Promise<void> {
+    if (!url) return;
+    const nombre = carpeta === 'foto' ? 'La foto de la máquina' : 'La ficha técnica';
+    const info = await this.storage.inspectEvidence(url, {
+      prefix: `${this.storage.maquinariaPrefix(codigo)}perfil/${carpeta}/`,
+    });
+    if (info.kind !== 'IMAGEN') {
+      throw new BadRequestException(`${nombre} debe ser una imagen (JPG, PNG o WEBP).`);
     }
+    void this.storage.generarVariantes(url);
+  }
 
-    const [items, total] = await Promise.all([
-      this.prisma.maquinaria.findMany({
-        where,
-        include: {
-          agencia: { select: { id: true, nombre: true, codigo: true } },
-          bahia: { select: { id: true, nombre: true, codigo: true } },
-          _count: {
-            select: {
-              incidentes: { where: { estado: { not: 'RESUELTO' } } },
-              mantenimientos: true,
-            },
-          },
-        },
-        orderBy: { codigo: 'asc' },
+  private async conteosPendientes(ids: string[]) {
+    if (!ids.length) return { incidentes: new Map<string, number>(), mantenimientos: new Map<string, number>() };
+    const [inc, man] = await Promise.all([
+      this.prisma.incidenteTecnico.groupBy({
+        by: ['maquinariaId'],
+        where: { maquinariaId: { in: ids }, estado: 'ABIERTO', tecnicoAsignadoId: null },
+        _count: { _all: true },
       }),
-      this.prisma.maquinaria.count({ where }),
+      this.prisma.mantenimientoMaquinaria.groupBy({
+        by: ['maquinariaId'],
+        where: {
+          maquinariaId: { in: ids },
+          estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          fechaProgramada: { lt: new Date() },
+        },
+        _count: { _all: true },
+      }),
     ]);
-    await this.attachFichaTecnicaUrls(items);
-
     return {
-      success: true,
-      total,
-      data: items,
+      incidentes: new Map(inc.map((r) => [r.maquinariaId, r._count._all])),
+      mantenimientos: new Map(man.map((r) => [r.maquinariaId, r._count._all])),
     };
   }
 
-  async create(dto: CreateMaquinariaDto) {
-    await this.ensureFichaTecnicaColumn();
-    const existing = await this.prisma.maquinaria.findUnique({
-      where: { codigo: dto.codigo },
+  async list(dto: ListMaquinariaDto, actor: Actor) {
+    const where: Prisma.MaquinariaWhereInput = { AND: [this.scopeMaquinaria(actor)] };
+    const and = where.AND as Prisma.MaquinariaWhereInput[];
+
+    if (dto.agenciaId) and.push({ agenciaId: dto.agenciaId });
+    if (dto.bahiaId) and.push({ bahiaId: dto.bahiaId });
+    if (dto.tipo) and.push({ tipo: dto.tipo });
+    if (dto.estadoOperativo) and.push({ estadoOperativo: dto.estadoOperativo });
+    if (dto.activa !== undefined) and.push({ activa: dto.activa });
+    if (dto.operadorAsignadoId) and.push({ operadorAsignadoId: dto.operadorAsignadoId });
+    if (dto.search) {
+      and.push({
+        OR: [
+          { codigo: { contains: dto.search, mode: 'insensitive' } },
+          { nombre: { contains: dto.search, mode: 'insensitive' } },
+          { marca: { contains: dto.search, mode: 'insensitive' } },
+          { modelo: { contains: dto.search, mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    const items = await this.prisma.maquinaria.findMany({
+      where,
+      include: {
+        agencia: { select: { id: true, nombre: true, codigo: true, regionId: true } },
+        bahia: { select: { id: true, nombre: true, codigo: true } },
+        operadorAsignado: { select: { id: true, name: true, lastname: true } },
+        _count: {
+          select: {
+            incidentes: { where: { estado: { notIn: ['RESUELTO', 'CANCELADO'] } } },
+            mantenimientos: true,
+          },
+        },
+      },
+      orderBy: { codigo: 'asc' },
     });
+
+    const pendientes = await this.conteosPendientes(items.map((i) => i.id));
+    const data = items.map((m) => ({
+      ...m,
+      incidentesNoAtendidos: pendientes.incidentes.get(m.id) ?? 0,
+      mantenimientosVencidos: pendientes.mantenimientos.get(m.id) ?? 0,
+    }));
+
+    return { success: true, total: data.length, data };
+  }
+
+  /** Ficha completa de una máquina: base del modal con incidencias, movimientos y mantenimientos. */
+  async detalle(dto: DetalleMaquinariaDto, actor: Actor) {
+    await this.assertPuedeVerMaquina(actor, dto.id);
+    const m = await this.prisma.maquinaria.findUnique({
+      where: { id: dto.id },
+      include: {
+        agencia: { select: { id: true, nombre: true, codigo: true, regionId: true, tipoUbicacion: true } },
+        bahia: { select: { id: true, nombre: true, codigo: true } },
+        creadoPor: { select: { id: true, name: true, lastname: true } },
+        desactivadoPor: { select: { id: true, name: true, lastname: true } },
+        operadorAsignado: { select: { id: true, name: true, lastname: true } },
+      },
+    });
+    if (!m) throw new NotFoundException(`Equipo ${dto.id} no encontrado`);
+
+    const [pendientes, proximo, totales] = await Promise.all([
+      this.conteosPendientes([m.id]),
+      this.prisma.mantenimientoMaquinaria.findFirst({
+        where: { maquinariaId: m.id, estado: { in: ['PENDIENTE', 'EN_PROCESO'] } },
+        orderBy: { fechaProgramada: 'asc' },
+        select: { id: true, fechaProgramada: true, tipo: true, estado: true },
+      }),
+      Promise.all([
+        this.prisma.incidenteTecnico.count({ where: { maquinariaId: m.id } }),
+        this.prisma.mantenimientoMaquinaria.count({ where: { maquinariaId: m.id } }),
+        this.prisma.movimientoMaquinaria.count({ where: { maquinariaId: m.id } }),
+      ]),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        ...m,
+        incidentesNoAtendidos: pendientes.incidentes.get(m.id) ?? 0,
+        mantenimientosVencidos: pendientes.mantenimientos.get(m.id) ?? 0,
+        proximoMantenimiento: proximo,
+        totales: { incidentes: totales[0], mantenimientos: totales[1], movimientos: totales[2] },
+      },
+    };
+  }
+
+  async create(dto: CreateMaquinariaDto, actor: Actor) {
+    const existing = await this.prisma.maquinaria.findUnique({ where: { codigo: dto.codigo } });
     if (existing) {
       throw new ConflictException(`Ya existe un equipo con el código ${dto.codigo}`);
     }
+    if (dto.estadoOperativo === 'DE_BAJA') {
+      throw new BadRequestException('Una máquina nueva no puede crearse dada de baja.');
+    }
 
-    const item = await this.prisma.maquinaria.create({
-      data: {
-        codigo: dto.codigo,
-        nombre: dto.nombre,
-        tipo: dto.tipo,
-        marca: dto.marca,
-        modelo: dto.modelo,
-        serie: dto.serie,
-        estadoOperativo: dto.estadoOperativo || 'OPERATIVA',
-        fotoUrl: dto.fotoUrl,
-        horasUso: dto.horasUso ?? 0,
-        agenciaId: dto.agenciaId || undefined,
-        bahiaId: dto.bahiaId || undefined,
-      },
-      include: {
-        agencia: { select: { id: true, nombre: true } },
-        bahia: { select: { id: true, nombre: true } },
-      },
+    await this.verificarImagenPerfil(dto.codigo, dto.fotoUrl, 'foto');
+    await this.verificarImagenPerfil(dto.codigo, dto.fichaTecnicaUrl, 'ficha-tecnica');
+
+    let agencia: { id: string; nombre: string; regionId: string | null } | null = null;
+    if (dto.agenciaId) {
+      agencia = await this.prisma.agencia.findUnique({
+        where: { id: dto.agenciaId },
+        select: { id: true, nombre: true, regionId: true },
+      });
+      if (!agencia) throw new NotFoundException('Agencia no encontrada');
+    }
+    if (dto.bahiaId) {
+      const bahia = await this.prisma.bahia.findUnique({ where: { id: dto.bahiaId } });
+      if (!bahia || (dto.agenciaId && bahia.agenciaId !== dto.agenciaId)) {
+        throw new BadRequestException('La bahía no pertenece a la agencia indicada.');
+      }
+    }
+
+    const item = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.maquinaria.create({
+        data: {
+          codigo: dto.codigo,
+          nombre: dto.nombre,
+          tipo: dto.tipo,
+          marca: dto.marca,
+          modelo: dto.modelo,
+          serie: dto.serie,
+          estadoOperativo: dto.estadoOperativo || 'OPERATIVA',
+          fotoUrl: dto.fotoUrl,
+          fichaTecnicaUrl: dto.fichaTecnicaUrl,
+          horasUso: dto.horasUso ?? 0,
+          agenciaId: dto.agenciaId || undefined,
+          bahiaId: dto.bahiaId || undefined,
+          creadoPorId: actor.id,
+        },
+        include: {
+          agencia: { select: { id: true, nombre: true, regionId: true } },
+          bahia: { select: { id: true, nombre: true } },
+        },
+      });
+      await this.registrarEvento(tx, created, 'MAQUINA_CREADA', actor.id, created.id, {
+        codigo: created.codigo,
+        nombre: created.nombre,
+        tipo: created.tipo,
+        agencia: created.agencia?.nombre ?? null,
+        bahia: created.bahia?.nombre ?? null,
+      });
+      return created;
     });
-    await this.persistFichaTecnicaUrl(item.id, dto.fichaTecnicaUrl);
-    (item as { fichaTecnicaUrl?: string }).fichaTecnicaUrl = dto.fichaTecnicaUrl;
 
-    return {
-      success: true,
-      data: item,
-    };
+    return { success: true, data: item };
   }
 
-  async update(dto: UpdateMaquinariaDto) {
-    await this.ensureFichaTecnicaColumn();
-    const existing = await this.prisma.maquinaria.findUnique({
-      where: { id: dto.id },
-    });
-    if (!existing) {
-      throw new NotFoundException(`Equipo con id ${dto.id} no encontrado`);
+  private static readonly CAMPOS_EDITABLES = [
+    'nombre', 'tipo', 'marca', 'modelo', 'serie', 'estadoOperativo', 'fotoUrl', 'fichaTecnicaUrl', 'horasUso',
+    'ventanaAdelantoDias',
+  ];
+
+  async update(dto: UpdateMaquinariaDto, actor: Actor) {
+    const existing = await this.cargarMaquina(dto.id);
+    const actual = await this.prisma.maquinaria.findUniqueOrThrow({ where: { id: dto.id } });
+
+    if (dto.estadoOperativo === 'DE_BAJA') {
+      throw new BadRequestException('Para dar de baja una máquina usa la acción de desactivar.');
+    }
+    if (dto.estadoOperativo && !existing.activa) {
+      throw new BadRequestException('La máquina está desactivada: actívala antes de cambiar su estado.');
+    }
+    const agenciaCambia = dto.agenciaId !== undefined && (dto.agenciaId || null) !== existing.agenciaId;
+    const bahiaCambia = dto.bahiaId !== undefined && (dto.bahiaId || null) !== existing.bahiaId;
+    if (agenciaCambia || bahiaCambia) {
+      throw new BadRequestException('Para cambiar de agencia o bahía usa el movimiento (transferir), así queda trazabilidad.');
     }
 
-    const { id, fichaTecnicaUrl, ...data } = dto;
-    const updated = await this.prisma.maquinaria.update({
-      where: { id },
-      data,
-      include: {
-        agencia: { select: { id: true, nombre: true } },
-        bahia: { select: { id: true, nombre: true } },
-      },
-    });
-    await this.persistFichaTecnicaUrl(id, fichaTecnicaUrl);
-    (updated as { fichaTecnicaUrl?: string }).fichaTecnicaUrl =
-      fichaTecnicaUrl !== undefined ? fichaTecnicaUrl : (updated as { fichaTecnicaUrl?: string }).fichaTecnicaUrl;
-    if (fichaTecnicaUrl === undefined) {
-      await this.attachFichaTecnicaUrls([updated as { id: string; fichaTecnicaUrl?: string | null }]);
+    // Solo se verifica lo que cambia: las imágenes que ya estaban guardadas no se vuelven a exigir.
+    if (dto.fotoUrl && dto.fotoUrl !== actual.fotoUrl) {
+      await this.verificarImagenPerfil(existing.codigo, dto.fotoUrl, 'foto');
+    }
+    if (dto.fichaTecnicaUrl && dto.fichaTecnicaUrl !== actual.fichaTecnicaUrl) {
+      await this.verificarImagenPerfil(existing.codigo, dto.fichaTecnicaUrl, 'ficha-tecnica');
     }
 
-    return {
-      success: true,
-      data: updated,
-    };
+    const { id, agenciaId: _a, bahiaId: _b, ...cambiosDto } = dto;
+    const cambios = this.diff(actual as unknown as Record<string, unknown>, cambiosDto, MaquinariaService.CAMPOS_EDITABLES);
+    if (!Object.keys(cambios).length) {
+      return { success: true, data: actual, sinCambios: true };
+    }
+
+    const data: Prisma.MaquinariaUpdateInput = {};
+    for (const campo of Object.keys(cambios)) {
+      (data as Record<string, unknown>)[campo] = (cambiosDto as Record<string, unknown>)[campo];
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.maquinaria.update({
+        where: { id },
+        data,
+        include: {
+          agencia: { select: { id: true, nombre: true, regionId: true } },
+          bahia: { select: { id: true, nombre: true } },
+        },
+      });
+      await this.registrarEvento(tx, u, 'MAQUINA_EDITADA', actor.id, id, { cambios });
+      return u;
+    });
+
+    return { success: true, data: updated };
+  }
+
+  /** Activar / desactivar (desactivar equivale a dar de baja). Siempre queda quién, cuándo y por qué. */
+  async setActiva(dto: SetActivaMaquinariaDto, actor: Actor) {
+    const m = await this.cargarMaquina(dto.maquinariaId);
+    if (m.activa === dto.activa) {
+      throw new BadRequestException(dto.activa ? 'La máquina ya está activa.' : 'La máquina ya está desactivada.');
+    }
+    const motivo = dto.motivo?.trim() || null;
+    if (!dto.activa && !motivo) {
+      throw new BadRequestException('Indica el motivo para desactivar la máquina.');
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.maquinaria.update({
+        where: { id: m.id },
+        data: dto.activa
+          ? {
+              activa: true,
+              estadoOperativo: 'OPERATIVA',
+              desactivadoPorId: null,
+              fechaDesactivacion: null,
+              motivoDesactivacion: null,
+            }
+          : {
+              activa: false,
+              estadoOperativo: 'DE_BAJA',
+              desactivadoPorId: actor.id,
+              fechaDesactivacion: new Date(),
+              motivoDesactivacion: motivo,
+            },
+        include: {
+          agencia: { select: { id: true, nombre: true, regionId: true } },
+          bahia: { select: { id: true, nombre: true } },
+          desactivadoPor: { select: { id: true, name: true, lastname: true } },
+        },
+      });
+      await this.registrarEvento(tx, u, dto.activa ? 'MAQUINA_ACTIVADA' : 'MAQUINA_DESACTIVADA', actor.id, m.id, {
+        motivo,
+        estadoAnterior: m.estadoOperativo,
+      });
+      return u;
+    });
+
+    return { success: true, data: updated };
+  }
+
+  async asignarOperador(dto: AsignarOperadorDto, actor: Actor) {
+    const m = await this.cargarMaquina(dto.maquinariaId);
+    assertRegion(actor, this.regionDe(m));
+    this.assertActiva(m);
+
+    const operadorId = dto.operadorId || null;
+    if (operadorId) {
+      const u = await this.prisma.user.findUnique({
+        where: { id: operadorId },
+        select: { id: true, estado: true, role: { select: { namerol: true } } },
+      });
+      if (!u || u.estado !== 1) throw new NotFoundException('El usuario indicado no existe o está inactivo.');
+      if (!ROLES_OPERADOR.includes(u.role.namerol)) {
+        throw new BadRequestException('Solo se puede asignar la máquina a un pulidor o a un líder operador.');
+      }
+    }
+    if (operadorId === m.operadorAsignadoId) {
+      throw new BadRequestException('La máquina ya está asignada a ese usuario.');
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.maquinaria.update({
+        where: { id: m.id },
+        data: { operadorAsignadoId: operadorId },
+        include: { operadorAsignado: { select: { id: true, name: true, lastname: true } } },
+      });
+      await this.registrarEvento(tx, m, 'OPERADOR_ASIGNADO', actor.id, m.id, {
+        anterior: m.operadorAsignadoId,
+        nuevo: operadorId,
+      });
+      return u;
+    });
+
+    return { success: true, data: updated };
+  }
+
+  async configurarVentana(dto: ConfigurarVentanaDto, actor: Actor) {
+    const m = await this.cargarMaquina(dto.maquinariaId);
+    assertRegion(actor, this.regionDe(m));
+    const dias = (dto.dias ?? 0) + (dto.semanas ?? 0) * 7;
+    if (dias === m.ventanaAdelantoDias) {
+      return { success: true, data: { id: m.id, ventanaAdelantoDias: dias }, sinCambios: true };
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.maquinaria.update({ where: { id: m.id }, data: { ventanaAdelantoDias: dias } });
+      await this.registrarEvento(tx, m, 'MAQUINA_EDITADA', actor.id, m.id, {
+        cambios: { ventanaAdelantoDias: { antes: m.ventanaAdelantoDias, despues: dias } },
+      });
+    });
+    return { success: true, data: { id: m.id, ventanaAdelantoDias: dias } };
   }
 
   // ==============================================================
   // INCIDENTES TÉCNICOS
   // ==============================================================
 
-  async reportarIncidente(dto: ReportarIncidenteDto, userId: string) {
-    const maquinaria = await this.prisma.maquinaria.findUnique({
-      where: { id: dto.maquinariaId },
-    });
-    if (!maquinaria) {
-      throw new NotFoundException(`Equipo ${dto.maquinariaId} no encontrado`);
-    }
+  private readonly includeIncidente = {
+    maquinaria: {
+      select: {
+        id: true, codigo: true, nombre: true, tipo: true, activa: true,
+        agencia: { select: { id: true, nombre: true, regionId: true } },
+      },
+    },
+    reportadoPor: { select: { id: true, name: true, lastname: true, email: true } },
+    resueltoPor: { select: { id: true, name: true, lastname: true, email: true } },
+    tecnicoAsignado: { select: { id: true, name: true, lastname: true, email: true } },
+    destinoTaller: { select: { id: true, nombre: true, tipoUbicacion: true } },
+    evidencias: { where: { activa: true }, orderBy: { creadaEn: 'asc' as const } },
+  } as const;
 
-    const gravedad = dto.gravedad || 'MEDIA';
+  /** Una incidencia sin asignar es "No atendida", sin importar cuánto tiempo lleve. */
+  private incidenteNoAtendido(i: { estado: string; tecnicoAsignadoId: string | null }): boolean {
+    return i.estado === 'ABIERTO' && !i.tecnicoAsignadoId;
+  }
 
-    // Si la gravedad es ALTA o CRITICA, se marca la máquina automáticamente como EN_MANTENIMIENTO
-    if (gravedad === 'ALTA' || gravedad === 'CRITICA') {
-      await this.prisma.maquinaria.update({
-        where: { id: dto.maquinariaId },
-        data: { estadoOperativo: 'EN_MANTENIMIENTO' },
+  async reportarIncidente(dto: ReportarIncidenteDto, actor: Actor) {
+    if (dto.clientUuid) {
+      const previo = await this.prisma.incidenteTecnico.findUnique({
+        where: { clientUuid: dto.clientUuid },
+        include: this.includeIncidente,
       });
+      if (previo) return { success: true, data: previo, duplicado: true };
     }
 
-    const evidencias = Array.isArray(dto.evidencias)
-      ? dto.evidencias.filter((e) => e?.url).map((e) => ({
-          tipo: e.tipo || 'FOTO_INCIDENTE',
-          url: e.url,
-          descripcion: e.descripcion || null,
-        }))
-      : [];
-    if (dto.fotoEvidenciaUrl && !evidencias.some((e) => e.url === dto.fotoEvidenciaUrl)) {
-      evidencias.unshift({ tipo: 'FOTO_INCIDENTE', url: dto.fotoEvidenciaUrl, descripcion: null });
+    const maquina = await this.cargarMaquina(dto.maquinariaId);
+    this.assertActiva(maquina);
+    if (maquina.operadorAsignadoId !== actor.id) {
+      throw new ForbiddenException('Solo puedes reportar las máquinas que tienes asignadas.');
     }
 
-    const incidente = await this.prisma.incidenteTecnico.create({
-      data: {
-        maquinariaId: dto.maquinariaId,
-        reportadoPorId: userId,
-        titulo: dto.titulo,
-        descripcion: dto.descripcion,
-        gravedad,
-        estado: 'ABIERTO',
-        fotoEvidenciaUrl: dto.fotoEvidenciaUrl || evidencias[0]?.url,
-        destinoTallerId: dto.destinoTallerId || undefined,
-        evidencias: evidencias.length ? { create: evidencias } : undefined,
-      },
-      include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true } },
-        reportadoPor: { select: { id: true, name: true, email: true } },
-        evidencias: true,
-        destinoTaller: { select: { id: true, nombre: true, tipoUbicacion: true } },
-      },
-    });
-
-    return {
-      success: true,
-      data: incidente,
-    };
-  }
-
-  async resolverIncidente(dto: ResolverIncidenteDto, userId: string) {
-    const incidente = await this.prisma.incidenteTecnico.findUnique({
-      where: { id: dto.incidenteId },
-      include: { maquinaria: true },
-    });
-    if (!incidente) {
-      throw new NotFoundException(`Incidente ${dto.incidenteId} no encontrado`);
+    const inputs: EvidenciaInputDto[] = [...(dto.evidencias || [])];
+    if (dto.fotoEvidenciaUrl && !inputs.some((e) => e.url === dto.fotoEvidenciaUrl)) {
+      inputs.unshift({ url: dto.fotoEvidenciaUrl });
     }
+    const evidencias = await this.verificarEvidencias(maquina, inputs, { completa: true });
 
-    const nuevoEstado = dto.estado || 'RESUELTO';
-    const evidenciasCierre = Array.isArray(dto.evidencias)
-      ? dto.evidencias.filter((e) => e?.url).map((e) => ({
-          tipo: e.tipo || 'DOCUMENTO_INCIDENTE',
-          url: e.url,
-          descripcion: e.descripcion || dto.repuestosUtilizados || null,
-        }))
-      : [];
-
-    const updated = await this.prisma.incidenteTecnico.update({
-      where: { id: dto.incidenteId },
-      data: {
-        estado: nuevoEstado,
-        solucion: dto.repuestosUtilizados
-          ? `${dto.solucion}\nRepuestos: ${dto.repuestosUtilizados}`
-          : dto.solucion,
-        resueltoPorId: userId,
-        fechaSolucion: new Date(),
-        evidencias: evidenciasCierre.length ? { create: evidenciasCierre } : undefined,
-      },
-      include: {
-        maquinaria: true,
-        reportadoPor: { select: { id: true, name: true } },
-        resueltoPor: { select: { id: true, name: true } },
-        evidencias: true,
-      },
-    });
-
-    // Verificar si quedan otros incidentes abiertos de alta o crítica gravedad
-    const incidentesAbiertos = await this.prisma.incidenteTecnico.count({
-      where: {
-        maquinariaId: incidente.maquinariaId,
-        estado: { notIn: ['RESUELTO', 'CANCELADO'] },
-        gravedad: { in: ['ALTA', 'CRITICA'] },
-      },
-    });
-
-    if (incidentesAbiertos === 0 && incidente.maquinaria.estadoOperativo === 'EN_MANTENIMIENTO') {
-      await this.prisma.maquinaria.update({
-        where: { id: incidente.maquinariaId },
-        data: { estadoOperativo: 'OPERATIVA' },
-      });
-    }
-
-    return {
-      success: true,
-      data: updated,
-    };
-  }
-
-  async listIncidentes(dto: ListIncidentesDto) {
-    const where: any = {};
-
-    if (dto.maquinariaId) where.maquinariaId = dto.maquinariaId;
-    if (dto.estado) where.estado = dto.estado;
-    if (dto.gravedad) where.gravedad = dto.gravedad;
-    if (dto.agenciaId) {
-      where.maquinaria = { agenciaId: dto.agenciaId };
-    }
-
-    const items = await this.prisma.incidenteTecnico.findMany({
-      where,
-      include: {
-        maquinaria: {
-          select: {
-            id: true,
-            codigo: true,
-            nombre: true,
-            tipo: true,
-            agencia: { select: { id: true, nombre: true } },
-          },
-        },
-        reportadoPor: { select: { id: true, name: true, email: true } },
-        resueltoPor: { select: { id: true, name: true, email: true } },
-        tecnicoAsignado: { select: { id: true, name: true, lastname: true, email: true } },
-        destinoTaller: { select: { id: true, nombre: true, tipoUbicacion: true } },
-        evidencias: true,
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 200,
-    });
-
-    return {
-      success: true,
-      total: items.length,
-      data: items,
-    };
-  }
-
-  // ==============================================================
-  // MANTENIMIENTOS TÉCNICOS
-  // ==============================================================
-
-  private async ensureFrecuenciaMantenimientoColumn(): Promise<void> {
-    try {
-      await this.prisma.$executeRawUnsafe(
-        `ALTER TABLE "MantenimientoMaquinaria" ADD COLUMN IF NOT EXISTS "frecuenciaDias" INTEGER`,
-      );
-    } catch (_) {}
-  }
-
-  private addDays(base: Date, days: number): Date {
-    const next = new Date(base);
-    next.setDate(next.getDate() + days);
-    return next;
-  }
-
-  private async persistFrecuenciaDias(id: string, frecuenciaDias?: number | null): Promise<void> {
-    if (frecuenciaDias === undefined) return;
-    await this.prisma.$executeRaw`
-      UPDATE "MantenimientoMaquinaria" SET "frecuenciaDias" = ${frecuenciaDias} WHERE "id" = ${id}
-    `;
-  }
-
-  async registrarMantenimiento(dto: RegistrarMantenimientoDto, userId: string) {
-    await this.ensureFrecuenciaMantenimientoColumn();
-    const maquinaria = await this.prisma.maquinaria.findUnique({
-      where: { id: dto.maquinariaId },
-    });
-    if (!maquinaria) {
-      throw new NotFoundException(`Equipo ${dto.maquinariaId} no encontrado`);
-    }
-
-    const evidenciasMant = Array.isArray(dto.evidencias)
-      ? dto.evidencias.filter((e) => e?.url).map((e) => ({
-          tipo: e.tipo || 'DOCUMENTO',
-          url: e.url,
-          descripcion: e.descripcion || null,
-        }))
-      : [];
-
-    const fechaProgramada = dto.fechaProgramada ? new Date(dto.fechaProgramada) : new Date();
-    const frecuenciaDias = dto.frecuenciaDias != null ? Number(dto.frecuenciaDias) : 0;
-    const proximo = dto.proximoMantenimiento
-      ? new Date(dto.proximoMantenimiento)
-      : frecuenciaDias > 0
-        ? this.addDays(fechaProgramada, frecuenciaDias)
-        : undefined;
-
-    const mantenimiento = await this.prisma.mantenimientoMaquinaria.create({
-      data: {
-        maquinariaId: dto.maquinariaId,
-        tecnicoId: dto.tecnicoId || userId,
-        tipo: dto.tipo || 'PREVENTIVO',
-        estado: 'PENDIENTE',
-        observaciones: dto.observaciones,
-        repuestosUsados: dto.repuestosUsados || undefined,
-        costoTotal: dto.costoTotal ? dto.costoTotal : undefined,
-        fechaMantenimiento: fechaProgramada,
-        proximoMantenimiento: proximo,
-        evidencias: evidenciasMant.length ? { create: evidenciasMant } : undefined,
-      },
-      include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true, agencia: { select: { id: true, nombre: true } } } },
-        tecnico: { select: { id: true, name: true, lastname: true } },
-        evidencias: true,
-      },
-    });
-    await this.persistFrecuenciaDias(mantenimiento.id, frecuenciaDias);
-    (mantenimiento as { frecuenciaDias?: number }).frecuenciaDias = frecuenciaDias;
-
-    return {
-      success: true,
-      data: mantenimiento,
-    };
-  }
-
-  async ejecutarMantenimiento(dto: EjecutarMantenimientoDto, userId: string) {
-    await this.ensureFrecuenciaMantenimientoColumn();
-    const existing = await this.prisma.mantenimientoMaquinaria.findUnique({
-      where: { id: dto.mantenimientoId },
-    });
-    if (!existing) {
-      throw new NotFoundException(`Mantenimiento ${dto.mantenimientoId} no encontrado`);
-    }
-
-    const evidencias = Array.isArray(dto.evidencias)
-      ? dto.evidencias.filter((e) => e?.url).map((e) => ({
-          tipo: String(e.tipo || 'FOTO').toUpperCase(),
-          url: e.url,
-          descripcion: e.descripcion || null,
-        }))
-      : [];
-    const tieneImagen = evidencias.some((e) =>
-      e.tipo.includes('FOTO') || e.tipo.includes('IMAGEN') || e.tipo === 'IMAGE',
-    );
-    if (!tieneImagen) {
-      throw new BadRequestException('Para ejecutar el mantenimiento debes adjuntar al menos una imagen.');
-    }
-
-    const fechaFin = dto.fechaFin ? new Date(dto.fechaFin) : new Date();
-    let frecuenciaDias = Number((existing as { frecuenciaDias?: number }).frecuenciaDias || 0);
-    if (!frecuenciaDias) {
-      try {
-        const rows = await this.prisma.$queryRaw<{ frecuenciaDias: number | null }[]>`
-          SELECT "frecuenciaDias" FROM "MantenimientoMaquinaria" WHERE "id" = ${dto.mantenimientoId}
-        `;
-        frecuenciaDias = Number(rows[0]?.frecuenciaDias || 0);
-      } catch (_) {}
-    }
-    const proximo = frecuenciaDias > 0 ? this.addDays(fechaFin, frecuenciaDias) : existing.proximoMantenimiento;
-
-    const updated = await this.prisma.mantenimientoMaquinaria.update({
-      where: { id: dto.mantenimientoId },
-      data: {
-        estado: 'FINALIZADO',
-        observaciones: dto.observaciones || existing.observaciones,
-        fechaMantenimiento: fechaFin,
-        proximoMantenimiento: proximo || undefined,
-        evidencias: evidencias.length ? { create: evidencias } : undefined,
-      },
-      include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true, agencia: { select: { id: true, nombre: true } } } },
-        tecnico: { select: { id: true, name: true, lastname: true } },
-        evidencias: true,
-      },
-    });
-
-    if (frecuenciaDias > 0 && proximo) {
-      const siguiente = await this.prisma.mantenimientoMaquinaria.create({
-        data: {
-          maquinariaId: existing.maquinariaId,
-          tecnicoId: existing.tecnicoId || userId,
-          tipo: existing.tipo,
-          estado: 'PENDIENTE',
-          observaciones: existing.observaciones,
-          fechaMantenimiento: proximo,
-          proximoMantenimiento: this.addDays(proximo, frecuenciaDias),
-        },
-      });
-      await this.persistFrecuenciaDias(siguiente.id, frecuenciaDias);
-    }
-
-    (updated as { frecuenciaDias?: number }).frecuenciaDias = frecuenciaDias;
-    return { success: true, data: updated };
-  }
-
-  async listMantenimientos(dto: ListMantenimientosDto) {
-    await this.ensureFrecuenciaMantenimientoColumn();
-    const where: any = {};
-    if (dto.maquinariaId) where.maquinariaId = dto.maquinariaId;
-    if (dto.tecnicoId) where.tecnicoId = dto.tecnicoId;
-    if (dto.tipo) where.tipo = dto.tipo;
-
-    const items = await this.prisma.mantenimientoMaquinaria.findMany({
-      where,
-      include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true, tipo: true, agencia: { select: { id: true, nombre: true } } } },
-        tecnico: { select: { id: true, name: true, lastname: true } },
-        evidencias: true,
-      },
-      orderBy: { fechaMantenimiento: 'desc' },
-      take: 200,
-    });
-
-    if (items.length && !Object.prototype.hasOwnProperty.call(items[0], 'frecuenciaDias')) {
-      try {
-        const rows = await this.prisma.$queryRaw<{ id: string; frecuenciaDias: number | null }[]>`
-          SELECT "id", "frecuenciaDias" FROM "MantenimientoMaquinaria"
-        `;
-        const map = new Map(rows.map(row => [row.id, row.frecuenciaDias]));
-        for (const item of items) {
-          (item as { frecuenciaDias?: number | null }).frecuenciaDias = map.get(item.id) ?? 0;
-        }
-      } catch (_) {}
-    }
-
-    return {
-      success: true,
-      total: items.length,
-      data: items,
-    };
-  }
-
-  async asignarIncidente(dto: AsignarIncidenteDto, userId: string) {
-    const incidente = await this.prisma.incidenteTecnico.findUnique({
-      where: { id: dto.incidenteId },
-    });
-    if (!incidente) {
-      throw new NotFoundException(`Incidente ${dto.incidenteId} no encontrado`);
-    }
-
-    const tecnicoId = dto.tecnicoId || userId;
     if (dto.destinoTallerId) {
       const taller = await this.prisma.agencia.findUnique({ where: { id: dto.destinoTallerId } });
       if (!taller) throw new NotFoundException('Taller destino no encontrado');
     }
 
-    const updated = await this.prisma.incidenteTecnico.update({
-      where: { id: dto.incidenteId },
-      data: {
-        tecnicoAsignadoId: tecnicoId,
-        fechaAsignacion: new Date(),
-        estado: incidente.estado === 'ABIERTO' ? 'EN_PROCESO' : incidente.estado,
-        destinoTallerId: dto.destinoTallerId || incidente.destinoTallerId,
+    const gravedad = dto.gravedad || 'MEDIA';
+    const primeraFoto = evidencias.find((e) => e.kind !== 'DOCUMENTO');
+
+    // La hora del reporte es la del servidor: el reporte siempre se hace con conexión.
+    const incidente = await this.prisma.$transaction(async (tx) => {
+      const inc = await tx.incidenteTecnico.create({
+        data: {
+          clientUuid: dto.clientUuid || undefined,
+          maquinariaId: maquina.id,
+          reportadoPorId: actor.id,
+          titulo: dto.titulo,
+          descripcion: dto.descripcion,
+          gravedad,
+          estado: 'ABIERTO',
+          fotoEvidenciaUrl: primeraFoto?.url,
+          destinoTallerId: dto.destinoTallerId || undefined,
+          fechaReporte: new Date(),
+          evidencias: { create: evidencias.map((e) => this.evidenciaData(e, 'INCIDENTE', 'REPORTE', actor.id)) },
+        },
+        include: this.includeIncidente,
+      });
+      await this.registrarEvento(tx, maquina, 'INCIDENTE_REPORTADO', actor.id, inc.id, {
+        titulo: inc.titulo,
+        gravedad,
+        reportadoEn: inc.fechaReporte,
+        evidencias: this.resumenEvidencias(evidencias),
+      });
+      return inc;
+    });
+
+    // Solo el coordinador de mantenimiento de la región de la máquina recibe la alerta.
+    void this.notifications.notificarCoordinadorRegion({
+      regionId: this.regionDe(maquina),
+      title: `Nueva incidencia: ${maquina.codigo}`,
+      body: `${incidente.titulo} (Gravedad: ${gravedad})`,
+      data: { type: 'INCIDENTE_NUEVO', incidenteId: incidente.id, maquinariaId: maquina.id },
+    });
+
+    return { success: true, data: incidente };
+  }
+
+  private async cargarIncidente(id: string) {
+    const inc = await this.prisma.incidenteTecnico.findUnique({
+      where: { id },
+      include: { maquinaria: { include: this.includeMaquinaCtx } },
+    });
+    if (!inc) throw new NotFoundException(`Incidente ${id} no encontrado`);
+    return inc;
+  }
+
+  async asignarIncidente(dto: AsignarIncidenteDto, actor: Actor) {
+    const inc = await this.cargarIncidente(dto.incidenteId);
+    const maquina = inc.maquinaria as unknown as MaquinaCtx;
+    assertRegion(actor, this.regionDe(maquina));
+    if (inc.estado === 'RESUELTO' || inc.estado === 'CANCELADO') {
+      throw new BadRequestException('La incidencia ya está cerrada.');
+    }
+
+    const tecnicoId = dto.tecnicoId || actor.id;
+    await this.validarResponsable(tecnicoId, this.regionDe(maquina));
+    if (dto.destinoTallerId) {
+      const taller = await this.prisma.agencia.findUnique({ where: { id: dto.destinoTallerId } });
+      if (!taller) throw new NotFoundException('Taller destino no encontrado');
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.incidenteTecnico.update({
+        where: { id: inc.id },
+        data: {
+          tecnicoAsignadoId: tecnicoId,
+          fechaAsignacion: new Date(),
+          estado: 'EN_PROCESO',
+          destinoTallerId: dto.destinoTallerId || inc.destinoTallerId,
+        },
+        include: this.includeIncidente,
+      });
+      await this.registrarEvento(tx, maquina, 'INCIDENTE_ASIGNADO', actor.id, inc.id, {
+        anterior: inc.tecnicoAsignadoId,
+        nuevo: tecnicoId,
+        autoAsignado: tecnicoId === actor.id,
+      });
+      return u;
+    });
+
+    if (tecnicoId !== actor.id) {
+      void this.notifications.notificarUsuarios(
+        [tecnicoId],
+        `Incidencia asignada: ${maquina.codigo}`,
+        inc.titulo,
+        { type: 'INCIDENTE_ASIGNADO', incidenteId: inc.id, maquinariaId: maquina.id },
+      );
+    }
+    return { success: true, data: updated };
+  }
+
+  async resolverIncidente(dto: ResolverIncidenteDto, actor: Actor) {
+    const inc = await this.cargarIncidente(dto.incidenteId);
+    const maquina = inc.maquinaria as unknown as MaquinaCtx;
+    if (inc.estado === 'RESUELTO' || inc.estado === 'CANCELADO') {
+      throw new BadRequestException('La incidencia ya está cerrada.');
+    }
+
+    // Repara el técnico asignado, o el coordinador que decide hacerlo él mismo.
+    let autoAsignar = false;
+    if (inc.tecnicoAsignadoId !== actor.id) {
+      if (esAdmin(actor)) {
+        // admin / super admin pueden cerrar cualquier incidencia
+      } else if (esCoordMantenimiento(actor) && !inc.tecnicoAsignadoId) {
+        assertRegion(actor, this.regionDe(maquina));
+        autoAsignar = true;
+      } else {
+        throw new ForbiddenException('Solo el técnico asignado puede reparar esta incidencia.');
+      }
+    }
+
+    const nuevoEstado = dto.estado || 'RESUELTO';
+    const evidencias = nuevoEstado === 'RESUELTO'
+      ? await this.verificarEvidencias(maquina, dto.evidencias, { completa: true })
+      : await this.verificarEvidencias(maquina, dto.evidencias, { completa: false });
+
+    const ahora = new Date();
+    const solucion = dto.repuestosUtilizados
+      ? `${dto.solucion}\nRepuestos: ${dto.repuestosUtilizados}`
+      : dto.solucion;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (autoAsignar) {
+        await this.registrarEvento(tx, maquina, 'INCIDENTE_ASIGNADO', actor.id, inc.id, {
+          anterior: null,
+          nuevo: actor.id,
+          autoAsignado: true,
+        });
+      }
+      const u = await tx.incidenteTecnico.update({
+        where: { id: inc.id },
+        data: {
+          estado: nuevoEstado,
+          solucion,
+          ...(autoAsignar ? { tecnicoAsignadoId: actor.id, fechaAsignacion: ahora } : {}),
+          ...(nuevoEstado === 'RESUELTO' ? { resueltoPorId: actor.id, fechaSolucion: ahora } : {}),
+          evidencias: {
+            create: evidencias.map((e) => this.evidenciaData(e, 'INCIDENTE', 'REPARACION', actor.id)),
+          },
+        },
+        include: this.includeIncidente,
+      });
+      await this.registrarEvento(
+        tx,
+        maquina,
+        nuevoEstado === 'RESUELTO' ? 'INCIDENTE_REPARADO' : 'INCIDENTE_CANCELADO',
+        actor.id,
+        inc.id,
+        {
+          reportadoEn: inc.fechaReporte,
+          reparadoEn: nuevoEstado === 'RESUELTO' ? ahora : null,
+          minutosHastaReparar:
+            nuevoEstado === 'RESUELTO' ? Math.round((ahora.getTime() - inc.fechaReporte.getTime()) / 60000) : null,
+          evidencias: this.resumenEvidencias(evidencias),
+        },
+      );
+      return u;
+    });
+
+    if (nuevoEstado === 'RESUELTO') {
+      void this.notifications.notificarUsuarios(
+        [inc.reportadoPorId],
+        `Incidencia reparada: ${maquina.codigo}`,
+        inc.titulo,
+        { type: 'INCIDENTE_REPARADO', incidenteId: inc.id, maquinariaId: maquina.id },
+      );
+    }
+    return { success: true, data: updated };
+  }
+
+  async editarIncidente(dto: EditarIncidenteDto, actor: Actor) {
+    const inc = await this.cargarIncidente(dto.incidenteId);
+    const maquina = inc.maquinaria as unknown as MaquinaCtx;
+
+    let campos = ['titulo', 'descripcion', 'gravedad', 'solucion'];
+    if (esTecnico(actor)) {
+      // El reparador solo corrige su propio trabajo.
+      if (inc.tecnicoAsignadoId !== actor.id && inc.resueltoPorId !== actor.id) {
+        throw new ForbiddenException('Solo puedes editar incidencias que tienes asignadas.');
+      }
+      campos = ['solucion'];
+    } else {
+      assertRegion(actor, this.regionDe(maquina));
+    }
+
+    const { incidenteId: _id, ...propuesta } = dto;
+    const cambios = this.diff(inc as unknown as Record<string, unknown>, propuesta, campos);
+    if (!Object.keys(cambios).length) {
+      return { success: true, data: inc, sinCambios: true };
+    }
+    const data: Record<string, unknown> = {};
+    for (const campo of Object.keys(cambios)) data[campo] = (propuesta as Record<string, unknown>)[campo];
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.incidenteTecnico.update({
+        where: { id: inc.id },
+        data: data as Prisma.IncidenteTecnicoUpdateInput,
+        include: this.includeIncidente,
+      });
+      await this.registrarEvento(tx, maquina, 'INCIDENTE_EDITADO', actor.id, inc.id, { cambios });
+      return u;
+    });
+    return { success: true, data: updated };
+  }
+
+  private ordenarIncidentes<T extends {
+    estado: string; gravedad: string; tecnicoAsignadoId: string | null; fechaReporte: Date;
+  }>(items: T[]): T[] {
+    const grupo = (i: T) => (this.incidenteNoAtendido(i) ? 0 : i.estado === 'EN_PROCESO' ? 1 : 2);
+    return items.sort((a, b) => {
+      const ga = grupo(a);
+      const gb = grupo(b);
+      if (ga !== gb) return ga - gb;
+      if (ga === 0) {
+        // No atendidas: las críticas primero y, dentro de cada gravedad, las más antiguas primero.
+        const r = (GRAVEDAD_RANK[a.gravedad] ?? 9) - (GRAVEDAD_RANK[b.gravedad] ?? 9);
+        return r !== 0 ? r : a.fechaReporte.getTime() - b.fechaReporte.getTime();
+      }
+      return b.fechaReporte.getTime() - a.fechaReporte.getTime();
+    });
+  }
+
+  async listIncidentes(dto: ListIncidentesDto, actor: Actor) {
+    const and: Prisma.IncidenteTecnicoWhereInput[] = [this.scopeIncidentes(actor)];
+    if (dto.maquinariaId) and.push({ maquinariaId: dto.maquinariaId });
+    if (dto.estado) and.push({ estado: dto.estado });
+    if (dto.gravedad) and.push({ gravedad: dto.gravedad });
+    if (dto.agenciaId) and.push({ maquinaria: { agenciaId: dto.agenciaId } });
+    if (dto.soloNoAtendidas) and.push({ estado: 'ABIERTO', tecnicoAsignadoId: null });
+
+    const items = await this.prisma.incidenteTecnico.findMany({
+      where: { AND: and },
+      include: this.includeIncidente,
+      orderBy: { fechaReporte: 'desc' },
+      take: 2000,
+    });
+    const ordenados = this.ordenarIncidentes(items);
+    const { page, pageSize, skip } = this.pagina(dto);
+    const data = ordenados.slice(skip, skip + pageSize).map((i) => ({
+      ...i,
+      noAtendida: this.incidenteNoAtendido(i),
+    }));
+    return { success: true, total: ordenados.length, page, pageSize, data };
+  }
+
+  // ==============================================================
+  // MANTENIMIENTOS
+  // ==============================================================
+
+  private readonly includeMantenimiento = {
+    maquinaria: {
+      select: {
+        id: true, codigo: true, nombre: true, tipo: true, ventanaAdelantoDias: true,
+        agencia: { select: { id: true, nombre: true, regionId: true } },
       },
-      include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true } },
-        tecnicoAsignado: { select: { id: true, name: true, lastname: true } },
-        destinoTaller: { select: { id: true, nombre: true, tipoUbicacion: true } },
-      },
+    },
+    tecnico: { select: { id: true, name: true, lastname: true } },
+    creadoPor: { select: { id: true, name: true, lastname: true } },
+    ejecutadoPor: { select: { id: true, name: true, lastname: true } },
+    evidencias: { where: { activa: true }, orderBy: { creadaEn: 'asc' as const } },
+  } as const;
+
+  /** Un mantenimiento sin ejecutar cuya fecha programada ya pasó es "No atendido". */
+  private mantenimientoNoAtendido(m: { estado: string; fechaProgramada: Date | null }, ahora = new Date()): boolean {
+    return m.estado !== 'FINALIZADO' && !!m.fechaProgramada && m.fechaProgramada.getTime() < ahora.getTime();
+  }
+
+  async registrarMantenimiento(dto: RegistrarMantenimientoDto, actor: Actor) {
+    const maquina = await this.cargarMaquina(dto.maquinariaId);
+    assertRegion(actor, this.regionDe(maquina));
+    this.assertActiva(maquina);
+
+    const tecnicoId = dto.tecnicoId || actor.id;
+    await this.validarResponsable(tecnicoId, this.regionDe(maquina));
+    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { completa: false });
+
+    const fechaProgramada = dto.fechaProgramada ? new Date(dto.fechaProgramada) : new Date();
+    if (Number.isNaN(fechaProgramada.getTime())) throw new BadRequestException('Fecha programada inválida.');
+    const frecuenciaDias = dto.frecuenciaDias != null ? Number(dto.frecuenciaDias) : 0;
+    const proximo = dto.proximoMantenimiento
+      ? new Date(dto.proximoMantenimiento)
+      : frecuenciaDias > 0
+        ? addDays(fechaProgramada, frecuenciaDias)
+        : undefined;
+
+    const mantenimiento = await this.prisma.$transaction(async (tx) => {
+      const m = await tx.mantenimientoMaquinaria.create({
+        data: {
+          maquinariaId: maquina.id,
+          tecnicoId,
+          creadoPorId: actor.id,
+          tipo: dto.tipo || 'PREVENTIVO',
+          estado: 'PENDIENTE',
+          observaciones: dto.observaciones,
+          repuestosUsados: dto.repuestosUsados || undefined,
+          costoTotal: dto.costoTotal ? dto.costoTotal : undefined,
+          fechaMantenimiento: fechaProgramada,
+          fechaProgramada,
+          proximoMantenimiento: proximo,
+          frecuenciaDias,
+          evidencias: {
+            create: evidencias.map((e) => this.evidenciaData(e, 'MANTENIMIENTO', 'PROGRAMACION', actor.id)),
+          },
+        },
+        include: this.includeMantenimiento,
+      });
+      await this.registrarEvento(tx, maquina, 'MANTENIMIENTO_PROGRAMADO', actor.id, m.id, {
+        tipo: m.tipo,
+        programadoPara: fechaProgramada,
+        frecuenciaDias,
+        tecnicoId,
+      });
+      return m;
+    });
+
+    if (tecnicoId !== actor.id) {
+      void this.notifications.notificarUsuarios(
+        [tecnicoId],
+        `Mantenimiento asignado: ${maquina.codigo}`,
+        `Programado para ${fechaProgramada.toISOString().slice(0, 10)}`,
+        { type: 'MANTENIMIENTO_ASIGNADO', mantenimientoId: mantenimiento.id, maquinariaId: maquina.id },
+      );
+    }
+    return { success: true, data: mantenimiento };
+  }
+
+  private async cargarMantenimiento(id: string) {
+    const m = await this.prisma.mantenimientoMaquinaria.findUnique({
+      where: { id },
+      include: { maquinaria: { include: this.includeMaquinaCtx } },
+    });
+    if (!m) throw new NotFoundException(`Mantenimiento ${id} no encontrado`);
+    return m;
+  }
+
+  async asignarMantenimiento(dto: AsignarMantenimientoDto, actor: Actor) {
+    const m = await this.cargarMantenimiento(dto.mantenimientoId);
+    const maquina = m.maquinaria as unknown as MaquinaCtx;
+    assertRegion(actor, this.regionDe(maquina));
+    if (m.estado === 'FINALIZADO') throw new BadRequestException('El mantenimiento ya fue ejecutado.');
+
+    const tecnicoId = dto.tecnicoId || actor.id;
+    await this.validarResponsable(tecnicoId, this.regionDe(maquina));
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.mantenimientoMaquinaria.update({
+        where: { id: m.id },
+        data: { tecnicoId, estado: 'EN_PROCESO' },
+        include: this.includeMantenimiento,
+      });
+      await this.registrarEvento(tx, maquina, 'MANTENIMIENTO_ASIGNADO', actor.id, m.id, {
+        anterior: m.tecnicoId,
+        nuevo: tecnicoId,
+        autoAsignado: tecnicoId === actor.id,
+      });
+      return u;
+    });
+
+    if (tecnicoId !== actor.id) {
+      void this.notifications.notificarUsuarios(
+        [tecnicoId],
+        `Mantenimiento asignado: ${maquina.codigo}`,
+        `Programado para ${(m.fechaProgramada ?? m.fechaMantenimiento).toISOString().slice(0, 10)}`,
+        { type: 'MANTENIMIENTO_ASIGNADO', mantenimientoId: m.id, maquinariaId: maquina.id },
+      );
+    }
+    return { success: true, data: updated };
+  }
+
+  async ejecutarMantenimiento(dto: EjecutarMantenimientoDto, actor: Actor) {
+    const existing = await this.cargarMantenimiento(dto.mantenimientoId);
+    const maquina = existing.maquinaria as unknown as MaquinaCtx;
+    if (existing.estado === 'FINALIZADO') throw new BadRequestException('El mantenimiento ya fue ejecutado.');
+    this.assertActiva(maquina);
+    if (existing.tecnicoId !== actor.id && !esAdmin(actor)) {
+      throw new ForbiddenException('Solo el técnico asignado puede ejecutar este mantenimiento.');
+    }
+
+    // Ventana de adelanto configurada en la máquina: fuera de ella no se puede registrar (sin excepciones).
+    const ahora = new Date();
+    const programada = existing.fechaProgramada ?? existing.fechaMantenimiento;
+    const desde = addDays(startOfDay(programada), -maquina.ventanaAdelantoDias);
+    if (ahora.getTime() < desde.getTime()) {
+      throw new BadRequestException(
+        `Aún no se puede registrar: está programado para ${programada.toISOString().slice(0, 10)} y la máquina permite ` +
+          `adelantarlo ${maquina.ventanaAdelantoDias} día(s). Podrá hacerse desde el ${desde.toISOString().slice(0, 10)}.`,
+      );
+    }
+
+    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { completa: true });
+
+    // El calendario no se corre: si toca cada 30 días y se hizo antes, el siguiente sigue en su fecha.
+    const frecuenciaDias = Number(existing.frecuenciaDias || 0);
+    let siguiente: Date | null = null;
+    if (frecuenciaDias > 0) {
+      siguiente = addDays(programada, frecuenciaDias);
+      while (siguiente.getTime() <= ahora.getTime()) siguiente = addDays(siguiente, frecuenciaDias);
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.mantenimientoMaquinaria.update({
+        where: { id: existing.id },
+        data: {
+          estado: 'FINALIZADO',
+          observaciones: dto.observaciones || existing.observaciones,
+          fechaProgramada: programada,
+          fechaEjecucion: ahora,
+          fechaMantenimiento: ahora,
+          ejecutadoPorId: actor.id,
+          proximoMantenimiento: siguiente ?? existing.proximoMantenimiento ?? undefined,
+          evidencias: {
+            create: evidencias.map((e) => this.evidenciaData(e, 'MANTENIMIENTO', 'EJECUCION', actor.id)),
+          },
+        },
+        include: this.includeMantenimiento,
+      });
+
+      if (siguiente) {
+        const yaExiste = await tx.mantenimientoMaquinaria.count({
+          where: { maquinariaId: existing.maquinariaId, estado: { not: 'FINALIZADO' }, fechaProgramada: siguiente },
+        });
+        if (!yaExiste) {
+          await tx.mantenimientoMaquinaria.create({
+            data: {
+              maquinariaId: existing.maquinariaId,
+              tecnicoId: existing.tecnicoId,
+              creadoPorId: existing.creadoPorId,
+              tipo: existing.tipo,
+              estado: 'PENDIENTE',
+              observaciones: existing.observaciones,
+              fechaMantenimiento: siguiente,
+              fechaProgramada: siguiente,
+              proximoMantenimiento: addDays(siguiente, frecuenciaDias),
+              frecuenciaDias,
+            },
+          });
+        }
+      }
+
+      await this.registrarEvento(tx, maquina, 'MANTENIMIENTO_EJECUTADO', actor.id, existing.id, {
+        programadoPara: programada,
+        ejecutadoEn: ahora,
+        diasDeAdelanto: Math.max(0, Math.round((startOfDay(programada).getTime() - startOfDay(ahora).getTime()) / 86400000)),
+        siguienteProgramado: siguiente,
+        evidencias: this.resumenEvidencias(evidencias),
+      });
+      return u;
     });
 
     return { success: true, data: updated };
   }
 
-  async asignarMantenimiento(dto: AsignarMantenimientoDto, userId: string) {
-    const mantenimiento = await this.prisma.mantenimientoMaquinaria.findUnique({
-      where: { id: dto.mantenimientoId },
-    });
-    if (!mantenimiento) {
-      throw new NotFoundException(`Mantenimiento ${dto.mantenimientoId} no encontrado`);
+  async editarMantenimiento(dto: EditarMantenimientoDto, actor: Actor) {
+    const m = await this.cargarMantenimiento(dto.mantenimientoId);
+    const maquina = m.maquinaria as unknown as MaquinaCtx;
+
+    let campos = ['tipo', 'observaciones', 'repuestosUsados', 'costoTotal', 'frecuenciaDias', 'fechaProgramada'];
+    if (esTecnico(actor)) {
+      if (m.tecnicoId !== actor.id && m.ejecutadoPorId !== actor.id) {
+        throw new ForbiddenException('Solo puedes editar mantenimientos que tienes asignados.');
+      }
+      campos = ['observaciones', 'repuestosUsados', 'costoTotal'];
+    } else {
+      assertRegion(actor, this.regionDe(maquina));
+    }
+    if (dto.fechaProgramada !== undefined && m.estado === 'FINALIZADO') {
+      throw new BadRequestException('No se puede reprogramar un mantenimiento ya ejecutado.');
     }
 
-    const updated = await this.prisma.mantenimientoMaquinaria.update({
-      where: { id: dto.mantenimientoId },
-      data: {
-        tecnicoId: dto.tecnicoId || userId,
-        estado: mantenimiento.estado === 'PENDIENTE' ? 'EN_PROCESO' : mantenimiento.estado,
-      },
-      include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true } },
-        tecnico: { select: { id: true, name: true, lastname: true } },
-      },
-    });
+    const { mantenimientoId: _id, ...propuesta } = dto;
+    const propuestaNorm: Record<string, unknown> = { ...propuesta };
+    if (dto.fechaProgramada !== undefined) {
+      const f = new Date(dto.fechaProgramada);
+      if (Number.isNaN(f.getTime())) throw new BadRequestException('Fecha programada inválida.');
+      propuestaNorm.fechaProgramada = f;
+    }
+    const cambios = this.diff(m as unknown as Record<string, unknown>, propuestaNorm, campos);
+    if (!Object.keys(cambios).length) {
+      return { success: true, data: m, sinCambios: true };
+    }
+    const data: Record<string, unknown> = {};
+    for (const campo of Object.keys(cambios)) data[campo] = propuestaNorm[campo];
+    if (data.fechaProgramada) data.fechaMantenimiento = data.fechaProgramada;
 
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.mantenimientoMaquinaria.update({
+        where: { id: m.id },
+        data: data as Prisma.MantenimientoMaquinariaUpdateInput,
+        include: this.includeMantenimiento,
+      });
+      await this.registrarEvento(tx, maquina, 'MANTENIMIENTO_EDITADO', actor.id, m.id, { cambios });
+      return u;
+    });
     return { success: true, data: updated };
   }
 
-  async transferirMaquinaria(dto: TransferirMaquinariaDto, userId: string) {
-    const maquina = await this.prisma.maquinaria.findUnique({
-      where: { id: dto.maquinariaId },
-      include: { agencia: { select: { id: true, nombre: true } }, bahia: { select: { id: true, nombre: true } } },
-    });
-    if (!maquina) {
-      throw new NotFoundException(`Equipo ${dto.maquinariaId} no encontrado`);
+  async listMantenimientos(dto: ListMantenimientosDto, actor: Actor) {
+    const ahora = new Date();
+    const and: Prisma.MantenimientoMaquinariaWhereInput[] = [this.scopeMantenimientos(actor)];
+    if (dto.maquinariaId) and.push({ maquinariaId: dto.maquinariaId });
+    if (dto.tecnicoId) and.push({ tecnicoId: dto.tecnicoId });
+    if (dto.tipo) and.push({ tipo: dto.tipo });
+    if (dto.estado) and.push({ estado: dto.estado });
+    if (dto.agenciaId) and.push({ maquinaria: { agenciaId: dto.agenciaId } });
+    if (dto.soloNoAtendidos) {
+      and.push({ estado: { in: ['PENDIENTE', 'EN_PROCESO'] }, fechaProgramada: { lt: ahora } });
     }
+
+    const items = await this.prisma.mantenimientoMaquinaria.findMany({
+      where: { AND: and },
+      include: this.includeMantenimiento,
+      orderBy: { fechaMantenimiento: 'desc' },
+      take: 2000,
+    });
+
+    const grupo = (m: (typeof items)[number]) =>
+      this.mantenimientoNoAtendido(m, ahora) ? 0 : m.estado !== 'FINALIZADO' ? 1 : 2;
+    const fecha = (m: (typeof items)[number]) => (m.fechaProgramada ?? m.fechaMantenimiento).getTime();
+    items.sort((a, b) => {
+      const ga = grupo(a);
+      const gb = grupo(b);
+      if (ga !== gb) return ga - gb;
+      // Vencidos: los más atrasados primero. Próximos: el más cercano primero. Finalizados: el más reciente.
+      if (ga === 2) return (b.fechaEjecucion ?? b.fechaMantenimiento).getTime() - (a.fechaEjecucion ?? a.fechaMantenimiento).getTime();
+      return fecha(a) - fecha(b);
+    });
+
+    const { page, pageSize, skip } = this.pagina(dto);
+    const data = items.slice(skip, skip + pageSize).map((m) => ({
+      ...m,
+      noAtendido: this.mantenimientoNoAtendido(m, ahora),
+    }));
+    return { success: true, total: items.length, page, pageSize, data };
+  }
+
+  // ==============================================================
+  // EVIDENCIAS ADICIONALES (se agregan o se reemplazan; nunca se borran)
+  // ==============================================================
+
+  async agregarEvidencia(dto: AgregarEvidenciaDto, actor: Actor) {
+    let maquina: MaquinaCtx;
+    let etapa: string;
+    let entidadId: string;
+
+    if (dto.entidad === 'INCIDENTE') {
+      const inc = await this.cargarIncidente(dto.entidadId);
+      maquina = inc.maquinaria as unknown as MaquinaCtx;
+      entidadId = inc.id;
+      etapa = dto.etapa || 'REPARACION';
+      const esReportante = etapa === 'REPORTE' && inc.reportadoPorId === actor.id;
+      const esReparador = etapa === 'REPARACION' && inc.tecnicoAsignadoId === actor.id;
+      if (!esReportante && !esReparador) {
+        if (esAdmin(actor) || esCoordMantenimiento(actor)) assertRegion(actor, this.regionDe(maquina));
+        else throw new ForbiddenException('No puedes agregar evidencia a esta incidencia.');
+      }
+    } else {
+      const m = await this.cargarMantenimiento(dto.entidadId);
+      maquina = m.maquinaria as unknown as MaquinaCtx;
+      entidadId = m.id;
+      etapa = 'EJECUCION';
+      if (m.tecnicoId !== actor.id) {
+        if (esAdmin(actor) || esCoordMantenimiento(actor)) assertRegion(actor, this.regionDe(maquina));
+        else throw new ForbiddenException('No puedes agregar evidencia a este mantenimiento.');
+      }
+    }
+
+    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { completa: false });
+    if (!evidencias.length) throw new BadRequestException('No se recibió ninguna evidencia.');
+    if (dto.reemplazaEvidenciaId && evidencias.length !== 1) {
+      throw new BadRequestException('Para reemplazar una evidencia envía exactamente un archivo nuevo.');
+    }
+
+    const contexto = dto.entidad === 'INCIDENTE' ? 'INCIDENTE' : 'MANTENIMIENTO';
+    const creadas = await this.prisma.$transaction(async (tx) => {
+      const nuevas = [];
+      for (const e of evidencias) {
+        const data = this.evidenciaData(e, contexto, etapa, actor.id);
+        if (dto.entidad === 'INCIDENTE') {
+          nuevas.push(await tx.evidenciaIncidente.create({ data: { ...data, incidenteId: entidadId } }));
+        } else {
+          nuevas.push(await tx.evidenciaMantenimiento.create({ data: { ...data, mantenimientoId: entidadId } }));
+        }
+      }
+
+      if (dto.reemplazaEvidenciaId) {
+        const nueva = nuevas[0];
+        const oculta = dto.entidad === 'INCIDENTE'
+          ? await tx.evidenciaIncidente.updateMany({
+              where: { id: dto.reemplazaEvidenciaId, incidenteId: entidadId, activa: true },
+              data: { activa: false, reemplazadaPorId: nueva.id },
+            })
+          : await tx.evidenciaMantenimiento.updateMany({
+              where: { id: dto.reemplazaEvidenciaId, mantenimientoId: entidadId, activa: true },
+              data: { activa: false, reemplazadaPorId: nueva.id },
+            });
+        if (!oculta.count) throw new BadRequestException('La evidencia a reemplazar no existe o ya fue reemplazada.');
+      }
+
+      await this.registrarEvento(tx, maquina, 'EVIDENCIA_AGREGADA', actor.id, entidadId, {
+        entidad: dto.entidad,
+        etapa,
+        reemplaza: dto.reemplazaEvidenciaId ?? null,
+        evidencias: this.resumenEvidencias(evidencias),
+      });
+      return nuevas;
+    });
+
+    return { success: true, data: creadas };
+  }
+
+  // ==============================================================
+  // MOVIMIENTOS (agencias, bahías y talleres)
+  // ==============================================================
+
+  async transferirMaquinaria(dto: TransferirMaquinariaDto, actor: Actor) {
+    const maquina = await this.cargarMaquina(dto.maquinariaId);
+    assertRegion(actor, this.regionDe(maquina));
+    this.assertActiva(maquina);
 
     const destino = await this.prisma.agencia.findUnique({
       where: { id: dto.destinoAgenciaId },
-      select: { id: true, nombre: true, tipoUbicacion: true },
+      select: { id: true, nombre: true, tipoUbicacion: true, regionId: true },
     });
     if (!destino) throw new NotFoundException('Agencia o taller destino no encontrado');
 
+    let destinoBahia: { id: string; nombre: string } | null = null;
     if (dto.destinoBahiaId) {
       const bahia = await this.prisma.bahia.findUnique({ where: { id: dto.destinoBahiaId } });
       if (!bahia || bahia.agenciaId !== dto.destinoAgenciaId) {
         throw new BadRequestException('La bahía no pertenece al destino indicado.');
       }
+      destinoBahia = { id: bahia.id, nombre: bahia.nombre };
     }
 
-    const movimiento = await this.prisma.movimientoMaquinaria.create({
-      data: {
-        maquinariaId: dto.maquinariaId,
-        origenAgenciaId: maquina.agenciaId,
-        destinoAgenciaId: dto.destinoAgenciaId,
-        origenBahiaId: maquina.bahiaId,
-        destinoBahiaId: dto.destinoBahiaId || null,
+    const destinoBahiaId = dto.destinoBahiaId || null;
+    if (maquina.agenciaId === dto.destinoAgenciaId && maquina.bahiaId === destinoBahiaId) {
+      throw new BadRequestException('La máquina ya está en esa ubicación.');
+    }
+
+    const origenBahia = maquina.bahiaId
+      ? await this.prisma.bahia.findUnique({ where: { id: maquina.bahiaId }, select: { id: true, nombre: true } })
+      : null;
+
+    const resultado = await this.prisma.$transaction(async (tx) => {
+      const movimiento = await tx.movimientoMaquinaria.create({
+        data: {
+          maquinariaId: maquina.id,
+          origenAgenciaId: maquina.agenciaId,
+          destinoAgenciaId: dto.destinoAgenciaId,
+          origenBahiaId: maquina.bahiaId,
+          destinoBahiaId,
+          motivo: dto.motivo,
+          usuarioId: actor.id,
+        },
+      });
+      const updated = await tx.maquinaria.update({
+        where: { id: maquina.id },
+        data: { agenciaId: dto.destinoAgenciaId, bahiaId: destinoBahiaId },
+        include: {
+          agencia: { select: { id: true, nombre: true, tipoUbicacion: true, regionId: true } },
+          bahia: { select: { id: true, nombre: true } },
+        },
+      });
+      // El evento queda en la región/agencia de origen; el destino va en los datos.
+      await this.registrarEvento(tx, maquina, 'MOVIMIENTO', actor.id, movimiento.id, {
         motivo: dto.motivo,
-        usuarioId: userId,
-      },
+        origen: { agenciaId: maquina.agenciaId, agencia: maquina.agencia?.nombre ?? null, bahiaId: maquina.bahiaId, bahia: origenBahia?.nombre ?? null },
+        destino: {
+          agenciaId: destino.id,
+          agencia: destino.nombre,
+          tipoUbicacion: destino.tipoUbicacion,
+          regionId: destino.regionId,
+          bahiaId: destinoBahia?.id ?? null,
+          bahia: destinoBahia?.nombre ?? null,
+        },
+      });
+      return { maquinaria: updated, movimiento };
     });
 
-    const updated = await this.prisma.maquinaria.update({
-      where: { id: dto.maquinariaId },
-      data: {
-        agenciaId: dto.destinoAgenciaId,
-        bahiaId: dto.destinoBahiaId || null,
-      },
-      include: {
-        agencia: { select: { id: true, nombre: true, tipoUbicacion: true } },
-        bahia: { select: { id: true, nombre: true } },
-      },
-    });
-
-    return { success: true, data: { maquinaria: updated, movimiento } };
+    return { success: true, data: resultado };
   }
 
-  async listMovimientos(dto: ListMovimientosMaquinariaDto) {
-    const where: { maquinariaId?: string } = {};
-    if (dto.maquinariaId) where.maquinariaId = dto.maquinariaId;
+  async listMovimientos(dto: ListMovimientosMaquinariaDto, actor: Actor) {
+    const where: Prisma.MovimientoMaquinariaWhereInput = {
+      ...(dto.maquinariaId ? { maquinariaId: dto.maquinariaId } : {}),
+      ...(esAdmin(actor) ? {} : { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } }),
+    };
+    const { page, pageSize, skip } = this.pagina(dto);
 
-    const items = await this.prisma.movimientoMaquinaria.findMany({
-      where,
-      include: {
-        maquinaria: { select: { id: true, codigo: true, nombre: true } },
-        origenAgencia: { select: { id: true, nombre: true, tipoUbicacion: true } },
-        destinoAgencia: { select: { id: true, nombre: true, tipoUbicacion: true } },
-        usuario: { select: { id: true, name: true, lastname: true } },
-      },
-      orderBy: { fecha: 'desc' },
-      take: 200,
-    });
+    const [total, items] = await Promise.all([
+      this.prisma.movimientoMaquinaria.count({ where }),
+      this.prisma.movimientoMaquinaria.findMany({
+        where,
+        include: {
+          maquinaria: { select: { id: true, codigo: true, nombre: true } },
+          origenAgencia: { select: { id: true, nombre: true, tipoUbicacion: true } },
+          destinoAgencia: { select: { id: true, nombre: true, tipoUbicacion: true } },
+          usuario: { select: { id: true, name: true, lastname: true } },
+        },
+        orderBy: { fecha: 'desc' },
+        skip,
+        take: pageSize,
+      }),
+    ]);
 
-    return { success: true, total: items.length, data: items };
+    // Las bahías del movimiento no tienen relación en el esquema: se resuelven los nombres aquí.
+    const bahiaIds = [...new Set(items.flatMap((i) => [i.origenBahiaId, i.destinoBahiaId]).filter((x): x is string => !!x))];
+    const bahias = bahiaIds.length
+      ? await this.prisma.bahia.findMany({ where: { id: { in: bahiaIds } }, select: { id: true, nombre: true, codigo: true } })
+      : [];
+    const porId = new Map(bahias.map((b) => [b.id, b]));
+    const data = items.map((i) => ({
+      ...i,
+      origenBahia: i.origenBahiaId ? porId.get(i.origenBahiaId) ?? null : null,
+      destinoBahia: i.destinoBahiaId ? porId.get(i.destinoBahiaId) ?? null : null,
+    }));
+
+    return { success: true, total, page, pageSize, data };
   }
 
   async listTalleres() {
@@ -647,5 +1438,60 @@ export class MaquinariaService {
       orderBy: [{ tipoUbicacion: 'asc' }, { nombre: 'asc' }],
     });
     return { success: true, data: items };
+  }
+
+  // ==============================================================
+  // LÍNEA DE TIEMPO (trazabilidad completa de una máquina)
+  // ==============================================================
+
+  async historial(dto: HistorialMaquinariaDto, actor: Actor) {
+    const m = await this.cargarMaquina(dto.maquinariaId);
+    assertRegion(actor, this.regionDe(m));
+
+    const where: Prisma.MaquinariaEventoWhereInput = { maquinariaId: m.id };
+    if (dto.tipos?.length) where.tipo = { in: dto.tipos };
+    if (dto.actorId) where.actorId = dto.actorId;
+    if (dto.desde || dto.hasta) {
+      const desde = dto.desde ? new Date(dto.desde) : undefined;
+      const hasta = dto.hasta ? new Date(dto.hasta) : undefined;
+      if ((desde && Number.isNaN(desde.getTime())) || (hasta && Number.isNaN(hasta.getTime()))) {
+        throw new BadRequestException('Rango de fechas inválido.');
+      }
+      where.ocurridoEn = { ...(desde ? { gte: desde } : {}), ...(hasta ? { lte: hasta } : {}) };
+    }
+
+    const { page, pageSize, skip } = this.pagina(dto);
+    const [total, eventos] = await Promise.all([
+      this.prisma.maquinariaEvento.count({ where }),
+      this.prisma.maquinariaEvento.findMany({
+        where,
+        include: { actor: { select: { id: true, name: true, lastname: true, role: { select: { namerol: true } } } } },
+        orderBy: { ocurridoEn: 'desc' },
+        skip,
+        take: pageSize,
+      }),
+    ]);
+
+    const data = eventos.map((e) => ({
+      id: e.id,
+      tipo: e.tipo,
+      ocurridoEn: e.ocurridoEn,
+      entidadId: e.entidadId,
+      agenciaId: e.agenciaId,
+      regionId: e.regionId,
+      datos: e.datos,
+      actor: e.actor
+        ? { id: e.actor.id, nombre: this.shortName(e.actor), rol: e.actor.role?.namerol ?? null }
+        : null,
+    }));
+
+    return {
+      success: true,
+      maquinaria: { id: m.id, codigo: m.codigo, nombre: m.nombre },
+      total,
+      page,
+      pageSize,
+      data,
+    };
   }
 }

@@ -20,8 +20,8 @@ describe('StorageService', () => {
   it.each([
     ['VIDEO_INICIAL', 'SERVICIOS_GENERALES', 'servicios/generales/ot-1/videos/inicial/', 'video/mp4'],
     ['VIDEO_FINAL', 'SERVICIOS_ESPECIALES', 'servicios/especiales/ot-1/videos/final/', 'video/mp4'],
-    ['FOTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'agencias/maquinaria/maq-1/incidentes/inc-1/fallas/fotos/', 'image/jpeg'],
-    ['DOCUMENTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'agencias/maquinaria/maq-1/incidentes/inc-1/fallas/documentos/', 'application/pdf'],
+    ['FOTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'maquinaria/maq-1/incidentes/inc-1/reporte/multimedia/', 'image/jpeg'],
+    ['DOCUMENTO_INCIDENTE', 'MAQUINARIA_INCIDENTE', 'maquinaria/maq-1/incidentes/inc-1/reporte/documento/', 'application/pdf'],
   ] as const)('construye la ruta oficial para %s', async (type, category, expectedPath, contentType) => {
     const result = await createService().buildS3Key({
       agenciaId: 'AGENCIA 01',
@@ -49,11 +49,13 @@ describe('StorageService', () => {
       category: 'MAQUINARIA_FICHA',
       fileName: 'ficha.png',
     });
-    expect(foto.key).toContain('agencias/maquinaria/mq-hidro-01/imagen/');
-    expect(ficha.key).toContain('agencias/maquinaria/mq-hidro-01/ficha-tecnica/');
+    expect(foto.key).toContain('maquinaria/mq-hidro-01/perfil/foto/');
+    expect(ficha.key).toContain('maquinaria/mq-hidro-01/perfil/ficha-tecnica/');
+    // Fuera de las agencias: la ruta nunca depende de dónde esté la máquina
+    expect(foto.key.startsWith('maquinaria/')).toBe(true);
   });
 
-  it('separa evidencias de falla y de resolución del mismo incidente', async () => {
+  it('separa evidencias de reporte y de reparación del mismo incidente', async () => {
     const resolucion = await createService().buildS3Key({
       maquinariaCodigo: 'MQ-HIDRO-01',
       incidenteId: 'INC-9',
@@ -61,7 +63,34 @@ describe('StorageService', () => {
       type: 'FOTO_INCIDENTE',
       category: 'MAQUINARIA_INCIDENTE',
     });
-    expect(resolucion.key).toContain('agencias/maquinaria/mq-hidro-01/incidentes/inc-9/resoluciones/fotos/');
+    expect(resolucion.key).toContain('maquinaria/mq-hidro-01/incidentes/inc-9/reparacion/multimedia/');
+  });
+
+  it('ordena la evidencia de un mantenimiento por máquina y por mantenimiento', async () => {
+    const video = await createService().buildS3Key({
+      maquinariaCodigo: 'MQ-HIDRO-01',
+      mantenimientoId: 'MANT-3',
+      type: 'VIDEO_INCIDENTE',
+      category: 'MAQUINARIA_MANTENIMIENTO',
+    });
+    const doc = await createService().buildS3Key({
+      maquinariaCodigo: 'MQ-HIDRO-01',
+      mantenimientoId: 'MANT-3',
+      type: 'DOCUMENTO',
+      category: 'MAQUINARIA_MANTENIMIENTO',
+    });
+    expect(video.key).toContain('maquinaria/mq-hidro-01/mantenimientos/mant-3/multimedia/');
+    expect(doc.key).toContain('maquinaria/mq-hidro-01/mantenimientos/mant-3/documento/');
+    expect(doc.key).toMatch(/_documento_[0-9a-f]{8}\.pdf$/);
+  });
+
+  it('extrae la clave S3 de una URL pública o del proxy /storage/file', () => {
+    const service = createService();
+    const key = 'maquinaria/mq-01/incidentes/i1/reporte/multimedia/x.jpg';
+    expect(service.keyFromUrl(`https://easydry-storage-test.s3.us-east-1.amazonaws.com/${key}`)).toBe(key);
+    expect(service.keyFromUrl(`https://api.example.com/storage/file?key=${encodeURIComponent(key)}`)).toBe(key);
+    expect(service.keyFromUrl('https://otro-sitio.com/foto.jpg')).toBeNull();
+    expect(service.maquinariaPrefix('MQ 01')).toBe('maquinaria/mq-01/');
   });
 
   it('guarda la foto de perfil en una ruta fija por usuario', async () => {

@@ -40,25 +40,27 @@ export class MaintenanceCronService {
     const now = new Date();
 
     try {
+      // Vencido = ya pasó su fecha programada y sigue sin ejecutarse (los finalizados no cuentan).
       const mantenimientosVencidos = await this.prisma.mantenimientoMaquinaria.findMany({
         where: {
-          proximoMantenimiento: { lte: now },
-          maquinaria: { estadoOperativo: { not: 'DE_BAJA' } },
+          estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
+          fechaProgramada: { lt: now },
+          maquinaria: { activa: true, estadoOperativo: { not: 'DE_BAJA' } },
         },
         include: {
-          maquinaria: true,
+          maquinaria: { include: { agencia: { select: { regionId: true } } } },
         },
-        take: 50,
+        take: 200,
       });
 
       for (const m of mantenimientosVencidos) {
-        this.logger.warn(`[Mantenimiento Alerta] La máquina ${m.maquinaria.codigo} (${m.maquinaria.nombre}) tiene mantenimiento vencido desde ${m.proximoMantenimiento?.toISOString()}`);
-        await this.notifications.notificarIncidenteCritico({
-          incidenteId: m.id,
-          titulo: `Mantenimiento preventivo vencido`,
-          gravedad: 'ALTA',
-          maquinariaCodigo: m.maquinaria.codigo,
-          agenciaId: m.maquinaria.agenciaId || undefined,
+        this.logger.warn(`[Mantenimiento Alerta] La máquina ${m.maquinaria.codigo} (${m.maquinaria.nombre}) tiene un mantenimiento vencido desde ${m.fechaProgramada?.toISOString()}`);
+        // Solo el coordinador de mantenimiento de la región de la máquina.
+        await this.notifications.notificarCoordinadorRegion({
+          regionId: m.maquinaria.agencia?.regionId,
+          title: `Mantenimiento vencido: ${m.maquinaria.codigo}`,
+          body: `${m.maquinaria.nombre} no se ha atendido desde ${m.fechaProgramada?.toISOString().slice(0, 10)}`,
+          data: { type: 'MANTENIMIENTO_VENCIDO', mantenimientoId: m.id, maquinariaId: m.maquinariaId },
         });
       }
 

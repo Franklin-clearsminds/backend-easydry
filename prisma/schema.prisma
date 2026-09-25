@@ -160,6 +160,14 @@ model User {
   incidentesAsignados   IncidenteTecnico[]        @relation("TecnicoAsignadoIncidente")
   movimientosMaquinaria MovimientoMaquinaria[]    @relation("ResponsableMovimientoMaquinaria")
   cambiosReceta         RecetaInsumoHistorial[]   @relation("UsuarioCambioReceta")
+  maquinariasCreadas         Maquinaria[]            @relation("MaquinariaCreadaPor")
+  maquinariasDesactivadas    Maquinaria[]            @relation("MaquinariaDesactivadaPor")
+  maquinariasAsignadas       Maquinaria[]            @relation("MaquinariaOperadorAsignado")
+  maquinariaEventos          MaquinariaEvento[]      @relation("MaquinariaEventoActor")
+  mantenimientosCreados      MantenimientoMaquinaria[] @relation("MantenimientoCreadoPor")
+  mantenimientosEjecutados   MantenimientoMaquinaria[] @relation("MantenimientoEjecutadoPor")
+  evidenciasIncidenteSubidas EvidenciaIncidente[]    @relation("EvidenciaIncidenteSubidaPor")
+  evidenciasMantenimientoSubidas EvidenciaMantenimiento[] @relation("EvidenciaMantenimientoSubidaPor")
 
   @@index([email])
   @@index([roleId])
@@ -893,9 +901,26 @@ model Maquinaria {
   bahiaId         String?
   bahia           Bahia?   @relation(fields: [bahiaId], references: [id])
 
+  /// Trazabilidad: quién la creó y quién/cuándo/por qué la activó o desactivó
+  creadoPorId          String?
+  creadoPor            User?     @relation("MaquinariaCreadaPor", fields: [creadoPorId], references: [id])
+  activa               Boolean   @default(true)
+  desactivadoPorId     String?
+  desactivadoPor       User?     @relation("MaquinariaDesactivadaPor", fields: [desactivadoPorId], references: [id])
+  fechaDesactivacion   DateTime?
+  motivoDesactivacion  String?
+
+  /// Pulidor / líder operador responsable de la máquina (único que puede reportarla)
+  operadorAsignadoId   String?
+  operadorAsignado     User?     @relation("MaquinariaOperadorAsignado", fields: [operadorAsignadoId], references: [id])
+
+  /// Días de adelanto permitidos para ejecutar un mantenimiento antes de su fecha programada
+  ventanaAdelantoDias  Int       @default(0)
+
   incidentes      IncidenteTecnico[]
   mantenimientos  MantenimientoMaquinaria[]
   movimientos     MovimientoMaquinaria[]
+  eventos         MaquinariaEvento[]
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -904,6 +929,35 @@ model Maquinaria {
   @@index([estadoOperativo])
   @@index([agenciaId])
   @@index([bahiaId])
+  @@index([operadorAsignadoId])
+  @@index([activa])
+}
+
+/// Línea de tiempo append-only de cada máquina (nunca se borra).
+model MaquinariaEvento {
+  id           String     @id @default(uuid())
+  maquinariaId String
+  maquinaria   Maquinaria @relation(fields: [maquinariaId], references: [id], onDelete: Restrict)
+  /// MAQUINA_CREADA | MAQUINA_EDITADA | MAQUINA_ACTIVADA | MAQUINA_DESACTIVADA | OPERADOR_ASIGNADO
+  /// MOVIMIENTO | INCIDENTE_REPORTADO | INCIDENTE_ASIGNADO | INCIDENTE_REPARADO | INCIDENTE_CANCELADO | INCIDENTE_EDITADO
+  /// MANTENIMIENTO_PROGRAMADO | MANTENIMIENTO_ASIGNADO | MANTENIMIENTO_EJECUTADO | MANTENIMIENTO_EDITADO
+  tipo         String
+  actorId      String?
+  actor        User?      @relation("MaquinariaEventoActor", fields: [actorId], references: [id], onDelete: Restrict)
+  /// Agencia y región en las que estaba la máquina cuando ocurrió el evento
+  agenciaId    String?
+  regionId     String?
+  /// Incidente, mantenimiento o movimiento al que refiere el evento
+  entidadId    String?
+  /// Detalle: antes/después, motivo, evidencias, etc.
+  datos        Json?
+  ocurridoEn   DateTime   @default(now())
+
+  @@index([maquinariaId, ocurridoEn])
+  @@index([tipo])
+  @@index([actorId])
+  @@index([regionId])
+  @@index([entidadId])
 }
 
 model IncidenteTecnico {
@@ -953,10 +1007,22 @@ model EvidenciaIncidente {
   url         String
   descripcion String?
   metadata    Json?
+  /// REPORTE | REPARACION (incidentes) | EJECUCION (mantenimientos)
+  etapa       String?
+  s3Key       String?
+  mimeType    String?
+  tamanoBytes Int?
+  duracionSeg Float?
+  subidoPorId String?
+  subidoPor   User?   @relation("EvidenciaIncidenteSubidaPor", fields: [subidoPorId], references: [id])
+  /// Un archivo reemplazado nunca se borra: queda oculto (activa=false)
+  reemplazadaPorId String?
+  activa      Boolean @default(true)
   creadaEn    DateTime          @default(now())
 
   @@index([incidenteId])
   @@index([tipo])
+  @@index([subidoPorId])
 }
 
 model MantenimientoMaquinaria {
@@ -972,9 +1038,18 @@ model MantenimientoMaquinaria {
   repuestosUsados      Json?       // Lista de repuestos e insumos aplicados
   costoTotal           Decimal?    @db.Decimal(10, 2)
 
+  /// Legacy: programada mientras está pendiente, ejecución al finalizar
   fechaMantenimiento   DateTime    @default(now())
+  /// Cuándo estaba programado (nunca se pisa al ejecutar)
+  fechaProgramada      DateTime?
+  /// Cuándo se ejecutó realmente (fecha y hora)
+  fechaEjecucion       DateTime?
   proximoMantenimiento DateTime?
   frecuenciaDias       Int?
+  creadoPorId          String?
+  creadoPor            User?       @relation("MantenimientoCreadoPor", fields: [creadoPorId], references: [id])
+  ejecutadoPorId       String?
+  ejecutadoPor         User?       @relation("MantenimientoEjecutadoPor", fields: [ejecutadoPorId], references: [id])
   evidencias           EvidenciaMantenimiento[]
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
@@ -983,6 +1058,7 @@ model MantenimientoMaquinaria {
   @@index([tecnicoId])
   @@index([tipo])
   @@index([estado])
+  @@index([fechaProgramada])
 }
 
 model EvidenciaMantenimiento {
@@ -993,10 +1069,22 @@ model EvidenciaMantenimiento {
   url              String
   descripcion      String?
   metadata         Json?
+  /// REPORTE | REPARACION (incidentes) | EJECUCION (mantenimientos)
+  etapa       String?
+  s3Key       String?
+  mimeType    String?
+  tamanoBytes Int?
+  duracionSeg Float?
+  subidoPorId String?
+  subidoPor   User?   @relation("EvidenciaMantenimientoSubidaPor", fields: [subidoPorId], references: [id])
+  /// Un archivo reemplazado nunca se borra: queda oculto (activa=false)
+  reemplazadaPorId String?
+  activa      Boolean @default(true)
   creadaEn         DateTime               @default(now())
 
   @@index([mantenimientoId])
   @@index([tipo])
+  @@index([subidoPorId])
 }
 
 model MovimientoMaquinaria {

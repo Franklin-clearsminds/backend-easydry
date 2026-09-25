@@ -571,7 +571,6 @@ export class SyncService {
           entity === 'incidente_maquinaria' ||
           entity === 'maintenance_incident'
         ) {
-          const mutData = mut.data || {};
           const incidentAction = String(mut.action || 'CREATE').toUpperCase();
           const existingIncident = await this.prisma.incidenteTecnico.findFirst({
             where: { clientUuid: mut.clientUuid },
@@ -586,110 +585,11 @@ export class SyncService {
             });
             continue;
           }
-          if (incidentAction === 'UPDATE') {
-            const incidentToUpdate = existingIncident || await this.prisma.incidenteTecnico.findFirst({
-              where: { OR: [{ id: String(mutData.id || '') }, { clientUuid: mut.clientUuid }] },
-            });
-            if (!incidentToUpdate) {
-              throw new NotFoundException(`Incidente ${mut.clientUuid} no encontrado para actualizar`);
-            }
-            const updatedIncident = await this.prisma.incidenteTecnico.update({
-              where: { id: incidentToUpdate.id },
-              data: {
-                estado: mutData.estado || incidentToUpdate.estado,
-                solucion: mutData.solucion || mutData.diagnostico || incidentToUpdate.solucion,
-                fechaSolucion: mutData.fechaSolucion ? new Date(mutData.fechaSolucion) : incidentToUpdate.fechaSolucion,
-                resueltoPorId: mutData.estado === 'RESUELTO' ? userId : incidentToUpdate.resueltoPorId,
-              },
-            });
-            await this.prisma.syncOutboxAudit.create({
-              data: {
-                mutationId: mut.mutationId,
-                clientUuid: mut.clientUuid,
-                deviceInfo: deviceId,
-                entity: 'IncidenteTecnico',
-                action: 'UPDATE',
-                payload: mut as any,
-                syncedAt: now,
-              },
-            });
-            results.push({
-              mutationId: mut.mutationId,
-              clientUuid: mut.clientUuid,
-              serverAssignedId: updatedIncident.id,
-              status: 'APPLIED',
-              syncedAt: now.toISOString(),
-            });
-            continue;
-          }
-          let maquinariaId = mutData.maquinariaId;
-          if (maquinariaId) {
-            const maquinariaPorId = await this.prisma.maquinaria.findUnique({ where: { id: String(maquinariaId) } });
-            maquinariaId = maquinariaPorId?.id;
-          }
-          if (!maquinariaId && mutData.maquinariaCodigo) {
-            const maq = await this.prisma.maquinaria.findUnique({
-              where: { codigo: mutData.maquinariaCodigo },
-            });
-            if (maq) maquinariaId = maq.id;
-          }
-          if (!maquinariaId) {
-            const primeraMaq = await this.prisma.maquinaria.findFirst();
-            maquinariaId = primeraMaq?.id;
-          }
-          if (!maquinariaId) {
-            throw new BadRequestException('No existe maquinaria registrada para vincular el incidente técnico.');
-          }
-
-          const gravedad = mutData.gravedad || 'MEDIA';
-          if (gravedad === 'ALTA' || gravedad === 'CRITICA') {
-            await this.prisma.maquinaria.update({
-              where: { id: maquinariaId },
-              data: { estadoOperativo: 'EN_MANTENIMIENTO' },
-            });
-          }
-
-          const inc = await this.prisma.incidenteTecnico.create({
-            data: {
-              clientUuid: mut.clientUuid,
-              maquinariaId,
-              reportadoPorId: userId,
-              titulo: mutData.titulo || 'Incidente reportado desde App Móvil',
-              descripcion: mutData.descripcion || 'Reporte de incidente técnico en campo',
-              gravedad,
-              estado: 'ABIERTO',
-              fotoEvidenciaUrl: mutData.fotoEvidenciaUrl || mutData.fileUrl || undefined,
-            },
-          });
-
-          if (gravedad === 'ALTA' || gravedad === 'CRITICA') {
-            await this.notifications?.notificarIncidenteCritico({
-              incidenteId: inc.id,
-              titulo: inc.titulo,
-              gravedad,
-              maquinariaCodigo: mutData.maquinariaCodigo || 'Equipo Taller',
-            });
-          }
-
-          await this.prisma.syncOutboxAudit.create({
-            data: {
-              clientUuid: mut.clientUuid,
-              mutationId: mut.mutationId,
-              deviceInfo: deviceId,
-              entity: 'IncidenteTecnico',
-              action: 'CREATE',
-              payload: mut as any,
-              syncedAt: now,
-            },
-          });
-
-          results.push({
-            mutationId: mut.mutationId,
-            clientUuid: mut.clientUuid,
-            serverAssignedId: inc.id,
-            status: 'APPLIED',
-            syncedAt: now.toISOString(),
-          });
+          // Las incidencias de maquinaria ya no se crean ni se cierran por sincronización offline:
+          // el reporte exige conexión (hora del servidor, máquina asignada y evidencia verificada en S3).
+          throw new BadRequestException(
+            'Las incidencias de maquinaria requieren conexión a internet. Repórtalas o ciérralas en línea.',
+          );
         } else if (
           entity === 'servicio_especial' ||
           entity === 'servicio_extra' ||

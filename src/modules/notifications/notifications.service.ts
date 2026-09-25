@@ -55,6 +55,39 @@ export class NotificationsService {
     }
   }
 
+  /** Push a usuarios concretos (por id). Nunca lanza: una falla de notificación no debe romper el flujo. */
+  async notificarUsuarios(userIds: string[], title: string, body: string, data?: Record<string, any>) {
+    try {
+      const ids = [...new Set(userIds.filter(Boolean))];
+      if (!ids.length) return;
+      const devices = await this.prisma.syncDevice.findMany({
+        where: { userId: { in: ids }, pushToken: { not: null } },
+        select: { pushToken: true },
+      });
+      const tokens = devices.map((d) => d.pushToken as string);
+      if (tokens.length) {
+        await this.sendPushNotification({ to: tokens, title, body, data });
+      }
+    } catch (err: any) {
+      this.logger.warn(`No se pudo notificar a usuarios: ${err?.message || err}`);
+    }
+  }
+
+  /** Avisa solo al coordinador de mantenimiento de la región de la máquina. */
+  async notificarCoordinadorRegion(params: {
+    regionId?: string | null;
+    title: string;
+    body: string;
+    data?: Record<string, any>;
+  }) {
+    if (!params.regionId) return;
+    const coordinadores = await this.prisma.user.findMany({
+      where: { estado: 1, regionId: params.regionId, role: { namerol: 'COORD_MANTENIMIENTO' } },
+      select: { id: true },
+    });
+    await this.notificarUsuarios(coordinadores.map((u) => u.id), params.title, params.body, params.data);
+  }
+
   async notificarIncidenteCritico(params: {
     incidenteId: string;
     titulo: string;

@@ -1,10 +1,28 @@
 import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DeleteObjectsCommand, GetBucketLocationCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetBucketLocationCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { PrismaService } from '../prisma/prisma.service.js';
+import {
+  detectKind,
+  EVIDENCE_RULES,
+  parseMoovDurationSeconds,
+  readBoxHeader,
+  videoDurationError,
+  type EvidenceKind,
+} from './media-inspect.js';
+
+/** Resultado de verificar un archivo ya subido a S3. */
+export interface InspectedEvidence {
+  key: string;
+  kind: EvidenceKind;
+  mimeType: string;
+  sizeBytes: number;
+  /** Solo videos. */
+  durationSeconds?: number;
+}
 
 export type StorageCategory =
   | 'SERVICIOS_GENERALES'
@@ -48,7 +66,8 @@ export interface GenerateUploadTicketDto {
   maquinariaNombre?: string;
   maquinariaCodigo?: string;
   incidenteId?: string;
-  incidenteFase?: 'fallas' | 'resoluciones';
+  /** 'reporte' | 'reparacion' (también se aceptan los alias antiguos 'fallas' | 'resoluciones'). */
+  incidenteFase?: 'reporte' | 'reparacion' | 'fallas' | 'resoluciones';
   mantenimientoId?: string;
   insumoId?: string;
   insumoNombre?: string;
@@ -309,18 +328,22 @@ export class StorageService implements OnModuleInit {
       || type === 'FOTO_MAQUINA'
       || type === 'FICHA_TECNICA'
     ) {
+      // Estructura fuera de las agencias: la carpeta usa el código de la máquina, que no cambia
+      // aunque la máquina se mueva. La agencia/bahía actual vive solo en la base de datos.
       const equipo = await this.resolveMaquinariaSlug(dto);
-      const folder = isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
+      const folder = isDocument ? 'documento' : 'multimedia';
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+      const maquinariaFilename = `${stamp}_${type.toLowerCase()}_${uuid}.${ext}`;
       if (category === 'MAQUINARIA_IMAGEN' || type === 'FOTO_MAQUINA') {
-        key = `agencias/maquinaria/${equipo}/imagen/${filename}`;
+        key = `maquinaria/${equipo}/perfil/foto/${maquinariaFilename}`;
       } else if (category === 'MAQUINARIA_FICHA' || type === 'FICHA_TECNICA') {
-        key = `agencias/maquinaria/${equipo}/ficha-tecnica/${filename}`;
+        key = `maquinaria/${equipo}/perfil/ficha-tecnica/${maquinariaFilename}`;
       } else if (category === 'MAQUINARIA_MANTENIMIENTO') {
         const mantId = this.safeSegment(dto.mantenimientoId || dto.clientUuid, 'sin-id');
-        key = `agencias/maquinaria/${equipo}/mantenimientos/${mantId}/${folder}/${filename}`;
+        key = `maquinaria/${equipo}/mantenimientos/${mantId}/${folder}/${maquinariaFilename}`;
       } else {
         const fase = this.incidenteFase(dto);
-        key = `agencias/maquinaria/${equipo}/incidentes/${incidenteId}/${fase}/${folder}/${filename}`;
+        key = `maquinaria/${equipo}/incidentes/${incidenteId}/${fase}/${folder}/${maquinariaFilename}`;
       }
     } else {
       const now = new Date();
@@ -362,12 +385,13 @@ export class StorageService implements OnModuleInit {
     return this.safeSegment(raw, 'agencia-general');
   }
 
-  private incidenteFase(dto: GenerateUploadTicketDto): 'fallas' | 'resoluciones' {
+  /** 'reporte' (lo sube quien reporta) o 'reparacion' (lo sube quien repara). */
+  private incidenteFase(dto: GenerateUploadTicketDto): 'reporte' | 'reparacion' {
     const raw = String(dto.incidenteFase || '').trim().toLowerCase();
     if (raw === 'resoluciones' || raw === 'resolucion' || raw === 'reparacion' || raw === 'solucion') {
-      return 'resoluciones';
+      return 'reparacion';
     }
-    return 'fallas';
+    return 'reporte';
   }
 
   /**
@@ -456,6 +480,104 @@ export class StorageService implements OnModuleInit {
     };
   }
 
+  /** Carpeta raíz de una máquina en S3 (por código, independiente de la agencia). */
+  public maquinariaPrefix(codigo: string): string {
+    return `maquinaria/${this.safeSegment(codigo, 'equipo')}/`;
+  }
+
+  /** Extrae la clave S3 de una URL pública administrada por este servicio (o de una clave cruda). */
+  public keyFromUrl(rawUrl: string): string | null {
+    const url = String(rawUrl || '').trim();
+    if (!url) return null;
+    const prefix = this.publicUrlPrefix.replace(/\/$/, '');
+    let key: string | null = null;
+    if (url.startsWith(`${prefix}/`)) {
+      key = url.slice(prefix.length + 1);
+    } else if (url.includes('/storage/file?key=')) {
+      key = url.split('/storage/file?key=')[1] || null;
+    } else if (!/^[a-z]+:\/\//i.test(url)) {
+      key = url;
+    }
+    if (!key) return null;
+    try {
+      return decodeURIComponent(key.split('?')[0]).replace(/^[/\\]+/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  private async readRange(key: string, start: number, endInclusive: number): Promise<Uint8Array> {
+    const res = await this.s3Client.send(new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+      Range: `bytes=${start}-${endInclusive}`,
+    }));
+    return (await res.Body?.transformToByteArray()) ?? new Uint8Array();
+  }
+
+  /** Busca la caja moov recorriendo las cajas de primer nivel sin descargar el video completo. */
+  private async readVideoDurationSeconds(key: string, size: number): Promise<number | null> {
+    const MAX_MOOV_BYTES = 8 * 1024 * 1024;
+    let offset = 0;
+    for (let i = 0; i < 64 && offset + 8 <= size; i++) {
+      const head = await this.readRange(key, offset, Math.min(offset + 15, size - 1));
+      const box = readBoxHeader(head, 0, offset);
+      if (!box) return null;
+      const total = box.toEnd ? size - offset : box.size;
+      if (box.type === 'moov') {
+        if (total > MAX_MOOV_BYTES) return null;
+        const moov = await this.readRange(key, offset, offset + total - 1);
+        return parseMoovDurationSeconds(moov);
+      }
+      if (total < 8) return null;
+      offset += total;
+    }
+    return null;
+  }
+
+  /**
+   * Verifica en S3 que el archivo exista y sea realmente lo que dice ser: tipo real por magic bytes,
+   * tamaño según el tipo y, en videos, duración de 13 a 30 s. Lanza BadRequestException si no cumple.
+   */
+  public async inspectEvidence(rawUrl: string, expected?: { prefix: string }): Promise<InspectedEvidence> {
+    await this.ensureBucketRegion();
+    const key = this.keyFromUrl(rawUrl);
+    if (!key) throw new BadRequestException('La URL de la evidencia no pertenece al almacenamiento de EasyDry.');
+    if (expected && !key.startsWith(expected.prefix)) {
+      throw new BadRequestException('La evidencia no pertenece a la carpeta de esta máquina.');
+    }
+
+    let size = 0;
+    try {
+      const head = await this.s3Client.send(new HeadObjectCommand({ Bucket: this.bucketName, Key: key }));
+      size = Number(head.ContentLength || 0);
+    } catch {
+      throw new BadRequestException('La evidencia no existe en el almacenamiento. Súbela de nuevo.');
+    }
+    if (size <= 0) throw new BadRequestException('La evidencia está vacía.');
+
+    const detected = detectKind(await this.readRange(key, 0, Math.min(size, 32) - 1));
+    if (!detected) {
+      throw new BadRequestException('Formato no permitido. Usa JPG, PNG, WEBP, MP4/MOV o PDF.');
+    }
+    const maxBytes = EVIDENCE_RULES[detected.kind].maxBytes;
+    if (size > maxBytes) {
+      throw new BadRequestException(
+        `El archivo pesa ${(size / 1024 / 1024).toFixed(1)} MB y el máximo para ${detected.kind.toLowerCase()} es ${maxBytes / 1024 / 1024} MB.`,
+      );
+    }
+
+    let durationSeconds: number | undefined;
+    if (detected.kind === 'VIDEO') {
+      const seconds = await this.readVideoDurationSeconds(key, size);
+      const error = videoDurationError(seconds);
+      if (error) throw new BadRequestException(error);
+      durationSeconds = Math.round((seconds as number) * 100) / 100;
+    }
+
+    return { key, kind: detected.kind, mimeType: detected.mime, sizeBytes: size, durationSeconds };
+  }
+
   public async getPresignedDownloadUrl(rawKey: string, expiresInSeconds = 3600): Promise<string> {
     await this.ensureBucketRegion();
     let key = String(rawKey || '').trim();
@@ -517,6 +639,55 @@ export class StorageService implements OnModuleInit {
       await this.escribirMiniatura(key, original);
     } catch (error: unknown) {
       this.logger.warn(`No se pudo generar la miniatura de ${key}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  /** Clave de la vista media (1600 px): `view/<clave-original>.jpg`. */
+  public viewKeyFor(key: string): string {
+    return `view/${String(key).replace(/^[/\\]+/, '').replace(/\.[^./]+$/, '')}.jpg`;
+  }
+
+  private static readonly VIEW_SIDE = 1600;
+
+  /**
+   * Vista media para el visor: la foto original de un celular o cámara puede pesar varios MB y tardar en
+   * abrirse y moverse. Si el original ya es liviano no se genera y el visor usa el original.
+   */
+  private async escribirVistaMedia(key: string, original: Buffer): Promise<void> {
+    const meta = await sharp(original, { failOn: 'none' }).metadata();
+    const lado = Math.max(meta.width || 0, meta.height || 0);
+    if (lado <= StorageService.VIEW_SIDE && original.length < 700_000) return;
+    const vista = await sharp(original, { failOn: 'none' })
+      .rotate()
+      .resize({ width: StorageService.VIEW_SIDE, height: StorageService.VIEW_SIDE, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+    await this.ensureBucketRegion();
+    await this.s3Client.send(new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: this.viewKeyFor(key),
+      Body: vista,
+      ContentType: 'image/jpeg',
+    }));
+  }
+
+  /**
+   * Genera la miniatura y la vista media de una foto ya subida a S3 (descarga una sola vez).
+   * Nunca lanza: una falla solo se registra y el cliente usa el original.
+   */
+  public async generarVariantes(fileUrl: string): Promise<void> {
+    try {
+      const key = this.keyFromUrl(fileUrl);
+      if (!key || !StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/') || key.startsWith('view/')) return;
+      await this.ensureBucketRegion();
+      const object = await this.s3Client.send(new GetObjectCommand({ Bucket: this.bucketName, Key: key }));
+      const bytes = await object.Body?.transformToByteArray();
+      if (!bytes) return;
+      const original = Buffer.from(bytes);
+      await this.escribirMiniatura(key, original);
+      await this.escribirVistaMedia(key, original);
+    } catch (error: unknown) {
+      this.logger.warn(`No se pudieron generar las variantes de ${fileUrl}: ${error instanceof Error ? error.message : error}`);
     }
   }
 
