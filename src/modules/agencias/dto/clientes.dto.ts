@@ -1,5 +1,6 @@
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsIn } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
 export class CreateClienteDto {
   @ApiProperty({ example: 'EasyDry Detailing Studio', description: 'Nombre único del cliente' })
@@ -32,12 +33,8 @@ export class UpdateClienteDto {
   estado?: number;
 }
 
-export class ListClientesDto {
-  @ApiPropertyOptional({ example: 'EasyDry', description: 'Buscar por nombre' })
-  @IsOptional()
-  @IsString()
-  search?: string;
-
+/** Sin page/pageSize: arreglo (hasta 100). Con alguno: página. Orden: nombre, estado, agencias, fecha. */
+export class ListClientesDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 1, description: 'Filtrar por estado: 1 activo, 0 inactivo' })
   @IsOptional()
   @IsInt()

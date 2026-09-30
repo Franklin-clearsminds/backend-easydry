@@ -1,17 +1,17 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AnalyticsService } from './analytics.service.js';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto } from './dto/analytics.dto.js';
 
+import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Analítica & Dashboards (100% POST)')
 @Controller('analytics')
-@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
+  @Permiso('dashboard.ver')
   @Post('dashboard')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Métricas agregadas en tiempo real para el Dashboard Web (KPIs, tiempos, bahías)' })
@@ -23,6 +23,7 @@ export class AnalyticsController {
     return this.analyticsService.getDashboardMetrics(dto, user);
   }
 
+  @Permiso('dashboard.ver')
   @Post('consumo-quimicos')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consumo agregado de químicos e insumos por rango de fechas (Gráficas)' })

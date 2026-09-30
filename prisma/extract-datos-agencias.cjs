@@ -158,6 +158,42 @@ function parseNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Hoja por nombre (sin distinguir mayúsculas ni acentos), o null si el libro no la tiene. */
+function hojaPorNombre(xlDir, sst, ...nombres) {
+  try {
+    const libro = fs.readFileSync(path.join(xlDir, 'workbook.xml'), 'utf8');
+    const rels = fs.readFileSync(path.join(xlDir, '_rels', 'workbook.xml.rels'), 'utf8');
+    const limpio = (s) => decode(String(s)).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+    const buscados = nombres.map(limpio);
+    for (const m of libro.matchAll(/<sheet\b[^>]*>/g)) {
+      const nombre = (m[0].match(/name="([^"]*)"/) || [])[1];
+      const rid = (m[0].match(/r:id="([^"]*)"/) || [])[1];
+      if (!nombre || !rid || !buscados.includes(limpio(nombre))) continue;
+      const rel = [...rels.matchAll(/<Relationship\b[^>]*>/g)].map((x) => x[0]).find((x) => x.includes('Id="' + rid + '"'));
+      const destino = rel && (rel.match(/Target="([^"]*)"/) || [])[1];
+      if (!destino) continue;
+      const archivo = path.join(xlDir, destino.replace(/^\/?(xl\/)?/, ''));
+      return parseSheet(fs.readFileSync(archivo, 'utf8'), sst);
+    }
+  } catch (e) {
+    console.warn('No se pudo leer la hoja opcional:', nombres[0], e.message);
+  }
+  return null;
+}
+
+/** Normaliza el nombre de un rol de la hoja de personal (acentos, espacios y sinónimos comunes). */
+function normalizarRolGestion(texto) {
+  const r = String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+  const alias = {
+    GERENTE: 'APROBADOR', APROBADOR_DE_AGENCIA: 'APROBADOR', LIDER_OPERADOR: 'LIDER', LIDER_AGENCIA: 'LIDER',
+    SUPERVISOR_REGIONAL: 'SUPERVISOR', COORDINADOR_COMERCIAL: 'COORD_COMERCIAL', COORDINADOR_DE_MANTENIMIENTO: 'COORD_MANTENIMIENTO',
+    COORDINADOR_MANTENIMIENTO: 'COORD_MANTENIMIENTO', COORDINADOR_DE_BODEGA: 'COORD_BODEGA', COORDINADOR_BODEGA: 'COORD_BODEGA',
+    ASISTENTE_DE_BODEGA: 'ASISTENTE_BODEGA', COORDINADOR_DE_SERVICIOS_ESPECIALES: 'COORD_SERVICIOS_ESPECIALES',
+    COORDINADOR_SERVICIOS_ESPECIALES: 'COORD_SERVICIOS_ESPECIALES', TECNICO_DE_MAQUINARIA: 'TECNICO',
+  };
+  return alias[r] || r;
+}
+
 const xl = unzipXlsx(XLSX);
 const sst = parseSharedStrings(fs.readFileSync(path.join(xl, 'sharedStrings.xml'), 'utf8'));
 const se = parseSheet(fs.readFileSync(path.join(xl, 'worksheets', 'sheet1.xml'), 'utf8'), sst);
@@ -311,6 +347,39 @@ for (const svc of catalogo) {
 
 const clientes = [...new Set([...agenciasMap.values()].map((a) => a.marca))];
 
+// Hoja opcional «PERSONAL GESTION»: líderes, aprobadores, supervisores y coordinadores (una fila por persona).
+// Encabezados reconocidos: NOMBRE, CEDULA, ROL (o CARGO), AGENCIA (o SEDE), REGION, BODEGA, CORREO (o EMAIL).
+const personalGestion = [];
+const hojaGestion = hojaPorNombre(xl, sst, 'PERSONAL GESTION', 'PERSONAL DE GESTION', 'GESTION');
+if (hojaGestion && hojaGestion.length > 1) {
+  const limpio = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  const encabezado = (hojaGestion[0] || []).map(limpio);
+  const col = (...nombres) => encabezado.findIndex((h) => nombres.includes(h));
+  const cNombre = col('NOMBRE', 'NOMBRES', 'NOMBRE COMPLETO');
+  const cCedula = col('CEDULA', 'CI', 'IDENTIFICACION');
+  const cRol = col('ROL', 'CARGO', 'PERFIL');
+  const cAgencia = col('AGENCIA', 'SEDE', 'SUCURSAL');
+  const cRegion = col('REGION');
+  const cBodega = col('BODEGA');
+  const cCorreo = col('CORREO', 'EMAIL', 'CORREO ELECTRONICO');
+  if (cNombre < 0 || cRol < 0) {
+    console.warn('La hoja de personal de gestión necesita al menos las columnas NOMBRE y ROL: se omite.');
+  } else {
+    for (const fila of hojaGestion.slice(1)) {
+      if (!fila || !fila[cNombre]) continue;
+      personalGestion.push({
+        nombre: fila[cNombre],
+        cedula: cCedula >= 0 ? normCedula(fila[cCedula]) : '',
+        rol: normalizarRolGestion(fila[cRol]),
+        agencia: cAgencia >= 0 ? (fila[cAgencia] || '').trim() : '',
+        region: cRegion >= 0 ? (fila[cRegion] || '').trim() : '',
+        bodega: cBodega >= 0 ? (fila[cBodega] || '').trim() : '',
+        correo: cCorreo >= 0 ? (fila[cCorreo] || '').trim().toLowerCase() : '',
+      });
+    }
+  }
+}
+
 const payload = {
   generatedAt: new Date().toISOString(),
   reglas: {
@@ -320,7 +389,6 @@ const payload = {
     duplicado0959378001: KEEP_AGENCY_FOR_DUP,
     prospectoConBahiasSinPersonal: true,
     email: '{nombre}.{rol}@easydry.com',
-    password: '123456',
     regiones: 'Sierra|Costa',
     serviciosHuerfanos: 'crear_en_catalogo',
     personalSucio: 'cargar_todos',
@@ -328,6 +396,7 @@ const payload = {
   clientes,
   pulidoresExcel,
   pulidorCedulas: [...pulidorCedulas],
+  personalGestion,
   agencias: [...agenciasMap.values()],
   catalogo,
   insumos: [...insumosMap.values()],
@@ -336,4 +405,5 @@ const payload = {
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify(payload, null, 2), 'utf8');
 console.log('Wrote', OUT);
+console.log('personal de gestión', personalGestion.length);
 console.log('clientes', clientes.length, 'agencias', payload.agencias.length, 'catalogo', catalogo.length, 'insumos', insumosMap.size, 'pulidores', pulidoresExcel.length);

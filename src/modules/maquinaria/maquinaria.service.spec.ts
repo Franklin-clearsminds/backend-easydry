@@ -8,7 +8,10 @@ const DAY = 86_400_000;
 const coordCosta: Actor = { id: 'coord-costa', rol: 'COORD_MANTENIMIENTO', regionId: 'costa', agenciaId: null };
 const tecnico: Actor = { id: 'tec-1', rol: 'TECNICO', regionId: 'costa', agenciaId: null };
 const pulidor: Actor = { id: 'pul-1', rol: 'PULIDOR', regionId: null, agenciaId: 'ag-1' };
+const lider: Actor = { id: 'lider-1', rol: 'LIDER', regionId: null, agenciaId: 'ag-1' };
 const admin: Actor = { id: 'adm-1', rol: 'ADMIN', regionId: null, agenciaId: null };
+const supervisorCosta: Actor = { id: 'sup-1', rol: 'SUPERVISOR', regionId: 'costa', agenciaId: null };
+const coordEspeciales: Actor = { id: 'coord-esp-1', rol: 'COORD_SERVICIOS_ESPECIALES', regionId: null, agenciaId: null };
 
 function maquina(over: Record<string, unknown> = {}) {
   return {
@@ -35,7 +38,9 @@ function build(prismaOver: Record<string, unknown> = {}) {
       create: vi.fn().mockResolvedValue({}),
     },
     maquinaria: { update: vi.fn().mockResolvedValue({ ...maquina(), activa: false }) },
-    incidenteTecnico: { create: vi.fn() },
+    incidenteTecnico: {
+      create: vi.fn().mockResolvedValue({ id: 'inc-1', titulo: 't', fechaReporte: new Date() }),
+    },
   };
   const prisma: Record<string, any> = {
     maquinaria: {
@@ -44,6 +49,9 @@ function build(prismaOver: Record<string, unknown> = {}) {
     },
     incidenteTecnico: { findMany: vi.fn(), findUnique: vi.fn() },
     mantenimientoMaquinaria: { findUnique: vi.fn() },
+    // sin plantilla de checklist para el tipo: la orden se cierra como siempre
+    checklistRespuesta: { findMany: vi.fn().mockResolvedValue([]), createMany: vi.fn() },
+    checklistPlantilla: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
     ...prismaOver,
   };
@@ -144,6 +152,35 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       )).rejects.toThrow(/asignadas/);
     });
 
+    it('el supervisor de la región y el coordinador de servicios especiales sí pueden reportar (aunque no sean el operador asignado)', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'pul-1' }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(1);
+      const evidenciasIncidente = [
+        { url: 'maquinaria/mq-01/incidentes/i1/reporte/a.jpg' },
+        { url: 'maquinaria/mq-01/incidentes/i1/reporte/a.pdf' },
+      ];
+      await service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: evidenciasIncidente } as never,
+        supervisorCosta,
+      );
+      await service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: evidenciasIncidente } as never,
+        coordEspeciales,
+      );
+      expect(prisma.maquinaria.count).toHaveBeenCalledTimes(2);
+    });
+
+    it('el supervisor fuera de su región no puede reportar', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'pul-1' }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(0);
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
+        { ...supervisorCosta, regionId: 'sierra' },
+      )).rejects.toThrow(ForbiddenException);
+    });
+
     it('no acepta máquinas desactivadas', async () => {
       const { service, prisma } = build();
       prisma.maquinaria.findUnique.mockResolvedValue(maquina({ activa: false }));
@@ -152,33 +189,70 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
         pulidor,
       )).rejects.toThrow(/desactivada/);
     });
+
+    it('al reportar basta una foto o video: el PDF no es obligatorio (se pide recién al resolver)', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'pul-1' }));
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [{ url: 'maquinaria/mq-01/incidentes/i1/reporte/a.jpg' }] } as never,
+        pulidor,
+      )).resolves.toBeDefined();
+    });
+
+    it('al reportar sigue exigiendo al menos una foto o video', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'pul-1' }));
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
+        pulidor,
+      )).rejects.toThrow(/al menos una foto o un video/);
+    });
+
+    it('el líder puede reportar cualquier máquina de su agencia, no solo la asignada a él', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ agenciaId: 'ag-1', operadorAsignadoId: 'pul-1' }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(1); // assertPuedeVerMaquina: la máquina sí está en su agencia
+      const evidenciasIncidente = [
+        { url: 'maquinaria/mq-01/incidentes/i1/reporte/a.jpg' },
+        { url: 'maquinaria/mq-01/incidentes/i1/reporte/a.pdf' },
+      ];
+      await service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: evidenciasIncidente } as never,
+        lider,
+      );
+      expect(prisma.maquinaria.count).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: 'm1', agenciaId: 'ag-1' }) }),
+      );
+    });
+
+    it('el líder no puede reportar una máquina de otra agencia', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ agenciaId: 'ag-2', operadorAsignadoId: 'pul-9' }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(0); // no está en la agencia del líder (ag-1)
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
+        lider,
+      )).rejects.toThrow(ForbiddenException);
+    });
   });
 
-  describe('lista de incidencias', () => {
-    it('muestra primero las no atendidas (críticas antes), luego en proceso y cerradas', async () => {
-      const { service, prisma } = build();
-      const base = { maquinariaId: 'm1', maquinaria: {}, evidencias: [] };
-      const inc = (id: string, estado: string, gravedad: string, tecnicoAsignadoId: string | null, horasAtras: number) => ({
-        ...base, id, estado, gravedad, tecnicoAsignadoId, fechaReporte: new Date(Date.now() - horasAtras * 3_600_000),
+  describe('asignar operador', () => {
+    it('acepta un pulidor (fijo o móvil)', async () => {
+      const { service } = build({
+        user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-2', estado: 1, role: { namerol: 'PULIDOR' } }) },
       });
-      prisma.incidenteTecnico.findMany.mockResolvedValue([
-        inc('cerrada', 'RESUELTO', 'ALTA', 'tec-1', 1),
-        inc('en-proceso', 'EN_PROCESO', 'BAJA', 'tec-1', 2),
-        inc('abierta-baja', 'ABIERTO', 'BAJA', null, 30),
-        inc('abierta-critica-nueva', 'ABIERTO', 'CRITICA', null, 1),
-        inc('abierta-baja-vieja', 'ABIERTO', 'BAJA', null, 90),
-      ]);
+      await expect(
+        service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-2' } as never, admin),
+      ).resolves.toBeDefined();
+    });
 
-      const { data } = await service.listIncidentes({} as never, coordCosta);
-
-      expect(data.map((d) => d.id)).toEqual([
-        'abierta-critica-nueva',
-        'abierta-baja-vieja',
-        'abierta-baja',
-        'en-proceso',
-        'cerrada',
-      ]);
-      expect(data.filter((d) => d.noAtendida).length).toBe(3);
+    it('rechaza asignarla a un líder: el líder ya ve y reporta toda la maquinaria de su agencia sin necesitar asignación individual', async () => {
+      const { service } = build({
+        user: { findUnique: vi.fn().mockResolvedValue({ id: 'lider-1', estado: 1, role: { namerol: 'LIDER' } }) },
+      });
+      await expect(
+        service.asignarOperador({ maquinariaId: 'm1', operadorId: 'lider-1' } as never, admin),
+      ).rejects.toThrow(/solo.*pulidor/i);
     });
   });
 

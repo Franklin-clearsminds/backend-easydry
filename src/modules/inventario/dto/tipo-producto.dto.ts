@@ -1,16 +1,14 @@
 import { IsString, IsOptional, IsInt, Min, Max } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
-export class ListTiposProductoDto {
+/** Orden permitido: codigo, nombre, estado, insumos (cantidad de insumos), fecha. */
+export class ListTiposProductoDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 1, description: '1 activo, 0 inactivo' })
   @IsOptional()
   @IsInt()
   estado?: number;
 
-  @ApiPropertyOptional({ description: 'Filtro de búsqueda por nombre o código' })
-  @IsOptional()
-  @IsString()
-  search?: string;
 }
 
 export class CreateTipoProductoDto {

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Optional, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -13,16 +13,63 @@ import {
 import { ListConsumosServicioDto } from './dto/consumos-servicio.dto.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import {
+  columnasSimples,
+  combinarWhere,
+  resolverOrden,
+  resolverPaginacion,
+  whereBusqueda,
+} from '../../common/utils/data-grid.helpers.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
+import { DecisionesService } from '../../common/permisos/decisiones.service.js';
+import { Alcance, puedeSobreAgencia, resolverAlcance } from '../../common/permisos/alcance.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+
+/** Columnas por las que se puede ordenar la lista de servicios (nombre público → campo de la base). */
+const ORDEN_SERVICIOS = columnasSimples({
+  fecha: 'horaIngreso',
+  createdAt: 'createdAt',
+  ot: 'ordenTrabajoOT',
+  placa: 'placa',
+  modelo: 'modelo',
+  cliente: 'cliente',
+  estado: 'estado',
+  servicio: 'catalogo.nombre',
+  operador: 'operador.name',
+  agencia: 'bahia.agencia.nombre',
+  bahia: 'bahia.nombre',
+});
 
 @Injectable()
 export class OperacionesService {
   private readonly logger = new Logger(OperacionesService.name);
 
+  private readonly decisiones: DecisionesService;
+
   constructor(
     private prisma: PrismaService,
     @Optional() private notifications?: NotificationsService,
-  ) {}
+    @Optional() decisiones?: DecisionesService,
+  ) {
+    this.decisiones = decisiones ?? new DecisionesService(prisma);
+  }
+
+  /** Nombre visible de quien decide, tomado de la sesión. */
+  private nombreDe(user: any): string {
+    return [user?.name, user?.lastname].filter(Boolean).join(' ').trim() || user?.email || 'Usuario';
+  }
+
+  /** El servicio debe estar dentro del alcance del usuario (agencia, región o lo propio). */
+  private asegurarAlcanceServicio(actor: any, servicio: any): void {
+    if (!actor) return;
+    const alcance: Alcance = resolverAlcance(actor);
+    if (alcance.tipo === 'PROPIO') {
+      if (servicio.operadorId === actor.id) return;
+    } else if (puedeSobreAgencia(alcance, { id: servicio.bahia?.agencia?.id ?? servicio.bahia?.agenciaId, regionId: servicio.bahia?.agencia?.regionId })) {
+      return;
+    }
+    throw new ForbiddenException('Este servicio no pertenece a tu alcance.');
+  }
 
   // ============================================================
   //  SERVICIOS DE LAVADO
@@ -38,63 +85,43 @@ export class OperacionesService {
     pageSize?: number;
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
+    bahiaId?: string;
+    operadorId?: string;
+    servicioId?: number;
+    clienteId?: string;
+    agenciaNombre?: string;
+    bahiaNombre?: string;
+    operadorNombre?: string;
+    clienteNombre?: string;
+    fechaDesde?: string;
+    fechaHasta?: string;
+    incluirResumen?: boolean;
   }, currentUser?: any) {
     const where: any = {
       deletedAt: null,
     };
 
-    // 1. Scoping RBAC por rol del usuario
-    if (currentUser) {
-      const userRole = (currentUser.role?.namerol || currentUser.roleDetails?.namerol || currentUser.role || '').toUpperCase();
-      const isSuperAdminOrAdmin = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
-      const isSupervisor = userRole === 'SUPERVISOR' || userRole === 'GERENTE_REGIONAL' || userRole.includes('SUPERVISOR') || userRole.includes('REGIONAL');
-      const isAprobador = userRole === 'APROBADOR' || userRole === 'GERENTE';
-      const isLider = userRole === 'LIDER' || userRole === 'LIDER_OPERADOR' || userRole === 'LIDER_AGENCIA';
-      const isLavador = userRole === 'LAVADOR' || userRole === 'OPERADOR';
-
-      if (isSuperAdminOrAdmin) {
-        // Super Admin y Admin: acceso nacional irrestricto
-        const targetAgencia = params?.agenciaId || params?.sucursalId;
-        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
-          where.bahia = { agenciaId: targetAgencia };
-        } else if (params?.regionId && params.regionId !== 'Todas' && params.regionId !== 'TODAS') {
-          where.bahia = { agencia: { regionId: params.regionId } };
-        }
-      } else if (isSupervisor) {
-        // Gerente Regional / Supervisor: solo operaciones de su región asignada
-        const regionId = currentUser.regionId || params?.regionId;
-        const targetAgencia = params?.agenciaId || params?.sucursalId;
-        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
-          where.bahia = {
-            agenciaId: targetAgencia,
-            ...(regionId ? { agencia: { regionId } } : {}),
-          };
-        } else if (regionId) {
-          where.bahia = { agencia: { regionId } };
-        }
-      } else if (isAprobador || isLider) {
-        // Aprobador / Líder: únicamente de su sucursal / agencia asignada
-        const targetAgencia = currentUser.agenciaId || params?.agenciaId || params?.sucursalId;
-        if (targetAgencia) {
-          where.bahia = { agenciaId: targetAgencia };
-        }
-      } else if (isLavador) {
-        // Lavador: solo ve los servicios donde él fue el operador asignado
+    // 1. Alcance del usuario (regla única): país, región, agencia o lo propio. Sin usuario o sin dato de su ámbito no ve nada.
+    //    Nunca se toma una agencia o región del cliente para ampliar el alcance: solo para acotar dentro de él.
+    const alcance: Alcance = currentUser ? resolverAlcance(currentUser) : { tipo: 'NINGUNO' };
+    const pideAgencia = [params?.agenciaId, params?.sucursalId].find((v) => v && v !== 'Todas' && v !== 'TODAS');
+    const pideRegion = params?.regionId && params.regionId !== 'Todas' && params.regionId !== 'TODAS' ? params.regionId : undefined;
+    switch (alcance.tipo) {
+      case 'GLOBAL':
+        if (pideAgencia) where.bahia = { agenciaId: pideAgencia };
+        else if (pideRegion) where.bahia = { agencia: { regionId: pideRegion } };
+        break;
+      case 'REGION':
+        where.bahia = { agencia: { regionId: alcance.regionId, ...(pideAgencia ? { id: pideAgencia } : {}) } };
+        break;
+      case 'AGENCIA':
+        where.bahia = { agenciaId: alcance.agenciaId };
+        break;
+      case 'PROPIO':
         where.operadorId = currentUser.id;
-      } else {
-        const targetAgencia = params?.agenciaId || params?.sucursalId;
-        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
-          where.bahia = { agenciaId: targetAgencia };
-        }
-      }
-    } else {
-      const targetAgencia = params?.agenciaId || params?.sucursalId;
-      if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
-        where.bahia = { agenciaId: targetAgencia };
-      }
-      if (params?.regionId && params.regionId !== 'Todas' && params.regionId !== 'TODAS') {
-        where.bahia = { agencia: { regionId: params.regionId } };
-      }
+        break;
+      default:
+        where.id = { in: [] };
     }
 
     // 2. Filtro por Estado Operativo
@@ -118,32 +145,71 @@ export class OperacionesService {
       }
     }
 
-    if (params?.search) {
-      const q = params.search.trim().toUpperCase();
-      where.OR = [
-        { placa: { contains: q } },
-        { modelo: { contains: q, mode: 'insensitive' } },
-        { cliente: { contains: q, mode: 'insensitive' } },
-      ];
+    // 3. Filtros adicionales: todos se resuelven en el servidor (antes la web los aplicaba sobre lo que ya había cargado)
+    const extra: Record<string, unknown>[] = [];
+    if (params?.bahiaId) {
+      // Acepta varios ids separados por coma: las bahías se llaman igual en varias agencias ("Bahía 1").
+      const ids = String(params.bahiaId).split(',').map((v) => v.trim()).filter(Boolean);
+      if (ids.length === 1) extra.push({ bahiaId: ids[0] });
+      else if (ids.length > 1) extra.push({ bahiaId: { in: ids } });
     }
+    if (params?.servicioId !== undefined && params?.servicioId !== null && String(params.servicioId) !== '') {
+      const catalogoId = Number(params.servicioId);
+      if (Number.isInteger(catalogoId)) extra.push({ servicioCatalogoId: catalogoId });
+    }
+    if (params?.clienteId) extra.push({ bahia: { agencia: { clienteId: params.clienteId } } });
+    // Filtros por nombre (exactos, sin distinguir mayúsculas); el alcance por rol de arriba se mantiene.
+    const igual = (valor: string) => ({ equals: valor.trim(), mode: 'insensitive' as const });
+    if (params?.agenciaNombre?.trim()) extra.push({ bahia: { agencia: { nombre: igual(params.agenciaNombre) } } });
+    if (params?.bahiaNombre?.trim()) extra.push({ bahia: { nombre: igual(params.bahiaNombre) } });
+    if (params?.clienteNombre?.trim()) extra.push({ bahia: { agencia: { cliente: { nombre: igual(params.clienteNombre) } } } });
+    const operadorNombre = whereBusqueda(['operador.name', 'operador.lastname'], params?.operadorNombre);
+    if (operadorNombre) extra.push(operadorNombre);
+    // Un lavador ya está limitado a sus propios servicios: no puede pedir los de otro operador.
+    if (params?.operadorId && !where.operadorId) where.operadorId = params.operadorId;
 
-    const page = params?.page ? Number(params.page) : 1;
-    const pageSize = params?.pageSize ? Number(params.pageSize) : 200;
-    const skip = (page - 1) * pageSize;
-    const sortField = params?.sortField || 'createdAt';
-    const sortOrder = params?.sortOrder || 'desc';
+    const desde = params?.fechaDesde ? new Date(params.fechaDesde) : null;
+    const hasta = params?.fechaHasta ? new Date(params.fechaHasta) : null;
+    const rangoFechas = {
+      ...(desde && !Number.isNaN(desde.getTime()) ? { gte: desde } : {}),
+      ...(hasta && !Number.isNaN(hasta.getTime()) ? { lte: hasta } : {}),
+    };
+    if (Object.keys(rangoFechas).length) extra.push({ horaIngreso: rangoFechas });
+
+    const busqueda = whereBusqueda(
+      ['placa', 'modelo', 'marca', 'cliente', 'ordenTrabajoOT', 'operador.name', 'operador.lastname'],
+      params?.search,
+    );
+
+    // Estado aparte: el resumen por estado usa los mismos filtros pero sin el de estado.
+    const { estado: estadoFiltrado, aprobadoPor: aprobadoPorFiltrado, ...whereSinEstado } = where;
+    const whereBase = combinarWhere(whereSinEstado, ...extra, busqueda);
+    const whereFinal = combinarWhere(
+      whereBase,
+      estadoFiltrado !== undefined || aprobadoPorFiltrado !== undefined
+        ? {
+            ...(estadoFiltrado !== undefined ? { estado: estadoFiltrado } : {}),
+            ...(aprobadoPorFiltrado !== undefined ? { aprobadoPor: aprobadoPorFiltrado } : {}),
+          }
+        : undefined,
+    );
+
+    // 4. Paginación y orden. Un cliente antiguo que no envía tamaño de página recibe hasta 100 (antes, 20).
+    const sinTamano = params?.pageSize === undefined || params?.pageSize === null;
+    const { page, pageSize, skip, take } = resolverPaginacion(params ?? {}, sinTamano ? { defecto: 100 } : {});
+    const orderBy = resolverOrden(params?.sortField, params?.sortOrder, ORDEN_SERVICIOS, { campo: 'fecha', dir: 'desc' });
 
     const [items, total] = await Promise.all([
       this.prisma.servicioLavado.findMany({
-        where,
+        where: whereFinal,
         skip,
-        take: pageSize,
-        orderBy: { [sortField]: sortOrder },
+        take,
+        orderBy: orderBy as any,
         include: {
           bahia: {
             include: {
               agencia: {
-                select: { id: true, nombre: true, codigo: true },
+                select: { id: true, nombre: true, codigo: true, regionId: true },
               },
             },
           },
@@ -162,10 +228,46 @@ export class OperacionesService {
           },
         },
       }),
-      this.prisma.servicioLavado.count({ where }),
+      this.prisma.servicioLavado.count({ where: whereFinal }),
     ]);
 
-    return buildDataGridResponse(items.map(serializeServicioLavado), total, page, pageSize);
+    // A cada servicio finalizado se le marca si quien consulta puede decidirlo ahora (aprobar o rechazar) y si su agencia tiene
+    // aprobador designado: así la pantalla de aprobaciones muestra solo acciones que el servidor aceptaría.
+    let serializados: any[] = items.map(serializeServicioLavado);
+    const finalizados = items.filter((s: any) => s.estado === ServiceStatus.FINALIZADO && !s.deletedAt);
+    if (finalizados.length && currentUser) {
+      const conAprobador = await this.decisiones.agenciasConAprobador(finalizados.map((s: any) => s.bahia?.agencia?.id));
+      serializados = serializados.map((s, i) => {
+        const bruto: any = items[i];
+        if (bruto.estado !== ServiceStatus.FINALIZADO || bruto.deletedAt) return s;
+        const agencia = bruto.bahia?.agencia;
+        const tiene = conAprobador.has(String(agencia?.id));
+        return {
+          ...s,
+          agenciaSinAprobador: !tiene,
+          puedeDecidir: this.decisiones.puedeDecidirAhora(currentUser, { id: agencia?.id, regionId: agencia?.regionId }, tiene),
+        };
+      });
+    }
+    const respuesta: Record<string, unknown> = { ...buildDataGridResponse(serializados, total, page, pageSize) };
+
+    if (params?.incluirResumen) {
+      const [porEstado, porAprobar] = await Promise.all([
+        this.prisma.servicioLavado.groupBy({ by: ['estado'], where: whereBase, _count: { _all: true } }),
+        this.prisma.servicioLavado.count({
+          where: combinarWhere(whereBase, { estado: ServiceStatus.FINALIZADO, aprobadoPor: null }),
+        }),
+      ]);
+      const conteo: Record<string, number> = {};
+      let totalResumen = 0;
+      for (const fila of porEstado) {
+        conteo[fila.estado] = fila._count._all;
+        totalResumen += fila._count._all;
+      }
+      respuesta['resumen'] = { porEstado: conteo, porAprobar, total: totalResumen };
+    }
+
+    return respuesta;
   }
 
   async findOneRaw(id: string) {
@@ -213,9 +315,21 @@ export class OperacionesService {
     return servicio;
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actor?: any) {
     const servicio = await this.findOneRaw(id);
+    this.asegurarAlcanceServicio(actor, servicio);
     return serializeServicioLavado(servicio);
+  }
+
+  /** Quién aprobó, rechazó, anuló o corrigió este servicio, con qué regla y por qué (del más reciente al más antiguo). */
+  async historialDecisiones(id: string, actor: any) {
+    const servicio = await this.findOneRaw(id);
+    this.asegurarAlcanceServicio(actor, servicio);
+    return this.prisma.auditoriaDecision.findMany({
+      where: { entidad: 'SERVICIO_LAVADO', entidadId: servicio.id },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
   }
 
   async consumirInsumosSiPendiente(servicioId: string, isOfflineSync = false) {
@@ -229,16 +343,12 @@ export class OperacionesService {
    * el mismo vehículo y no se repita un servicio ya registrado en esa OT.
    */
   private async _validarOTServicioGeneral(ordenTrabajoOT: string, placa: string, catalogoIds: number[]) {
+    // La OT de servicios generales (lavado) y la OT de servicios especiales viven en espacios de
+    // numeración independientes: el mismo número puede existir una vez como lavado y otra vez
+    // como especial (decisión de producto, ver PLAN-PERMISOS-Y-ROLES.md). Por eso aquí solo se
+    // valida contra otros servicios generales, nunca contra ServicioEspecial.
     const normalizarPlaca = (value?: string | null) => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const placaNueva = normalizarPlaca(placa);
-
-    const otEspecial = await this.prisma.servicioEspecial.findFirst({
-      where: { codigoSE: { equals: ordenTrabajoOT, mode: 'insensitive' }, deletedAt: null },
-      select: { id: true },
-    });
-    if (otEspecial) {
-      throw new BadRequestException(`La Orden de Trabajo "${ordenTrabajoOT}" ya está registrada como servicio especial. Ingrese otro número de OT.`);
-    }
 
     const existentes = await this.prisma.servicioLavado.findMany({
       where: {
@@ -269,14 +379,14 @@ export class OperacionesService {
    * Crea una o varias filas de servicio general para la misma OT y vehículo.
    * Con varios servicios valida primero el stock combinado para no dejar la OT a medias.
    */
-  async createMultiple(createDto: CreateServicioDto, operadorId: string) {
+  async createMultiple(createDto: CreateServicioDto, operadorId: string, actor?: any) {
     const ids = Array.from(new Set(
       [...(createDto.servicioCatalogoIds || []), createDto.servicioCatalogoId]
         .map((id) => Number(id))
         .filter((id) => Number.isInteger(id) && id > 0),
     ));
     if (ids.length <= 1) {
-      return this.create({ ...createDto, servicioCatalogoId: ids[0] ?? createDto.servicioCatalogoId }, operadorId);
+      return this.create({ ...createDto, servicioCatalogoId: ids[0] ?? createDto.servicioCatalogoId }, operadorId, actor);
     }
 
     const ordenTrabajoOT = createDto.ordenTrabajoOT?.trim().toUpperCase();
@@ -299,6 +409,10 @@ export class OperacionesService {
     }
     if (catalogos.some((c) => c.categoria !== 'GENERAL')) {
       throw new BadRequestException('Solo se pueden registrar varios servicios en la misma OT para servicios generales.');
+    }
+    const inactivo = catalogos.find((c) => c.estado === 'Inactivo');
+    if (inactivo) {
+      throw new BadRequestException(`El servicio "${inactivo.nombre}" está inactivo y no se puede usar en una nueva OT.`);
     }
 
     if (bahia?.agenciaId) {
@@ -344,12 +458,12 @@ export class OperacionesService {
         servicioCatalogoId: ids[i],
         servicioCatalogoIds: undefined,
         clientUuid: i === 0 ? baseUuid : `${baseUuid}-${i + 1}`,
-      }, operadorId));
+      }, operadorId, actor));
     }
     return creados;
   }
 
-  async create(createDto: CreateServicioDto, operadorId: string) {
+  async create(createDto: CreateServicioDto, operadorId: string, actor?: any) {
     const clientUuid = createDto.clientUuid || randomUUID();
     const now = new Date();
 
@@ -379,6 +493,9 @@ export class OperacionesService {
       throw new BadRequestException('Debe indicar una bahía válida de la agencia para registrar el servicio.');
     }
 
+    if (actor && !puedeSobreAgencia(resolverAlcance(actor), { id: bahia.agenciaId, regionId: bahia.agencia?.regionId })) {
+      throw new ForbiddenException('La bahía indicada no pertenece a tu alcance.');
+    }
     const resolvedBahiaId = bahia.id;
     const agenciaId = bahia.agenciaId;
 
@@ -417,6 +534,9 @@ export class OperacionesService {
     if (!catalogo) {
       throw new BadRequestException('Debe indicar un servicio válido del catálogo asignado a la agencia.');
     }
+    if (catalogo.estado === 'Inactivo') {
+      throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar en una nueva OT.`);
+    }
     const resolvedCatalogoId = catalogo.id;
 
     // Validar que el servicio esté en la lista de la agencia (Agencia.servicioIds)
@@ -441,7 +561,10 @@ export class OperacionesService {
       }
     }
 
-    // 4. Control físico de Bahía: Impedir doble auto simultáneo en proceso en la misma bahía
+    // 4. Estado físico de la bahía: se informa, pero ya no bloquea el registro (decisión de
+    // producto). El estado real en tiempo real lo entrega `bahias/list` / `bahias/opciones`
+    // (campo `ocupada`) para que la pantalla lo muestre antes de crear el servicio.
+    let advertenciaBahiaOcupada: string | undefined;
     if (createDto.estado === ServiceStatus.EN_PROCESO) {
       const activoEnBahia = await this.prisma.servicioLavado.findFirst({
         where: {
@@ -451,9 +574,7 @@ export class OperacionesService {
         },
       });
       if (activoEnBahia && activoEnBahia.placa !== createDto.placa.toUpperCase().trim()) {
-        throw new BadRequestException(
-          `La bahía "${bahia.nombre}" ya se encuentra ocupada por el vehículo ${activoEnBahia.placa}. Espere a que finalice o seleccione otra bahía disponible.`,
-        );
+        advertenciaBahiaOcupada = `[ALERTA: la bahía "${bahia.nombre}" ya tenía en proceso al vehículo ${activoEnBahia.placa} (OT ${activoEnBahia.ordenTrabajoOT || '—'}) al registrar esta OT]`;
       }
     }
 
@@ -492,6 +613,11 @@ export class OperacionesService {
 
     // 6. Advertencia de Maquinaria Averiada o Fuera de Servicio
     let observacionesFinales = createDto.observaciones;
+    if (advertenciaBahiaOcupada) {
+      observacionesFinales = observacionesFinales
+        ? `${observacionesFinales} | ${advertenciaBahiaOcupada}`
+        : advertenciaBahiaOcupada;
+    }
     const maquinaAveriada = await this.prisma.maquinaria.findFirst({
       where: {
         bahiaId: resolvedBahiaId,
@@ -507,30 +633,8 @@ export class OperacionesService {
 
     // 7. Registro seguro del servicio de lavado en base de datos
     let estadoInicial = createDto.estado || ServiceStatus.EN_ESPERA;
-    let observacionGerenteAuto: string | undefined = undefined;
-    let aprobadoPorAuto: string | undefined = undefined;
-    let fechaAprobacionAuto: Date | undefined = undefined;
-
-    // Si se crea directamente como FINALIZADO, verificar si la agencia cuenta con aprobador asignado
-    if (estadoInicial === ServiceStatus.FINALIZADO) {
-      let tieneAprobador = false;
-      if (agenciaId) {
-        const approver = await this.prisma.user.findFirst({
-          where: {
-            estado: 1,
-            OR: [{ agenciaId }, { agenciasIds: { has: agenciaId } }],
-            role: { namerol: { in: ['APROBADOR', 'GERENTE'] } },
-          },
-        });
-        if (approver) tieneAprobador = true;
-      }
-      if (!tieneAprobador) {
-        estadoInicial = ServiceStatus.APROBADO;
-        observacionGerenteAuto = 'Aprobado automáticamente (Agencia sin aprobador asignado)';
-        aprobadoPorAuto = 'Sistema (Auto-Aprobación)';
-        fechaAprobacionAuto = now;
-      }
-    }
+    // Un servicio finalizado siempre queda pendiente de aprobación: lo decide el aprobador designado de la agencia o,
+    // si no tiene, un administrador o el supervisor de su región. No hay auto-aprobación.
 
     // Hora salida estimada desde CatalogoServicio.tiempoEstimadoMin (BD)
     const minsEstimados = Math.max(1, Number(catalogo.tiempoEstimadoMin) || 30);
@@ -582,9 +686,6 @@ export class OperacionesService {
         color: createDto.color?.trim(),
         cliente: createDto.cliente?.trim(),
         estado: estadoInicial,
-        observacionGerente: observacionGerenteAuto,
-        aprobadoPor: aprobadoPorAuto,
-        fechaAprobacion: fechaAprobacionAuto,
         bahiaId: resolvedBahiaId,
         servicioCatalogoId: resolvedCatalogoId,
         operadorId: validOperadorId,
@@ -643,10 +744,27 @@ export class OperacionesService {
     return serializeServicioLavado(finalCreated);
   }
 
-  async update(id: string, updateDto: UpdateServicioDto, isOfflineSync: boolean = false) {
+  async update(id: string, updateDto: UpdateServicioDto, isOfflineSync: boolean = false, actor?: any) {
     const servicio = await this.findOneRaw(id);
     const data: any = { ...updateDto };
     delete data.id;
+    delete data.motivoCorreccion;
+
+    let motivoCorreccion: string | undefined;
+    if (actor) {
+      this.asegurarAlcanceServicio(actor, servicio);
+      if (servicio.deletedAt) throw new BadRequestException('El servicio está anulado y no se puede modificar.');
+      // Aprobar, rechazar y anular tienen sus propias acciones (con regla y registro): no se cuelan por aquí.
+      if (updateDto.estado && ([ServiceStatus.APROBADO, ServiceStatus.RECHAZADO, ServiceStatus.CANCELADO] as ServiceStatus[]).includes(updateDto.estado)) {
+        throw new BadRequestException('Para aprobar, rechazar o anular usa la acción correspondiente.');
+      }
+      if (servicio.estado === ServiceStatus.APROBADO) {
+        if (!['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor))) {
+          throw new ForbiddenException('Un servicio aprobado solo lo puede editar un administrador.');
+        }
+        motivoCorreccion = this.decisiones.exigirMotivo(updateDto.motivoCorreccion, 'corregir un servicio aprobado');
+      }
+    }
     data.version = { increment: 1 };
 
     if (updateDto.estado === ServiceStatus.FINALIZADO) {
@@ -692,35 +810,6 @@ export class OperacionesService {
         await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
       }
 
-      // ──────────────────────────────────────────────────────────────
-      // AUTO-APROBACIÓN PARA AGENCIAS SIN APROBADOR ASIGNADO
-      // ──────────────────────────────────────────────────────────────
-      const agenciaId = servicio.bahia?.agencia?.id || servicio.bahia?.agenciaId;
-      let tieneAprobador = false;
-      if (agenciaId) {
-        const approver = await this.prisma.user.findFirst({
-          where: {
-            estado: 1,
-            OR: [
-              { agenciaId },
-              { agenciasIds: { has: agenciaId } },
-            ],
-            role: {
-              namerol: { in: ['APROBADOR', 'GERENTE'] },
-            },
-          },
-        });
-        if (approver) {
-          tieneAprobador = true;
-        }
-      }
-
-      if (!tieneAprobador) {
-        data.estado = ServiceStatus.APROBADO;
-        data.observacionGerente = 'Aprobado automáticamente (Agencia sin aprobador asignado)';
-        data.aprobadoPor = 'Sistema (Auto-Aprobación)';
-        data.fechaAprobacion = new Date();
-      }
     }
 
     const updated = await this.prisma.servicioLavado.update({
@@ -744,6 +833,19 @@ export class OperacionesService {
         },
       },
     });
+
+    if (actor && motivoCorreccion) {
+      await this.decisiones.registrar({
+        entidad: 'SERVICIO_LAVADO',
+        entidadId: servicio.id,
+        accion: 'EDITAR_APROBADO',
+        user: actor,
+        regla: 'ADMIN',
+        motivo: motivoCorreccion,
+        agenciaId: servicio.bahia?.agencia?.id ?? null,
+        detalle: { cambios: Object.keys(data).filter((k) => k !== 'version') },
+      });
+    }
 
     // Persistir en EvidenciaServicio si se envió vídeo o foto de salida/ingreso
     if (updateDto.fotoSalidaUrl) {
@@ -780,11 +882,30 @@ export class OperacionesService {
     return serializeServicioLavado(updated);
   }
 
-  async softDelete(id: string, motivo?: string, reponerInsumos: boolean = true) {
+  /**
+   * Anula un servicio (no se borra: queda con deletedAt para la sincronización y con quién, cuándo y por qué).
+   * Con `actor` (llamada desde la API) exige motivo y aplica la regla: antes de aprobar, el líder y el aprobador de la agencia y los
+   * administradores; ya aprobado, solo los administradores.
+   */
+  async softDelete(id: string, motivo?: string, reponerInsumos: boolean = true, actor?: any) {
     const servicio = await this.findOneRaw(id);
 
-    // Reversión de Insumos: Si el servicio estaba FINALIZADO y tenía consumos, reponer al inventario
-    if (servicio.estado === ServiceStatus.FINALIZADO && reponerInsumos && servicio.consumos?.length > 0) {
+    let regla: 'TITULAR' | 'RESPALDO' | 'ADMIN' | undefined;
+    let motivoAnulacion = motivo;
+    if (actor) {
+      this.asegurarAlcanceServicio(actor, servicio);
+      if (servicio.deletedAt) throw new BadRequestException('El servicio ya está anulado.');
+      motivoAnulacion = this.decisiones.exigirMotivo(motivo, 'anular un servicio');
+      regla = this.decisiones.reglaParaAnular(
+        actor,
+        { id: servicio.bahia.agencia.id, regionId: servicio.bahia.agencia.regionId },
+        servicio.estado === ServiceStatus.APROBADO,
+      );
+    }
+
+    // Reversión de Insumos: si el servicio ya había consumido insumos (finalizado o aprobado), reponer al inventario
+    const consumioInsumos = servicio.estado === ServiceStatus.FINALIZADO || servicio.estado === ServiceStatus.APROBADO;
+    if (consumioInsumos && reponerInsumos && servicio.consumos?.length > 0) {
       const agenciaId = servicio.bahia?.agencia?.id;
       for (const c of servicio.consumos) {
         const cantidadRevertir = Number(c.cantidadUsada);
@@ -826,9 +947,10 @@ export class OperacionesService {
       data: {
         deletedAt: new Date(),
         estado: ServiceStatus.CANCELADO,
-        observaciones: motivo
-          ? `${servicio.observaciones || ''} | [Eliminado/Anulado]: ${motivo}`.trim()
+        observaciones: motivoAnulacion
+          ? `${servicio.observaciones || ''} | [Eliminado/Anulado]: ${motivoAnulacion}`.trim()
           : servicio.observaciones,
+        ...(actor ? { anuladoPorId: String(actor.id), anuladoEn: new Date(), motivoAnulacion } : {}),
         version: servicio.version + 1,
       },
       include: {
@@ -839,6 +961,19 @@ export class OperacionesService {
         operador: true,
       },
     });
+
+    if (actor && regla) {
+      await this.decisiones.registrar({
+        entidad: 'SERVICIO_LAVADO',
+        entidadId: servicio.id,
+        accion: 'ANULAR',
+        user: actor,
+        regla,
+        motivo: motivoAnulacion,
+        agenciaId: servicio.bahia.agencia.id,
+        detalle: { estadoAnterior: servicio.estado, insumosRepuestos: consumioInsumos && reponerInsumos },
+      });
+    }
 
     return serializeServicioLavado(deleted);
   }
@@ -1542,17 +1677,23 @@ export class OperacionesService {
   //  APROBACIONES Y CIERRE DIARIO GERENCIAL
   // ============================================================
 
-  async aprobarServicio(id: string, observacion?: string, gerenteNombre?: string) {
+  /** Aprobar: el aprobador designado de la agencia o, si no tiene, un administrador o el supervisor de su región. */
+  async aprobarServicio(id: string, observacion: string | undefined, actor: any) {
     const servicio = await this.findOneRaw(id);
+    if (servicio.deletedAt) throw new BadRequestException('El servicio está anulado.');
     if (servicio.estado !== ServiceStatus.FINALIZADO) {
       throw new BadRequestException('Solo se pueden aprobar servicios que ya han sido finalizados.');
     }
+    const agencia = servicio.bahia.agencia;
+    const regla = await this.decisiones.reglaParaDecidir(actor, { id: agencia.id, regionId: agencia.regionId });
     const updated = await this.prisma.servicioLavado.update({
       where: { id: servicio.id },
       data: {
         estado: ServiceStatus.APROBADO,
-        observacionGerente: observacion || servicio.observacionGerente || 'Aprobado por gerencia',
-        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
+        observacionGerente: observacion || servicio.observacionGerente || 'Aprobado',
+        aprobadoPor: this.nombreDe(actor),
+        decididoPorId: String(actor.id),
+        reglaDecision: regla,
         fechaAprobacion: new Date(),
         version: servicio.version + 1,
       },
@@ -1575,21 +1716,38 @@ export class OperacionesService {
       },
     });
 
+    await this.decisiones.registrar({
+      entidad: 'SERVICIO_LAVADO',
+      entidadId: servicio.id,
+      accion: 'APROBAR',
+      user: actor,
+      regla,
+      motivo: observacion,
+      agenciaId: agencia.id,
+    });
+
     return serializeServicioLavado(updated);
   }
 
-  async rechazarServicio(id: string, motivo: string, gerenteNombre?: string) {
+  /** Rechazar: mismas reglas que aprobar; el motivo es obligatorio. */
+  async rechazarServicio(id: string, motivo: string, actor: any) {
     const servicio = await this.findOneRaw(id);
+    if (servicio.deletedAt) throw new BadRequestException('El servicio está anulado.');
     if (servicio.estado !== ServiceStatus.FINALIZADO) {
       throw new BadRequestException('Solo se pueden rechazar servicios que ya han sido finalizados.');
     }
+    const motivoOk = this.decisiones.exigirMotivo(motivo, 'rechazar un servicio');
+    const agencia = servicio.bahia.agencia;
+    const regla = await this.decisiones.reglaParaDecidir(actor, { id: agencia.id, regionId: agencia.regionId });
     const updated = await this.prisma.servicioLavado.update({
       where: { id: servicio.id },
       data: {
         estado: ServiceStatus.RECHAZADO,
-        motivoRechazo: motivo,
-        observacionGerente: motivo,
-        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
+        motivoRechazo: motivoOk,
+        observacionGerente: motivoOk,
+        aprobadoPor: this.nombreDe(actor),
+        decididoPorId: String(actor.id),
+        reglaDecision: regla,
         fechaAprobacion: new Date(),
         version: servicio.version + 1,
       },
@@ -1612,25 +1770,38 @@ export class OperacionesService {
       },
     });
 
+    await this.decisiones.registrar({
+      entidad: 'SERVICIO_LAVADO',
+      entidadId: servicio.id,
+      accion: 'RECHAZAR',
+      user: actor,
+      regla,
+      motivo: motivoOk,
+      agenciaId: agencia.id,
+    });
+
     return serializeServicioLavado(updated);
   }
 
+  /** Cierre del día de UNA agencia (la agencia es obligatoria). Misma regla de quién puede decidir. */
   async aprobarTodosServicios(
-    agenciaId?: string,
-    sucursalId?: string,
+    actor: any,
+    agenciaId: string | undefined,
     fecha?: string,
-    gerenteNombre?: string,
     requiereFotoSalida: boolean = true,
   ) {
-    const targetAgencia = agenciaId || sucursalId;
+    if (!agenciaId) {
+      throw new BadRequestException('Indica la agencia cuyo día quieres cerrar: no se puede aprobar todo el país de una vez.');
+    }
+    const agencia = await this.prisma.agencia.findUnique({ where: { id: agenciaId }, select: { id: true, nombre: true, regionId: true } });
+    if (!agencia) throw new NotFoundException('Agencia no encontrada.');
+    const regla = await this.decisiones.reglaParaDecidir(actor, { id: agencia.id, regionId: agencia.regionId });
+
     const baseWhere: any = {
       estado: ServiceStatus.FINALIZADO,
       deletedAt: null,
+      bahia: { agenciaId: agencia.id },
     };
-
-    if (targetAgencia) {
-      baseWhere.bahia = { agenciaId: targetAgencia };
-    }
 
     if (fecha) {
       const start = new Date(`${fecha}T00:00:00.000Z`);
@@ -1653,16 +1824,34 @@ export class OperacionesService {
       });
     }
 
-    const batchResult = await this.prisma.servicioLavado.updateMany({
-      where: whereParaAprobar,
-      data: {
-        estado: ServiceStatus.APROBADO,
-        observacionGerente: 'Aprobación masiva de cierre diario (Quality Gate)',
-        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
-        fechaAprobacion: new Date(),
-        version: { increment: 1 },
-      },
-    });
+    const pendientes = await this.prisma.servicioLavado.findMany({ where: whereParaAprobar, select: { id: true } });
+    const ids = pendientes.map((s) => s.id);
+    const batchResult = ids.length
+      ? await this.prisma.servicioLavado.updateMany({
+          where: { id: { in: ids }, estado: ServiceStatus.FINALIZADO },
+          data: {
+            estado: ServiceStatus.APROBADO,
+            observacionGerente: 'Aprobación masiva de cierre diario (Quality Gate)',
+            aprobadoPor: this.nombreDe(actor),
+            decididoPorId: String(actor.id),
+            reglaDecision: regla,
+            fechaAprobacion: new Date(),
+            version: { increment: 1 },
+          },
+        })
+      : { count: 0 };
+
+    if (ids.length) {
+      await this.decisiones.registrarLote({
+        entidad: 'SERVICIO_LAVADO',
+        entidadIds: ids,
+        accion: 'APROBAR',
+        user: actor,
+        regla,
+        motivo: 'Aprobación masiva de cierre diario',
+        agenciaId: agencia.id,
+      });
+    }
 
     return {
       ok: true,

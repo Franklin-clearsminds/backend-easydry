@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-16T17:58:51.233Z",
+  "generatedAt": "2026-09-28T18:13:56.837Z",
   "reglas": {
     "marcasComoClientes": true,
     "pulidorEnLavados": "solo_pulidor_fijo",
@@ -7,7 +7,6 @@
     "duplicado0959378001": "AUTOMEKANO AEROPUERTO",
     "prospectoConBahiasSinPersonal": true,
     "email": "{nombre}.{rol}@easydry.com",
-    "password": "123456",
     "regiones": "Sierra|Costa",
     "serviciosHuerfanos": "crear_en_catalogo",
     "personalSucio": "cargar_todos"
@@ -232,6 +231,7 @@
     "1761722956",
     "0956426951"
   ],
+  "personalGestion": [],
   "agencias": [
     {
       "marca": "ALVAREZ BARBA",
@@ -3582,7 +3582,7 @@
         {
           "insumoNombre": "FABRIC INTERIOR CLEANER 500ML",
           "codigoSKU": "MCL3058",
-          "cantidad": 2,
+          "cantidad": 1,
           "unidad": "UND",
           "nota": "(ESTE PRODUCTO ES EN UNIDAD)"
         },
@@ -3610,7 +3610,7 @@
         {
           "insumoNombre": "FABRIC INTERIOR CLEANER 500ML",
           "codigoSKU": "MCL3058",
-          "cantidad": 1,
+          "cantidad": 0.5,
           "unidad": "UND",
           "nota": "(ESTE PRODUCTO ES EN UNIDAD)"
         },

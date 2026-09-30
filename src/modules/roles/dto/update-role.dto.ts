@@ -1,6 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsArray, IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { AMBITOS } from '../../../common/permisos/catalogo-permisos.js';
+
+const aLista = ({ value }: { value: unknown }) => {
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(',').map((s) => s.trim()).filter(Boolean);
+  return [];
+};
 
 export class UpdateRoleDto {
   @ApiProperty({ example: '1b6b0bba-9ee1-4f99-a194-89e728542969', description: 'ID del rol a actualizar' })
@@ -8,7 +15,7 @@ export class UpdateRoleDto {
   @IsNotEmpty({ message: 'El id es requerido' })
   id: string;
 
-  @ApiProperty({ example: 'SUPERVISOR_REGIONAL_EDIT', description: 'Nuevo nombre de rol', required: false })
+  @ApiProperty({ example: 'SUPERVISOR_ZONA', description: 'Nuevo nombre (no se puede cambiar en los roles oficiales)', required: false })
   @IsOptional()
   @IsString({ message: 'El campo namerol debe ser una cadena de texto' })
   namerol?: string;
@@ -23,19 +30,22 @@ export class UpdateRoleDto {
   @IsIn([0, 1], { message: 'El estado debe ser 1 (Activo) o 0 (Inactivo)' })
   estado?: number;
 
-  @ApiProperty({
-    example: ['dashboard', 'sucursales', 'reportes'],
-    description: 'Nueva lista de permisos (array de cadenas / lista)',
-    type: [String],
-    required: false,
-  })
+  @ApiProperty({ example: ['dashboard', 'reportes'], description: 'Nueva lista de módulos de navegación', type: [String], required: false })
   @IsOptional()
-  @Transform(({ value }) => {
-    if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
-    if (typeof value === 'string') return value.split(',').map((s) => s.trim()).filter(Boolean);
-    return [];
-  })
+  @Transform(aLista)
   @IsArray({ message: 'El campo permisos debe ser una lista de cadenas' })
   @IsString({ each: true, message: 'Cada elemento de permisos debe ser una cadena' })
   permisos?: string[];
+
+  @ApiProperty({ example: ['servicios.ver'], description: 'Nueva lista de permisos que el backend exige', type: [String], required: false })
+  @IsOptional()
+  @Transform(aLista)
+  @IsArray({ message: 'El campo capacidades debe ser una lista de cadenas' })
+  @IsString({ each: true, message: 'Cada permiso debe ser un string' })
+  capacidades?: string[];
+
+  @ApiProperty({ example: 'AGENCIA', description: 'Sobre qué datos actúa el rol', enum: AMBITOS, required: false })
+  @IsOptional()
+  @IsIn([...AMBITOS], { message: 'El ámbito debe ser GLOBAL, REGION, AGENCIA o PROPIO' })
+  ambito?: string;
 }

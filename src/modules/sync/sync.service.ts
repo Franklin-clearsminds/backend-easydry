@@ -12,6 +12,9 @@ import { ServiceStatus } from '@prisma/client';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
 
+import { tienePermiso } from '../../common/permisos/capacidades.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { resolverAlcance, SIN_RESULTADOS } from '../../common/permisos/alcance.js';
 const publicMediaUrl = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
@@ -113,6 +116,7 @@ export class SyncService {
             errorMotivo: `OPERADOR_INACTIVO_RESCATE: Operador ${currentUser.email} fue desactivado`,
             intentos: 1,
             resuelto: false,
+            usuarioId: userId,
           },
         });
         results.push({
@@ -282,6 +286,7 @@ export class SyncService {
                   errorMotivo: `POSIBLE_DUPLICADO_PLACA: El vehículo ya tiene orden activa ${duplicateActive.id} (${duplicateActive.placa})`,
                   intentos: 1,
                   resuelto: false,
+                  usuarioId: userId,
                 },
               });
 
@@ -771,6 +776,7 @@ export class SyncService {
                 payload: mut.data || mut,
                 errorMotivo: err.message,
                 intentos,
+                usuarioId: userId,
               },
             });
           } catch (dlqErr) {
@@ -829,19 +835,38 @@ export class SyncService {
       whereClause.OR = orConditions;
     }
 
-    // Scoping por Permisos y Sede
+    // Scoping por permisos y alcance: solo quien puede ver servicios (servicios.ver) recibe algo; el resto
+    // (bodega, mantenimiento, técnico — el plan dice explícitamente que no ven OT) se queda sin resultados.
+    let esAdminOSuperAdmin = false;
+    let ocultarContactoOperador = true;
     if (userId) {
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
         include: { role: true },
       });
 
-      if (user && !['SUPER_ADMIN', 'ADMIN'].includes(user.role?.namerol || '')) {
-        if (user.role?.namerol === 'SUPERVISOR' && user.regionId) {
-          whereClause.bahia = { agencia: { regionId: user.regionId } };
-        } else if (user.agenciaId) {
-          whereClause.bahia = { agenciaId: user.agenciaId };
+      if (!user || !tienePermiso(user, 'servicios.ver')) {
+        Object.assign(whereClause, SIN_RESULTADOS);
+      } else {
+        const alcance = resolverAlcance(user);
+        switch (alcance.tipo) {
+          case 'GLOBAL':
+            break;
+          case 'REGION':
+            whereClause.bahia = { agencia: { regionId: alcance.regionId } };
+            break;
+          case 'AGENCIA':
+            whereClause.bahia = { agenciaId: alcance.agenciaId };
+            break;
+          case 'PROPIO':
+            whereClause.operadorId = alcance.userId;
+            break;
+          default:
+            Object.assign(whereClause, SIN_RESULTADOS);
         }
+        const rol = rolDeUsuario(user);
+        esAdminOSuperAdmin = rol === 'SUPER_ADMIN' || rol === 'ADMIN';
+        ocultarContactoOperador = !esAdminOSuperAdmin;
       }
     }
 
@@ -853,7 +878,8 @@ export class SyncService {
       include: {
         bahia: { include: { agencia: true } },
         catalogo: true,
-        operador: { select: { id: true, name: true, lastname: true, email: true } },
+        // Quien no es administrador nunca recibe el correo de otro usuario (D9).
+        operador: { select: { id: true, name: true, lastname: true, email: !ocultarContactoOperador } },
         consumos: { include: { insumo: true } },
         evidencias: true,
       },
@@ -1297,10 +1323,14 @@ export class SyncService {
     };
   }
 
-  async listDeadLetterQueue(resuelto?: boolean) {
+  async listDeadLetterQueue(resuelto?: boolean, user?: any) {
     const where: any = {};
     if (resuelto !== undefined) {
       where.resuelto = resuelto;
+    }
+    // Quien no gestiona la cola (sync.dlq.gestionar) solo ve los errores de su propia sincronización.
+    if (!user || !tienePermiso(user, 'sync.dlq.gestionar')) {
+      where.usuarioId = user?.id ? String(user.id) : '__ninguno__';
     }
     const items = await this.prisma.syncDeadLetterQueue.findMany({
       where,
@@ -1314,7 +1344,7 @@ export class SyncService {
     };
   }
 
-  async resolveDeadLetterItem(id: string, resuelto: boolean = true) {
+  async resolveDeadLetterItem(id: string, resuelto: boolean = true, actor?: any) {
     const item = await this.prisma.syncDeadLetterQueue.findUnique({
       where: { id },
     });
@@ -1327,6 +1357,7 @@ export class SyncService {
       where: { id },
       data: { resuelto },
     });
+    await this.registrarDecisionDlq(actor, id, 'RESOLVER', { resuelto });
 
     return {
       success: true,
@@ -1336,7 +1367,24 @@ export class SyncService {
   }
 
   // Punto 3: Replay y Reingreso de Mutaciones en Dead-Letter Queue (/sync/dlq/replay)
-  async replayDeadLetterItem(dlqId: string, payloadCorregido?: any, userId?: string) {
+  /** Deja registrado quién resolvió o reintentó un error de sincronización. */
+  private async registrarDecisionDlq(actor: any, dlqId: string, accion: 'RESOLVER' | 'REINTENTAR', detalle: Record<string, unknown>) {
+    if (!actor?.id) return;
+    await this.prisma.auditoriaDecision.create({
+      data: {
+        entidad: 'SYNC_DLQ',
+        entidadId: dlqId,
+        accion,
+        usuarioId: String(actor.id),
+        usuarioNombre: [actor.name, actor.lastname].filter(Boolean).join(' ').trim() || actor.email || 'Usuario',
+        rol: rolDeUsuario(actor),
+        regla: 'ADMIN',
+        detalle: detalle as any,
+      },
+    });
+  }
+
+  async replayDeadLetterItem(dlqId: string, payloadCorregido?: any, userId?: string, actor?: any) {
     const item = await this.prisma.syncDeadLetterQueue.findUnique({
       where: { id: dlqId },
     });
@@ -1395,6 +1443,7 @@ export class SyncService {
         },
       });
 
+      await this.registrarDecisionDlq(actor, dlqId, 'REINTENTAR', { payloadCorregido: !!payloadCorregido });
       return {
         success: true,
         replayed: true,

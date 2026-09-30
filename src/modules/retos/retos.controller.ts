@@ -1,17 +1,17 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CreateRetoDto, DeleteRetoDto, ListRetosDto } from './dto/retos.dto.js';
 import { RetosService } from './retos.service.js';
 
+import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Retos de productividad')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
 @Controller('retos')
 export class RetosController {
   constructor(private readonly retosService: RetosService) {}
 
+  @Permiso('retos.ver')
   @Post('list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar retos almacenados en PostgreSQL' })
@@ -19,6 +19,7 @@ export class RetosController {
     return this.retosService.list(dto, user);
   }
 
+  @Permiso('retos.crear')
   @Post('create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear un reto de productividad' })
@@ -26,6 +27,7 @@ export class RetosController {
     return this.retosService.create(dto, user);
   }
 
+  @Permiso('retos.eliminar')
   @Post('delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar un reto' })

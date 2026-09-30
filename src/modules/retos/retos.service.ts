@@ -1,9 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRetoDto, ListRetosDto } from './dto/retos.dto.js';
+import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
+import { listarPaginable } from '../../common/utils/listado-paginable.js';
+import { resolverAlcance } from '../../common/permisos/alcance.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
 
-const ADMIN_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'ADMINISTRADOR']);
-const CREATE_ROLES = new Set([...ADMIN_ROLES, 'GERENTE']);
+const ADMIN_ROLES = new Set(['SUPER_ADMIN', 'ADMIN']);
 
 @Injectable()
 export class RetosService {
@@ -13,11 +16,21 @@ export class RetosService {
     const role = this.roleCode(user);
     const where: any = {};
 
-    if (dto.soloActivos !== false && !dto.incluirTodos) {
+    if (dto.vigencia) {
+      // Con `vigencia` (pantalla de retos) se ignoran los indicadores antiguos.
+      if (dto.vigencia === 'ACTIVOS') {
+        where.estado = 'ACTIVO';
+      } else if (dto.vigencia === 'VENCIDOS') {
+        const hoy = new Date();
+        hoy.setHours(0, 0, 0, 0);
+        where.fechaFin = { lt: hoy };
+      }
+    } else if (dto.soloActivos !== false && !dto.incluirTodos) {
       where.estado = 'ACTIVO';
     }
 
-    if (!ADMIN_ROLES.has(role)) {
+    // Quien actúa en todo el país (administradores, jefe comercial) ve todos los retos; el resto, los de su región o agencia.
+    if (resolverAlcance(user).tipo !== 'GLOBAL') {
       const visibility: any[] = [
         { AND: [{ regiones: { isEmpty: true } }, { sucursalesIds: { isEmpty: true } }] },
         { regiones: { has: 'Todas' } },
@@ -29,15 +42,35 @@ export class RetosService {
       where.AND = [...(where.AND || []), { OR: visibility }];
     }
 
-    return this.prisma.reto.findMany({
-      where,
-      orderBy: [{ fechaInicio: 'desc' }, { createdAt: 'desc' }],
+    const filtros = combinarWhere(where, whereBusqueda(['titulo', 'descripcion', 'premio'], dto.search));
+    return listarPaginable(dto, {
+      where: filtros,
+      columnas: columnasSimples({ titulo: 'titulo', inicio: 'fechaInicio', fin: 'fechaFin', estado: 'estado', fecha: 'fechaInicio' }),
+      ordenHeredado: [{ fechaInicio: 'desc' }, { createdAt: 'desc' }],
+      buscar: ({ where: w, orderBy, skip, take }) => this.prisma.reto.findMany({ where: w, orderBy, skip, take }),
+      contar: (w) => this.prisma.reto.count({ where: w }),
     });
   }
 
   async create(dto: CreateRetoDto, user: any) {
-    if (!CREATE_ROLES.has(this.roleCode(user))) {
-      throw new ForbiddenException('Tu rol no está autorizado para crear retos.');
+    // El permiso «retos.crear» ya se exigió en el controlador. Quien no actúa en todo el país (coordinador comercial) solo crea
+    // retos para su propia región y para agencias de esa región.
+    const alcance = resolverAlcance(user);
+    const regiones = this.cleanList(dto.regiones);
+    const sucursalesIds = this.cleanList(dto.sucursalesIds);
+    if (alcance.tipo !== 'GLOBAL') {
+      if (alcance.tipo !== 'REGION') {
+        throw new ForbiddenException('Tu usuario no tiene una región asignada para crear retos.');
+      }
+      const miRegion = String(user?.region?.nombre || '').trim();
+      if (!miRegion) throw new ForbiddenException('Tu usuario no tiene una región asignada para crear retos.');
+      if (regiones.length === 0 || regiones.some((r) => r.toLowerCase() !== miRegion.toLowerCase())) {
+        throw new ForbiddenException(`Solo puedes crear retos para tu región (${miRegion}).`);
+      }
+      if (sucursalesIds.length) {
+        const propias = await this.prisma.agencia.count({ where: { id: { in: sucursalesIds }, regionId: alcance.regionId } });
+        if (propias !== sucursalesIds.length) throw new ForbiddenException('Algunas agencias no pertenecen a tu región.');
+      }
     }
     const inicio = new Date(dto.fechaInicio);
     const fin = new Date(dto.fechaFin);
@@ -52,9 +85,9 @@ export class RetosService {
         premio: dto.premio?.trim() || null,
         fechaInicio: inicio,
         fechaFin: fin,
-        regiones: this.cleanList(dto.regiones),
+        regiones,
         marcas: this.cleanList(dto.marcas),
-        sucursalesIds: this.cleanList(dto.sucursalesIds),
+        sucursalesIds,
         estado: dto.estado || 'ACTIVO',
         criterios: this.cleanList(dto.criterios),
         creadoPorId: user?.id ? String(user.id) : null,
@@ -77,7 +110,7 @@ export class RetosService {
   }
 
   private roleCode(user: any): string {
-    return String(user?.role?.namerol || user?.roleDetails?.namerol || user?.role || '').toUpperCase();
+    return rolDeUsuario(user);
   }
 
   private cleanList(values?: string[]): string[] {

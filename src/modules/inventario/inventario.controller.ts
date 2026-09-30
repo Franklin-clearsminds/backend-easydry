@@ -1,26 +1,26 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, ForbiddenException } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { InventarioService } from './inventario.service.js';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
 // DTOs
 import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto, DetailEnvaseDto } from './dto/envases.dto.js';
 import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidades.dto.js';
-import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, DetailInsumoDto } from './dto/insumos.dto.js';
+import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, DetailInsumoDto, InsumosOpcionesDto } from './dto/insumos.dto.js';
 import { ListStockDto, AjusteStockDto, ReajusteStockDto } from './dto/stock.dto.js';
-import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, RechazarDespachoDto, ListMovimientosDto } from './dto/movimientos.dto.js';
+import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, RechazarDespachoDto, ListMovimientosDto, ListDespachosDto } from './dto/movimientos.dto.js';
 import { ListKardexDto } from './dto/kardex.dto.js';
-import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto } from './dto/alertas.dto.js';
+import { StockResumenAgenciasDto, StockResumenPulidoresDto, StockResumenBodegasDto, InsumosServiciosDto } from './dto/stock-resumen.dto.js';
+import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto, SincronizarAlertasDto } from './dto/alertas.dto.js';
 import { CreateTipoProductoDto, UpdateTipoProductoDto, ListTiposProductoDto } from './dto/tipo-producto.dto.js';
 import { CreatePresentacionDto, UpdatePresentacionDto, ListPresentacionesDto } from './dto/presentaciones.dto.js';
 import { ListTiposMovimientoDto, ListMotivosDto, CreateMotivoDto, UpdateMotivoDto } from './dto/movimiento-catalogo.dto.js';
 import { RegistrarMovimientoOperativoDto, ListMovimientosGlobalesDto, ListStockBajoDto } from './dto/movimiento-operacion.dto.js';
 import { CreateBodegaDto, UpdateBodegaDto, ToggleActivaBodegaDto, DeleteBodegaDto } from './dto/bodegas.dto.js';
 
+import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Inventario & Bodega (100% POST)')
 @Controller('inventario')
-@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class InventarioController {
   constructor(private readonly inventarioService: InventarioService) {}
@@ -29,6 +29,7 @@ export class InventarioController {
   // TIPOS DE ENVASE
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('envases/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar catálogo de tipos de envase' })
@@ -37,6 +38,7 @@ export class InventarioController {
     return this.inventarioService.listEnvases(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('envases/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo tipo de envase (COORD_BODEGA / ADMIN / SUPER_ADMIN)' })
@@ -46,6 +48,7 @@ export class InventarioController {
     return this.inventarioService.createEnvase(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('envases/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar tipo de envase' })
@@ -57,6 +60,7 @@ export class InventarioController {
   // UNIDADES DE MEDIDA
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('unidades/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar catálogo de unidades de medida' })
@@ -64,6 +68,7 @@ export class InventarioController {
     return this.inventarioService.listUnidades(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('unidades/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva unidad de medida (COORD_BODEGA / ADMIN)' })
@@ -71,6 +76,7 @@ export class InventarioController {
     return this.inventarioService.createUnidad(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('unidades/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar unidad de medida' })
@@ -82,6 +88,7 @@ export class InventarioController {
   // INSUMOS (Catálogo Maestro)
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('insumos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar catálogo maestro de insumos con filtros (auto-filtrado por servicios/agencia)' })
@@ -89,6 +96,7 @@ export class InventarioController {
     return this.inventarioService.listInsumos(dto, user);
   }
 
+  @Permiso('inventario.ver')
   @Post('insumos/detail')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ficha técnica completa de un insumo con stock por ubicación' })
@@ -97,6 +105,7 @@ export class InventarioController {
     return this.inventarioService.detailInsumo(dto.id);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('insumos/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Registrar nuevo insumo en catálogo (COORD_BODEGA / ADMIN)' })
@@ -105,6 +114,7 @@ export class InventarioController {
     return this.inventarioService.createInsumo(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('insumos/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar datos, umbrales o estado de un insumo' })
@@ -116,6 +126,15 @@ export class InventarioController {
   // STOCK — Existencias multi-ubicación
   // ==============================================================
 
+  @Permiso('inventario.ver')
+  @Post('insumos/opciones')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Insumos para un desplegable con buscador (mismo alcance por sede que insumos/list): { value, label, sublabel } paginado' })
+  async opcionesInsumos(@Body() dto: InsumosOpcionesDto, @CurrentUser() user: any) {
+    return this.inventarioService.listInsumosOpciones(dto, user);
+  }
+
+  @Permiso('inventario.ver')
   @Post('stock/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -130,15 +149,16 @@ export class InventarioController {
     );
   }
 
+  @Permiso('stock.ajustar')
   @Post('stock/ajuste')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ajuste manual de stock por conteo físico, merma o daño (deja trazabilidad)' })
   @ApiResponse({ status: 404, description: 'Registro de stock no encontrado' })
   async ajusteStock(@Body() dto: AjusteStockDto, @CurrentUser() user: any) {
-    this._requireRolBodega(user, 'ajustar stock');
     return this.inventarioService.ajusteStock(dto, user.id);
   }
 
+  @Permiso('stock.ajustar')
   @Post('stock/reajuste')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -151,20 +171,25 @@ export class InventarioController {
     return this.inventarioService.reajustarStock(dto, user);
   }
 
+  @Permiso('stock.ajustar')
   @Post('stock/resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard rápido: totales de stock, bajo mínimo y alertas pendientes' })
-  async resumenStock(@Body() body: { agenciaId?: string; sucursalId?: string; pulidorId?: string }) {
-    return this.inventarioService.resumenStock(body.agenciaId || body.sucursalId, body.pulidorId);
+  async resumenStock(@Body() body: { agenciaId?: string; sucursalId?: string; pulidorId?: string }, @CurrentUser() user: any) {
+    const agenciaId = await this.inventarioService.agenciaEnAlcance(user, body.agenciaId || body.sucursalId);
+    const pulidorId = body.pulidorId ? await this.inventarioService.pulidorEnAlcance(user, body.pulidorId) : undefined;
+    return this.inventarioService.resumenStock(agenciaId, pulidorId);
   }
 
+  @Permiso('inventario.ver')
   @Post('stock/agencias-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen consolidado de insumos por agencia' })
-  async stockAgenciasResumen(@Body() dto: any, @CurrentUser() user: any) {
+  async stockAgenciasResumen(@Body() dto: StockResumenAgenciasDto, @CurrentUser() user: any) {
     return this.inventarioService.obtenerStockAgenciasResumen(dto, user?.id);
   }
 
+  @Permiso('inventario.ver')
   @Post('bodegas/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar bodegas del sistema (Central y Regionales)' })
@@ -172,6 +197,7 @@ export class InventarioController {
     return this.inventarioService.listBodegas(user?.id);
   }
 
+  @Permiso('bodegas.gestionar')
   @Post('bodegas/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva bodega regional vinculada estrictamente a una región (SUPER_ADMIN / ADMIN / COORD_BODEGA)' })
@@ -179,6 +205,7 @@ export class InventarioController {
     return this.inventarioService.crearBodega(dto);
   }
 
+  @Permiso('bodegas.gestionar')
   @Post('bodegas/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar bodega (nombre, código, región, ciudad, etc.)' })
@@ -186,6 +213,7 @@ export class InventarioController {
     return this.inventarioService.actualizarBodega(dto);
   }
 
+  @Permiso('bodegas.gestionar')
   @Post('bodegas/toggle-activa')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activar o desactivar bodega regional' })
@@ -193,6 +221,7 @@ export class InventarioController {
     return this.inventarioService.toggleActivaBodega(dto);
   }
 
+  @Permiso('bodegas.gestionar')
   @Post('bodegas/delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar bodega regional del sistema' })
@@ -200,17 +229,19 @@ export class InventarioController {
     return this.inventarioService.eliminarBodega(dto);
   }
 
+  @Permiso('inventario.ver')
   @Post('stock/bodegas-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen de inventario en bodegas' })
-  async stockBodegasResumen(@Body() dto: any, @CurrentUser() user: any) {
+  async stockBodegasResumen(@Body() dto: StockResumenBodegasDto, @CurrentUser() user: any) {
     return this.inventarioService.obtenerStockBodegasResumen(dto, user?.id);
   }
 
+  @Permiso('inventario.ver')
   @Post('stock/pulidores-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen consolidado de insumos en kits de pulidores' })
-  async stockPulidoresResumen(@Body() dto: any, @CurrentUser() user: any) {
+  async stockPulidoresResumen(@Body() dto: StockResumenPulidoresDto, @CurrentUser() user: any) {
     return this.inventarioService.obtenerStockPulidoresResumen(dto, user?.id);
   }
 
@@ -218,6 +249,7 @@ export class InventarioController {
   // MOVIMIENTOS — Compras, Despachos y Recepción
   // ==============================================================
 
+  @Permiso('compras.registrar')
   @Post('movimientos/compras/registrar')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -229,6 +261,7 @@ export class InventarioController {
     return this.inventarioService.registrarCompra(dto, user.id);
   }
 
+  @Permiso('despachos.crear')
   @Post('movimientos/despachos/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -240,6 +273,7 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
+  @Permiso('despachos.crear')
   @Post('despachos/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Generar despacho químico a agencia o pulidor (Ruta canónica frontend)' })
@@ -247,6 +281,7 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
+  @Permiso('despachos.recibir')
   @Post('movimientos/despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -258,6 +293,7 @@ export class InventarioController {
     return this.inventarioService.confirmarRecepcion(dto, user.id);
   }
 
+  @Permiso('despachos.recibir')
   @Post('despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Confirmar recepción física de químicos en agencia (Ruta canónica frontend)' })
@@ -265,6 +301,7 @@ export class InventarioController {
     return this.inventarioService.confirmarRecepcion({ ...dto, accion: dto.accion || 'RECIBIDO' }, user.id);
   }
 
+  @Permiso('despachos.recibir')
   @Post('despachos/rechazar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rechazar despacho químico recibido en agencia (devuelve stock a Bodega)' })
@@ -272,13 +309,15 @@ export class InventarioController {
     return this.inventarioService.rechazarDespacho(dto, user.id);
   }
 
+  @Permiso('despachos.ver')
   @Post('despachos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar despachos de químicos con estado (EN_TRANSITO, RECIBIDO, RECHAZADO)' })
-  async listDespachosDirecto(@Body() dto: ListMovimientosDto, @CurrentUser() user: any) {
+  async listDespachosDirecto(@Body() dto: ListDespachosDto, @CurrentUser() user: any) {
     return this.inventarioService.listDespachos(dto, user?.id);
   }
 
+  @Permiso('despachos.ver')
   @Post('despachos/agencia/pendientes')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar despachos pendientes de confirmación para una agencia (LIDER_OPERADOR / LIDER_AGENCIA)' })
@@ -286,10 +325,11 @@ export class InventarioController {
     @Body() dto: { agenciaId?: string; sucursalId?: string },
     @CurrentUser() user: any,
   ) {
-    const targetAgencia = dto.agenciaId || dto.sucursalId || user?.agenciaId || '';
+    const targetAgencia = (await this.inventarioService.agenciaEnAlcance(user, dto.agenciaId || dto.sucursalId)) || user?.agenciaId || '';
     return this.inventarioService.obtenerDespachosPendientesAgencia(targetAgencia);
   }
 
+  @Permiso('despachos.ver')
   @Post('despachos/pendientes')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar despachos en tránsito pendientes de confirmación según el usuario actual' })
@@ -297,26 +337,30 @@ export class InventarioController {
     return this.inventarioService.obtenerDespachosPendientes(user?.id);
   }
 
+  @Permiso('inventario.ver')
   @Post('movimientos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Historial de movimientos con filtros por tipo, estado, fecha y responsable' })
-  async listMovimientos(@Body() dto: ListMovimientosDto) {
-    return this.inventarioService.listMovimientos(dto);
+  async listMovimientos(@Body() dto: ListMovimientosDto, @CurrentUser() user: any) {
+    return this.inventarioService.listMovimientos(dto, user);
   }
 
   // ==============================================================
   // ALERTAS DE STOCK
   // ==============================================================
 
+  @Permiso('alertas.crear')
   @Post('alertas/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Emitir alerta de bajo stock desde una agencia o kit pulidor (LIDER_AGENCIA / PULIDOR)',
   })
   async crearAlerta(@Body() dto: CrearAlertaDto, @CurrentUser() user: any) {
-    return this.inventarioService.crearAlerta(dto, user.id);
+    // La agencia (o el kit) de la alerta sale del alcance del usuario: ver InventarioService.crearAlerta.
+    return this.inventarioService.crearAlerta(dto, user);
   }
 
+  @Permiso('alertas.ver')
   @Post('alertas/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Bandeja de alertas para Bodega Central con filtros (ASISTENTE_BODEGA / COORD_BODEGA)' })
@@ -324,30 +368,43 @@ export class InventarioController {
     return this.inventarioService.listAlertas(dto, user?.id);
   }
 
+  @Permiso('alertas.atender')
+  @Post('alertas/sincronizar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Genera las alertas de insumos requeridos por servicios asignados y sin stock (escribe en la base; el listado paginado ya no lo hace)',
+  })
+  async sincronizarAlertas(@Body() dto: SincronizarAlertasDto, @CurrentUser() user: any) {
+    return this.inventarioService.sincronizarAlertas(user?.id, !!dto?.forzar);
+  }
+
+  @Permiso('alertas.atender')
   @Post('alertas/atender')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cambiar estado de alerta: EN_PROCESO | DESPACHADO | RESUELTO' })
   @ApiResponse({ status: 404, description: 'Alerta no encontrada' })
-  async atenderAlerta(@Body() dto: AtenderAlertaDto) {
-    return this.inventarioService.atenderAlerta(dto);
+  async atenderAlerta(@Body() dto: AtenderAlertaDto, @CurrentUser() user: any) {
+    return this.inventarioService.atenderAlerta(dto, user);
   }
 
   // ==============================================================
   // KARDEX (100% POST & DATAGRID)
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('kardex/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar Kardex contable y trazabilidad transaccional de insumos con DataGrid' })
   @ApiResponse({ status: 200, description: 'Listado paginado DataGrid del Kardex de inventario' })
-  async listKardex(@Body() dto: ListKardexDto) {
-    return this.inventarioService.listKardex(dto);
+  async listKardex(@Body() dto: ListKardexDto, @CurrentUser() user: any) {
+    return this.inventarioService.listKardex(dto, user?.id);
   }
 
   // ==============================================================
   // TIPOS DE PRODUCTO (Catálogo Dinámico 100% POST)
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('tipos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar catálogo dinámico de tipos de producto' })
@@ -355,6 +412,7 @@ export class InventarioController {
     return this.inventarioService.listTiposProducto(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('tipos/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo tipo de producto (Líquido, Polvo, Gel, etc.)' })
@@ -362,6 +420,7 @@ export class InventarioController {
     return this.inventarioService.createTipoProducto(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('tipos/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar tipo de producto o desactivarlo lógicamente' })
@@ -373,6 +432,7 @@ export class InventarioController {
   // PRESENTACIONES DEL PRODUCTO (100% POST)
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('presentaciones/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar presentaciones asociadas a un insumo/producto' })
@@ -380,6 +440,7 @@ export class InventarioController {
     return this.inventarioService.listPresentaciones(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('presentaciones/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva presentación con factor de equivalencia a unidad base' })
@@ -387,6 +448,7 @@ export class InventarioController {
     return this.inventarioService.createPresentacion(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('presentaciones/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar o desactivar presentación' })
@@ -398,6 +460,7 @@ export class InventarioController {
   // TIPOS Y MOTIVOS DE MOVIMIENTO (100% POST)
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('movimiento-tipos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar catálogo de tipos de movimiento (ENTRY, CONSUMPTION, etc.)' })
@@ -405,6 +468,7 @@ export class InventarioController {
     return this.inventarioService.listTiposMovimiento(dto);
   }
 
+  @Permiso('inventario.ver')
   @Post('motivos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar motivos de movimiento configurables' })
@@ -412,6 +476,7 @@ export class InventarioController {
     return this.inventarioService.listMotivos(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('motivos/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo motivo de movimiento' })
@@ -419,6 +484,7 @@ export class InventarioController {
     return this.inventarioService.createMotivo(dto);
   }
 
+  @Permiso('inventario.catalogos.gestionar')
   @Post('motivos/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar motivo de movimiento' })
@@ -430,6 +496,7 @@ export class InventarioController {
   // MOVIMIENTOS GLOBALES & REGISTRO CENTRALIZADO (Kardex Atómico)
   // ==============================================================
 
+  @Permiso('stock.ajustar')
   @Post('movimientos/registrar')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -437,10 +504,10 @@ export class InventarioController {
       'Registrar movimiento operativo (Entrada, Consumo, Merma) con cálculo automático en unidad base y prevención de saldo negativo',
   })
   async registrarMovimiento(@Body() dto: RegistrarMovimientoOperativoDto, @CurrentUser() user: any) {
-    this._requireRolBodega(user, 'registrar movimientos de inventario');
     return this.inventarioService.registrarMovimientoGlobal(dto, user?.id || user?.sub);
   }
 
+  @Permiso('inventario.ver')
   @Post('movimientos/historial')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -455,6 +522,7 @@ export class InventarioController {
   // DASHBOARD & ALERTAS DE STOCK BAJO (Datos Reales de BD)
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('dashboard/resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen en tiempo real para el Dashboard de Inventario (últimos movimientos según rol)' })
@@ -462,6 +530,7 @@ export class InventarioController {
     return this.inventarioService.obtenerResumenDashboard(user?.id || user?.sub);
   }
 
+  @Permiso('stock.ajustar')
   @Post('stock-bajo/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listado de productos cuyo stock actual es menor o igual al stock mínimo' })
@@ -473,32 +542,35 @@ export class InventarioController {
   // INSUMOS POR SERVICIOS DE AGENCIA (LÍDER OPERADOR) & CONSUMO OT
   // ==============================================================
 
+  @Permiso('inventario.ver')
   @Post('agencia/insumos-servicios')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Obtener insumos requeridos por los servicios de una agencia con stock real y alertas (Líder Operador / Agencia)',
   })
   async insumosServiciosAgencia(
-    @Body() body: { agenciaId?: string; sucursalId?: string; servicioIds?: number[] },
+    @Body() body: InsumosServiciosDto,
     @CurrentUser() user: any,
   ) {
-    const agenciaId = body?.agenciaId || body?.sucursalId || user?.agenciaId || user?.sucursalId;
-    return this.inventarioService.obtenerInsumosServiciosAgencia(agenciaId, body?.servicioIds);
+    const agenciaId = (await this.inventarioService.agenciaEnAlcance(user, body?.agenciaId || body?.sucursalId)) || user?.agenciaId;
+    return this.inventarioService.obtenerInsumosServiciosAgencia(agenciaId, body?.servicioIds, body);
   }
 
+  @Permiso('inventario.ver')
   @Post('pulidor/insumos-servicios')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Insumos requeridos por los servicios asignados al pulidor (kit personal)',
   })
   async insumosServiciosPulidor(
-    @Body() body: { pulidorId?: string; servicioIds?: number[] },
+    @Body() body: InsumosServiciosDto,
     @CurrentUser() user: any,
   ) {
-    const pulidorId = body?.pulidorId || user?.id || user?.sub;
-    return this.inventarioService.obtenerInsumosServiciosPulidor(pulidorId, body?.servicioIds);
+    const pulidorId = (await this.inventarioService.pulidorEnAlcance(user, body?.pulidorId)) || user?.id;
+    return this.inventarioService.obtenerInsumosServiciosPulidor(pulidorId, body?.servicioIds, body);
   }
 
+  @Permiso('stock.consumir')
   @Post('stock/consumir-servicio')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -514,23 +586,9 @@ export class InventarioController {
     },
     @CurrentUser() user: any,
   ) {
-    const agenciaId = dto?.agenciaId || user?.agenciaId || user?.sucursalId;
+    // El descuento se hace siempre en la agencia del usuario; solo quien actúa por región o país puede indicar otra dentro de su alcance.
+    const agenciaId = await this.inventarioService.agenciaEnAlcance(user, dto?.agenciaId);
+    if (!agenciaId) throw new BadRequestException('Indica la agencia donde se consume el insumo.');
     return this.inventarioService.consumirInsumosServicio({ ...dto, agenciaId }, user?.id || user?.sub);
-  }
-
-  // ==============================================================
-  // HELPERS DE PERMISOS POR ROL
-  // ==============================================================
-
-  /** Roles que pueden modificar stock a mano: administración y bodega. */
-  private _requireRolBodega(user: any, accion: string) {
-    const rol = String(
-      user?.roleDetails?.namerol || user?.role?.namerol || (typeof user?.role === 'string' ? user.role : ''),
-    ).toUpperCase();
-    if (!['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA', 'ASISTENTE_BODEGA'].includes(rol)) {
-      throw new ForbiddenException(
-        `Solo Super Admin, Admin, Coordinador de Bodega o Asistente de Bodega pueden ${accion}.`,
-      );
-    }
   }
 }

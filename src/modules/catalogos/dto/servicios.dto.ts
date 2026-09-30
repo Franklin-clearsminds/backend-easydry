@@ -1,6 +1,8 @@
+import { OpcionesDto } from '../../../common/utils/opciones.js';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsNumber, IsOptional, Min } from 'class-validator';
+import { IsNotEmpty, IsString, IsNumber, IsOptional, Min, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
 export class CreateCatalogoServicioDto {
   @ApiProperty({ example: 'SER-001', description: 'Código único del servicio' })
@@ -38,6 +40,11 @@ export class CreateCatalogoServicioDto {
   @IsNumber()
   @Min(1)
   tiempoEstimadoMin: number;
+
+  @ApiPropertyOptional({ example: 'Activo', description: 'Activo (por defecto) o Inactivo' })
+  @IsOptional()
+  @IsIn(['Activo', 'Inactivo'])
+  estado?: 'Activo' | 'Inactivo';
 }
 
 export class UpdateCatalogoServicioDto {
@@ -82,18 +89,19 @@ export class UpdateCatalogoServicioDto {
   @IsNumber()
   @Min(1)
   tiempoEstimadoMin?: number;
+
+  @ApiPropertyOptional({ example: 'Inactivo', description: 'Activo o Inactivo' })
+  @IsOptional()
+  @IsIn(['Activo', 'Inactivo'])
+  estado?: 'Activo' | 'Inactivo';
 }
 
-export class ListCatalogoServiciosDto {
+/** Sin page/pageSize: como siempre (hasta 100). Con alguno: página. Orden: codigo, nombre, categoria, precio, tiempo, fecha. */
+export class ListCatalogoServiciosDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'GENERAL' })
   @IsOptional()
   @IsString()
   categoria?: string;
-
-  @ApiPropertyOptional({ example: 'Express' })
-  @IsOptional()
-  @IsString()
-  search?: string;
 
   @ApiPropertyOptional({ example: 'uuid-agencia-123', description: 'Filtrar servicios habilitados para esta agencia' })
   @IsOptional()
@@ -106,4 +114,24 @@ export class DeleteCatalogoServicioDto {
   @IsNumber()
   @IsNotEmpty()
   id: number;
+}
+
+export class SiguienteCodigoServicioDto {
+  @ApiPropertyOptional({ example: 'GENERAL', description: 'GENERAL → SER-###; ESPECIAL o EXTRA → ESP-###' })
+  @IsOptional()
+  @IsString()
+  categoria?: string;
+}
+
+/** Servicios del catálogo para un desplegable con buscador (mismo alcance por agencia/rol que `servicios/list`). */
+export class ServiciosOpcionesDto extends OpcionesDto {
+  @ApiPropertyOptional({ example: 'GENERAL' })
+  @IsOptional()
+  @IsString()
+  categoria?: string;
+
+  @ApiPropertyOptional({ description: 'Solo los servicios habilitados para esta agencia' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
 }

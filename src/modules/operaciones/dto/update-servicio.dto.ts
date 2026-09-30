@@ -3,7 +3,7 @@ import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { ServiceStatus } from '@prisma/client';
 
 export class UpdateServicioDto {
-  @ApiProperty({ example: 'demo-uuid-in-progress-001', description: 'ID o clientUuid del servicio a actualizar' })
+  @ApiProperty({ example: '3f2b8c1e-5a4d-4e7b-9c3a-1d2e3f4a5b6c', description: 'ID o clientUuid del servicio a actualizar' })
   @IsString()
   @IsNotEmpty()
   id: string;
@@ -27,4 +27,9 @@ export class UpdateServicioDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'Motivo de la corrección. Obligatorio (y solo para administradores) al editar un servicio ya aprobado.' })
+  @IsOptional()
+  @IsString()
+  motivoCorreccion?: string;
 }

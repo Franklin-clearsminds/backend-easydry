@@ -22,19 +22,16 @@ export function serializeServicioLavado(s: any): any {
     }
   }
   if (!ordenTrabajoOT) {
-    ordenTrabajoOT = s.id ? `OT-${s.id.substring(0, 6).toUpperCase()}` : 'OT-9800';
+    ordenTrabajoOT = s.id ? `OT-${s.id.substring(0, 6).toUpperCase()}` : '';
   }
-  const numeroOrden = s.numeroOrden || ordenTrabajoOT;
   const marca = s.marca || (s.modelo ? s.modelo.split(' ')[0] : 'General');
   const isVideoUrl = (value: unknown): value is string => {
     if (typeof value !== 'string') return false;
     const clean = value.split('?')[0].toLowerCase();
     return /\.(mp4|mov|m4v|webm)$/.test(clean) || clean.includes('/videos/');
   };
-  const isDemoMediaUrl = (value: unknown): boolean =>
-    typeof value === 'string' && /^(mock:)|images\.unsplash\.com|assets\.mixkit\.co|gtv-videos-bucket\/sample/i.test(value);
   const safeMediaUrl = (value: unknown): string | null =>
-    typeof value === 'string' && value.trim() && !isDemoMediaUrl(value) ? value : null;
+    typeof value === 'string' && value.trim() ? value : null;
   const rawFotoIngreso = safeMediaUrl(s.fotoIngresoUrl);
   const rawFotoSalida = safeMediaUrl(s.fotoSalidaUrl);
   const fotoIngresoUrl = isVideoUrl(rawFotoIngreso) ? null : rawFotoIngreso;
@@ -85,7 +82,6 @@ export function serializeServicioLavado(s: any): any {
     id: s.id,
     clientUuid: s.clientUuid || s.id,
     ordenTrabajoOT,
-    numeroOrden,
     placa: s.placa || '',
     marca,
     modelo: s.modelo || '',
@@ -132,6 +128,13 @@ export function serializeServicioLavado(s: any): any {
     aprobadoPor: s.aprobadoPor || null,
     fechaAprobacion: fechaAprobacionStr,
     motivoRechazo: s.motivoRechazo || null,
+    // Quién decidió y con qué regla (TITULAR = aprobador de la agencia, RESPALDO = agencia sin aprobador), y la anulación
+    decididoPorId: s.decididoPorId || null,
+    reglaDecision: s.reglaDecision || null,
+    anuladoPorId: s.anuladoPorId || null,
+    anuladoEn: s.anuladoEn ? (s.anuladoEn instanceof Date ? s.anuladoEn.toISOString() : String(s.anuladoEn)) : null,
+    motivoAnulacion: s.motivoAnulacion || null,
+    agenciaId: s.bahia?.agencia?.id || s.bahia?.agenciaId || s.agenciaId || null,
 
     // Control de Concurrencia y Sincronización
     version: s.version || 1,

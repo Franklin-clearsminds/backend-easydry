@@ -1,5 +1,6 @@
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray, IsInt, IsBoolean, Min, ArrayMinSize } from 'class-validator';
 import { PaginacionDto } from './trazabilidad.dto.js';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -134,7 +135,11 @@ export class UpdateMaquinariaDto {
   bahiaId?: string;
 }
 
-export class ListMaquinariaDto {
+/**
+ * Sin page/pageSize: `{ success, total, data }` con hasta 100 equipos. Con alguno: página estándar (`items`, `data`, `total`,
+ * …). Orden: codigo, nombre, tipo, estado, agencia, bahia, fecha.
+ */
+export class ListMaquinariaDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ description: 'Filtro por agencia' })
   @IsOptional()
   @IsString()
@@ -155,10 +160,36 @@ export class ListMaquinariaDto {
   @IsString()
   estadoOperativo?: string;
 
-  @ApiPropertyOptional({ description: 'Búsqueda por texto en código, nombre, marca o modelo' })
+  @ApiPropertyOptional({ description: 'Filtro por región (de la agencia donde está el equipo)' })
   @IsOptional()
   @IsString()
-  search?: string;
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtro por cliente/marca (de la agencia donde está el equipo)' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  // Filtros por NOMBRE (exacto, sin distinguir mayúsculas) para las pantallas que trabajan con los nombres del filter-bar.
+  @ApiPropertyOptional({ description: 'Nombre exacto de la agencia' })
+  @IsOptional()
+  @IsString()
+  agenciaNombre?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre exacto de la bahía' })
+  @IsOptional()
+  @IsString()
+  bahiaNombre?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre exacto de la región de la agencia' })
+  @IsOptional()
+  @IsString()
+  regionNombre?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre exacto del cliente/marca de la agencia' })
+  @IsOptional()
+  @IsString()
+  clienteNombre?: string;
 
   @ApiPropertyOptional({ description: 'true = solo activas, false = solo desactivadas' })
   @IsOptional()
@@ -245,6 +276,54 @@ export class ListIncidentesDto extends PaginacionDto {
   @IsOptional()
   @IsBoolean()
   soloNoAtendidas?: boolean;
+
+  @ApiPropertyOptional({ description: 'Texto: título, descripción, máquina (código o nombre), reportante o técnico' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Técnico asignado' })
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
+
+  @ApiPropertyOptional({ description: 'Región de la máquina' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Cliente / marca de la agencia de la máquina' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ description: 'Desde (inclusive), por fecha de reporte. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Hasta (inclusive), por fecha de reporte. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaHasta?: string;
+
+  @ApiPropertyOptional({
+    description: 'Orden explícito: fecha, solucion, estado, gravedad, titulo, maquina, agencia, reportadoPor, tecnico. '
+      + 'Sin orden explícito: no atendidas primero, luego en proceso y luego cerradas, cada grupo con lo más reciente primero.',
+  })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ description: 'Devuelve el conteo por grupo (sin atender / en proceso / cerradas) con los mismos filtros menos el de estado' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
 
   @ApiPropertyOptional({ description: 'Filtro por máquina' })
   @IsOptional()
@@ -347,6 +426,49 @@ export class ListMantenimientosDto extends PaginacionDto {
   @IsOptional()
   @IsBoolean()
   soloNoAtendidos?: boolean;
+
+  @ApiPropertyOptional({ description: 'Texto: observaciones, máquina (código o nombre) o técnico' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Región de la máquina' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Cliente / marca de la agencia de la máquina' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ description: 'Desde (inclusive), por fecha programada. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Hasta (inclusive), por fecha programada. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaHasta?: string;
+
+  @ApiPropertyOptional({
+    description: 'Orden explícito: fecha (programada), ejecucion, estado, tipo, maquina, agencia, tecnico. '
+      + 'Sin orden explícito: vencidos primero, luego pendientes y luego ejecutados, cada grupo con lo más reciente primero.',
+  })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ description: 'Devuelve el conteo por grupo (vencidos / pendientes / ejecutados) con los mismos filtros menos el de estado' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
 
   @ApiPropertyOptional({ description: 'Filtro por estado (PENDIENTE, EN_PROCESO, FINALIZADO)' })
   @IsOptional()

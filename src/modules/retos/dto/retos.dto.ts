@@ -1,3 +1,4 @@
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -10,7 +11,8 @@ import {
   MaxLength,
 } from 'class-validator';
 
-export class ListRetosDto {
+/** Sin page/pageSize: arreglo (hasta 100). Con alguno: página. Orden: titulo, inicio, fin, estado, fecha (inicio). */
+export class ListRetosDto extends PaginacionOpcionalDto {
   @IsOptional()
   @IsBoolean()
   @Type(() => Boolean)
@@ -20,6 +22,14 @@ export class ListRetosDto {
   @IsBoolean()
   @Type(() => Boolean)
   soloActivos?: boolean;
+
+  /**
+   * Vigencia del reto: ACTIVOS (estado ACTIVO), VENCIDOS (ya pasó su fecha de fin) o TODOS. Si se envía, reemplaza a
+   * `soloActivos` / `incluirTodos`. La visibilidad por rol (región / sucursal) se mantiene siempre.
+   */
+  @IsOptional()
+  @IsIn(['ACTIVOS', 'VENCIDOS', 'TODOS'])
+  vigencia?: 'ACTIVOS' | 'VENCIDOS' | 'TODOS';
 }
 
 export class CreateRetoDto {

@@ -1,40 +1,33 @@
 import { ForbiddenException } from '@nestjs/common';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
 
-/** Roles del módulo de maquinaria (nombres tal cual están en la tabla roles). */
+/** Roles del módulo de maquinaria (nombres normalizados, tal cual están en la tabla roles). */
 export const ROL = {
   SUPER_ADMIN: 'SUPER_ADMIN',
   ADMIN: 'ADMIN',
+  SUPERVISOR: 'SUPERVISOR',
   COORD_MANTENIMIENTO: 'COORD_MANTENIMIENTO',
+  COORD_SERVICIOS_ESPECIALES: 'COORD_SERVICIOS_ESPECIALES',
   COORD_BODEGA: 'COORD_BODEGA',
   TECNICO: 'TECNICO',
+  PULIDOR: 'PULIDOR',
+  LIDER: 'LIDER',
 } as const;
 
-export const ROLES_PULIDOR = ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'];
-export const ROLES_LIDER = ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'];
-/** Quienes tienen contacto con la máquina: reportan y ven solo lo asignado a ellos. */
-export const ROLES_OPERADOR = [...ROLES_PULIDOR, ...ROLES_LIDER];
+/**
+ * A quién se le puede asignar una máquina como responsable personal (`operadorAsignadoId`): solo
+ * pulidores (fijo o móvil). El líder NO se asigna así — ya ve y reporta toda la maquinaria de su
+ * agencia por ser líder (`esLider`, ver `scopeMaquinaria`/`scopeIncidentes` y `reportarIncidente`
+ * en `maquinaria.service.ts`), así que asignarle además una máquina en concreto no aporta nada y
+ * confundía la lista de candidatos con pulidores fijos y móviles.
+ */
+export const ROLES_OPERADOR: string[] = [ROL.PULIDOR];
 export const ROLES_ADMIN: string[] = [ROL.SUPER_ADMIN, ROL.ADMIN];
 
-/** Permisos por acción (se aplican en el backend con @Roles y de nuevo en el servicio). */
-export const PERMISOS = {
-  crearMaquina: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_BODEGA],
-  editarMaquina: [ROL.ADMIN, ROL.SUPER_ADMIN],
-  activarMaquina: [ROL.ADMIN, ROL.SUPER_ADMIN],
-  verMaquinas: [
-    ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_BODEGA, ROL.COORD_MANTENIMIENTO, ROL.TECNICO, ...ROLES_OPERADOR,
-  ],
-  asignarOperador: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO],
-  reportarIncidente: ROLES_OPERADOR,
-  verIncidentes: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO, ROL.TECNICO, ...ROLES_OPERADOR],
-  asignarTrabajo: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO],
-  repararIncidente: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO, ROL.TECNICO],
-  editarIncidente: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO, ROL.TECNICO],
-  programarMantenimiento: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO],
-  ejecutarMantenimiento: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO, ROL.TECNICO],
-  verMantenimientos: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO, ROL.TECNICO],
-  moverMaquina: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO],
-  verTrazabilidad: [ROL.ADMIN, ROL.SUPER_ADMIN, ROL.COORD_MANTENIMIENTO],
-} as const;
+/**
+ * Qué acciones puede hacer cada rol lo deciden los permisos guardados en el rol (decorador Permiso en el controlador).
+ * Aquí solo queda el alcance: sobre qué máquinas puede actuar quien ya tiene el permiso.
+ */
 
 /** Quién está haciendo la petición, ya normalizado desde el JWT. */
 export interface Actor {
@@ -45,7 +38,7 @@ export interface Actor {
 }
 
 export function actorFromUser(user: any): Actor {
-  const rol = String(user?.roleDetails?.namerol || user?.role?.namerol || (typeof user?.role === 'string' ? user.role : '') || '');
+  const rol = rolDeUsuario(user);
   return {
     id: String(user?.id || ''),
     rol,
@@ -56,8 +49,12 @@ export function actorFromUser(user: any): Actor {
 
 export const esAdmin = (actor: Actor): boolean => ROLES_ADMIN.includes(actor.rol);
 export const esOperador = (actor: Actor): boolean => ROLES_OPERADOR.includes(actor.rol);
+export const esSupervisor = (actor: Actor): boolean => actor.rol === ROL.SUPERVISOR;
+export const esCoordServiciosEspeciales = (actor: Actor): boolean => actor.rol === ROL.COORD_SERVICIOS_ESPECIALES;
 export const esCoordMantenimiento = (actor: Actor): boolean => actor.rol === ROL.COORD_MANTENIMIENTO;
 export const esTecnico = (actor: Actor): boolean => actor.rol === ROL.TECNICO;
+export const esLider = (actor: Actor): boolean => actor.rol === ROL.LIDER;
+export const esPulidor = (actor: Actor): boolean => actor.rol === ROL.PULIDOR;
 
 /**
  * El coordinador (y el técnico) solo operan en la región de la máquina.
@@ -71,11 +68,6 @@ export function assertRegion(actor: Actor, regionDeLaMaquina: string | null | un
   if (!regionDeLaMaquina || regionDeLaMaquina !== actor.regionId) {
     throw new ForbiddenException('Esta máquina pertenece a otra región.');
   }
-}
-
-/** true si el rol está en la lista (SUPER_ADMIN siempre pasa, igual que en RolesGuard). */
-export function tieneRol(actor: Actor, roles: readonly string[]): boolean {
-  return actor.rol === ROL.SUPER_ADMIN || roles.includes(actor.rol);
 }
 
 /** Suma días de calendario a una fecha (sin mutar la original). */

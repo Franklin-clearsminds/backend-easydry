@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { secretoObligatorio } from '../../common/config/secretos.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcryptjs';
@@ -18,10 +19,10 @@ export class AuthService {
   ) {}
 
   private generateTokens(user: { id: string; email: string; roleId: string }) {
-    const accessSecret = this.configService.get<string>('JWT_SECRET') || 'EasyDrySecretKey2026*OfflineSync';
+    const accessSecret = secretoObligatorio(this.configService.get<string>('JWT_SECRET'), 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync');
     const accessExpiresIn = this.configService.get<string>('JWT_ACCESS_EXPIRATION') || '1h';
 
-    const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET') || 'EasyDryRefreshSecretKey2026*OfflineSync';
+    const refreshSecret = secretoObligatorio(this.configService.get<string>('JWT_REFRESH_SECRET'), 'JWT_REFRESH_SECRET', 'EasyDryRefreshSecretKey2026*OfflineSync');
     const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_EXPIRATION') || '15d';
 
     const accessPayload = {
@@ -58,7 +59,7 @@ export class AuthService {
       where: { email: email.toLowerCase().trim() },
       include: {
         role: {
-          select: { id: true, namerol: true, permisos: true, acciones: true, estado: true },
+          select: { id: true, namerol: true, permisos: true, acciones: true, capacidades: true, ambito: true, estado: true },
         },
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true },
@@ -119,6 +120,11 @@ export class AuthService {
         modulos: user.role?.permisos ?? [],
         /** Acciones granulares del rol (desde Role.acciones en BD) */
         acciones: user.role?.acciones ?? null,
+        /** Permisos que el backend exige (Role.capacidades) y sobre qué datos actúa el rol (Role.ambito) */
+        capacidades: user.role?.capacidades ?? [],
+        ambito: user.role?.ambito ?? 'AGENCIA',
+        /** true = contraseña temporal: la web y la app llevan al usuario a cambiarla antes de seguir */
+        debeCambiarPassword: !!user.debeCambiarPassword,
         agenciaId: user.agenciaId,
         agenciasIds: user.agenciasIds,
         agencia: user.agencia,
@@ -146,7 +152,7 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token requerido');
     }
 
-    const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET') || 'EasyDryRefreshSecretKey2026*OfflineSync';
+    const refreshSecret = secretoObligatorio(this.configService.get<string>('JWT_REFRESH_SECRET'), 'JWT_REFRESH_SECRET', 'EasyDryRefreshSecretKey2026*OfflineSync');
 
     let payload: any;
     try {
@@ -163,7 +169,7 @@ export class AuthService {
       where: { id: payload.sub },
       include: {
         role: {
-          select: { id: true, namerol: true, permisos: true, acciones: true, estado: true },
+          select: { id: true, namerol: true, permisos: true, acciones: true, capacidades: true, ambito: true, estado: true },
         },
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true },
@@ -212,6 +218,11 @@ export class AuthService {
         permisos: user.role?.permisos ?? [],
         modulos: user.role?.permisos ?? [],
         acciones: user.role?.acciones ?? null,
+        /** Permisos que el backend exige (Role.capacidades) y sobre qué datos actúa el rol (Role.ambito) */
+        capacidades: user.role?.capacidades ?? [],
+        ambito: user.role?.ambito ?? 'AGENCIA',
+        /** true = contraseña temporal: la web y la app llevan al usuario a cambiarla antes de seguir */
+        debeCambiarPassword: !!user.debeCambiarPassword,
         agenciaId: user.agenciaId,
         agenciasIds: user.agenciasIds,
         agencia: user.agencia,
@@ -244,12 +255,13 @@ export class AuthService {
         lastname: true,
         roleId: true,
         role: {
-          select: { id: true, namerol: true, permisos: true, acciones: true, estado: true },
+          select: { id: true, namerol: true, permisos: true, acciones: true, capacidades: true, ambito: true, estado: true },
         },
         agenciaId: true,
         agenciasIds: true,
         bodegaId: true,
         estado: true,
+        debeCambiarPassword: true,
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true, direccion: true },
         },
@@ -288,6 +300,9 @@ export class AuthService {
       permisos: role?.permisos ?? [],
       modulos: role?.permisos ?? [],
       acciones: role?.acciones ?? null,
+      capacidades: role?.capacidades ?? [],
+      ambito: role?.ambito ?? 'AGENCIA',
+      debeCambiarPassword: !!user.debeCambiarPassword,
       roleDetails: role,
       avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
       avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
@@ -310,7 +325,7 @@ export class AuthService {
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: await bcrypt.hash(dto.newPassword, 10) },
+      data: { passwordHash: await bcrypt.hash(dto.newPassword, 10), debeCambiarPassword: false },
     });
     return { ok: true, message: 'Contraseña actualizada correctamente.' };
   }

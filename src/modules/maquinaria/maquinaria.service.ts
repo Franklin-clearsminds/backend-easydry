@@ -5,11 +5,24 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { StorageService, type InspectedEvidence } from '../storage/storage.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { ChecklistService } from './checklist.service.js';
+import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import { listarPaginable } from '../../common/utils/listado-paginable.js';
+import {
+  columnasSimples,
+  combinarWhere,
+  paginarPorGrupos,
+  rangoFechas,
+  resolverOrden,
+  resolverPaginacion,
+  whereBusqueda,
+} from '../../common/utils/data-grid.helpers.js';
 import {
   CreateMaquinariaDto,
   UpdateMaquinariaDto,
@@ -44,7 +57,10 @@ import {
   assertRegion,
   esAdmin,
   esCoordMantenimiento,
+  esCoordServiciosEspeciales,
+  esSupervisor,
   esOperador,
+  esLider,
   esTecnico,
   ROL,
   ROLES_OPERADOR,
@@ -74,18 +90,82 @@ interface EvidenciaVerificada extends InspectedEvidence {
 
 const SIN_REGION = '__sin_region__';
 const NADA = '__ninguno__';
-const GRAVEDAD_RANK: Record<string, number> = { CRITICA: 0, ALTA: 1, MEDIA: 2, BAJA: 3 };
+/** Columnas por las que se puede ordenar la lista de incidencias (nombre público → campo de la base). */
+const ORDEN_INCIDENTES = columnasSimples({
+  fecha: 'fechaReporte',
+  solucion: 'fechaSolucion',
+  estado: 'estado',
+  gravedad: 'gravedad',
+  titulo: 'titulo',
+  maquina: 'maquinaria.codigo',
+  agencia: 'maquinaria.agencia.nombre',
+  reportadoPor: 'reportadoPor.name',
+  tecnico: 'tecnicoAsignado.name',
+});
+
+/** Columnas por las que se puede ordenar la lista de mantenimientos. */
+const ORDEN_MANTENIMIENTOS = columnasSimples({
+  fecha: 'fechaProgramada',
+  ejecucion: 'fechaEjecucion',
+  estado: 'estado',
+  tipo: 'tipo',
+  maquina: 'maquinaria.codigo',
+  agencia: 'maquinaria.agencia.nombre',
+  tecnico: 'tecnico.name',
+});
+
+const CAMPOS_BUSQUEDA_INCIDENTES = [
+  'titulo', 'descripcion', 'maquinaria.codigo', 'maquinaria.nombre',
+  'reportadoPor.name', 'reportadoPor.lastname', 'tecnicoAsignado.name', 'tecnicoAsignado.lastname',
+];
+const CAMPOS_BUSQUEDA_MANTENIMIENTOS = [
+  'observaciones', 'maquinaria.codigo', 'maquinaria.nombre', 'tecnico.name', 'tecnico.lastname',
+];
 const MAX_MULTIMEDIA = 10;
 
 @Injectable()
 export class MaquinariaService {
   private readonly logger = new Logger(MaquinariaService.name);
 
+  private readonly checklist: ChecklistService;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly notifications: NotificationsService,
-  ) {}
+    @Optional() checklist?: ChecklistService,
+  ) {
+    this.checklist = checklist ?? new ChecklistService(prisma);
+  }
+
+  // ==============================================================
+  // Checklist de mantenimiento
+  // ==============================================================
+
+  /** El checklist de una orden, visible para quien puede ver ese mantenimiento (mismo alcance que el listado). */
+  async obtenerChecklist(mantenimientoId: string, actor: Actor) {
+    const visible = await this.prisma.mantenimientoMaquinaria.count({ where: { id: mantenimientoId, ...this.scopeMantenimientos(actor) } });
+    if (!visible) throw new ForbiddenException('No tienes acceso a este mantenimiento.');
+    const m = await this.cargarMantenimiento(mantenimientoId);
+    return { success: true, ...(await this.checklist.obtenerDeMantenimiento(m.id, m.tipo)) };
+  }
+
+  /** Marca un paso del checklist: el técnico asignado o un administrador, mientras la orden no esté ejecutada. */
+  async marcarChecklist(dto: { mantenimientoId: string; pasoId: string; completado: boolean; observacion?: string }, actor: Actor, usuario: any) {
+    const m = await this.cargarMantenimiento(dto.mantenimientoId);
+    this.checklist.asegurarPuedeMarcar({ tecnicoId: m.tecnicoId, estado: m.estado }, usuario);
+    await this.checklist.obtenerDeMantenimiento(m.id, m.tipo);
+    const paso = await this.checklist.marcar(dto, usuario);
+    return { success: true, data: paso };
+  }
+
+  listarPlantillasChecklist() {
+    return this.checklist.listarPlantillas();
+  }
+
+  guardarPlantillaChecklist(dto: { tipo: string; nombre?: string; pasos: Array<{ texto: string; obligatorio?: boolean }> }, usuario: any) {
+    return this.checklist.guardarPlantilla(dto, usuario);
+  }
 
   // ==============================================================
   // Utilidades comunes
@@ -157,10 +237,15 @@ export class MaquinariaService {
     return cambios;
   }
 
+  /** Paginación estándar: máx. 100 por petición; un cliente que no envía tamaño recibe hasta 100. */
   private pagina(dto: PaginacionDto) {
-    const pageSize = Math.min(Math.max(dto.pageSize ?? 200, 1), 200);
-    const page = Math.max(dto.page ?? 1, 1);
-    return { page, pageSize, skip: (page - 1) * pageSize };
+    const sinTamano = dto.pageSize === undefined || dto.pageSize === null;
+    return resolverPaginacion(dto, sinTamano ? { defecto: 100 } : {});
+  }
+
+  /** Respuesta estándar de listados: formato común + `success` (que la web y la app de maquinaria ya leen). */
+  private respuestaPagina<T>(items: T[], total: number, page: number, pageSize: number, extra: Record<string, unknown> = {}) {
+    return { success: true, ...buildDataGridResponse(items, total, page, pageSize), ...extra };
   }
 
   private shortName(u?: { name?: string | null; lastname?: string | null } | null): string {
@@ -173,7 +258,8 @@ export class MaquinariaService {
 
   private scopeMaquinaria(actor: Actor): Prisma.MaquinariaWhereInput {
     if (esAdmin(actor) || actor.rol === ROL.COORD_BODEGA) return {};
-    if (esCoordMantenimiento(actor)) return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
+    if (esCoordMantenimiento(actor) || esSupervisor(actor)) return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
+    if (esCoordServiciosEspeciales(actor)) return { operadorAsignado: { role: { namerol: 'PULIDOR' } } };
     if (esTecnico(actor)) {
       return {
         OR: [
@@ -182,14 +268,21 @@ export class MaquinariaService {
         ],
       };
     }
+    // El líder supervisa toda su agencia: ve (y por tanto puede reportar, ver §reportarIncidente)
+    // cualquier máquina de su sede, esté o no asignada a él por nombre. El pulidor sigue viendo solo
+    // lo que tiene asignado a él personalmente, como su kit de insumos.
+    if (esLider(actor)) return { agenciaId: actor.agenciaId ?? NADA };
     if (esOperador(actor)) return { operadorAsignadoId: actor.id };
     return { id: NADA };
   }
 
   private scopeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
     if (esAdmin(actor)) return {};
-    if (esCoordMantenimiento(actor)) return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    if (esCoordMantenimiento(actor) || esSupervisor(actor)) return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    if (esCoordServiciosEspeciales(actor)) return { maquinaria: { operadorAsignado: { role: { namerol: 'PULIDOR' } } } };
     if (esTecnico(actor)) return { tecnicoAsignadoId: actor.id };
+    // Mismo criterio que scopeMaquinaria: el líder ve las incidencias de toda su agencia.
+    if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     if (esOperador(actor)) {
       return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
     }
@@ -231,7 +324,12 @@ export class MaquinariaService {
   private async verificarEvidencias(
     maquina: Pick<MaquinaCtx, 'codigo'>,
     inputs: EvidenciaInputDto[] | undefined,
-    opts: { completa: boolean },
+    /**
+     * `requiereMultimedia`: exige al menos 1 foto o video. `requiereDocumento`: exige exactamente 1
+     * PDF. Son independientes: al reportar una falla solo se exige evidencia (foto/video) — el PDF
+     * (informe de reparación) recién se exige al resolver la incidencia o cerrar el mantenimiento.
+     */
+    opts: { requiereMultimedia?: boolean; requiereDocumento?: boolean },
   ): Promise<EvidenciaVerificada[]> {
     const vistos = new Set<string>();
     const unicos = (inputs || []).filter((e) => {
@@ -257,9 +355,11 @@ export class MaquinariaService {
     if (documentos > 1) {
       throw new BadRequestException('Solo se permite un documento por registro.');
     }
-    if (opts.completa) {
-      if (multimedia < 1) throw new BadRequestException('Adjunta al menos una foto o un video.');
-      if (documentos !== 1) throw new BadRequestException('Adjunta un documento (PDF).');
+    if (opts.requiereMultimedia && multimedia < 1) {
+      throw new BadRequestException('Adjunta al menos una foto o un video.');
+    }
+    if (opts.requiereDocumento && documentos !== 1) {
+      throw new BadRequestException('Adjunta un documento (PDF).');
     }
     return verificadas;
   }
@@ -325,8 +425,14 @@ export class MaquinariaService {
   }
 
   private async conteosPendientes(ids: string[]) {
-    if (!ids.length) return { incidentes: new Map<string, number>(), mantenimientos: new Map<string, number>() };
-    const [inc, man] = await Promise.all([
+    if (!ids.length) {
+      return {
+        incidentes: new Map<string, number>(),
+        mantenimientos: new Map<string, number>(),
+        proximoMantenimiento: new Map<string, Date>(),
+      };
+    }
+    const [inc, man, proximo] = await Promise.all([
       this.prisma.incidenteTecnico.groupBy({
         by: ['maquinariaId'],
         where: { maquinariaId: { in: ids }, estado: 'ABIERTO', tecnicoAsignadoId: null },
@@ -341,10 +447,22 @@ export class MaquinariaService {
         },
         _count: { _all: true },
       }),
+      // Próximo mantenimiento por máquina (el más cercano, vencido o no): lo que ve el líder/pulidor
+      // en "Mi Maquinaria" — solo la fecha, nada de costos ni repuestos.
+      this.prisma.mantenimientoMaquinaria.groupBy({
+        by: ['maquinariaId'],
+        where: { maquinariaId: { in: ids }, estado: { in: ['PENDIENTE', 'EN_PROCESO'] } },
+        _min: { fechaProgramada: true },
+      }),
     ]);
     return {
       incidentes: new Map(inc.map((r) => [r.maquinariaId, r._count._all])),
       mantenimientos: new Map(man.map((r) => [r.maquinariaId, r._count._all])),
+      proximoMantenimiento: new Map(
+        proximo
+          .filter((r) => r._min.fechaProgramada)
+          .map((r) => [r.maquinariaId, r._min.fechaProgramada as Date]),
+      ),
     };
   }
 
@@ -358,41 +476,66 @@ export class MaquinariaService {
     if (dto.estadoOperativo) and.push({ estadoOperativo: dto.estadoOperativo });
     if (dto.activa !== undefined) and.push({ activa: dto.activa });
     if (dto.operadorAsignadoId) and.push({ operadorAsignadoId: dto.operadorAsignadoId });
-    if (dto.search) {
-      and.push({
-        OR: [
-          { codigo: { contains: dto.search, mode: 'insensitive' } },
-          { nombre: { contains: dto.search, mode: 'insensitive' } },
-          { marca: { contains: dto.search, mode: 'insensitive' } },
-          { modelo: { contains: dto.search, mode: 'insensitive' } },
-        ],
-      });
+    if (dto.regionId) and.push({ agencia: { regionId: dto.regionId } });
+    if (dto.clienteId) and.push({ agencia: { clienteId: dto.clienteId } });
+    const igual = (valor: string) => ({ equals: valor.trim(), mode: 'insensitive' as const });
+    if (dto.agenciaNombre) and.push({ agencia: { nombre: igual(dto.agenciaNombre) } });
+    if (dto.bahiaNombre) and.push({ bahia: { nombre: igual(dto.bahiaNombre) } });
+    if (dto.clienteNombre) and.push({ agencia: { cliente: { nombre: igual(dto.clienteNombre) } } });
+    if (dto.regionNombre) {
+      and.push({ agencia: { OR: [{ region: igual(dto.regionNombre) }, { regionRel: { nombre: igual(dto.regionNombre) } }] } });
     }
+    const busqueda = whereBusqueda(['codigo', 'nombre', 'marca', 'modelo', 'serie'], dto.search);
+    if (busqueda) and.push(busqueda as Prisma.MaquinariaWhereInput);
 
-    const items = await this.prisma.maquinaria.findMany({
-      where,
-      include: {
-        agencia: { select: { id: true, nombre: true, codigo: true, regionId: true } },
-        bahia: { select: { id: true, nombre: true, codigo: true } },
-        operadorAsignado: { select: { id: true, name: true, lastname: true } },
-        _count: {
-          select: {
-            incidentes: { where: { estado: { notIn: ['RESUELTO', 'CANCELADO'] } } },
-            mantenimientos: true,
+    // Los conteos de pendientes se calculan solo para las filas que se devuelven (antes, para todas las máquinas).
+    const conPendientes = async (items: any[]) => {
+      const pendientes = await this.conteosPendientes(items.map((i) => i.id));
+      return items.map((m) => ({
+        ...m,
+        incidentesNoAtendidos: pendientes.incidentes.get(m.id) ?? 0,
+        mantenimientosVencidos: pendientes.mantenimientos.get(m.id) ?? 0,
+        proximoMantenimiento: pendientes.proximoMantenimiento.get(m.id) ?? null,
+      }));
+    };
+
+    const resultado = await listarPaginable(dto, {
+      where: where as Record<string, unknown>,
+      columnas: columnasSimples({
+        codigo: 'codigo',
+        nombre: 'nombre',
+        tipo: 'tipo',
+        estado: 'estadoOperativo',
+        agencia: 'agencia.nombre',
+        bahia: 'bahia.nombre',
+        fecha: 'createdAt',
+      }),
+      ordenHeredado: [{ codigo: 'asc' }],
+      contar: (w) => this.prisma.maquinaria.count({ where: w }),
+      mapear: conPendientes,
+      buscar: ({ where: w, orderBy, skip, take }) =>
+        this.prisma.maquinaria.findMany({
+          where: w,
+          orderBy,
+          skip,
+          take,
+          include: {
+            agencia: { select: { id: true, nombre: true, codigo: true, regionId: true } },
+            bahia: { select: { id: true, nombre: true, codigo: true } },
+            operadorAsignado: { select: { id: true, name: true, lastname: true } },
+            _count: {
+              select: {
+                incidentes: { where: { estado: { notIn: ['RESUELTO', 'CANCELADO'] } } },
+                mantenimientos: true,
+              },
+            },
           },
-        },
-      },
-      orderBy: { codigo: 'asc' },
+        }),
     });
 
-    const pendientes = await this.conteosPendientes(items.map((i) => i.id));
-    const data = items.map((m) => ({
-      ...m,
-      incidentesNoAtendidos: pendientes.incidentes.get(m.id) ?? 0,
-      mantenimientosVencidos: pendientes.mantenimientos.get(m.id) ?? 0,
-    }));
-
-    return { success: true, total: data.length, data };
+    // Sin página: la forma de siempre ({ success, total, data }), ahora con tope de 100.
+    if (Array.isArray(resultado)) return { success: true, total: resultado.length, data: resultado };
+    return { success: true, ...resultado };
   }
 
   /** Ficha completa de una máquina: base del modal con incidencias, movimientos y mantenimientos. */
@@ -612,7 +755,7 @@ export class MaquinariaService {
       });
       if (!u || u.estado !== 1) throw new NotFoundException('El usuario indicado no existe o está inactivo.');
       if (!ROLES_OPERADOR.includes(u.role.namerol)) {
-        throw new BadRequestException('Solo se puede asignar la máquina a un pulidor o a un líder operador.');
+        throw new BadRequestException('Solo se puede asignar la máquina a un pulidor (fijo o móvil).');
       }
     }
     if (operadorId === m.operadorAsignadoId) {
@@ -660,6 +803,9 @@ export class MaquinariaService {
       select: {
         id: true, codigo: true, nombre: true, tipo: true, activa: true,
         agencia: { select: { id: true, nombre: true, regionId: true } },
+        operadorAsignado: {
+          select: { id: true, agenciaId: true, agencia: { select: { nombre: true } } },
+        },
       },
     },
     reportadoPor: { select: { id: true, name: true, lastname: true, email: true } },
@@ -674,26 +820,58 @@ export class MaquinariaService {
     return i.estado === 'ABIERTO' && !i.tecnicoAsignadoId;
   }
 
+  /**
+   * La máquina puede estar registrada en una agencia (dato físico, a veces desactualizado) pero tener
+   * un operador personal asignado (pulidor fijo o móvil). Cuando hay operador, su ubicación manda:
+   * la agencia del pulidor fijo, o "Pulidor Móvil" si no tiene agencia fija (viaja por región).
+   */
+  private ubicacionIncidente<
+    T extends {
+      maquinaria?: {
+        agencia?: { id: string; nombre: string; regionId: string | null } | null;
+        operadorAsignado?: { id: string; agenciaId: string | null; agencia?: { nombre: string } | null } | null;
+      } | null;
+    },
+  >(inc: T): T & { agenciaMostrada: string | null; esPulidorMovil: boolean } {
+    const op = inc.maquinaria?.operadorAsignado;
+    if (op) {
+      if (op.agenciaId && op.agencia?.nombre) {
+        return { ...inc, agenciaMostrada: op.agencia.nombre, esPulidorMovil: false };
+      }
+      return { ...inc, agenciaMostrada: null, esPulidorMovil: true };
+    }
+    return { ...inc, agenciaMostrada: inc.maquinaria?.agencia?.nombre ?? null, esPulidorMovil: false };
+  }
+
   async reportarIncidente(dto: ReportarIncidenteDto, actor: Actor) {
     if (dto.clientUuid) {
       const previo = await this.prisma.incidenteTecnico.findUnique({
         where: { clientUuid: dto.clientUuid },
         include: this.includeIncidente,
       });
-      if (previo) return { success: true, data: previo, duplicado: true };
+      if (previo) return { success: true, data: this.ubicacionIncidente(previo), duplicado: true };
     }
 
     const maquina = await this.cargarMaquina(dto.maquinariaId);
     this.assertActiva(maquina);
+    // El operador asignado reporta lo suyo; el líder reporta cualquier máquina de su agencia (supervisa
+    // toda la sede, no solo lo que quedó a su nombre); supervisor (su región) y coordinador de servicios
+    // especiales (sus pulidores) también reportan, con el mismo alcance que usan para ver la máquina
+    // (scopeMaquinaria).
     if (maquina.operadorAsignadoId !== actor.id) {
-      throw new ForbiddenException('Solo puedes reportar las máquinas que tienes asignadas.');
+      if (esLider(actor) || esSupervisor(actor) || esCoordServiciosEspeciales(actor)) {
+        await this.assertPuedeVerMaquina(actor, maquina.id);
+      } else {
+        throw new ForbiddenException('Solo puedes reportar las máquinas que tienes asignadas.');
+      }
     }
 
     const inputs: EvidenciaInputDto[] = [...(dto.evidencias || [])];
     if (dto.fotoEvidenciaUrl && !inputs.some((e) => e.url === dto.fotoEvidenciaUrl)) {
       inputs.unshift({ url: dto.fotoEvidenciaUrl });
     }
-    const evidencias = await this.verificarEvidencias(maquina, inputs, { completa: true });
+    // Al reportar solo se exige evidencia (foto/video): el informe en PDF se pide al resolver.
+    const evidencias = await this.verificarEvidencias(maquina, inputs, { requiereMultimedia: true });
 
     if (dto.destinoTallerId) {
       const taller = await this.prisma.agencia.findUnique({ where: { id: dto.destinoTallerId } });
@@ -738,7 +916,7 @@ export class MaquinariaService {
       data: { type: 'INCIDENTE_NUEVO', incidenteId: incidente.id, maquinariaId: maquina.id },
     });
 
-    return { success: true, data: incidente };
+    return { success: true, data: this.ubicacionIncidente(incidente) };
   }
 
   private async cargarIncidente(id: string) {
@@ -792,7 +970,7 @@ export class MaquinariaService {
         { type: 'INCIDENTE_ASIGNADO', incidenteId: inc.id, maquinariaId: maquina.id },
       );
     }
-    return { success: true, data: updated };
+    return { success: true, data: this.ubicacionIncidente(updated) };
   }
 
   async resolverIncidente(dto: ResolverIncidenteDto, actor: Actor) {
@@ -816,9 +994,10 @@ export class MaquinariaService {
     }
 
     const nuevoEstado = dto.estado || 'RESUELTO';
+    // Al resolver (repararla de verdad) se exige foto/video Y el informe en PDF.
     const evidencias = nuevoEstado === 'RESUELTO'
-      ? await this.verificarEvidencias(maquina, dto.evidencias, { completa: true })
-      : await this.verificarEvidencias(maquina, dto.evidencias, { completa: false });
+      ? await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true, requiereDocumento: true })
+      : await this.verificarEvidencias(maquina, dto.evidencias, {});
 
     const ahora = new Date();
     const solucion = dto.repuestosUtilizados
@@ -871,7 +1050,7 @@ export class MaquinariaService {
         { type: 'INCIDENTE_REPARADO', incidenteId: inc.id, maquinariaId: maquina.id },
       );
     }
-    return { success: true, data: updated };
+    return { success: true, data: this.ubicacionIncidente(updated) };
   }
 
   async editarIncidente(dto: EditarIncidenteDto, actor: Actor) {
@@ -906,47 +1085,73 @@ export class MaquinariaService {
       await this.registrarEvento(tx, maquina, 'INCIDENTE_EDITADO', actor.id, inc.id, { cambios });
       return u;
     });
-    return { success: true, data: updated };
-  }
-
-  private ordenarIncidentes<T extends {
-    estado: string; gravedad: string; tecnicoAsignadoId: string | null; fechaReporte: Date;
-  }>(items: T[]): T[] {
-    const grupo = (i: T) => (this.incidenteNoAtendido(i) ? 0 : i.estado === 'EN_PROCESO' ? 1 : 2);
-    return items.sort((a, b) => {
-      const ga = grupo(a);
-      const gb = grupo(b);
-      if (ga !== gb) return ga - gb;
-      if (ga === 0) {
-        // No atendidas: las críticas primero y, dentro de cada gravedad, las más antiguas primero.
-        const r = (GRAVEDAD_RANK[a.gravedad] ?? 9) - (GRAVEDAD_RANK[b.gravedad] ?? 9);
-        return r !== 0 ? r : a.fechaReporte.getTime() - b.fechaReporte.getTime();
-      }
-      return b.fechaReporte.getTime() - a.fechaReporte.getTime();
-    });
+    return { success: true, data: this.ubicacionIncidente(updated) };
   }
 
   async listIncidentes(dto: ListIncidentesDto, actor: Actor) {
-    const and: Prisma.IncidenteTecnicoWhereInput[] = [this.scopeIncidentes(actor)];
-    if (dto.maquinariaId) and.push({ maquinariaId: dto.maquinariaId });
-    if (dto.estado) and.push({ estado: dto.estado });
-    if (dto.gravedad) and.push({ gravedad: dto.gravedad });
-    if (dto.agenciaId) and.push({ maquinaria: { agenciaId: dto.agenciaId } });
-    if (dto.soloNoAtendidas) and.push({ estado: 'ABIERTO', tecnicoAsignadoId: null });
+    const filtros: Record<string, unknown>[] = [this.scopeIncidentes(actor) as Record<string, unknown>];
+    if (dto.maquinariaId) filtros.push({ maquinariaId: dto.maquinariaId });
+    if (dto.gravedad) filtros.push({ gravedad: dto.gravedad });
+    if (dto.tecnicoId) filtros.push({ tecnicoAsignadoId: dto.tecnicoId });
+    if (dto.agenciaId) filtros.push({ maquinaria: { agenciaId: dto.agenciaId } });
+    if (dto.regionId) filtros.push({ maquinaria: { agencia: { regionId: dto.regionId } } });
+    if (dto.clienteId) filtros.push({ maquinaria: { agencia: { clienteId: dto.clienteId } } });
+    const rango = rangoFechas(dto.fechaDesde, dto.fechaHasta);
+    if (rango) filtros.push({ fechaReporte: rango });
 
-    const items = await this.prisma.incidenteTecnico.findMany({
-      where: { AND: and },
-      include: this.includeIncidente,
-      orderBy: { fechaReporte: 'desc' },
-      take: 2000,
-    });
-    const ordenados = this.ordenarIncidentes(items);
-    const { page, pageSize, skip } = this.pagina(dto);
-    const data = ordenados.slice(skip, skip + pageSize).map((i) => ({
-      ...i,
-      noAtendida: this.incidenteNoAtendido(i),
-    }));
-    return { success: true, total: ordenados.length, page, pageSize, data };
+    const baseSinEstado = combinarWhere(...filtros, whereBusqueda(CAMPOS_BUSQUEDA_INCIDENTES, dto.search));
+    const base = combinarWhere(
+      baseSinEstado,
+      dto.estado ? { estado: dto.estado } : undefined,
+      dto.soloNoAtendidas ? { estado: 'ABIERTO', tecnicoAsignadoId: null } : undefined,
+    );
+
+    const { page, pageSize, skip, take } = this.pagina(dto);
+    const contar = (where: Record<string, unknown>) => this.prisma.incidenteTecnico.count({ where: where as never });
+    const buscar = (where: Record<string, unknown>, orderBy: unknown[], s: number, t: number) =>
+      this.prisma.incidenteTecnico.findMany({
+        where: where as never, orderBy: orderBy as never, skip: s, take: t, include: this.includeIncidente,
+      });
+
+    // Grupos en el orden acordado: sin atender → en proceso → cerradas. Dentro de cada uno, lo más reciente primero.
+    const enOrden = [{ fechaReporte: 'desc' }, { id: 'desc' }];
+    const grupoNoAtendidas = { estado: 'ABIERTO', tecnicoAsignadoId: null };
+    const grupoEnProceso = { OR: [{ estado: 'EN_PROCESO' }, { estado: 'ABIERTO', tecnicoAsignadoId: { not: null } }] };
+    const grupoCerradas = { NOT: [{ estado: 'ABIERTO' }, { estado: 'EN_PROCESO' }] };
+
+    let items: Awaited<ReturnType<typeof buscar>>;
+    let total: number;
+    if (dto.sortField && Object.prototype.hasOwnProperty.call(ORDEN_INCIDENTES, dto.sortField)) {
+      // Orden pedido por el usuario en una columna: manda sobre los grupos.
+      const orden = resolverOrden(dto.sortField, dto.sortOrder, ORDEN_INCIDENTES, { campo: 'fecha', dir: 'desc' });
+      [items, total] = await Promise.all([buscar(base, orden, skip, take), contar(base)]);
+    } else {
+      const r = await paginarPorGrupos(
+        [
+          { where: combinarWhere(base, grupoNoAtendidas), orderBy: enOrden },
+          { where: combinarWhere(base, grupoEnProceso), orderBy: enOrden },
+          { where: combinarWhere(base, grupoCerradas), orderBy: enOrden },
+        ],
+        skip, take, contar, buscar,
+      );
+      items = r.items;
+      total = r.total;
+    }
+
+    const extra: Record<string, unknown> = {};
+    if (dto.incluirResumen) {
+      const [noAtendidas, enProceso, cerradas] = await Promise.all([
+        contar(combinarWhere(baseSinEstado, grupoNoAtendidas)),
+        contar(combinarWhere(baseSinEstado, grupoEnProceso)),
+        contar(combinarWhere(baseSinEstado, grupoCerradas)),
+      ]);
+      extra['resumen'] = { noAtendidas, enProceso, cerradas, total: noAtendidas + enProceso + cerradas };
+    }
+
+    return this.respuestaPagina(
+      items.map((i) => ({ ...this.ubicacionIncidente(i), noAtendida: this.incidenteNoAtendido(i) })),
+      total, page, pageSize, extra,
+    );
   }
 
   // ==============================================================
@@ -978,7 +1183,7 @@ export class MaquinariaService {
 
     const tecnicoId = dto.tecnicoId || actor.id;
     await this.validarResponsable(tecnicoId, this.regionDe(maquina));
-    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { completa: false });
+    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, {});
 
     const fechaProgramada = dto.fechaProgramada ? new Date(dto.fechaProgramada) : new Date();
     if (Number.isNaN(fechaProgramada.getTime())) throw new BadRequestException('Fecha programada inválida.');
@@ -1093,7 +1298,11 @@ export class MaquinariaService {
       );
     }
 
-    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { completa: true });
+    // No se cierra la orden mientras falten pasos obligatorios del checklist de su tipo.
+    await this.checklist.exigirCompleto(existing.id, existing.tipo);
+
+    // Al cerrar el mantenimiento se exige foto/video Y el informe en PDF.
+    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true, requiereDocumento: true });
 
     // El calendario no se corre: si toca cada 30 días y se hizo antes, el siguiente sigue en su fecha.
     const frecuenciaDias = Number(existing.frecuenciaDias || 0);
@@ -1202,41 +1411,71 @@ export class MaquinariaService {
 
   async listMantenimientos(dto: ListMantenimientosDto, actor: Actor) {
     const ahora = new Date();
-    const and: Prisma.MantenimientoMaquinariaWhereInput[] = [this.scopeMantenimientos(actor)];
-    if (dto.maquinariaId) and.push({ maquinariaId: dto.maquinariaId });
-    if (dto.tecnicoId) and.push({ tecnicoId: dto.tecnicoId });
-    if (dto.tipo) and.push({ tipo: dto.tipo });
-    if (dto.estado) and.push({ estado: dto.estado });
-    if (dto.agenciaId) and.push({ maquinaria: { agenciaId: dto.agenciaId } });
-    if (dto.soloNoAtendidos) {
-      and.push({ estado: { in: ['PENDIENTE', 'EN_PROCESO'] }, fechaProgramada: { lt: ahora } });
+    const filtros: Record<string, unknown>[] = [this.scopeMantenimientos(actor) as Record<string, unknown>];
+    if (dto.maquinariaId) filtros.push({ maquinariaId: dto.maquinariaId });
+    if (dto.tecnicoId) filtros.push({ tecnicoId: dto.tecnicoId });
+    if (dto.tipo) filtros.push({ tipo: dto.tipo });
+    if (dto.agenciaId) filtros.push({ maquinaria: { agenciaId: dto.agenciaId } });
+    if (dto.regionId) filtros.push({ maquinaria: { agencia: { regionId: dto.regionId } } });
+    if (dto.clienteId) filtros.push({ maquinaria: { agencia: { clienteId: dto.clienteId } } });
+    const rango = rangoFechas(dto.fechaDesde, dto.fechaHasta);
+    if (rango) filtros.push({ fechaProgramada: rango });
+
+    const pendientes = { estado: { in: ['PENDIENTE', 'EN_PROCESO'] } };
+    const grupoVencidos = { ...pendientes, fechaProgramada: { lt: ahora } };
+    const grupoPendientes = { ...pendientes, OR: [{ fechaProgramada: null }, { fechaProgramada: { gte: ahora } }] };
+    const grupoEjecutados = { NOT: pendientes };
+
+    const baseSinEstado = combinarWhere(...filtros, whereBusqueda(CAMPOS_BUSQUEDA_MANTENIMIENTOS, dto.search));
+    const base = combinarWhere(
+      baseSinEstado,
+      dto.estado ? { estado: dto.estado } : undefined,
+      dto.soloNoAtendidos ? grupoVencidos : undefined,
+    );
+
+    const { page, pageSize, skip, take } = this.pagina(dto);
+    const contar = (where: Record<string, unknown>) => this.prisma.mantenimientoMaquinaria.count({ where: where as never });
+    const buscar = (where: Record<string, unknown>, orderBy: unknown[], s: number, t: number) =>
+      this.prisma.mantenimientoMaquinaria.findMany({
+        where: where as never, orderBy: orderBy as never, skip: s, take: t, include: this.includeMantenimiento,
+      });
+
+    // Vencidos → pendientes → ejecutados. Dentro de cada grupo, lo más reciente primero (los sin fecha, al final).
+    const porProgramacion = [{ fechaProgramada: { sort: 'desc', nulls: 'last' } }, { id: 'desc' }];
+    const porEjecucion = [{ fechaEjecucion: { sort: 'desc', nulls: 'last' } }, { fechaMantenimiento: 'desc' }, { id: 'desc' }];
+
+    let items: Awaited<ReturnType<typeof buscar>>;
+    let total: number;
+    if (dto.sortField && Object.prototype.hasOwnProperty.call(ORDEN_MANTENIMIENTOS, dto.sortField)) {
+      const orden = resolverOrden(dto.sortField, dto.sortOrder, ORDEN_MANTENIMIENTOS, { campo: 'fecha', dir: 'desc' });
+      [items, total] = await Promise.all([buscar(base, orden, skip, take), contar(base)]);
+    } else {
+      const r = await paginarPorGrupos(
+        [
+          { where: combinarWhere(base, grupoVencidos), orderBy: porProgramacion },
+          { where: combinarWhere(base, grupoPendientes), orderBy: porProgramacion },
+          { where: combinarWhere(base, grupoEjecutados), orderBy: porEjecucion },
+        ],
+        skip, take, contar, buscar,
+      );
+      items = r.items;
+      total = r.total;
     }
 
-    const items = await this.prisma.mantenimientoMaquinaria.findMany({
-      where: { AND: and },
-      include: this.includeMantenimiento,
-      orderBy: { fechaMantenimiento: 'desc' },
-      take: 2000,
-    });
+    const extra: Record<string, unknown> = {};
+    if (dto.incluirResumen) {
+      const [vencidos, pendientesN, ejecutados] = await Promise.all([
+        contar(combinarWhere(baseSinEstado, grupoVencidos)),
+        contar(combinarWhere(baseSinEstado, grupoPendientes)),
+        contar(combinarWhere(baseSinEstado, grupoEjecutados)),
+      ]);
+      extra['resumen'] = { vencidos, pendientes: pendientesN, ejecutados, total: vencidos + pendientesN + ejecutados };
+    }
 
-    const grupo = (m: (typeof items)[number]) =>
-      this.mantenimientoNoAtendido(m, ahora) ? 0 : m.estado !== 'FINALIZADO' ? 1 : 2;
-    const fecha = (m: (typeof items)[number]) => (m.fechaProgramada ?? m.fechaMantenimiento).getTime();
-    items.sort((a, b) => {
-      const ga = grupo(a);
-      const gb = grupo(b);
-      if (ga !== gb) return ga - gb;
-      // Vencidos: los más atrasados primero. Próximos: el más cercano primero. Finalizados: el más reciente.
-      if (ga === 2) return (b.fechaEjecucion ?? b.fechaMantenimiento).getTime() - (a.fechaEjecucion ?? a.fechaMantenimiento).getTime();
-      return fecha(a) - fecha(b);
-    });
-
-    const { page, pageSize, skip } = this.pagina(dto);
-    const data = items.slice(skip, skip + pageSize).map((m) => ({
-      ...m,
-      noAtendido: this.mantenimientoNoAtendido(m, ahora),
-    }));
-    return { success: true, total: items.length, page, pageSize, data };
+    return this.respuestaPagina(
+      items.map((m) => ({ ...m, noAtendido: this.mantenimientoNoAtendido(m, ahora) })),
+      total, page, pageSize, extra,
+    );
   }
 
   // ==============================================================
@@ -1270,7 +1509,7 @@ export class MaquinariaService {
       }
     }
 
-    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { completa: false });
+    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, {});
     if (!evidencias.length) throw new BadRequestException('No se recibió ninguna evidencia.');
     if (dto.reemplazaEvidenciaId && evidencias.length !== 1) {
       throw new BadRequestException('Para reemplazar una evidencia envía exactamente un archivo nuevo.');
@@ -1421,7 +1660,7 @@ export class MaquinariaService {
       destinoBahia: i.destinoBahiaId ? porId.get(i.destinoBahiaId) ?? null : null,
     }));
 
-    return { success: true, total, page, pageSize, data };
+    return this.respuestaPagina(data, total, page, pageSize);
   }
 
   async listTalleres() {
@@ -1485,13 +1724,8 @@ export class MaquinariaService {
         : null,
     }));
 
-    return {
-      success: true,
+    return this.respuestaPagina(data, total, page, pageSize, {
       maquinaria: { id: m.id, codigo: m.codigo, nombre: m.nombre },
-      total,
-      page,
-      pageSize,
-      data,
-    };
+    });
   }
 }

@@ -1,6 +1,7 @@
-import { IsString, IsOptional, IsNumber, IsPositive, IsArray } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsPositive, IsArray, IsBoolean, IsIn, IsInt, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { DataGridQueryDto } from '../../../common/dto/data-grid.dto.js';
+import { DataGridQueryDto, PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
 export class RegistrarMovimientoOperativoDto {
   @ApiProperty({ description: 'UUID del insumo/producto' })
@@ -69,6 +70,33 @@ export class RegistrarMovimientoOperativoDto {
 }
 
 export class ListMovimientosGlobalesDto extends DataGridQueryDto {
+  // Sin valores por defecto en el DTO: así el servidor distingue a un cliente antiguo (que no envía página ni tamaño)
+  // de uno nuevo (sin tamaño recibe hasta 100 filas, como antes de paginar en el servidor).
+  @ApiPropertyOptional({ example: 1, description: 'Página (1 = primera)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  override page?: number = undefined;
+
+  @ApiPropertyOptional({ example: 25, description: 'Filas por página (máximo 100; un valor mayor se recorta)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  override pageSize?: number = undefined;
+
+  @ApiPropertyOptional({ example: 'fecha', description: 'Columna: fecha, comprobante, producto, sku, tipo, ruta, destino, cantidad, cantidadBase, stockAnterior, stockNuevo, responsable. Por defecto: más reciente primero.' })
+  @IsOptional()
+  @IsString()
+  override sortField?: string = undefined;
+
+  @ApiPropertyOptional({ example: 'desc', enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  override sortOrder?: 'asc' | 'desc' = undefined;
+
   @ApiPropertyOptional({ description: 'Filtrar por insumo' })
   @IsOptional()
   @IsString()
@@ -88,9 +116,24 @@ export class ListMovimientosGlobalesDto extends DataGridQueryDto {
   @IsOptional()
   @IsString()
   fechaHasta?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar por ubicación afectada (ID de bodega, agencia o pulidor)' })
+  @IsOptional()
+  @IsString()
+  ubicacionId?: string;
+
+  @ApiPropertyOptional({ description: 'Incluye en la respuesta el conteo por tipo de movimiento con los mismos filtros (menos el de tipo)' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
 }
 
-export class ListStockBajoDto extends DataGridQueryDto {
+/**
+ * Insumos con stock por debajo del mínimo de bodega. Siempre responde `{ items, total, page, … }`; sin page/pageSize
+ * devuelve la primera página de 100 (antes 20). Orden permitido: sku, nombre, tipo, stock, minimo, deficit, fecha
+ * (por defecto el de menor stock primero).
+ */
+export class ListStockBajoDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ description: 'Filtro por tipo de producto' })
   @IsOptional()
   @IsString()

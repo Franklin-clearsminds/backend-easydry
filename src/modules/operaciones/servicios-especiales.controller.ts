@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { ServiciosEspecialesService } from './servicios-especiales.service.js';
 import {
@@ -10,16 +10,17 @@ import {
   ReanudarServicioEspecialDto,
   ReasignarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
+import { AnularServicioEspecialDto } from './dto/aprobaciones.dto.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
+import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Servicios Especiales y Detailing (100% POST)')
 @Controller('operaciones/servicios-especiales')
-@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class ServiciosEspecialesController {
   constructor(private readonly service: ServiciosEspecialesService) {}
 
+  @Permiso('especiales.ver')
   @Post('list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar servicios especiales (Pulido, Cerámico, Lavado de Motor)' })
@@ -28,14 +29,24 @@ export class ServiciosEspecialesController {
     return this.service.findAll(queryDto, user);
   }
 
+  @Permiso('especiales.ver')
   @Post('detail')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Detalle de un servicio especial por ID o clientUuid' })
   @ApiResponse({ status: 200, description: 'Detalle completo' })
-  async detail(@Body() body: { id: string }) {
-    return this.service.findOne(body.id);
+  async detail(@Body() body: { id: string }, @CurrentUser() user: any) {
+    return this.service.findOne(body.id, user);
   }
 
+  @Permiso('especiales.ver')
+  @Post('historial')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Registro de decisiones de un servicio especial: quién lo anuló y por qué' })
+  async historial(@Body() body: { id: string }, @CurrentUser() user: any) {
+    return this.service.historialDecisiones(body.id, user);
+  }
+
+  @Permiso('especiales.crear')
   @Post('crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo servicio especial de detailing' })
@@ -47,6 +58,7 @@ export class ServiciosEspecialesController {
     return this.service.create(dto, user?.id, user);
   }
 
+  @Permiso('especiales.operar')
   @Post('iniciar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Marcar inicio de trabajo en servicio especial con video inicial' })
@@ -62,6 +74,7 @@ export class ServiciosEspecialesController {
     }, user);
   }
 
+  @Permiso('especiales.operar')
   @Post('pausar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Pausar servicio especial con motivo y video de pausa' })
@@ -73,6 +86,7 @@ export class ServiciosEspecialesController {
     return this.service.pausar(dto, user);
   }
 
+  @Permiso('especiales.operar')
   @Post('reanudar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reanudar servicio especial con video de reanudación' })
@@ -84,6 +98,7 @@ export class ServiciosEspecialesController {
     return this.service.reanudar(dto, user);
   }
 
+  @Permiso('especiales.operar')
   @Post('completar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Finalizar servicio especial con video final y calificación' })
@@ -95,6 +110,7 @@ export class ServiciosEspecialesController {
     return this.service.completar(dto, user);
   }
 
+  @Permiso('especiales.reasignar')
   @Post('reasignar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reasignar servicio especial a otro pulidor' })
@@ -106,14 +122,16 @@ export class ServiciosEspecialesController {
     return this.service.reasignar(dto, user);
   }
 
+  @Permiso('especiales.anular')
   @Post('delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Anular o cancelar servicio especial (soft delete)' })
   @ApiResponse({ status: 200, description: 'Servicio especial cancelado' })
-  async delete(@Body() body: { id: string; motivo?: string }) {
-    return this.service.softDelete(body.id, body.motivo);
+  async delete(@Body() body: AnularServicioEspecialDto, @CurrentUser() user: any) {
+    return this.service.softDelete(body.id, body.motivo, user);
   }
 
+  @Permiso('especiales.ver')
   @Post('pulidores')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar pulidores activos por región o sucursal' })
@@ -122,16 +140,19 @@ export class ServiciosEspecialesController {
     @Body() body: { regionId?: string; agenciaId?: string },
     @CurrentUser() user: any,
   ) {
-    let regionId: string | undefined = undefined;
-    if (body?.regionId && String(body.regionId).trim() && String(body.regionId).trim() !== 'null' && String(body.regionId).trim() !== 'undefined') {
-      regionId = String(body.regionId).trim();
-    } else if (user?.regionId && String(user.regionId).trim() && String(user.regionId).trim() !== 'null' && String(user.regionId).trim() !== 'undefined') {
-      regionId = String(user.regionId).trim();
-    }
-    const agenciaId = body?.agenciaId && String(body.agenciaId).trim() && String(body.agenciaId).trim() !== 'null' ? String(body.agenciaId).trim() : undefined;
-    return this.service.listarPulidoresPorRegion(regionId, agenciaId);
+    const limpio = (v?: string) => (v && String(v).trim() && !['null', 'undefined'].includes(String(v).trim()) ? String(v).trim() : undefined);
+    // El servicio (`listarPulidoresPorRegion`) ya acota lo pedido al alcance real del usuario: fuerza
+    // la región de un actor REGION y la agencia de un actor AGENCIA, pase lo que pase aquí. No hay
+    // que adelantarle nada: si antes se rellenaba `regionId` con la región del propio usuario cuando
+    // el cliente no mandaba ninguna, a un coordinador de alcance nacional (GLOBAL, sin región fija)
+    // eso lo limitaba a los pulidores de su propia región aunque quisiera crear la OT en una agencia
+    // de otra región — el pulidor fijo de esa agencia simplemente no aparecía en la lista.
+    const regionId = limpio(body?.regionId);
+    const agenciaId = limpio(body?.agenciaId);
+    return this.service.listarPulidoresPorRegion(regionId, agenciaId, user);
   }
 
+  @Permiso('especiales.ver')
   @Post('stock-pulidor')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar existencias de químicos en custodia del pulidor' })
@@ -148,6 +169,6 @@ export class ServiciosEspecialesController {
     if (!pulidorId) {
       return [];
     }
-    return this.service.obtenerStockPulidor(pulidorId);
+    return this.service.obtenerStockPulidor(pulidorId, user);
   }
 }

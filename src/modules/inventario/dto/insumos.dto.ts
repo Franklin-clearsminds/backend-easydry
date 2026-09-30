@@ -1,5 +1,8 @@
-import { IsString, IsOptional, IsNumber, IsInt, Min, IsPositive } from 'class-validator';
+import { OpcionesDto } from '../../../common/utils/opciones.js';
+import { IsString, IsOptional, IsNumber, IsInt, IsIn, Min, IsPositive } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
+import { NIVELES_STOCK_FILTRO } from '../stock-nivel.js';
 
 export class CreateInsumoDto {
   @ApiProperty({ example: 'INS-LAV-001', description: 'Código SKU único del insumo' })
@@ -154,7 +157,12 @@ export class UpdateInsumoDto {
   estado?: number;
 }
 
-export class ListInsumosDto {
+/**
+ * Sin page/pageSize: arreglo con hasta 100 insumos (con stocks, recetas y presentaciones, como siempre).
+ * Con page o pageSize: página liviana (sin stocks por ubicación, recetas ni presentaciones). Orden permitido: sku, nombre,
+ * tipo, contenido, stockMinimoBodega, stockOptimoBodega, stockMinimoAgencia, stockOptimoAgencia, estado, fecha, stock, alerta.
+ */
+export class ListInsumosDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'QUIMICOS_LAVADO' })
   @IsOptional()
   @IsString()
@@ -164,11 +172,6 @@ export class ListInsumosDto {
   @IsOptional()
   @IsInt()
   estado?: number;
-
-  @ApiPropertyOptional({ description: 'Buscar por nombre o SKU' })
-  @IsOptional()
-  @IsString()
-  search?: string;
 
 
   @ApiPropertyOptional({ description: 'ID del tipo de producto para filtrar' })
@@ -191,10 +194,26 @@ export class ListInsumosDto {
   @ApiPropertyOptional({ description: 'Filtrar estrictamente a insumos requeridos por servicios' })
   @IsOptional()
   soloDeServicios?: boolean;
+
+  @ApiPropertyOptional({ enum: NIVELES_STOCK_FILTRO, description: 'Nivel de stock (solo modo paginado): agotado, bajo_minimo, moderado, optimo o alerta_total (agotado o bajo mínimo)' })
+  @IsOptional()
+  @IsIn(NIVELES_STOCK_FILTRO)
+  nivelStock?: (typeof NIVELES_STOCK_FILTRO)[number];
 }
 
 export class DetailInsumoDto {
   @ApiProperty()
   @IsString()
   id: string;
+}
+
+/** Insumos para un desplegable con buscador (mismo alcance por sede que `insumos/list`). Solo activos salvo que se pida otro estado. */
+export class InsumosOpcionesDto extends OpcionesDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() tipoProductoId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() categoria?: string;
+  @ApiPropertyOptional({ description: 'Sede cuyos insumos se ofrecen (un rol de sede siempre queda en la suya)' })
+  @IsOptional() @IsString() agenciaId?: string;
+  @ApiPropertyOptional() @IsOptional() soloDeServicios?: boolean;
+  @ApiPropertyOptional({ description: '1 activos (por defecto), 0 inactivos' })
+  @IsOptional() @IsInt() estado?: number;
 }

@@ -14,7 +14,16 @@ import { fileURLToPath } from 'node:url';
 const prisma = new PrismaClient();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = path.join(__dirname, 'data', 'datos-agencias.json');
-const PASSWORD = '123456';
+/**
+ * Contraseña inicial de los usuarios NUEVOS (todos deben cambiarla en su primer ingreso). Es obligatoria, viene de
+ * IMPORT_PASSWORD_INICIAL (mínimo 8 caracteres) y no tiene valor por defecto.
+ */
+function passwordInicial(): string {
+  const valor = process.env.IMPORT_PASSWORD_INICIAL?.trim();
+  if (!valor || valor.length < 8) throw new Error('Define IMPORT_PASSWORD_INICIAL (mínimo 8 caracteres) en el .env o en el entorno.');
+  return valor;
+}
+const PASSWORD = passwordInicial();
 const RESERVED_EMAILS = new Set(['superadmin@easydry.com', 'admin@easydry.com']);
 const PROSPECT_MARCAS = new Set(['ORGU FORD', 'ASSA', 'IOKARS', 'OIKORSA']);
 
@@ -66,10 +75,21 @@ type PulidorExcel = {
   region: string;
 };
 
+type PersonalGestionExcel = {
+  nombre: string;
+  cedula: string;
+  rol: string;
+  agencia: string;
+  region: string;
+  bodega: string;
+  correo: string;
+};
+
 type Payload = {
   clientes: string[];
   pulidoresExcel: PulidorExcel[];
   pulidorCedulas: string[];
+  personalGestion?: PersonalGestionExcel[];
   agencias: AgenciaItem[];
   catalogo: CatalogoItem[];
   insumos: InsumoItem[];
@@ -557,6 +577,10 @@ async function main() {
 
   const claimedEmails = new Set<string>([...RESERVED_EMAILS]);
   const assignedCedulas = new Set<string>();
+  // Cada agencia solo puede tener un pulidor fijo (decisión de producto). Si el Excel trae más de
+  // uno marcado como pulidor para la misma sede, es un error de la hoja de datos, no algo que el
+  // importador deba resolver por su cuenta asignando ambos en silencio.
+  const fijoPorAgencia = new Map<string, string>();
   let lavadores = 0;
   let pulidoresFijos = 0;
   let pulidoresMoviles = 0;
@@ -576,6 +600,16 @@ async function main() {
       }
       const nombre = (op.nombre || '').trim() || `SIN NOMBRE ${cedula || 'X'}`;
       const esPulidor = Boolean(op.esPulidor);
+      if (esPulidor) {
+        const yaAsignado = fijoPorAgencia.get(agenciaId);
+        if (yaAsignado && yaAsignado !== (cedula || nombre)) {
+          throw new Error(
+            `La agencia "${ag.nombre}" tiene más de un pulidor marcado en el Excel (${yaAsignado} y ${cedula || nombre}). `
+            + `Cada agencia solo puede tener un pulidor fijo: corrige la hoja antes de reimportar.`,
+          );
+        }
+        fijoPorAgencia.set(agenciaId, cedula || nombre);
+      }
       const rol = esPulidor ? 'pulidor' : 'lavador';
       const email = makeEmail(nombre, rol, cedula, claimedEmails);
       const { name, lastname } = splitNombre(nombre);
@@ -583,7 +617,6 @@ async function main() {
       const existing = await prisma.user.findUnique({ where: { email } });
       const dataUser = {
         email,
-        passwordHash,
         name,
         lastname,
         roleId: esPulidor ? rolePulidor.id : roleLavador.id,
@@ -592,9 +625,10 @@ async function main() {
         servicioIds: servicioIds as unknown as Prisma.InputJsonValue,
         estado: 1,
       };
+      // Solo un usuario nuevo recibe la contraseña inicial (y debe cambiarla); a los existentes no se les toca.
       const user = existing
         ? await prisma.user.update({ where: { id: existing.id }, data: dataUser })
-        : await prisma.user.create({ data: dataUser });
+        : await prisma.user.create({ data: { ...dataUser, passwordHash, debeCambiarPassword: true } });
       if (cedula) assignedCedulas.add(cedula);
       if (esPulidor) pulidoresFijos += 1;
       else lavadores += 1;
@@ -611,7 +645,6 @@ async function main() {
     const existing = await prisma.user.findUnique({ where: { email } });
     const dataUser = {
       email,
-      passwordHash,
       name,
       lastname,
       roleId: rolePulidor.id,
@@ -621,9 +654,61 @@ async function main() {
       estado: 1,
     };
     if (existing) await prisma.user.update({ where: { id: existing.id }, data: dataUser });
-    else await prisma.user.create({ data: dataUser });
+    else await prisma.user.create({ data: { ...dataUser, passwordHash, debeCambiarPassword: true } });
     assignedCedulas.add(p.cedula);
     pulidoresMoviles += 1;
+  }
+
+  // ── Personal de gestión (hoja «PERSONAL GESTION» del Excel): líderes, aprobadores, supervisores y coordinadores.
+  const ROLES_GESTION = new Set([
+    'APROBADOR', 'LIDER', 'SUPERVISOR', 'JEFE_COMERCIAL', 'COORD_COMERCIAL', 'COORD_SERVICIOS_ESPECIALES',
+    'COORD_MANTENIMIENTO', 'TECNICO', 'COORD_BODEGA', 'ASISTENTE_BODEGA',
+  ]);
+  const NECESITA_AGENCIA = new Set(['APROBADOR', 'LIDER']);
+  const NECESITA_REGION = new Set(['SUPERVISOR', 'COORD_COMERCIAL']);
+  const rolesGestion = new Map((await prisma.role.findMany({ where: { namerol: { in: [...ROLES_GESTION] } } })).map((r) => [r.namerol, r.id]));
+  const regionesBd = await prisma.region.findMany({ select: { id: true, nombre: true } });
+  const bodegasBd = await prisma.bodega.findMany({ select: { id: true, nombre: true } });
+  const problemasGestion: string[] = [];
+  const gestionPorRol = new Map<string, number>();
+  for (const [i, p] of (data.personalGestion || []).entries()) {
+    const fila = `fila ${i + 2} (${p.nombre})`;
+    if (!ROLES_GESTION.has(p.rol) || !rolesGestion.has(p.rol)) {
+      problemasGestion.push(`${fila}: el rol «${p.rol}» no es un rol de gestión válido`);
+      continue;
+    }
+    const agenciaId = p.agencia ? agenciaIds.get(normKey(p.agencia)) : undefined;
+    const region = p.region ? regionesBd.find((r) => normKey(r.nombre) === normKey(p.region)) : undefined;
+    const bodega = p.bodega ? bodegasBd.find((b) => normKey(b.nombre) === normKey(p.bodega)) : undefined;
+    if (NECESITA_AGENCIA.has(p.rol) && !agenciaId) {
+      problemasGestion.push(`${fila}: el rol ${p.rol} necesita una agencia que exista (${p.agencia || 'vacía'})`);
+      continue;
+    }
+    if (NECESITA_REGION.has(p.rol) && !region) {
+      problemasGestion.push(`${fila}: el rol ${p.rol} necesita una región que exista (${p.region || 'vacía'})`);
+      continue;
+    }
+    if (p.rol === 'ASISTENTE_BODEGA' && !bodega) {
+      problemasGestion.push(`${fila}: el asistente de bodega necesita una bodega que exista (${p.bodega || 'vacía'})`);
+      continue;
+    }
+    const email = p.correo || makeEmail(p.nombre, p.rol, p.cedula, claimedEmails);
+    claimedEmails.add(email);
+    const { name, lastname } = splitNombre(p.nombre);
+    const existente = await prisma.user.findUnique({ where: { email } });
+    const dataGestion = {
+      email,
+      name,
+      lastname,
+      roleId: rolesGestion.get(p.rol)!,
+      agenciaId: NECESITA_AGENCIA.has(p.rol) ? agenciaId! : null,
+      regionId: NECESITA_REGION.has(p.rol) ? region!.id : null,
+      bodegaId: p.rol === 'ASISTENTE_BODEGA' ? bodega!.id : null,
+      estado: 1,
+    };
+    if (existente) await prisma.user.update({ where: { id: existente.id }, data: dataGestion });
+    else await prisma.user.create({ data: { ...dataGestion, passwordHash, debeCambiarPassword: true } });
+    gestionPorRol.set(p.rol, (gestionPorRol.get(p.rol) || 0) + 1);
   }
 
   let stockAgencia = 0;
@@ -658,7 +743,15 @@ async function main() {
   console.log(`⏭  Personal duplicado:  ${usuariosOmitidos}`);
   console.log(`📦 Stock agencia (0):   ${stockAgencia} slots nuevos`);
   console.log(`🧰 Stock pulidor (0):   ${stockPulidor} slots nuevos`);
-  console.log(`🔑 Clave importados:    ${PASSWORD}  |  email: {nombre}.{rol}@easydry.com`);
+  if (gestionPorRol.size || problemasGestion.length) {
+    console.log(`🧑‍💼 Personal de gestión:  ${[...gestionPorRol.entries()].map(([r, n]) => `${r} ${n}`).join(', ') || 'ninguno'}`);
+  }
+  console.log('🔑 Los usuarios nuevos usan la contraseña inicial de IMPORT_PASSWORD_INICIAL y deben cambiarla al entrar (los existentes conservan la suya).');
+  console.log('   Correo: {nombre}.{rol}@easydry.com, o el de la hoja de personal si lo trae.');
+  if (problemasGestion.length) {
+    console.log(`⚠ Personal de gestión no cargado (${problemasGestion.length}): corrige el Excel y vuelve a importar`);
+    for (const linea of problemasGestion) console.log('   -', linea);
+  }
   if (unmatchedServicios.length) {
     console.log(`⚠ Servicios de agencia sin match en catálogo (${unmatchedServicios.length}):`);
     for (const line of unmatchedServicios.slice(0, 20)) console.log('   -', line);

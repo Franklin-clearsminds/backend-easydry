@@ -49,15 +49,4 @@ describe('serializeServicioLavado multimedia', () => {
     expect(result.videoInicialUrl).toContain('legacy.mp4');
   });
 
-  it('oculta referencias multimedia de demostración guardadas anteriormente', () => {
-    const result = serializeServicioLavado({
-      ...baseService,
-      fotoIngresoUrl: 'https://images.unsplash.com/photo-demo.jpg',
-      videoFinalUrl: 'https://assets.mixkit.co/videos/demo.mp4',
-    });
-
-    expect(result.fotoIngresoUrl).toBeNull();
-    expect(result.videoFinalUrl).toBeNull();
-    expect(result.videoUrl).toBeNull();
-  });
 });

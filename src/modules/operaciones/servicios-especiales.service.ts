@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { DecisionesService } from '../../common/permisos/decisiones.service.js';
+import { Alcance, resolverAlcance } from '../../common/permisos/alcance.js';
+import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
 import {
   QueryServicioEspecialDto,
   CreateServicioEspecialDto,
@@ -11,10 +15,62 @@ import {
   ReasignarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import {
+  columnasSimples,
+  combinarWhere,
+  resolverOrden,
+  resolverPaginacion,
+  whereBusqueda,
+} from '../../common/utils/data-grid.helpers.js';
+
+/** Columnas por las que se puede ordenar la lista de servicios especiales (nombre público → campo de la base). */
+const ORDEN_ESPECIALES = columnasSimples({
+  fecha: 'createdAt',
+  ot: 'ordenTrabajoOT',
+  placa: 'placa',
+  servicio: 'tipoServicio',
+  agencia: 'agencia.nombre',
+  region: 'region.nombre',
+  operador: 'operador.name',
+  estado: 'estado',
+  tiempoPausa: 'tiempoPausaTotalSeg',
+  tiempoEfectivo: 'tiempoEfectivoSeg',
+});
 
 @Injectable()
 export class ServiciosEspecialesService {
-  constructor(private prisma: PrismaService) {}
+  private readonly decisiones: DecisionesService;
+
+  constructor(private prisma: PrismaService, decisiones?: DecisionesService) {
+    this.decisiones = decisiones ?? new DecisionesService(prisma);
+  }
+
+  /**
+   * ¿Puede este usuario ver el servicio especial? País: todos. Región: los de su región. Agencia: los de su agencia.
+   * Un pulidor móvil (sin agencia, opera por región) solo ve los que tiene asignados.
+   */
+  private puedeVer(actor: any, item: { agenciaId?: string | null; regionId?: string | null; operadorId?: string | null; agencia?: { regionId?: string | null } | null }): boolean {
+    const alcance: Alcance = resolverAlcance(actor);
+    if (rolDeUsuario(actor) === 'PULIDOR' && alcance.tipo === 'REGION') return item.operadorId === actor.id;
+    switch (alcance.tipo) {
+      case 'GLOBAL':
+        return true;
+      case 'REGION':
+        return item.regionId === alcance.regionId || item.agencia?.regionId === alcance.regionId;
+      case 'AGENCIA':
+        return item.agenciaId === alcance.agenciaId;
+      case 'PROPIO':
+        return item.operadorId === actor.id;
+      default:
+        return false;
+    }
+  }
+
+  private asegurarPuedeVer(actor: any, item: any): void {
+    if (actor && !this.puedeVer(actor, item)) {
+      throw new ForbiddenException('Este servicio especial no pertenece a tu alcance.');
+    }
+  }
 
   private _formatItem(item: any) {
     if (!item) return null;
@@ -69,7 +125,6 @@ export class ServiciosEspecialesService {
       historialPausas: Array.isArray(item.historialPausas) ? item.historialPausas : [],
       ordenTrabajoOT: item.ordenTrabajoOT || item.codigoSE || item.id,
       codigoSE: item.codigoSE || item.ordenTrabajoOT || item.id,
-      numeroOrden: item.ordenTrabajoOT || item.codigoSE || item.id,
       categoriaServicio: 'ESPECIAL',
       servicioNombre: item.tipoServicio,
       servicio: item.tipoServicio,
@@ -90,58 +145,34 @@ export class ServiciosEspecialesService {
   async findAll(query: QueryServicioEspecialDto, currentUser?: any) {
     const where: any = { deletedAt: null };
 
-    // 1. Filtrado Estricto por Rol y Región (RBAC)
-    if (currentUser) {
-      const rol = (currentUser.role?.namerol || currentUser.roleDetails?.namerol || currentUser.role || '').toUpperCase();
-      const isSuperAdminOrAdmin = rol === 'SUPER_ADMIN' || rol === 'ADMIN';
-      const isSupervisor = rol === 'SUPERVISOR' || rol === 'GERENTE_REGIONAL' || rol.includes('SUPERVISOR') || rol.includes('REGIONAL');
-      const isAprobador = rol === 'APROBADOR' || rol === 'GERENTE';
-      const isPulidor = rol.includes('PULIDOR') || rol === 'PULIDOR_MOVIL' || rol === 'PULIDOR_FIJO';
-      const isCoord = rol.includes('COORD_SERVICIOS_ESPECIALES') || (rol.includes('COORD') && rol.includes('ESPECIALES'));
-
-      if (isSuperAdminOrAdmin) {
-        // Super Admin y Admin: ven todo a nivel nacional sin restricciones forzadas
-        if (query.regionId && query.regionId !== 'Todas' && query.regionId !== 'TODAS') {
-          where.regionId = query.regionId;
+    // 1. Alcance del usuario (regla única): país, región, agencia o lo propio. Sin usuario o sin dato de su ámbito no ve nada.
+    //    Lo que manda el cliente solo acota dentro del alcance, nunca lo amplía.
+    const alcance: Alcance = currentUser ? resolverAlcance(currentUser) : { tipo: 'NINGUNO' };
+    const neutro = (v?: string) => (v && v !== 'Todas' && v !== 'TODAS' ? v : undefined);
+    const pideRegion = neutro(query.regionId);
+    const pideAgencia = neutro(query.agenciaId) || neutro(query.sucursalId);
+    switch (alcance.tipo) {
+      case 'GLOBAL':
+        if (pideRegion) where.regionId = pideRegion;
+        if (pideAgencia) where.agenciaId = pideAgencia;
+        break;
+      case 'REGION':
+        if (rolDeUsuario(currentUser) === 'PULIDOR') {
+          // Pulidor móvil: solo los servicios que tiene asignados.
+          where.operadorId = currentUser.id;
+        } else {
+          where.OR = [{ regionId: alcance.regionId }, { agencia: { regionId: alcance.regionId } }];
+          if (pideAgencia) where.agenciaId = pideAgencia;
         }
-        const targetAgencia = query.agenciaId || query.sucursalId;
-        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
-          where.agenciaId = targetAgencia;
-        }
-      } else if (isSupervisor) {
-        // Gerente Regional / Supervisor: solo servicios de su región
-        const regId = currentUser.regionId || query.regionId;
-        if (regId && regId !== 'Todas' && regId !== 'TODAS') {
-          where.OR = [
-            { regionId: regId },
-            { agencia: { regionId: regId } }
-          ];
-        }
-        const targetAgencia = query.agenciaId || query.sucursalId;
-        if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
-          where.agenciaId = targetAgencia;
-        }
-      } else if (isAprobador) {
-        // Aprobador: solo servicios de su sucursal / agencia asignada
-        const targetAgencia = currentUser.agenciaId || query.agenciaId || query.sucursalId;
-        if (targetAgencia) {
-          where.agenciaId = targetAgencia;
-        }
-      } else if (isPulidor) {
-        // Los servicios especiales solo le salen al pulidor al que se le asignó la OT
+        break;
+      case 'AGENCIA':
+        where.agenciaId = alcance.agenciaId;
+        break;
+      case 'PROPIO':
         where.operadorId = currentUser.id;
-      } else if (isCoord && currentUser.regionId) {
-        // El coordinador ve únicamente los servicios de su región asignada
-        where.regionId = currentUser.regionId;
-      }
-    } else {
-      if (query.regionId && query.regionId !== 'Todas' && query.regionId !== 'TODAS') {
-        where.regionId = query.regionId;
-      }
-      const targetAgencia = query.agenciaId || query.sucursalId;
-      if (targetAgencia && targetAgencia !== 'Todas' && targetAgencia !== 'TODAS') {
-        where.agenciaId = targetAgencia;
-      }
+        break;
+      default:
+        where.id = { in: [] };
     }
 
     if (query.operadorId && !where.operadorId) {
@@ -163,48 +194,66 @@ export class ServiciosEspecialesService {
       where.tipoServicio = { contains: query.tipoServicio, mode: 'insensitive' };
     }
 
-    if (query.search) {
-      const q = query.search.trim();
-      const searchConditions = [
-        { codigoSE: { contains: q, mode: 'insensitive' } },
-        { placa: { contains: q, mode: 'insensitive' } },
-        { modelo: { contains: q, mode: 'insensitive' } },
-        { clienteNombre: { contains: q, mode: 'insensitive' } },
-        { observaciones: { contains: q, mode: 'insensitive' } },
-      ];
+    const busqueda = whereBusqueda(
+      ['codigoSE', 'ordenTrabajoOT', 'placa', 'modelo', 'marca', 'clienteNombre', 'tipoServicio', 'operador.name', 'operador.lastname'],
+      query.search,
+    );
 
-      if (where.OR) {
-        where.AND = [
-          { OR: where.OR },
-          { OR: searchConditions },
-        ];
-        delete where.OR;
-      } else {
-        where.OR = searchConditions;
-      }
-    }
+    const desde = query.fechaDesde ? new Date(query.fechaDesde) : null;
+    const hasta = query.fechaHasta ? new Date(query.fechaHasta) : null;
+    const rangoFechas = {
+      ...(desde && !Number.isNaN(desde.getTime()) ? { gte: desde } : {}),
+      ...(hasta && !Number.isNaN(hasta.getTime()) ? { lte: hasta } : {}),
+    };
 
-    const page = query.page ? Number(query.page) : 1;
-    const pageSize = query.pageSize ? Number(query.pageSize) : 50;
-    const skip = (page - 1) * pageSize;
+    // El estado va aparte: el resumen por estado usa los mismos filtros pero sin el de estado.
+    const { estado: estadoFiltrado, ...whereSinEstado } = where;
+    const whereBase = combinarWhere(
+      whereSinEstado,
+      Object.keys(rangoFechas).length ? { createdAt: rangoFechas } : undefined,
+      busqueda,
+    );
+    const whereFinal = combinarWhere(whereBase, estadoFiltrado !== undefined ? { estado: estadoFiltrado } : undefined);
+
+    // Un cliente antiguo que no envía tamaño de página recibe hasta 100 (antes, 50).
+    const sinTamano = query.pageSize === undefined || query.pageSize === null;
+    const { page, pageSize, skip, take } = resolverPaginacion(query, sinTamano ? { defecto: 100 } : {});
+    const orderBy = resolverOrden(query.sortField, query.sortOrder, ORDEN_ESPECIALES, { campo: 'fecha', dir: 'desc' });
 
     const [items, total] = await Promise.all([
       this.prisma.servicioEspecial.findMany({
-        where,
+        where: whereFinal,
         skip,
-        take: pageSize,
-        orderBy: { createdAt: 'desc' },
+        take,
+        orderBy: orderBy as any,
         include: {
           agencia: { select: { id: true, nombre: true, codigo: true } },
           operador: { select: { id: true, name: true, lastname: true, email: true, regionId: true } },
           region: { select: { id: true, nombre: true, codigo: true } },
         },
       }),
-      this.prisma.servicioEspecial.count({ where }),
+      this.prisma.servicioEspecial.count({ where: whereFinal }),
     ]);
 
     const formatted = items.map((i) => this._formatItem(i));
-    return buildDataGridResponse(formatted, total, page, pageSize);
+    const respuesta: Record<string, unknown> = { ...buildDataGridResponse(formatted, total, page, pageSize) };
+
+    if (query.incluirResumen) {
+      const porEstado = await this.prisma.servicioEspecial.groupBy({
+        by: ['estado'],
+        where: whereBase as any,
+        _count: { _all: true },
+      });
+      const conteo: Record<string, number> = {};
+      let totalResumen = 0;
+      for (const fila of porEstado) {
+        conteo[fila.estado] = fila._count._all;
+        totalResumen += fila._count._all;
+      }
+      respuesta['resumen'] = { porEstado: conteo, total: totalResumen };
+    }
+
+    return respuesta;
   }
 
   async findOneRaw(id: string) {
@@ -231,9 +280,21 @@ export class ServiciosEspecialesService {
     return item;
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actor?: any) {
     const item = await this.findOneRaw(id);
+    this.asegurarPuedeVer(actor, item);
     return this._formatItem(item);
+  }
+
+  /** Quién anuló este servicio especial y por qué (del más reciente al más antiguo). */
+  async historialDecisiones(id: string, actor: any) {
+    const item = await this.findOneRaw(id);
+    this.asegurarPuedeVer(actor, item);
+    return this.prisma.auditoriaDecision.findMany({
+      where: { entidad: 'SERVICIO_ESPECIAL', entidadId: item.id },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
   }
 
   async create(dto: CreateServicioEspecialDto, creatorId?: string, currentUser?: any) {
@@ -243,17 +304,14 @@ export class ServiciosEspecialesService {
       throw new BadRequestException('El número de Orden de Trabajo (OT) es obligatorio y debe ser ingresado por el usuario.');
     }
 
+    // La OT de servicios especiales tiene su propio espacio de numeración, independiente del de
+    // servicios generales (lavado): el mismo número puede existir una vez en cada uno (decisión
+    // de producto, ver PLAN-PERMISOS-Y-ROLES.md). Por eso aquí solo se valida contra otros
+    // servicios especiales, nunca contra ServicioLavado.
     const duplicateEspecial = await this.prisma.servicioEspecial.findFirst({
       where: { codigoSE: { equals: rawOT, mode: 'insensitive' }, deletedAt: null },
     });
     if (duplicateEspecial) {
-      throw new BadRequestException(`La Orden de Trabajo "${rawOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
-    }
-
-    const duplicateGeneral = await this.prisma.servicioLavado.findFirst({
-      where: { ordenTrabajoOT: { equals: rawOT, mode: 'insensitive' }, deletedAt: null },
-    });
-    if (duplicateGeneral) {
       throw new BadRequestException(`La Orden de Trabajo "${rawOT}" ya se encuentra registrada en el sistema. Ingrese un número de OT único.`);
     }
 
@@ -283,10 +341,10 @@ export class ServiciosEspecialesService {
       }
     }
 
-    const rolCreator = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
-    const isAdminCreator = rolCreator.includes('ADMIN') || rolCreator.includes('SUPER');
-    const isCoord = (rolCreator.includes('COORD_SERVICIOS_ESPECIALES') || (rolCreator.includes('COORD') && rolCreator.includes('ESPECIALES'))) && !isAdminCreator;
-    const isPulidorCreator = rolCreator.includes('PULIDOR') && !isAdminCreator;
+    const rolCreator = rolDeUsuario(currentUser);
+    const isAdminCreator = rolCreator === 'SUPER_ADMIN' || rolCreator === 'ADMIN';
+    const isCoord = rolCreator === 'COORD_SERVICIOS_ESPECIALES' && !isAdminCreator;
+    const isPulidorCreator = rolCreator === 'PULIDOR' && !isAdminCreator;
 
     let finalAgenciaId = dto.agenciaId || null;
 
@@ -314,6 +372,27 @@ export class ServiciosEspecialesService {
       finalAgenciaId = dto.agenciaId;
     }
 
+    // El alcance del usuario manda: una agencia solo en su agencia; una región solo en agencias de su región.
+    if (currentUser) {
+      const alcance = resolverAlcance(currentUser);
+      if (alcance.tipo === 'AGENCIA') {
+        if (finalAgenciaId && finalAgenciaId !== alcance.agenciaId) {
+          throw new ForbiddenException('Solo puedes crear servicios especiales en tu agencia.');
+        }
+        finalAgenciaId = alcance.agenciaId;
+      } else if (alcance.tipo === 'REGION') {
+        if (finalAgenciaId) {
+          const agenciaSel = await this.prisma.agencia.findUnique({ where: { id: finalAgenciaId }, select: { regionId: true } });
+          if (!agenciaSel || agenciaSel.regionId !== alcance.regionId) {
+            throw new ForbiddenException('Esa agencia no pertenece a tu región.');
+          }
+        }
+        finalRegionId = alcance.regionId;
+      } else if (alcance.tipo !== 'GLOBAL') {
+        throw new ForbiddenException('Tu usuario no tiene agencia ni región asignada para crear servicios especiales.');
+      }
+    }
+
     // Validar asignación de operador: Si el creador es Coordinador, el operador debe ser de su misma región
     if (dto.operadorId && finalRegionId) {
       const operadorAsignado = await this.prisma.user.findUnique({
@@ -329,6 +408,21 @@ export class ServiciosEspecialesService {
     if (!operadorIdFinal && isPulidorCreator) {
       operadorIdFinal = creatorId || currentUser?.id || null;
     }
+
+    // Si la agencia tiene un pulidor fijo activo, la OT es siempre para él: nadie (coordinador o
+    // administrador) puede asignarla a otro pulidor. La web y la app ya bloquean este campo en
+    // pantalla; esta es la validación de servidor que hace la regla real, no solo de UI. No aplica
+    // cuando el propio pulidor se autoasigna su OT (isPulidorCreator, ya resuelto arriba).
+    if (!isPulidorCreator && finalAgenciaId) {
+      const pulidorFijo = await this.prisma.user.findFirst({
+        where: { estado: 1, agenciaId: finalAgenciaId, role: { namerol: 'PULIDOR' } },
+        select: { id: true },
+      });
+      if (pulidorFijo) {
+        operadorIdFinal = pulidorFijo.id;
+      }
+    }
+
     if (isCoord && !operadorIdFinal) {
       throw new BadRequestException('Debe asignar un pulidor móvil para crear la orden de servicio especial.');
     }
@@ -396,20 +490,36 @@ export class ServiciosEspecialesService {
       throw new BadRequestException('No se puede reasignar un servicio finalizado o cancelado.');
     }
 
-    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
-    const puedeReasignar =
-      rol.includes('COORD') ||
-      rol.includes('ADMIN') ||
-      rol.includes('SUPER') ||
-      rol.includes('GERENTE');
-    if (!puedeReasignar) {
-      throw new ForbiddenException('Solo el coordinador puede reasignar este servicio.');
-    }
+    this.asegurarPuedeVer(currentUser, item);
 
     const rawOp = dto.operadorId == null ? '' : String(dto.operadorId).trim();
     const operadorIdFinal = !rawOp || rawOp === '0' || rawOp === 'null' ? null : rawOp;
 
+    // Si la agencia del servicio tiene un pulidor fijo activo, la OT es siempre para él: no se
+    // puede reasignar a otro pulidor (misma regla que en la creación).
+    if (item.agenciaId) {
+      const pulidorFijo = await this.prisma.user.findFirst({
+        where: { estado: 1, agenciaId: item.agenciaId, role: { namerol: 'PULIDOR' } },
+        select: { id: true },
+      });
+      if (pulidorFijo && operadorIdFinal !== pulidorFijo.id) {
+        throw new BadRequestException('Esta agencia tiene un pulidor fijo asignado permanentemente: no se puede reasignar a otro pulidor.');
+      }
+    }
+
     if (operadorIdFinal) {
+      const destino = await this.prisma.user.findUnique({
+        where: { id: operadorIdFinal },
+        select: { estado: true, regionId: true, agencia: { select: { regionId: true } }, role: { select: { namerol: true } } },
+      });
+      if (!destino || destino.estado !== 1 || normalizarRol(destino.role?.namerol) !== 'PULIDOR') {
+        throw new BadRequestException('El nuevo responsable debe ser un pulidor activo.');
+      }
+      const regionDestino = destino.regionId || destino.agencia?.regionId || null;
+      const regionServicio = item.regionId || item.agencia?.regionId || null;
+      if (regionServicio && regionDestino && regionServicio !== regionDestino) {
+        throw new BadRequestException('Solo se puede reasignar a un pulidor de la misma región del servicio.');
+      }
       await this.assertPulidorTieneInsumosParaOT(
         operadorIdFinal,
         dto.recetaInsumos || item.recetaInsumos,
@@ -613,19 +723,28 @@ export class ServiciosEspecialesService {
       return this._formatItem(item);
     }
 
-    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
-    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
-    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+    const rol = rolDeUsuario(currentUser);
+    // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
+    // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
+    // permiso desde Roles y Permisos, este comportamiento cambia con él.
+    const puedeActuarSobreCualquiera = tienePermiso(currentUser, 'especiales.reasignar');
+    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
 
     // Solo el pulidor asignado a esta OT o un Admin/SuperAdmin puede iniciarla
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede iniciar el servicio.');
     }
 
+    // El operadorId que manda el cliente solo se usa para asignar (cuando aún no hay uno) si el actor tiene
+    // permiso de reasignar; si no, se queda con el que ya tenía el servicio o, si no tenía, con el propio actor.
+    // Nunca se toma un id de un tercero como respaldo (D3).
+    const operadorIdFinal = item.operadorId
+      ?? (puedeActuarSobreCualquiera && dto.operadorId ? dto.operadorId : currentUser?.id);
+
     const data: any = {
       estado: 'En Proceso',
       fechaInicio: item.fechaInicio || new Date(),
-      operadorId: dto.operadorId || item.operadorId,
+      operadorId: operadorIdFinal,
       version: item.version + 1,
     };
 
@@ -649,9 +768,12 @@ export class ServiciosEspecialesService {
   async pausar(dto: PausarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
 
-    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
-    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
-    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+    const rol = rolDeUsuario(currentUser);
+    // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
+    // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
+    // permiso desde Roles y Permisos, este comportamiento cambia con él.
+    const puedeActuarSobreCualquiera = tienePermiso(currentUser, 'especiales.reasignar');
+    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
 
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede pausar el servicio.');
@@ -737,9 +859,12 @@ export class ServiciosEspecialesService {
   async reanudar(dto: ReanudarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
 
-    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
-    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
-    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+    const rol = rolDeUsuario(currentUser);
+    // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
+    // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
+    // permiso desde Roles y Permisos, este comportamiento cambia con él.
+    const puedeActuarSobreCualquiera = tienePermiso(currentUser, 'especiales.reasignar');
+    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
 
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException('Solo el pulidor asignado a esta orden de trabajo puede reanudar el servicio.');
@@ -898,9 +1023,12 @@ export class ServiciosEspecialesService {
   async completar(dto: CompletarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
 
-    const rol = (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '').toUpperCase();
-    const isAdmin = rol.includes('ADMIN') || rol.includes('SUPER');
-    const isPulidor = rol.includes('PULIDOR') && !isAdmin;
+    const rol = rolDeUsuario(currentUser);
+    // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
+    // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
+    // permiso desde Roles y Permisos, este comportamiento cambia con él.
+    const puedeActuarSobreCualquiera = tienePermiso(currentUser, 'especiales.reasignar');
+    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
 
     // Solo el pulidor asignado a esta OT o un Admin/SuperAdmin puede completarla
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
@@ -1126,15 +1254,27 @@ export class ServiciosEspecialesService {
     }
   }
 
-  async softDelete(id: string, motivo?: string) {
+  /**
+   * Anula un servicio especial (no se borra). Con `actor` (llamada desde la API) exige motivo, valida el alcance y deja registrado
+   * quién, cuándo y por qué. Anulan el coordinador de servicios especiales y los administradores; el aprobador, los de su agencia.
+   */
+  async softDelete(id: string, motivo?: string, actor?: any) {
     const item = await this.findOneRaw(id);
+    let motivoOk = motivo;
+    let regla: 'TITULAR' | 'ADMIN' = 'ADMIN';
+    if (actor) {
+      if (item.deletedAt) throw new BadRequestException('El servicio especial ya está anulado.');
+      motivoOk = this.decisiones.exigirMotivo(motivo, 'anular un servicio especial');
+      this.asegurarPuedeVer(actor, item);
+      regla = ['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor)) ? 'ADMIN' : 'TITULAR';
+    }
     const updated = await this.prisma.servicioEspecial.update({
       where: { id: item.id },
       data: {
         estado: 'Cancelado',
         deletedAt: new Date(),
-        observaciones: motivo
-          ? `${item.observaciones || ''} | [Cancelado]: ${motivo}`.trim()
+        observaciones: motivoOk
+          ? `${item.observaciones || ''} | [Anulado]: ${motivoOk}`.trim()
           : item.observaciones,
         version: item.version + 1,
       },
@@ -1145,6 +1285,19 @@ export class ServiciosEspecialesService {
       },
     });
 
+    if (actor) {
+      await this.decisiones.registrar({
+        entidad: 'SERVICIO_ESPECIAL',
+        entidadId: item.id,
+        accion: 'ANULAR',
+        user: actor,
+        regla,
+        motivo: motivoOk,
+        agenciaId: item.agenciaId,
+        detalle: { estadoAnterior: item.estado },
+      });
+    }
+
     return this._formatItem(updated);
   }
 
@@ -1152,7 +1305,18 @@ export class ServiciosEspecialesService {
   // MÉTODOS AUXILIARES: PULIDORES Y STOCK ZONAL
   // =========================================================================
 
-  async listarPulidoresPorRegion(regionId?: string, agenciaId?: string) {
+  async listarPulidoresPorRegion(regionId?: string, agenciaId?: string, actor?: any) {
+    if (actor) {
+      const alcance = resolverAlcance(actor);
+      if (alcance.tipo === 'AGENCIA') {
+        agenciaId = alcance.agenciaId;
+        regionId = undefined;
+      } else if (alcance.tipo === 'REGION') {
+        regionId = alcance.regionId;
+      } else if (alcance.tipo !== 'GLOBAL') {
+        return [];
+      }
+    }
     const where: any = {
       estado: 1,
       role: {
@@ -1201,7 +1365,21 @@ export class ServiciosEspecialesService {
     });
   }
 
-  async obtenerStockPulidor(pulidorId: string) {
+  async obtenerStockPulidor(pulidorId: string, actor?: any) {
+    if (actor && pulidorId !== String(actor.id)) {
+      if (rolDeUsuario(actor) === 'PULIDOR') throw new ForbiddenException('Solo puedes ver el stock de tu propio kit.');
+      const pulidor = await this.prisma.user.findUnique({
+        where: { id: pulidorId },
+        select: { id: true, agenciaId: true, regionId: true, agencia: { select: { regionId: true } } },
+      });
+      const alcance = resolverAlcance(actor);
+      const permitido =
+        !!pulidor &&
+        (alcance.tipo === 'GLOBAL' ||
+          (alcance.tipo === 'REGION' && (pulidor.regionId === alcance.regionId || pulidor.agencia?.regionId === alcance.regionId)) ||
+          (alcance.tipo === 'AGENCIA' && pulidor.agenciaId === alcance.agenciaId));
+      if (!permitido) throw new ForbiddenException('Ese pulidor no pertenece a tu alcance.');
+    }
     const stocks = await this.prisma.stockUbicacion.findMany({
       where: {
         pulidorId,

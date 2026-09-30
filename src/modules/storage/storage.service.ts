@@ -14,6 +14,7 @@ import {
   type EvidenceKind,
 } from './media-inspect.js';
 
+import { resolverAlcance } from '../../common/permisos/alcance.js';
 /** Resultado de verificar un archivo ya subido a S3. */
 export interface InspectedEvidence {
   key: string;
@@ -764,6 +765,22 @@ export class StorageService implements OnModuleInit {
       return raw;
     }
     return this.safeSegment(raw, 'usuario');
+  }
+
+  /**
+   * ¿La carpeta de agencia de una llave (`agencias/<segmento>/…`) está dentro del alcance del usuario? El segmento es el nombre de la
+   * agencia. País: cualquiera; región: las agencias de su región; agencia: la suya.
+   */
+  public async agenciaSegmentoEnAlcance(user: any, segmento: string): Promise<boolean> {
+    const alcance = resolverAlcance(user);
+    if (alcance.tipo === 'GLOBAL') return true;
+    if (!this.prisma) return false;
+    const agencias = await this.prisma.agencia.findMany({
+      where: alcance.tipo === 'REGION' ? { regionId: alcance.regionId } : alcance.tipo === 'AGENCIA' ? { id: alcance.agenciaId } : { id: { in: [] } },
+      select: { id: true, nombre: true },
+    });
+    const buscado = String(segmento || '').toLowerCase();
+    return agencias.some((a) => a.id.toLowerCase() === buscado || this.safeSegment(a.nombre, 'agencia-general').toLowerCase() === buscado);
   }
 
   private safeSegment(value: string | undefined, fallback: string): string {

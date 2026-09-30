@@ -1,5 +1,6 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, Min, Max, IsIn, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class QueryServicioEspecialDto {
   @ApiPropertyOptional({ description: 'ID de agencia' })
@@ -37,13 +38,48 @@ export class QueryServicioEspecialDto {
   @IsOptional()
   search?: string;
 
-  @ApiPropertyOptional({ default: 1 })
+  @ApiPropertyOptional({ example: 1, description: 'Página (1 = primera)' })
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ default: 50 })
+  @ApiPropertyOptional({ example: 25, description: 'Filas por página (máximo 100; un valor mayor se recorta). Sin valor: hasta 100 (clientes antiguos).' })
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(200)
   pageSize?: number;
+
+  @ApiPropertyOptional({
+    example: 'fecha',
+    description: 'Columna: fecha, ot, placa, servicio, agencia, region, operador, estado, tiempoPausa, tiempoEfectivo. Por defecto: más reciente primero.',
+  })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ example: 'desc', enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ example: '2026-09-01T05:00:00.000Z', description: 'Desde (inclusive), por fecha de creación. ISO 8601.' })
+  @IsOptional()
+  @IsString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ example: '2026-09-30T04:59:59.999Z', description: 'Hasta (inclusive), por fecha de creación. ISO 8601.' })
+  @IsOptional()
+  @IsString()
+  fechaHasta?: string;
+
+  @ApiPropertyOptional({ description: 'Incluye el conteo por estado con los mismos filtros (menos el de estado)' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
 }
 
 export class CreateServicioEspecialDto {

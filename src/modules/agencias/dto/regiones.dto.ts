@@ -1,5 +1,6 @@
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsIn } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
 export class CreateRegionDto {
   @ApiProperty({ example: 'REG-SIERRA', description: 'Código único de la región' })
@@ -72,12 +73,8 @@ export class UpdateRegionDto {
   responsable?: string;
 }
 
-export class ListRegionesDto {
-  @ApiPropertyOptional({ example: 'Sierra', description: 'Buscar por nombre o código' })
-  @IsOptional()
-  @IsString()
-  search?: string;
-
+/** Sin page/pageSize: arreglo (hasta 100). Con alguno: página. Orden: codigo, nombre, estado, agencias, usuarios, fecha. */
+export class ListRegionesDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 1, description: 'Filtrar por estado: 1 activo, 0 inactivo' })
   @IsOptional()
   @IsInt()

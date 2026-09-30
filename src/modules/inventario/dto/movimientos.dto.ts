@@ -7,6 +7,11 @@ import {
   ValidateNested,
   ArrayNotEmpty,
   IsPositive,
+  IsInt,
+  IsIn,
+  IsBoolean,
+  Min,
+  Max,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -227,4 +232,57 @@ export class ListMovimientosDto {
   @IsOptional()
   @IsString()
   numeroGuia?: string;
+}
+
+/**
+ * Filtros y paginación de `despachos/list`. Sin `page` ni `pageSize` (clientes antiguos, como la app móvil) responde
+ * un arreglo con hasta 100 despachos; con alguno de los dos responde `{ items, total, page, … }`.
+ * No fija valores por defecto para poder distinguir ambos casos.
+ */
+export class ListDespachosDto extends ListMovimientosDto {
+  // Estos dos ya los enviaban los clientes, pero al no estar declarados el validador global los descartaba.
+  @ApiPropertyOptional({ description: 'Agencia destino (id, nombre o código)' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'Agencia destino (id, nombre o código)' })
+  @IsOptional()
+  @IsString()
+  agenciaDestinoId?: string;
+
+  @ApiPropertyOptional({ example: 1, description: 'Página (1 = primera)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 25, description: 'Filas por página (máximo 100; un valor mayor se recorta)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  pageSize?: number;
+
+  @ApiPropertyOptional({ example: 'fecha', description: 'Columna: fecha, guia, estado, origen, destino, recepcion. Por defecto: más reciente primero.' })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ example: 'desc', enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ description: 'Búsqueda por palabras: guía, origen, destino, responsables e insumos (mínimo 2 letras)' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Incluye los contadores por estado con los mismos filtros (menos el de estado)' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
 }
