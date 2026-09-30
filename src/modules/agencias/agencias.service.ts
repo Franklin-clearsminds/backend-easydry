@@ -2694,7 +2694,14 @@ export class AgenciasService {
     const cedula = cedulaMatch ? cedulaMatch[1] : (u.email ? u.email.split('@')[0].replace('op.', '') : 'N/A');
     const cleanLastname = rawLastname.replace(/\(CI:[^)]+\)/, '').replace(/CI:[^)]+/, '').trim();
     const fullName = `${u.name || ''} ${cleanLastname}`.trim();
-    const bahiaActual = u.bahiasAsignadas && u.bahiasAsignadas.length > 0 ? u.bahiasAsignadas[0] : null;
+    // Antes se leía `u.bahiasAsignadas` (la relación legacy 1:1 vía Bahia.operadorActualId): en
+    // cuanto una bahía admite más de un lavador (maxLavadoresPorBahia > 1) y se asigna un segundo,
+    // `asignarOperadorABahia` mueve ese campo legacy al recién llegado y el primer lavador deja de
+    // tener CUALQUIER bahía en `bahiasAsignadas` — aunque su fila en BahiaOperador siga activa. Se
+    // usa la relación real (BahiaOperador.activo=true) como fuente de verdad. Ver conversación con
+    // el usuario del 2026-09-30.
+    const asignacionActiva = u.bahiaOperadores && u.bahiaOperadores.length > 0 ? u.bahiaOperadores[0] : null;
+    const bahiaActual = asignacionActiva?.bahia || null;
 
     return {
       id: u.id,
@@ -2770,7 +2777,7 @@ export class AgenciasService {
     // Filtros por nombre de la pantalla de operadores (bahía asignada y cliente de la agencia).
     const extra: any[] = [];
     if (dto.bahiaNombre?.trim()) {
-      extra.push({ bahiasAsignadas: { some: { nombre: { contains: dto.bahiaNombre.trim(), mode: 'insensitive' } } } });
+      extra.push({ bahiaOperadores: { some: { activo: true, bahia: { nombre: { contains: dto.bahiaNombre.trim(), mode: 'insensitive' } } } } });
     }
     if (dto.clienteNombre?.trim()) {
       extra.push({ agencia: { cliente: { nombre: { equals: dto.clienteNombre.trim(), mode: 'insensitive' } } } });
@@ -2798,7 +2805,7 @@ export class AgenciasService {
           include: {
             role: true,
             agencia: true,
-            bahiasAsignadas: true,
+            bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } },
             _count: { select: { serviciosAtendidos: true } },
           },
         }),
@@ -2886,7 +2893,7 @@ export class AgenciasService {
       include: {
         role: true,
         agencia: true,
-        bahiasAsignadas: true,
+        bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } },
         _count: {
           select: { serviciosAtendidos: true }
         }
@@ -2917,7 +2924,7 @@ export class AgenciasService {
       include: {
         role: true,
         agencia: true,
-        bahiasAsignadas: true,
+        bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } },
         _count: {
           select: { serviciosAtendidos: true }
         }
@@ -2931,7 +2938,7 @@ export class AgenciasService {
   async updateOperador(dto: UpdateOperadorDto, updaterId?: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: dto.id },
-      include: { bahiasAsignadas: true }
+      include: { bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } } }
     });
     if (!user) {
       throw new NotFoundException(`Operador con ID "${dto.id}" no encontrado`);
@@ -2984,7 +2991,7 @@ export class AgenciasService {
 
     // Si se especificó bahía para cambiar o desvincular
     if (dto.bahiaId !== undefined) {
-      const currentBahia = user.bahiasAsignadas?.[0];
+      const currentBahia = user.bahiaOperadores?.[0]?.bahia;
       const esSinBahia = !dto.bahiaId || dto.bahiaId.toLowerCase().includes('sin bahia') || dto.bahiaId.toLowerCase().includes('sin bahía');
 
       if (esSinBahia && currentBahia) {
@@ -3008,7 +3015,7 @@ export class AgenciasService {
       include: {
         role: true,
         agencia: true,
-        bahiasAsignadas: true,
+        bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } },
         _count: { select: { serviciosAtendidos: true } }
       }
     });

@@ -177,7 +177,7 @@ describe('agencias/list', () => {
 describe('agencias/operadores/list', () => {
   const armar = () => {
     const prisma = {
-      user: tabla([{ id: 'o1', name: 'Pedro', lastname: 'Ruiz', email: 'op.1@x', role: { namerol: 'LAVADOR' }, bahiasAsignadas: [], _count: { serviciosAtendidos: 0 } }], 30),
+      user: tabla([{ id: 'o1', name: 'Pedro', lastname: 'Ruiz', email: 'op.1@x', role: { namerol: 'LAVADOR' }, bahiaOperadores: [], _count: { serviciosAtendidos: 0 } }], 30),
     };
     return { prisma, service: new AgenciasService(prisma as never) };
   };
@@ -204,9 +204,30 @@ describe('agencias/operadores/list', () => {
     const { prisma, service } = armar();
     await service.listOperadores({ page: 1, bahiaNombre: 'Bahía 2', clienteNombre: 'EasyDry', estado: 1 } as any, { role: 'ADMIN' });
     const txt = JSON.stringify(prisma.user.findMany.mock.calls[0][0].where);
-    expect(txt).toContain('"bahiasAsignadas":{"some":{"nombre":{"contains":"Bahía 2"');
+    // Filtra por la relación real BahiaOperador (activa), no por el campo legacy Bahia.operadorActualId
+    // que se pisa al asignar un segundo lavador a la misma bahía (ver conversación 2026-09-30).
+    expect(txt).toContain('"bahiaOperadores":{"some":{"activo":true,"bahia":{"nombre":{"contains":"Bahía 2"');
     expect(txt).toContain('"cliente":{"nombre":{"equals":"EasyDry"');
     expect(txt).toContain('"estado":1');
+  });
+
+  it('la bahía de un operador sale de BahiaOperador (activo), no del campo legacy que se pisa al agregar un segundo lavador', async () => {
+    // Bug real: al asignar un segundo lavador a una bahía con maxLavadoresPorBahia > 1,
+    // `asignarOperadorABahia` mueve `Bahia.operadorActualId` al recién llegado. Si `mapUserToOperador`
+    // siguiera leyendo esa relación legacy, el PRIMER lavador aparecería como "Sin asignar" aunque su
+    // fila en BahiaOperador siga activa. Se verifica que ahora lee de ahí.
+    const prisma = {
+      user: tabla([
+        {
+          id: 'o1', name: 'Pedro', lastname: 'Ruiz', email: 'op.1@x', role: { namerol: 'LAVADOR' },
+          bahiaOperadores: [{ bahia: { id: 'b1', nombre: 'Bahía 01', codigo: 'B01' } }],
+          _count: { serviciosAtendidos: 0 },
+        },
+      ], 1),
+    };
+    const service = new AgenciasService(prisma as never);
+    const r: any = await service.listOperadores({ page: 1, pageSize: 10 } as any, { role: 'ADMIN' });
+    expect(r.items[0]).toMatchObject({ bahia: 'Bahía 01', bahiaId: 'b1' });
   });
 
   it('un líder queda limitado a su agencia aunque pida otra', async () => {
