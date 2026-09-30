@@ -32,9 +32,10 @@ describe('resolverAlcance', () => {
     expect(resolverAlcance(usuario('PULIDOR'))).toEqual({ tipo: 'NINGUNO' });
   });
 
-  it('el asistente de bodega usa la región de su bodega; el técnico solo lo propio', () => {
+  it('el asistente de bodega usa la región de su bodega; el técnico, la región que tiene asignada', () => {
     expect(resolverAlcance(usuario('ASISTENTE_BODEGA', { bodega: { regionId: 'r9' } }))).toEqual({ tipo: 'REGION', regionId: 'r9' });
-    expect(resolverAlcance(usuario('TECNICO'))).toEqual({ tipo: 'PROPIO', userId: 'u1' });
+    expect(resolverAlcance(usuario('TECNICO', { regionId: 'r3' }))).toEqual({ tipo: 'REGION', regionId: 'r3' });
+    expect(resolverAlcance(usuario('TECNICO'))).toEqual({ tipo: 'NINGUNO' });
   });
 
   it('un ámbito desconocido no da acceso', () => {

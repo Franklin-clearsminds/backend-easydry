@@ -88,7 +88,7 @@ export const ROLES_BASE: RolBase[] = [
       ...LECTURA_RED, 'dashboard.ver', 'bahias.editar', 'bahias.asignar', 'servicios.ver', 'servicios.crear', 'servicios.editar',
       'servicios.anular', 'solicitudes.ver', 'solicitudes.crear', 'consumos.ver', 'recetas.ver', 'retos.ver', 'inventario.ver',
       'stock.consumir', 'despachos.ver', 'despachos.crear', 'despachos.recibir', 'alertas.ver', 'alertas.crear', 'maquinaria.ver',
-      'incidentes.ver', 'incidentes.reportar', 'maquinaria.evidencias', 'evidencias.subir', 'sync.usar',
+      'incidentes.ver', 'incidentes.reportar', 'mantenimientos.ver', 'maquinaria.evidencias', 'evidencias.subir', 'sync.usar',
     ),
   },
   {
@@ -117,7 +117,7 @@ export const ROLES_BASE: RolBase[] = [
     capacidades: p(
       'agencias.ver', 'catalogo.ver', 'evidencias.ver', 'dashboard.ver', 'especiales.ver', 'especiales.crear',
       'especiales.operar', 'recetas.ver', 'retos.ver', 'inventario.ver', 'stock.consumir', 'despachos.ver', 'despachos.recibir',
-      'alertas.ver', 'alertas.crear', 'maquinaria.ver', 'incidentes.ver', 'incidentes.reportar', 'maquinaria.evidencias',
+      'alertas.ver', 'alertas.crear', 'maquinaria.ver', 'incidentes.ver', 'incidentes.reportar', 'mantenimientos.ver', 'maquinaria.evidencias',
       'evidencias.subir', 'sync.usar',
     ),
   },
@@ -134,8 +134,8 @@ export const ROLES_BASE: RolBase[] = [
   },
   {
     namerol: 'TECNICO',
-    descripcion: 'Técnico de maquinaria: ejecuta y cierra las órdenes de mantenimiento asignadas.',
-    ambito: 'PROPIO',
+    descripcion: 'Técnico de maquinaria: trabaja en la región que tiene asignada y ejecuta y cierra las órdenes de mantenimiento que le asignan.',
+    ambito: 'REGION',
     modulos: ['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'perfil'],
     capacidades: p(
       'dashboard.ver', 'maquinaria.ver', 'incidentes.ver', 'incidentes.resolver', 'mantenimientos.ver', 'mantenimientos.ejecutar',

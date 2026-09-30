@@ -397,7 +397,7 @@ export class AgenciasController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo usuario con credenciales y contraseña (SUPER_ADMIN, ADMIN)' })
   async createUsuario(@Body() dto: CreateUsuarioDto, @CurrentUser() user: any) {
-    return this.agenciasService.createUsuario(dto);
+    return this.agenciasService.createUsuario(dto, user);
   }
 
   @Permiso('usuarios.gestionar')

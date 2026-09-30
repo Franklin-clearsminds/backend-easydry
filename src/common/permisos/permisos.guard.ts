@@ -27,11 +27,6 @@ export class PermisosGuard extends jwt implements CanActivate {
 
     if (this.reflector.getAllAndOverride<boolean>(SOLO_AUTENTICADO_KEY, destinos)) return true;
 
-    // Con una contraseña temporal solo se puede iniciar sesión, ver el perfil y cambiar la contraseña.
-    if (user?.debeCambiarPassword) {
-      throw new ForbiddenException('Debes cambiar tu contraseña temporal antes de continuar.');
-    }
-
     const codigos = this.reflector.getAllAndOverride<string[]>(PERMISO_KEY, destinos);
     if (!codigos?.length) {
       const req = context.switchToHttp().getRequest();

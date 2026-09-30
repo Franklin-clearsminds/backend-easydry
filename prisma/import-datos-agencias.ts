@@ -625,10 +625,10 @@ async function main() {
         servicioIds: servicioIds as unknown as Prisma.InputJsonValue,
         estado: 1,
       };
-      // Solo un usuario nuevo recibe la contraseña inicial (y debe cambiarla); a los existentes no se les toca.
+      // Solo un usuario nuevo recibe la contraseña inicial; a los existentes no se les toca.
       const user = existing
         ? await prisma.user.update({ where: { id: existing.id }, data: dataUser })
-        : await prisma.user.create({ data: { ...dataUser, passwordHash, debeCambiarPassword: true } });
+        : await prisma.user.create({ data: { ...dataUser, passwordHash } });
       if (cedula) assignedCedulas.add(cedula);
       if (esPulidor) pulidoresFijos += 1;
       else lavadores += 1;
@@ -654,7 +654,7 @@ async function main() {
       estado: 1,
     };
     if (existing) await prisma.user.update({ where: { id: existing.id }, data: dataUser });
-    else await prisma.user.create({ data: { ...dataUser, passwordHash, debeCambiarPassword: true } });
+    else await prisma.user.create({ data: { ...dataUser, passwordHash } });
     assignedCedulas.add(p.cedula);
     pulidoresMoviles += 1;
   }
@@ -707,7 +707,7 @@ async function main() {
       estado: 1,
     };
     if (existente) await prisma.user.update({ where: { id: existente.id }, data: dataGestion });
-    else await prisma.user.create({ data: { ...dataGestion, passwordHash, debeCambiarPassword: true } });
+    else await prisma.user.create({ data: { ...dataGestion, passwordHash } });
     gestionPorRol.set(p.rol, (gestionPorRol.get(p.rol) || 0) + 1);
   }
 

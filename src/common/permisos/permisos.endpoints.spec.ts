@@ -61,7 +61,7 @@ describe('todos los endpoints declaran su permiso (falla cerrado)', () => {
       for (const { nombre, handler } of rutas(c)) if (Reflect.getMetadata(SOLO_AUTENTICADO_KEY, handler)) solos.push(`${c.name}.${nombre}`);
     }
     expect(solos.sort()).toEqual([
-      'AuthController.changePassword', 'AuthController.getMe', 'AuthController.updateProfile',
+      'AuthController.getMe', 'AuthController.updateProfile',
       'StorageController.getPresignedUrl', 'StorageController.getUploadTicket', 'StorageController.uploadFile',
     ]);
   });

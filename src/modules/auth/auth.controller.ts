@@ -4,7 +4,6 @@ import { AuthService } from './auth.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
-import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
 
 import { Publico, SoloAutenticado } from '../../common/permisos/permisos.decorators.js';
@@ -54,17 +53,4 @@ export class AuthController {
     return this.authService.updateProfile(userId, dto);
   }
 
-  @SoloAutenticado()
-  @Post('change-password')
-  @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Cambiar la contraseña propia (cualquier usuario con sesión)',
-    description: 'Exige la contraseña actual.',
-  })
-  @ApiResponse({ status: 200, description: 'Contraseña actualizada' })
-  @ApiResponse({ status: 400, description: 'Contraseña actual incorrecta o nueva inválida' })
-  async changePassword(@CurrentUser() user: any, @Body() dto: ChangePasswordDto) {
-    return this.authService.changePassword(user.id, dto);
-  }
 }

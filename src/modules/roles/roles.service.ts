@@ -277,6 +277,9 @@ export class RolesService {
     }
     if (ambito !== undefined) {
       if (!esAmbito(ambito)) throw new BadRequestException('Ámbito inválido.');
+      if (role.esSistema && ambito !== role.ambito) {
+        throw new ForbiddenException('El ámbito de un rol oficial no se puede cambiar: el sistema depende de él (define qué región, agencia o registros propios puede ver y asignar cada usuario con ese rol).');
+      }
       dataToUpdate.ambito = ambito;
     }
     // Solo se validan como "otorgados" los permisos que el rol no tenía antes.

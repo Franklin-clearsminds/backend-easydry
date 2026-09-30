@@ -6,7 +6,6 @@ import bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
-import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { StorageService } from '../storage/storage.service.js';
 
 @Injectable()
@@ -123,8 +122,6 @@ export class AuthService {
         /** Permisos que el backend exige (Role.capacidades) y sobre qué datos actúa el rol (Role.ambito) */
         capacidades: user.role?.capacidades ?? [],
         ambito: user.role?.ambito ?? 'AGENCIA',
-        /** true = contraseña temporal: la web y la app llevan al usuario a cambiarla antes de seguir */
-        debeCambiarPassword: !!user.debeCambiarPassword,
         agenciaId: user.agenciaId,
         agenciasIds: user.agenciasIds,
         agencia: user.agencia,
@@ -221,8 +218,6 @@ export class AuthService {
         /** Permisos que el backend exige (Role.capacidades) y sobre qué datos actúa el rol (Role.ambito) */
         capacidades: user.role?.capacidades ?? [],
         ambito: user.role?.ambito ?? 'AGENCIA',
-        /** true = contraseña temporal: la web y la app llevan al usuario a cambiarla antes de seguir */
-        debeCambiarPassword: !!user.debeCambiarPassword,
         agenciaId: user.agenciaId,
         agenciasIds: user.agenciasIds,
         agencia: user.agencia,
@@ -261,7 +256,6 @@ export class AuthService {
         agenciasIds: true,
         bodegaId: true,
         estado: true,
-        debeCambiarPassword: true,
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true, direccion: true },
         },
@@ -302,32 +296,10 @@ export class AuthService {
       acciones: role?.acciones ?? null,
       capacidades: role?.capacidades ?? [],
       ambito: role?.ambito ?? 'AGENCIA',
-      debeCambiarPassword: !!user.debeCambiarPassword,
       roleDetails: role,
       avatarUrl: this.versionedAvatar(user.avatarUrl, user.updatedAt),
       avatar: this.versionedAvatar(user.avatarUrl, user.updatedAt),
     };
-  }
-
-  async changePassword(userId: string, dto: ChangePasswordDto) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      throw new UnauthorizedException('Usuario no encontrado');
-    }
-
-    const actualValida = await bcrypt.compare(dto.currentPassword, user.passwordHash);
-    if (!actualValida) {
-      throw new BadRequestException('La contraseña actual es incorrecta.');
-    }
-    if (dto.currentPassword === dto.newPassword) {
-      throw new BadRequestException('La nueva contraseña debe ser distinta de la actual.');
-    }
-
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash: await bcrypt.hash(dto.newPassword, 10), debeCambiarPassword: false },
-    });
-    return { ok: true, message: 'Contraseña actualizada correctamente.' };
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {

@@ -8,8 +8,8 @@ const ESPECIALES = '*#-_.';
 const elegir = (alfabeto: string): string => alfabeto[randomInt(alfabeto.length)];
 
 /**
- * Contraseña temporal aleatoria de 12 caracteres (sin letras que se confunden: 0/O, 1/l/I). Contiene mayúscula, minúscula, número
- * y un símbolo. El usuario debe cambiarla en su primer ingreso.
+ * Contraseña aleatoria de 12 caracteres (sin letras que se confunden: 0/O, 1/l/I). Contiene mayúscula, minúscula, número
+ * y un símbolo. Se entrega una sola vez a quien registra al usuario; solo un administrador puede volver a cambiarla.
  */
 export function generarPasswordTemporal(): string {
   const todos = MAYUSCULAS + MINUSCULAS + NUMEROS + ESPECIALES;

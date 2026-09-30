@@ -25,7 +25,7 @@ export interface SyncMutationResult {
   mutationId: string;
   clientUuid: string;
   serverAssignedId: string;
-  status: 'APPLIED' | 'ALREADY_EXISTS' | 'FAILED';
+  status: 'APPLIED' | 'ALREADY_EXISTS' | 'FAILED' | 'DEAD_LETTER';
   syncedAt: string;
   error?: string;
 }
@@ -294,7 +294,12 @@ export class SyncService {
                 mutationId: mut.mutationId,
                 clientUuid: mut.clientUuid,
                 serverAssignedId: duplicateActive.id,
-                status: 'FAILED',
+                // DEAD_LETTER, no FAILED: esta condición (otra orden activa con la misma placa) no se
+                // resuelve sola reintentando — ya quedó registrada en syncDeadLetterQueue para
+                // resolución manual arriba. Devolver FAILED hacía que el cliente reintentara el mismo
+                // rechazo cada 30s para siempre, sin que nadie se enterara (ver conversación con el
+                // usuario del 2026-09-30).
+                status: 'DEAD_LETTER',
                 error: `POSIBLE_DUPLICADO_PLACA: Ya existe la orden activa ${duplicateActive.id} para el vehículo ${placa}`,
                 syncedAt: now.toISOString(),
               });
@@ -451,9 +456,15 @@ export class SyncService {
             });
           } else if (action === 'UPDATE' || action === 'COMPLETE') {
             // Actualización de orden existente
+            // `id` es un uuid String en Prisma; algunos clientes (móvil, al crear offline) usan
+            // internamente un id numérico de placeholder que nunca corresponde a una fila real. Sin
+            // este `String(...)`, Prisma rechaza la consulta ENTERA con un error de validación
+            // ("Invalid invocation") en vez de simplemente no encontrar coincidencia por ese lado —
+            // tumbaba toda la mutación (y dejaba la OT sin finalizar) por un tipo de dato, no por un
+            // rechazo de negocio real. clientUuid sigue siendo la clave de idempotencia confiable.
             const existing = await this.prisma.servicioLavado.findFirst({
               where: {
-                OR: [{ clientUuid: mut.clientUuid }, { id: mut.data?.id || mut.clientUuid }],
+                OR: [{ clientUuid: mut.clientUuid }, { id: String(mut.data?.id || mut.clientUuid) }],
               },
             });
 
@@ -787,7 +798,7 @@ export class SyncService {
             mutationId: mut.mutationId,
             clientUuid: mut.clientUuid,
             serverAssignedId: '',
-            status: 'DEAD_LETTER' as any,
+            status: 'DEAD_LETTER',
             syncedAt: now.toISOString(),
             error: `Movido a DLQ (Superó umbral o error irrecuperable): ${err.message}`,
           });

@@ -109,7 +109,16 @@ async function main() {
       rolesMap.set(r.namerol, existente.id);
     } else {
       // Se respetan los permisos que el Super Admin haya ajustado; solo se marca como rol oficial.
-      await prisma.role.update({ where: { id: existente.id }, data: { esSistema: true } });
+      // El ámbito NO es una preferencia ajustable: es una invariante estructural del rol (define qué
+      // región/agencia/registros propios puede ver y asignar), así que el seed lo fuerza siempre,
+      // aunque no se pida actualizar el resto de permisos. Si difiere, también se recalculan las
+      // acciones legacy con las capacidades actuales (las del Super Admin) y el ámbito correcto.
+      const datosForzados: Prisma.RoleUpdateInput = { esSistema: true };
+      if (existente.ambito !== r.ambito) {
+        datosForzados.ambito = r.ambito;
+        datosForzados.acciones = accionesLegacy(existente.capacidades, r.ambito) as unknown as Prisma.InputJsonValue;
+      }
+      await prisma.role.update({ where: { id: existente.id }, data: datosForzados });
       rolesMap.set(r.namerol, existente.id);
     }
   }
@@ -139,7 +148,6 @@ async function main() {
       data: {
         email: c.email,
         passwordHash: await bcrypt.hash(c.password, 10),
-        debeCambiarPassword: true, // la contraseña de siembra es temporal: se cambia en el primer ingreso
         name: c.name,
         lastname: c.lastname,
         roleId: rolesMap.get(c.rol)!,

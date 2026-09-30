@@ -124,9 +124,10 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('sync.dlq.gestionar')).toEqual(['ADMIN', 'SUPER_ADMIN']);
   });
 
-  it('el coordinador comercial y el supervisor tienen alcance regional; el aprobador y el líder, de agencia', () => {
+  it('el coordinador comercial, el supervisor y el técnico tienen alcance regional; el aprobador y el líder, de agencia', () => {
     const ambito = (n: string) => ROLES_BASE.find((r) => r.namerol === n)!.ambito;
     expect(['SUPERVISOR', 'COORD_COMERCIAL'].map(ambito)).toEqual(['REGION', 'REGION']);
+    expect(['COORD_MANTENIMIENTO', 'TECNICO'].map(ambito)).toEqual(['REGION', 'REGION']);
     expect(['APROBADOR', 'LIDER'].map(ambito)).toEqual(['AGENCIA', 'AGENCIA']);
     expect(['SUPER_ADMIN', 'ADMIN', 'JEFE_COMERCIAL'].map(ambito)).toEqual(['GLOBAL', 'GLOBAL', 'GLOBAL']);
   });

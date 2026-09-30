@@ -2025,15 +2025,18 @@ export class AgenciasService {
       throw new ForbiddenException('El usuario Super Administrador es de sistema y no puede gestionarse desde la aplicación.');
     }
 
-    // Reinicio de contraseña: reglas de quién puede reiniciar a quién.
+    // Las contraseñas las gestiona únicamente el Administrador o el Super Administrador: nadie cambia la suya.
     const nuevaPassword = dto.password?.trim();
     if (nuevaPassword) {
       if (nuevaPassword.length < 6) {
         throw new BadRequestException('La contraseña debe tener al menos 6 caracteres.');
       }
-      const rolActor = actor?.roleDetails?.namerol || actor?.role?.namerol || (typeof actor?.role === 'string' ? actor.role : '');
-      if (actor?.id && actor.id === user.id) {
-        throw new ForbiddenException('Para cambiar su propia contraseña use su perfil (se solicita la contraseña actual).');
+      const rolActor = rolDeUsuario(actor);
+      if (!this.esAdmin(actor)) {
+        throw new ForbiddenException('Solo el Administrador o el Super Administrador pueden asignar contraseñas.');
+      }
+      if (actor?.id && String(actor.id) === String(user.id)) {
+        throw new ForbiddenException('No puedes cambiar tu propia contraseña: la asigna otro administrador.');
       }
       if (user.role?.namerol === 'ADMIN' && rolActor !== 'SUPER_ADMIN') {
         throw new ForbiddenException('Solo el Super Administrador puede reiniciar la contraseña de un Administrador.');
@@ -2127,8 +2130,13 @@ export class AgenciasService {
       }
     }
 
-    const currentRoleName = user.role?.namerol || dto.rolNombre || '';
+    // Si se está cambiando el rol, manda el rol nuevo (no el que tenía el usuario).
+    const rolEfectivo = roleIdToSet
+      ? await this.prisma.role.findUnique({ where: { id: roleIdToSet }, select: { namerol: true, ambito: true } })
+      : await this.prisma.role.findUnique({ where: { id: user.roleId }, select: { namerol: true, ambito: true } });
+    const currentRoleName = rolEfectivo?.namerol || user.role?.namerol || dto.rolNombre || '';
     const userRoleCode = currentRoleName.toUpperCase();
+    const ambitoRolUpdate = rolEfectivo?.ambito || '';
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
@@ -2175,9 +2183,36 @@ export class AgenciasService {
         throw new BadRequestException('El Asistente de Bodega solo puede asignarse a bodegas de tipo REGIONAL.');
       }
       regionIdToSet = bod.regionId || regionIdToSet || user.regionId;
+    } else if (ambitoRolUpdate === 'REGION') {
+      // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
+      agenciaIdToSet = null;
+      bodegaIdToSet = null;
+      if (!regionIdToSet) regionIdToSet = user.regionId;
+      if (!regionIdToSet) {
+        throw new BadRequestException('Este rol trabaja sobre su región: debe tener una región asignada.');
+      }
     }
 
-    const checkRolName = (user.role?.namerol || dto.rolNombre || '').toUpperCase();
+    // Un técnico (o coordinador de mantenimiento) con trabajo abierto no se puede mover de región sin
+    // reasignarlo antes: si no, ese mantenimiento o incidente queda con un tecnicoId que ya nadie ve
+    // (scopeMantenimientos/scopeIncidentes solo protegen la visibilidad de ÉL, no la del resto del equipo).
+    const regionRealmenteCambia = regionIdToSet !== undefined && regionIdToSet !== user.regionId;
+    if (regionRealmenteCambia && (user.role?.namerol === 'TECNICO' || user.role?.namerol === 'COORD_MANTENIMIENTO')) {
+      const [mantenimientosAbiertos, incidentesAbiertos] = await Promise.all([
+        this.prisma.mantenimientoMaquinaria.count({ where: { tecnicoId: user.id, estado: { in: ['PENDIENTE', 'EN_PROCESO'] } } }),
+        this.prisma.incidenteTecnico.count({ where: { tecnicoAsignadoId: user.id, estado: { in: ['ABIERTO', 'EN_PROCESO'] } } }),
+      ]);
+      if (mantenimientosAbiertos + incidentesAbiertos > 0) {
+        const partes: string[] = [];
+        if (mantenimientosAbiertos) partes.push(`${mantenimientosAbiertos} mantenimiento${mantenimientosAbiertos === 1 ? '' : 's'}`);
+        if (incidentesAbiertos) partes.push(`${incidentesAbiertos} incidente${incidentesAbiertos === 1 ? '' : 's'}`);
+        throw new BadRequestException(
+          `Este usuario tiene ${partes.join(' y ')} sin terminar en su región actual. Reasígnalos antes de cambiarlo de región.`,
+        );
+      }
+    }
+
+    const checkRolName = currentRoleName.toUpperCase();
     let isPulidorRole = checkRolName.includes('PULIDOR');
     if (roleIdToSet) {
       const checkRoleObj = await this.prisma.role.findUnique({ where: { id: roleIdToSet } });
@@ -2214,11 +2249,7 @@ export class AgenciasService {
         ...(agenciaIdToSet !== undefined && { agenciaId: agenciaIdToSet }),
         ...(regionIdToSet !== undefined && { regionId: regionIdToSet }),
         ...(bodegaIdToSet !== undefined && { bodegaId: bodegaIdToSet }),
-        ...(passwordHashToSet !== undefined && {
-          passwordHash: passwordHashToSet,
-          // Si otro usuario le reinicia la contraseña, la nueva es temporal y la debe cambiar al entrar.
-          debeCambiarPassword: String(actor?.id) !== String(dto.id),
-        }),
+        ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet }),
         ...(finalServicioIdsUsuario !== undefined && {
           servicioIds: finalServicioIdsUsuario,
         }),
@@ -2256,7 +2287,11 @@ export class AgenciasService {
     };
   }
 
-  async createUsuario(dto: CreateUsuarioDto) {
+  async createUsuario(dto: CreateUsuarioDto, actor?: any) {
+    // La contraseña de acceso solo la asigna el Administrador o el Super Administrador.
+    if (actor && !this.esAdmin(actor)) {
+      throw new ForbiddenException('Solo el Administrador o el Super Administrador pueden registrar usuarios con contraseña.');
+    }
     const emailNorm = dto.email.toLowerCase().trim();
     const existing = await this.prisma.user.findUnique({ where: { email: emailNorm } });
     if (existing) {
@@ -2357,7 +2392,13 @@ export class AgenciasService {
       if (bodega.regionId) regionIdToSet = bodega.regionId;
     }
 
-    const userRoleCode = (dto.rolNombre || '').toUpperCase();
+    // El rol real y su ámbito se leen de la BD: `dto.rolNombre` puede llegar con el nombre visible del rol.
+    const rolAsignado = await this.prisma.role.findUnique({
+      where: { id: roleIdToSet },
+      select: { namerol: true, ambito: true },
+    });
+    const userRoleCode = (rolAsignado?.namerol || dto.rolNombre || '').toUpperCase();
+    const ambitoRolCreate = rolAsignado?.ambito || '';
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
@@ -2402,6 +2443,13 @@ export class AgenciasService {
         throw new BadRequestException('El Líder Operador debe tener una agencia asignada.');
       }
       bodegaIdToSet = null;
+    } else if (ambitoRolCreate === 'REGION') {
+      // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
+      agenciaIdToSet = null;
+      bodegaIdToSet = null;
+      if (!regionIdToSet) {
+        throw new BadRequestException('Este rol trabaja sobre su región: debe tener una región asignada.');
+      }
     }
 
     const passwordToHash = dto.password?.trim();
@@ -2438,7 +2486,6 @@ export class AgenciasService {
         lastname: dto.lastname || '',
         email: emailNorm,
         passwordHash,
-        debeCambiarPassword: true,
         roleId: roleIdToSet,
         agenciaId: agenciaIdToSet,
         regionId: regionIdToSet,
@@ -2832,7 +2879,6 @@ export class AgenciasService {
         lastname: finalLastName,
         email: emailToUse,
         passwordHash,
-        debeCambiarPassword: true,
         roleId: role.id,
         agenciaId: agencia.id,
         estado: dto.estado !== undefined ? dto.estado : 1,
@@ -2878,7 +2924,7 @@ export class AgenciasService {
       }
     });
 
-    // La contraseña temporal se entrega una sola vez, para que quien registra al operador se la comunique.
+    // La contraseña se entrega una sola vez, para que quien registra al operador se la comunique. Solo un administrador puede cambiarla después.
     return { ...this.mapUserToOperador(created), passwordTemporal };
   }
 

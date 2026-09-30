@@ -84,6 +84,21 @@ describe('RolesService — editar', () => {
     expect(data.acciones.registrarServicio).toBe(false);
   });
 
+  it('el ámbito de un rol oficial no se puede cambiar: es una invariante, no una preferencia', async () => {
+    // TECNICO llegó a tener ambito=PROPIO en producción por este mismo hueco; ahora está bloqueado.
+    const { prisma, service } = armar(oficial('TECNICO'));
+    await expect(service.update({ id: 'r-TECNICO', ambito: 'PROPIO' } as any, superAdmin)).rejects.toThrow(/ámbito de un rol oficial/);
+    expect(prisma.role.update).not.toHaveBeenCalled();
+    // Pedir el mismo ámbito que ya tiene no es "cambiarlo": no debe romper el resto del update.
+    await expect(service.update({ id: 'r-TECNICO', ambito: 'REGION', capacidades: ['maquinaria.ver'] } as any, superAdmin)).resolves.toBeDefined();
+  });
+
+  it('un rol NO oficial sí puede cambiar de ámbito libremente (para SUPER_ADMIN)', async () => {
+    const { prisma, service } = armar({ id: 'p', namerol: 'PERSONAL', esSistema: false, capacidades: [], ambito: 'AGENCIA' });
+    await service.update({ id: 'p', ambito: 'REGION' } as any, superAdmin);
+    expect(prisma.role.update.mock.calls[0][0].data.ambito).toBe('REGION');
+  });
+
   it('un rol no puede editar el suyo ni uno con permisos que no tiene', async () => {
     const propio = armar({ ...oficial('ADMIN'), id: 'r-admin' });
     await expect(propio.service.update({ id: 'r-admin', estado: 0 } as any, admin)).rejects.toThrow(/tu propio rol/);

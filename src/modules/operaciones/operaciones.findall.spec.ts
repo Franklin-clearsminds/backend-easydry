@@ -90,9 +90,12 @@ describe('OperacionesService.findAll (servicios de lavado)', () => {
     expect(where).toContain('"deletedAt":null');
   });
 
-  it('un usuario con alcance propio (técnico) solo ve lo suyo aunque pida los servicios de otro operador', async () => {
+  it('un usuario con alcance propio solo ve lo suyo aunque pida los servicios de otro operador', async () => {
     const { service, findMany } = construir();
-    await service.findAll({ operadorId: 'otro' }, { id: 'tec-1', role: { namerol: 'TECNICO' } });
+    await service.findAll(
+      { operadorId: 'otro' },
+      { id: 'tec-1', role: { namerol: 'ROL_PROPIO', ambito: 'PROPIO', capacidades: ['servicios.ver'] } },
+    );
     const where = JSON.stringify(findMany.mock.calls[0][0].where);
     expect(where).toContain('"operadorId":"tec-1"');
     expect(where).not.toContain('"operadorId":"otro"');

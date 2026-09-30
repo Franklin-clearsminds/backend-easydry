@@ -116,7 +116,6 @@ model User {
   email         String   @unique
   passwordHash  String
   /// true = tiene una contraseña temporal: debe cambiarla antes de usar el sistema
-  debeCambiarPassword Boolean @default(false)
   name          String
   lastname      String
   roleId        String

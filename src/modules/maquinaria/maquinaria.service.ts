@@ -258,16 +258,10 @@ export class MaquinariaService {
 
   private scopeMaquinaria(actor: Actor): Prisma.MaquinariaWhereInput {
     if (esAdmin(actor) || actor.rol === ROL.COORD_BODEGA) return {};
-    if (esCoordMantenimiento(actor) || esSupervisor(actor)) return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
-    if (esCoordServiciosEspeciales(actor)) return { operadorAsignado: { role: { namerol: 'PULIDOR' } } };
-    if (esTecnico(actor)) {
-      return {
-        OR: [
-          { incidentes: { some: { tecnicoAsignadoId: actor.id } } },
-          { mantenimientos: { some: { tecnicoId: actor.id } } },
-        ],
-      };
+    if (esCoordMantenimiento(actor) || esSupervisor(actor) || esTecnico(actor)) {
+      return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
     }
+    if (esCoordServiciosEspeciales(actor)) return { operadorAsignado: { role: { namerol: 'PULIDOR' } } };
     // El líder supervisa toda su agencia: ve (y por tanto puede reportar, ver §reportarIncidente)
     // cualquier máquina de su sede, esté o no asignada a él por nombre. El pulidor sigue viendo solo
     // lo que tiene asignado a él personalmente, como su kit de insumos.
@@ -278,9 +272,24 @@ export class MaquinariaService {
 
   private scopeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
     if (esAdmin(actor)) return {};
-    if (esCoordMantenimiento(actor) || esSupervisor(actor)) return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    if (esCoordMantenimiento(actor)) {
+      // El coordinador ve todo lo de su región (tiene que verlo para poder asignarlo), y además lo
+      // que tiene asignado a su propio nombre aunque lo muevan de región después (ver bloqueo de
+      // cambio de región con trabajo abierto en agencias.service.ts).
+      return { OR: [
+        { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } },
+        { tecnicoAsignadoId: actor.id },
+      ] };
+    }
+    if (esSupervisor(actor)) {
+      return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    }
+    if (esTecnico(actor)) {
+      // El técnico solo ve las incidencias que el coordinador de mantenimiento de su región le
+      // asignó a él por nombre, no todas las de la región (eso es del coordinador/supervisor).
+      return { tecnicoAsignadoId: actor.id };
+    }
     if (esCoordServiciosEspeciales(actor)) return { maquinaria: { operadorAsignado: { role: { namerol: 'PULIDOR' } } } };
-    if (esTecnico(actor)) return { tecnicoAsignadoId: actor.id };
     // Mismo criterio que scopeMaquinaria: el líder ve las incidencias de toda su agencia.
     if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     if (esOperador(actor)) {
@@ -291,8 +300,25 @@ export class MaquinariaService {
 
   private scopeMantenimientos(actor: Actor): Prisma.MantenimientoMaquinariaWhereInput {
     if (esAdmin(actor)) return {};
-    if (esCoordMantenimiento(actor)) return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
-    if (esTecnico(actor)) return { tecnicoId: actor.id };
+    if (esCoordMantenimiento(actor)) {
+      // El coordinador ve todos los de su región (tiene que verlos para poder asignarlos), y además
+      // los que tiene asignados a su propio nombre aunque lo muevan de región después (ver bloqueo
+      // de cambio de región con trabajo abierto en agencias.service.ts).
+      return { OR: [
+        { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } },
+        { tecnicoId: actor.id },
+      ] };
+    }
+    if (esTecnico(actor)) {
+      // El técnico solo ve los mantenimientos que el coordinador de mantenimiento de su región le
+      // asignó a él por nombre, no todos los de la región. Al depender solo de tecnicoId (y no de
+      // la región), tampoco pierde de vista su trabajo si lo mueven de región mientras lo tiene abierto.
+      return { tecnicoId: actor.id };
+    }
+    // Mismo criterio que scopeMaquinaria: el pulidor ve los mantenimientos de lo que tiene asignado
+    // a él, y el líder los de toda su agencia (ve y reporta cualquier máquina de su sede).
+    if (esOperador(actor)) return { maquinaria: { operadorAsignadoId: actor.id } };
+    if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     return { id: NADA };
   }
 
