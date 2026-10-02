@@ -33,6 +33,11 @@ export class ConsumoQuimicosAnalyticsDto {
   @IsOptional()
   @IsDateString()
   fechaHasta?: string;
+  
+  @ApiPropertyOptional({ description: 'Fecha exacta' })
+  @IsOptional()
+  @IsDateString()
+  fecha?: string;
 
   @ApiPropertyOptional({ description: 'Agrupación temporal: DIA | SEMANA | MES', example: 'DIA' })
   @IsOptional()
@@ -60,4 +65,9 @@ export class RankingLavadoresDto {
   @IsOptional()
   @IsDateString()
   fechaHasta?: string;
+  
+  @ApiPropertyOptional({ description: 'Fecha exacta' })
+  @IsOptional()
+  @IsDateString()
+  fecha?: string;
 }

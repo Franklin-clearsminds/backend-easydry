@@ -73,6 +73,11 @@ export class ListAlertasDto extends PaginacionOpcionalDto {
   @IsOptional()
   @IsBoolean()
   soloActivas?: boolean;
+  
+  @ApiPropertyOptional({ description: 'Fecha exacta para filtrar' })
+  @IsOptional()
+  @IsString()
+  fecha?: string;
 }
 
 export class SincronizarAlertasDto {
