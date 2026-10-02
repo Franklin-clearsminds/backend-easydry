@@ -102,6 +102,7 @@ export function serializeServicioLavado(s: any): any {
     servicio: servicioNombre,
     categoriaServicio: s.catalogo?.categoria || s.categoriaServicio || 'GENERAL',
     tiempoEstimadoMin: Number(s.catalogo?.tiempoEstimadoMin ?? s.tiempoEstimadoMin ?? 30),
+    precio: s.precio != null ? Number(s.precio) : null,
 
     // Tiempos y Fechas
     fecha: fechaIngresoStr.split('T')[0],

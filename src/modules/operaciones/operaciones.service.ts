@@ -561,6 +561,17 @@ export class OperacionesService {
       }
     }
 
+    // Precio efectivo de este servicio para esta agencia (override si lo fijó un admin, si no el precio
+    // global del catálogo), congelado en la OT: cambios posteriores al precio no la afectan.
+    let precioResuelto: number | null = catalogo.precio != null ? Number(catalogo.precio) : null;
+    if (agenciaId) {
+      const overridePrecio = await this.prisma.precioAgenciaServicio.findUnique({
+        where: { agenciaId_catalogoServicioId: { agenciaId, catalogoServicioId: resolvedCatalogoId } },
+        select: { precio: true },
+      });
+      if (overridePrecio) precioResuelto = Number(overridePrecio.precio);
+    }
+
     // 4. Estado físico de la bahía: se informa, pero ya no bloquea el registro (decisión de
     // producto). El estado real en tiempo real lo entrega `bahias/list` / `bahias/opciones`
     // (campo `ocupada`) para que la pantalla lo muestre antes de crear el servicio.
@@ -688,6 +699,7 @@ export class OperacionesService {
         estado: estadoInicial,
         bahiaId: resolvedBahiaId,
         servicioCatalogoId: resolvedCatalogoId,
+        precio: precioResuelto,
         operadorId: validOperadorId,
         horaIngreso: now,
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,

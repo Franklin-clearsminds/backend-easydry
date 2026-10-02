@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, Min, Max, IsIn, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsInt, Min, Max, IsIn, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -102,6 +102,14 @@ export class CreateServicioEspecialDto {
   @IsString()
   @IsNotEmpty()
   tipoServicio: string;
+
+  @ApiPropertyOptional({
+    description: 'ID del servicio ESPECIAL del catálogo elegido (de ahí se toma y congela el precio). Si no se envía, se intenta resolver por el nombre de tipoServicio.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  servicioCatalogoId?: number;
 
   @ApiProperty({
     description: 'Información del vehículo y cliente',

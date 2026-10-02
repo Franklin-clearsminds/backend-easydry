@@ -42,6 +42,7 @@ function build(prismaOver: Record<string, unknown> = {}) {
     maquinaria: { update: vi.fn().mockResolvedValue({ ...maquina(), activa: false }) },
     incidenteTecnico: {
       create: vi.fn().mockResolvedValue({ id: 'inc-1', titulo: 't', fechaReporte: new Date() }),
+      update: vi.fn().mockImplementation(async ({ data }: any) => ({ id: 'inc-1', ...data })),
     },
     movimientoMaquinaria: { create: vi.fn().mockResolvedValue({ id: 'mov-1' }) },
     limpiezaMaquinaria: {
@@ -119,11 +120,12 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       const m = mantenimiento(5);
       prisma.mantenimientoMaquinaria.findUnique.mockResolvedValue(m);
 
-      await service.ejecutarMantenimiento({ mantenimientoId: 'mt1', evidencias } as never, tecnico);
+      await service.ejecutarMantenimiento({ mantenimientoId: 'mt1', evidencias, costoTotal: 50 } as never, tecnico);
 
       const update = tx.mantenimientoMaquinaria.update.mock.calls[0][0].data;
       expect(update.estado).toBe('FINALIZADO');
       expect(update.ejecutadoPorId).toBe('tec-1');
+      expect(update.costoTotal).toBe(50);
       // Fecha y hora reales de ejecución, distintas de la programada
       expect(update.fechaEjecucion).toBeInstanceOf(Date);
       expect(update.fechaProgramada).toEqual(m.fechaProgramada);
@@ -608,6 +610,107 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
         expect(r.data).toHaveLength(1);
         expect(prisma.limpiezaMaquinaria.findMany.mock.calls[0][0].take).toBe(5000);
       });
+    });
+  });
+});
+
+describe('MaquinariaService — costo de mantenimiento e incidencias', () => {
+  const evidenciasCompletas = [
+    { url: 'maquinaria/mq-01/incidentes/inc-1/multimedia/a.jpg' },
+    { url: 'maquinaria/mq-01/incidentes/inc-1/documento/a.pdf' },
+  ];
+
+  const incidente = (over: Record<string, unknown> = {}) => ({
+    id: 'inc-1',
+    maquinariaId: 'm1',
+    estado: 'ABIERTO',
+    tecnicoAsignadoId: 'tec-1',
+    resueltoPorId: null,
+    reportadoPorId: 'user-reporta',
+    fechaReporte: new Date(),
+    titulo: 'Fuga de aceite',
+    descripcion: 'Fuga visible en el pistón 2',
+    gravedad: 'MEDIA',
+    solucion: null,
+    costoTotal: null,
+    maquinaria: maquina(),
+    ...over,
+  });
+
+  describe('resolverIncidente', () => {
+    it('exige el costo para marcar la incidencia como RESUELTO', async () => {
+      const { service, prisma } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente());
+      await expect(
+        service.resolverIncidente({ incidenteId: 'inc-1', solucion: 'Se cambió el retén', evidencias: evidenciasCompletas } as never, tecnico),
+      ).rejects.toThrow(/costo de la reparación es obligatorio/);
+    });
+
+    it('no exige costo para cancelarla (no hubo reparación que costear)', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente());
+      await service.resolverIncidente({ incidenteId: 'inc-1', solucion: 'No se pudo atender', estado: 'CANCELADO' } as never, tecnico);
+      expect(tx.incidenteTecnico.update.mock.calls[0][0].data.estado).toBe('CANCELADO');
+      expect(tx.incidenteTecnico.update.mock.calls[0][0].data.costoTotal).toBeUndefined();
+    });
+
+    it('congela el costo informado al resolver', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente());
+      await service.resolverIncidente(
+        { incidenteId: 'inc-1', solucion: 'Se cambió el retén', evidencias: evidenciasCompletas, costoTotal: 35.5 } as never,
+        tecnico,
+      );
+      expect(tx.incidenteTecnico.update.mock.calls[0][0].data.costoTotal).toBe(35.5);
+    });
+  });
+
+  describe('editarMantenimiento — corrección de costo restringida', () => {
+    const cargado = (over: Record<string, unknown> = {}) => ({
+      id: 'mt1', maquinariaId: 'm1', tecnicoId: 'tec-1', ejecutadoPorId: 'tec-1', estado: 'FINALIZADO',
+      tipo: 'PREVENTIVO', observaciones: null, repuestosUsados: null, costoTotal: 50, frecuenciaDias: 30,
+      fechaProgramada: new Date(), maquinaria: maquina(), ...over,
+    });
+
+    it('el técnico no puede corregir el costo después de ejecutado (se ignora, no hay cambios)', async () => {
+      const { service, prisma, tx } = build();
+      prisma.mantenimientoMaquinaria.findUnique.mockResolvedValue(cargado());
+      const r: any = await service.editarMantenimiento({ mantenimientoId: 'mt1', costoTotal: 999 } as never, tecnico);
+      expect(r.sinCambios).toBe(true);
+      expect(tx.mantenimientoMaquinaria.update).not.toHaveBeenCalled();
+    });
+
+    it('el coordinador de mantenimiento de la misma región sí puede corregirlo', async () => {
+      const { service, prisma, tx } = build();
+      prisma.mantenimientoMaquinaria.findUnique.mockResolvedValue(cargado());
+      await service.editarMantenimiento({ mantenimientoId: 'mt1', costoTotal: 75 } as never, coordCosta);
+      expect(tx.mantenimientoMaquinaria.update.mock.calls[0][0].data.costoTotal).toBe(75);
+    });
+
+    it('un admin también puede corregirlo', async () => {
+      const { service, prisma, tx } = build();
+      prisma.mantenimientoMaquinaria.findUnique.mockResolvedValue(cargado());
+      await service.editarMantenimiento({ mantenimientoId: 'mt1', costoTotal: 80 } as never, admin);
+      expect(tx.mantenimientoMaquinaria.update.mock.calls[0][0].data.costoTotal).toBe(80);
+    });
+  });
+
+  describe('editarIncidente — corrección de costo restringida', () => {
+    const cargado = (over: Record<string, unknown> = {}) => incidente({ estado: 'RESUELTO', resueltoPorId: 'tec-1', costoTotal: 35.5, ...over });
+
+    it('el técnico no puede corregir el costo después de resuelta (se ignora, no hay cambios)', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(cargado());
+      const r: any = await service.editarIncidente({ incidenteId: 'inc-1', costoTotal: 999 } as never, tecnico);
+      expect(r.sinCambios).toBe(true);
+      expect(tx.incidenteTecnico.update).not.toHaveBeenCalled();
+    });
+
+    it('el coordinador de mantenimiento de la misma región sí puede corregirlo', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(cargado());
+      await service.editarIncidente({ incidenteId: 'inc-1', costoTotal: 42 } as never, coordCosta);
+      expect(tx.incidenteTecnico.update.mock.calls[0][0].data.costoTotal).toBe(42);
     });
   });
 });

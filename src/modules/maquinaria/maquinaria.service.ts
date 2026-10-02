@@ -1078,10 +1078,14 @@ export class MaquinariaService {
     }
 
     const nuevoEstado = dto.estado || 'RESUELTO';
-    // Al resolver (repararla de verdad) se exige foto/video Y el informe en PDF.
+    // Al resolver (repararla de verdad) se exige foto/video Y el informe en PDF, y el costo de la
+    // reparación (no al cancelar: ahí no hubo reparación que costear).
     const evidencias = nuevoEstado === 'RESUELTO'
       ? await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true, requiereDocumento: true })
       : await this.verificarEvidencias(maquina, dto.evidencias, {});
+    if (nuevoEstado === 'RESUELTO' && dto.costoTotal == null) {
+      throw new BadRequestException('El costo de la reparación es obligatorio para resolver la incidencia.');
+    }
 
     const ahora = new Date();
     const solucion = dto.repuestosUtilizados
@@ -1102,7 +1106,7 @@ export class MaquinariaService {
           estado: nuevoEstado,
           solucion,
           ...(autoAsignar ? { tecnicoAsignadoId: actor.id, fechaAsignacion: ahora } : {}),
-          ...(nuevoEstado === 'RESUELTO' ? { resueltoPorId: actor.id, fechaSolucion: ahora } : {}),
+          ...(nuevoEstado === 'RESUELTO' ? { resueltoPorId: actor.id, fechaSolucion: ahora, costoTotal: dto.costoTotal } : {}),
           evidencias: {
             create: evidencias.map((e) => this.evidenciaData(e, 'INCIDENTE', 'REPARACION', actor.id)),
           },
@@ -1142,7 +1146,8 @@ export class MaquinariaService {
     const inc = await this.cargarIncidente(dto.incidenteId);
     const maquina = inc.maquinaria as unknown as MaquinaCtx;
 
-    let campos = ['titulo', 'descripcion', 'gravedad', 'solucion'];
+    // El costo ya lo ingresó el técnico al resolver; corregirlo después es solo de admin o coordinador de mantenimiento.
+    let campos = ['titulo', 'descripcion', 'gravedad', 'solucion', 'costoTotal'];
     if (esTecnico(actor)) {
       // El reparador solo corrige su propio trabajo.
       if (inc.tecnicoAsignadoId !== actor.id && inc.resueltoPorId !== actor.id) {
@@ -1388,8 +1393,11 @@ export class MaquinariaService {
     // No se cierra la orden mientras falten pasos obligatorios del checklist de su tipo.
     await this.checklist.exigirCompleto(existing.id, existing.tipo);
 
-    // Al cerrar el mantenimiento se exige foto/video Y el informe en PDF.
+    // Al cerrar el mantenimiento se exige foto/video Y el informe en PDF, y el costo del trabajo.
     const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true, requiereDocumento: true });
+    if (dto.costoTotal == null) {
+      throw new BadRequestException('El costo del mantenimiento es obligatorio para ejecutarlo.');
+    }
 
     // El calendario no se corre: si toca cada 30 días y se hizo antes, el siguiente sigue en su fecha.
     const frecuenciaDias = Number(existing.frecuenciaDias || 0);
@@ -1405,6 +1413,7 @@ export class MaquinariaService {
         data: {
           estado: 'FINALIZADO',
           observaciones: dto.observaciones || existing.observaciones,
+          costoTotal: dto.costoTotal,
           fechaProgramada: programada,
           fechaEjecucion: ahora,
           fechaMantenimiento: ahora,
@@ -1461,7 +1470,8 @@ export class MaquinariaService {
       if (m.tecnicoId !== actor.id && m.ejecutadoPorId !== actor.id) {
         throw new ForbiddenException('Solo puedes editar mantenimientos que tienes asignados.');
       }
-      campos = ['observaciones', 'repuestosUsados', 'costoTotal'];
+      // El costo ya lo ingresó al ejecutar; corregirlo después es solo de admin o coordinador de mantenimiento.
+      campos = ['observaciones', 'repuestosUsados'];
     } else {
       assertRegion(actor, this.regionDe(maquina));
     }
