@@ -30,6 +30,7 @@ function armar(svc: any = servicio(), conAprobador = false) {
     agencia: { findUnique: vi.fn().mockResolvedValue({ id: 'a1', regionId: 'r1', nombre: 'Uno' }) },
     user: { count: vi.fn().mockResolvedValue(conAprobador ? 1 : 0) },
     auditoriaDecision: { create: vi.fn().mockResolvedValue({}), createMany: vi.fn().mockResolvedValue({ count: 2 }) },
+    evidenciaServicio: { create: vi.fn().mockResolvedValue({}) },
     bahia: { findUnique: vi.fn(), findFirst: vi.fn() },
     $transaction: vi.fn(),
   };
@@ -177,10 +178,36 @@ describe('editar servicios', () => {
   it('al finalizar ya no se aprueba solo, aunque la agencia no tenga aprobador', async () => {
     const svc = servicio('EN_PROCESO', { consumos: [{ id: 'c' }] });
     const { prisma, service } = armar(svc, false);
-    await service.update('s1', { id: 's1', estado: 'FINALIZADO' } as any, false, usuario('LIDER', { agenciaId: 'a1' }));
+    await service.update('s1', { id: 's1', estado: 'FINALIZADO', fotoSalidaUrl: 'evidencia.jpg' } as any, false, usuario('LIDER', { agenciaId: 'a1' }));
     const data = prisma.servicioLavado.update.mock.calls[0][0].data;
     expect(data.estado).toBe('FINALIZADO');
     expect(data).not.toHaveProperty('aprobadoPor');
+  });
+
+  it('no se puede finalizar sin evidencia de salida (foto o vídeo), llamando directo al endpoint', async () => {
+    const { prisma, service } = armar(servicio('EN_PROCESO', { consumos: [{ id: 'c' }] }));
+    await expect(
+      service.update('s1', { id: 's1', estado: 'FINALIZADO' } as any, false, usuario('LIDER', { agenciaId: 'a1' })),
+    ).rejects.toThrow(/evidencia de salida/);
+    expect(prisma.servicioLavado.update).not.toHaveBeenCalled();
+  });
+
+  it('la evidencia ya guardada en el servicio alcanza (no hace falta reenviarla al finalizar)', async () => {
+    const { prisma, service } = armar(servicio('EN_PROCESO', { consumos: [{ id: 'c' }], fotoSalidaUrl: 'ya-subida.jpg' }));
+    await service.update('s1', { id: 's1', estado: 'FINALIZADO' } as any, false, usuario('LIDER', { agenciaId: 'a1' }));
+    expect(prisma.servicioLavado.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('el offline sync puede finalizar sin evidencia en el payload (su propio flujo la maneja aparte)', async () => {
+    const { prisma, service } = armar(servicio('EN_PROCESO', { consumos: [{ id: 'c' }] }));
+    await service.update('s1', { id: 's1', estado: 'FINALIZADO' } as any, true, usuario('LIDER', { agenciaId: 'a1' }));
+    expect(prisma.servicioLavado.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('un servicio ya FINALIZADO no vuelve a exigir evidencia (no es la primera transición)', async () => {
+    const { prisma, service } = armar(servicio('FINALIZADO', { consumos: [{ id: 'c' }], fotoSalidaUrl: 'ya-subida.jpg' }));
+    await service.update('s1', { id: 's1', estado: 'FINALIZADO', observaciones: 'retoque' } as any, false, usuario('ADMIN'));
+    expect(prisma.servicioLavado.update).toHaveBeenCalledTimes(1);
   });
 });
 

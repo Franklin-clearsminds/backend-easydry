@@ -87,6 +87,8 @@ export const CATALOGO_PERMISOS = [
   def('Maquinaria', 'mantenimientos.ejecutar', 'Ejecutar mantenimientos', 'Ejecutar y editar mantenimientos asignados.'),
   def('Maquinaria', 'maquinaria.evidencias', 'Agregar evidencias de maquinaria', 'Subir fotos o videos a un incidente o mantenimiento.'),
   def('Maquinaria', 'checklist.gestionar', 'Gestionar plantillas de checklist', 'Definir los pasos de cada tipo de mantenimiento (preventivo o correctivo).'),
+  def('Maquinaria', 'limpiezas.ver', 'Ver limpiezas de maquinaria', 'Auditoría de limpiezas registradas (fecha, quién y fotos) dentro de su ámbito.'),
+  def('Maquinaria', 'limpiezas.editar', 'Editar o eliminar limpiezas', 'Corregir las observaciones o eliminar un registro de limpieza dentro de su ámbito.'),
 
   def('Sistema', 'sync.usar', 'Usar la sincronización de la app', 'Sincronizar datos de la app móvil y registrar el dispositivo.'),
   def('Sistema', 'sync.dlq.gestionar', 'Gestionar errores de sincronización', 'Ver, resolver y reintentar los errores de todos los usuarios.'),

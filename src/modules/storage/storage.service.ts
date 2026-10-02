@@ -32,6 +32,7 @@ export type StorageCategory =
   | 'MAQUINARIA_FICHA'
   | 'MAQUINARIA_INCIDENTE'
   | 'MAQUINARIA_MANTENIMIENTO'
+  | 'MAQUINARIA_LIMPIEZA'
   | 'DOCUMENTO'
   | 'CATALOGO_INSUMOS'
   | 'PERFIL_USUARIO';
@@ -47,6 +48,7 @@ export type MediaEvidenceType =
   | 'VIDEO_PAUSA'
   | 'VIDEO_REANUDAR'
   | 'FOTO_MAQUINA'
+  | 'FOTO_LIMPIEZA'
   | 'FICHA_TECNICA'
   | 'DOCUMENTO'
   | 'FOTO_INCIDENTE'
@@ -92,7 +94,7 @@ export interface UploadTicketResponse {
 
 const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
-  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FOTO_MAQUINA', 'FICHA_TECNICA',
+  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FOTO_MAQUINA', 'FOTO_LIMPIEZA', 'FICHA_TECNICA',
   'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE', 'IMAGEN_PRODUCTO', 'FOTO_AJUSTE_INVENTARIO', 'FOTO_INGRESO_INVENTARIO', 'FOTO_PERFIL',
 ]);
 
@@ -326,8 +328,10 @@ export class StorageService implements OnModuleInit {
       || category === 'MAQUINARIA_FICHA'
       || category === 'MAQUINARIA_INCIDENTE'
       || category === 'MAQUINARIA_MANTENIMIENTO'
+      || category === 'MAQUINARIA_LIMPIEZA'
       || type === 'FOTO_MAQUINA'
       || type === 'FICHA_TECNICA'
+      || type === 'FOTO_LIMPIEZA'
     ) {
       // Estructura fuera de las agencias: la carpeta usa el código de la máquina, que no cambia
       // aunque la máquina se mueva. La agencia/bahía actual vive solo en la base de datos.
@@ -342,6 +346,9 @@ export class StorageService implements OnModuleInit {
       } else if (category === 'MAQUINARIA_MANTENIMIENTO') {
         const mantId = this.safeSegment(dto.mantenimientoId || dto.clientUuid, 'sin-id');
         key = `maquinaria/${equipo}/mantenimientos/${mantId}/${folder}/${maquinariaFilename}`;
+      } else if (category === 'MAQUINARIA_LIMPIEZA' || type === 'FOTO_LIMPIEZA') {
+        const diaUtc = new Date().toISOString().slice(0, 10);
+        key = `maquinaria/${equipo}/limpiezas/${diaUtc}/${maquinariaFilename}`;
       } else {
         const fase = this.incidenteFase(dto);
         key = `maquinaria/${equipo}/incidentes/${incidenteId}/${fase}/${folder}/${maquinariaFilename}`;
@@ -793,6 +800,7 @@ export class StorageService implements OnModuleInit {
     if (type === 'IMAGEN_PRODUCTO' || type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO') return 'CATALOGO_INSUMOS';
     if (type === 'VIDEO_PAUSA' || type === 'VIDEO_REANUDAR') return 'SERVICIOS_ESPECIALES';
     if (type === 'FOTO_MAQUINA') return 'MAQUINARIA_IMAGEN';
+    if (type === 'FOTO_LIMPIEZA') return 'MAQUINARIA_LIMPIEZA';
     if (type === 'FICHA_TECNICA' || type === 'DOCUMENTO') return 'MAQUINARIA_FICHA';
     if (type === 'FOTO_INCIDENTE' || type === 'VIDEO_INCIDENTE' || type === 'DOCUMENTO_INCIDENTE') return 'MAQUINARIA_INCIDENTE';
     if (type === 'PDF_CIERRE') return 'DOCUMENTO';
@@ -804,6 +812,7 @@ export class StorageService implements OnModuleInit {
     if (category === 'CATALOGO_INSUMOS' && (type === 'IMAGEN_PRODUCTO' || type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO')) return;
     if (category === 'MAQUINARIA_IMAGEN' && type === 'FOTO_MAQUINA') return;
     if (category === 'MAQUINARIA_MANTENIMIENTO' && (type === 'FOTO_INCIDENTE' || type === 'DOCUMENTO' || type === 'FICHA_TECNICA' || type === 'VIDEO_INCIDENTE')) return;
+    if (category === 'MAQUINARIA_LIMPIEZA' && type === 'FOTO_LIMPIEZA') return;
     const serviceTypes = new Set<MediaEvidenceType>([
       'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
       'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR',

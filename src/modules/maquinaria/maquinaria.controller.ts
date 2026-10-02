@@ -25,8 +25,13 @@ import {
   ConfigurarVentanaDto,
   DetalleMaquinariaDto,
   EditarIncidenteDto,
+  EditarLimpiezaDto,
   EditarMantenimientoDto,
+  EliminarLimpiezaDto,
+  ExportarLimpiezasDto,
   HistorialMaquinariaDto,
+  ListLimpiezasDto,
+  RegistrarLimpiezaDto,
   SetActivaMaquinariaDto,
 } from './dto/trazabilidad.dto.js';
 
@@ -238,6 +243,58 @@ export class MaquinariaController {
   }
 
   // ==============================================================
+  // LIMPIEZA (2x/semana para la maquinaria de agencia, diaria para la asignada a un pulidor)
+  // ==============================================================
+
+  @Permiso('maquinaria.evidencias')
+  @Post('limpiezas/registrar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Registrar la limpieza de una máquina (una o varias fotos); el líder la de su agencia, el pulidor la suya' })
+  async registrarLimpieza(@Body() dto: RegistrarLimpiezaDto, @CurrentUser() user: any) {
+    return this.maquinariaService.registrarLimpieza(dto, actorFromUser(user));
+  }
+
+  @Permiso('limpiezas.ver')
+  @Post('limpiezas/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Historial de limpiezas (de una máquina o de todas dentro del alcance del actor), más reciente primero. Admin/super admin: todo el país; supervisor y coordinador de mantenimiento: su región; coordinador de servicios especiales: sus pulidores.' })
+  async listLimpiezas(@Body() dto: ListLimpiezasDto, @CurrentUser() user: any) {
+    return this.maquinariaService.listLimpiezas(dto, actorFromUser(user));
+  }
+
+  @Permiso('limpiezas.ver')
+  @Post('limpiezas/resumen')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Cuántas máquinas dentro del alcance del actor están atrasadas de limpieza (para el badge de alerta)' })
+  async resumenLimpiezas(@CurrentUser() user: any) {
+    return this.maquinariaService.resumenLimpiezas(actorFromUser(user));
+  }
+
+  @Permiso('limpiezas.ver')
+  @Post('limpiezas/exportar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Historial completo de limpiezas (hasta 5000 filas) dentro del alcance del actor, para exportar a CSV' })
+  async exportarLimpiezas(@Body() dto: ExportarLimpiezasDto, @CurrentUser() user: any) {
+    return this.maquinariaService.exportarLimpiezas(dto, actorFromUser(user));
+  }
+
+  @Permiso('limpiezas.editar')
+  @Post('limpiezas/editar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Corregir las observaciones de un registro de limpieza (admin, supervisor y coordinador de mantenimiento de su región)' })
+  async editarLimpieza(@Body() dto: EditarLimpiezaDto, @CurrentUser() user: any) {
+    return this.maquinariaService.editarLimpieza(dto, actorFromUser(user));
+  }
+
+  @Permiso('limpiezas.editar')
+  @Post('limpiezas/eliminar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Eliminar un registro de limpieza (queda el evento en la línea de tiempo de la máquina)' })
+  async eliminarLimpieza(@Body() dto: EliminarLimpiezaDto, @CurrentUser() user: any) {
+    return this.maquinariaService.eliminarLimpieza(dto, actorFromUser(user));
+  }
+
+  // ==============================================================
   // MOVIMIENTOS
   // ==============================================================
 
@@ -260,8 +317,8 @@ export class MaquinariaController {
   @Permiso('maquinaria.ver')
   @Post('talleres/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar talleres nacional y regionales' })
-  async listTalleres() {
-    return this.maquinariaService.listTalleres();
+  @ApiOperation({ summary: 'Listar talleres nacional y regionales (admin: todos; coordinador/técnico: los de su región)' })
+  async listTalleres(@CurrentUser() user: any) {
+    return this.maquinariaService.listTalleres(actorFromUser(user));
   }
 }

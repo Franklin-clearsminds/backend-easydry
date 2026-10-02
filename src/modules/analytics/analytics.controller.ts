@@ -2,7 +2,7 @@ import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AnalyticsService } from './analytics.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto } from './dto/analytics.dto.js';
+import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto, RankingLavadoresDto } from './dto/analytics.dto.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Analítica & Dashboards (100% POST)')
@@ -33,5 +33,17 @@ export class AnalyticsController {
     @CurrentUser() user: any,
   ) {
     return this.analyticsService.getConsumoQuimicos(dto, user);
+  }
+
+  @Permiso('productividad.ver')
+  @Post('ranking-lavadores')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Ranking de lavadores: cantidad de servicios y tiempo promedio por servicio' })
+  @ApiResponse({ status: 200, description: 'Top 10 operadores ordenados por cantidad de servicios' })
+  async getRankingLavadores(
+    @Body() dto: RankingLavadoresDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.analyticsService.getRankingLavadores(dto, user);
   }
 }

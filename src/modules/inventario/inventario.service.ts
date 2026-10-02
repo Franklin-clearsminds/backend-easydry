@@ -5,8 +5,10 @@ import {
   BadRequestException,
   ForbiddenException,
   UnauthorizedException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto } from './dto/envases.dto.js';
 import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidades.dto.js';
 import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, InsumosOpcionesDto } from './dto/insumos.dto.js';
@@ -235,7 +237,37 @@ import { resolverAlcance } from '../../common/permisos/alcance.js';
 import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 @Injectable()
 export class InventarioService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private notifications?: NotificationsService,
+  ) {}
+
+  /** Destinatarios del aviso de "despacho en camino", según el tipo ya resuelto en `crearDespacho`. */
+  private async resolverDestinatariosDespacho(params: {
+    tipo: string;
+    destinoPulidorId: string | null;
+    destinoAgenciaId: string | null;
+    destinoBodegaId: string | null;
+  }): Promise<string[]> {
+    if (params.tipo === 'DESPACHO_PULIDOR') {
+      return params.destinoPulidorId ? [params.destinoPulidorId] : [];
+    }
+    if (params.tipo === 'DESPACHO_AGENCIA' && params.destinoAgenciaId) {
+      const lideres = await this.prisma.user.findMany({
+        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: 'LIDER' } },
+        select: { id: true },
+      });
+      return lideres.map((u) => u.id);
+    }
+    if (params.tipo === 'DESPACHO_BODEGA' && params.destinoBodegaId) {
+      const asistentes = await this.prisma.user.findMany({
+        where: { bodegaId: params.destinoBodegaId, estado: 1, role: { namerol: 'ASISTENTE_BODEGA' } },
+        select: { id: true },
+      });
+      return asistentes.map((u) => u.id);
+    }
+    return [];
+  }
 
   // ============================================================
   //  TIPOS DE ENVASE
@@ -403,7 +435,9 @@ export class InventarioService {
       ''
     ).toString().toUpperCase();
     const isScopedRole = ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r));
-    const targetAgenciaId = dto?.agenciaId || (isScopedRole ? (user?.agenciaId || user?.agencia?.id) : undefined);
+    // Igual que el asistente de bodega con su `bodegaId`: un rol de sede nunca amplía su alcance con
+    // un `agenciaId` que mande el cliente — siempre es la suya, tomada del token.
+    const targetAgenciaId = isScopedRole ? (user?.agenciaId || user?.agencia?.id) : dto?.agenciaId;
 
     let agenciaTarget: any = null;
     let scopeWhere: Record<string, unknown> = {};
@@ -3066,6 +3100,20 @@ export class InventarioService {
         await this.prisma.movimientoInventario.delete({ where: { id: movimiento.id } });
       } catch (_) {}
       throw err;
+    }
+
+    if (this.notifications) {
+      void this.resolverDestinatariosDespacho({ tipo, destinoPulidorId, destinoAgenciaId, destinoBodegaId }).then((ids) => {
+        if (ids.length) {
+          void this.notifications!.notificarUsuarios(
+            ids,
+            'Nuevo despacho en camino',
+            `Guía ${guia}: ${destinoLabel}`,
+            { movimientoId: movimiento.id },
+            { tipo: 'DESPACHO_PENDIENTE', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: movimiento.id },
+          );
+        }
+      });
     }
 
     return {

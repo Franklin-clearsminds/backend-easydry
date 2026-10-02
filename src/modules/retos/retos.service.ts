@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { CreateRetoDto, ListRetosDto } from './dto/retos.dto.js';
+import { CerrarRetoDto, CreateRetoDto, ListRetosDto } from './dto/retos.dto.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
 import { resolverAlcance } from '../../common/permisos/alcance.js';
@@ -107,6 +107,29 @@ export class RetosService {
     }
     await this.prisma.reto.delete({ where: { id } });
     return { success: true, id };
+  }
+
+  async cerrar(dto: CerrarRetoDto, user: any) {
+    const existing = await this.prisma.reto.findUnique({ where: { id: dto.id } });
+    if (!existing) throw new NotFoundException('Reto no encontrado.');
+    const isAdmin = ADMIN_ROLES.has(this.roleCode(user));
+    const isOwner = existing.creadoPorId && String(existing.creadoPorId) === String(user?.id || '');
+    if (!isAdmin && !isOwner) {
+      throw new ForbiddenException('Solo el creador o un administrador puede cerrar este reto.');
+    }
+    if (existing.estado === 'FINALIZADO') {
+      throw new BadRequestException('Este reto ya fue cerrado.');
+    }
+    return this.prisma.reto.update({
+      where: { id: dto.id },
+      data: {
+        estado: 'FINALIZADO',
+        ganadorNombre: dto.ganadorNombre?.trim() || null,
+        resultado: dto.resultado?.trim() || null,
+        cerradoPorId: user?.id ? String(user.id) : null,
+        cerradoEn: new Date(),
+      },
+    });
   }
 
   private roleCode(user: any): string {

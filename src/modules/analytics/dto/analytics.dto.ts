@@ -39,3 +39,25 @@ export class ConsumoQuimicosAnalyticsDto {
   @IsString()
   agrupacion?: 'DIA' | 'SEMANA' | 'MES';
 }
+
+export class RankingLavadoresDto {
+  @ApiPropertyOptional({ description: 'Filtrar por agencia específica' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar por región' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha inicio del rango (YYYY-MM-DD). Si no se envía, inicio del mes actual.' })
+  @IsOptional()
+  @IsDateString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha fin del rango (YYYY-MM-DD). Si no se envía, hoy.' })
+  @IsOptional()
+  @IsDateString()
+  fechaHasta?: string;
+}

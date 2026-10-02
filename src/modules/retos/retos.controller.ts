@@ -1,7 +1,7 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { CreateRetoDto, DeleteRetoDto, ListRetosDto } from './dto/retos.dto.js';
+import { CerrarRetoDto, CreateRetoDto, DeleteRetoDto, ListRetosDto } from './dto/retos.dto.js';
 import { RetosService } from './retos.service.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
@@ -33,5 +33,13 @@ export class RetosController {
   @ApiOperation({ summary: 'Eliminar un reto' })
   delete(@Body() dto: DeleteRetoDto, @CurrentUser() user: any) {
     return this.retosService.delete(dto.id, user);
+  }
+
+  @Permiso('retos.crear')
+  @Post('cerrar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Cerrar un reto registrando ganador y resultado' })
+  cerrar(@Body() dto: CerrarRetoDto, @CurrentUser() user: any) {
+    return this.retosService.cerrar(dto, user);
   }
 }

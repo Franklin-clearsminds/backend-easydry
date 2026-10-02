@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { esHoyDiaDebido, limpiezaAtrasada, reglaLimpieza } from '../../common/utils/limpieza-maquinaria.js';
 
 @Injectable()
 export class MaintenanceCronService {
@@ -61,12 +62,122 @@ export class MaintenanceCronService {
           title: `Mantenimiento vencido: ${m.maquinaria.codigo}`,
           body: `${m.maquinaria.nombre} no se ha atendido desde ${m.fechaProgramada?.toISOString().slice(0, 10)}`,
           data: { type: 'MANTENIMIENTO_VENCIDO', mantenimientoId: m.id, maquinariaId: m.maquinariaId },
+          opts: { tipo: 'MANTENIMIENTO_VENCIDO', entidadTipo: 'MAQUINARIA', entidadId: m.maquinariaId },
         });
       }
 
       return { count: mantenimientosVencidos.length };
     } catch (err: any) {
       this.logger.error(`[Cron] Error verificando mantenimientos: ${err.message}`);
+      return { error: err.message };
+    }
+  }
+
+  /** Máquinas activas a las que les aplica alguna regla de limpieza (con agencia o pulidor asignado). */
+  private candidatasLimpieza() {
+    return this.prisma.maquinaria.findMany({
+      where: {
+        activa: true,
+        OR: [{ agenciaId: { not: null } }, { operadorAsignadoId: { not: null } }],
+      },
+      select: {
+        id: true,
+        codigo: true,
+        nombre: true,
+        agenciaId: true,
+        operadorAsignadoId: true,
+        agencia: { select: { regionId: true } },
+      },
+      take: 500,
+    });
+  }
+
+  // Cron diario: todos los días a las 07:00 AM (recordatorio al responsable el día que corresponde limpiar)
+  @Cron('0 7 * * *')
+  async recordatorioLimpiezaDelDia() {
+    this.logger.log('[Cron] Verificando recordatorios de limpieza del día...');
+    const hoy = new Date();
+    try {
+      const candidatas = await this.candidatasLimpieza();
+      const debidasHoy = candidatas.filter((m) => esHoyDiaDebido(reglaLimpieza(m), hoy));
+      if (!debidasHoy.length) return { count: 0 };
+
+      const inicioDia = new Date(hoy); inicioDia.setHours(0, 0, 0, 0);
+      const finDia = new Date(hoy); finDia.setHours(23, 59, 59, 999);
+      const yaRegistradas = await this.prisma.limpiezaMaquinaria.findMany({
+        where: { maquinariaId: { in: debidasHoy.map((m) => m.id) }, fecha: { gte: inicioDia, lte: finDia } },
+        select: { maquinariaId: true },
+      });
+      const registradasIds = new Set(yaRegistradas.map((r) => r.maquinariaId));
+
+      let count = 0;
+      for (const m of debidasHoy) {
+        if (registradasIds.has(m.id)) continue;
+        const responsableId = m.operadorAsignadoId
+          ?? (m.agenciaId
+            ? (await this.prisma.user.findFirst({ where: { agenciaId: m.agenciaId, estado: 1, role: { namerol: 'LIDER' } }, select: { id: true } }))?.id
+            : null);
+        if (!responsableId) continue;
+        await this.notifications.notificarUsuarios(
+          [responsableId],
+          `Limpieza pendiente hoy: ${m.codigo}`,
+          `${m.nombre} tiene limpieza programada para hoy.`,
+          { type: 'LIMPIEZA_RECORDATORIO', maquinariaId: m.id },
+          { tipo: 'LIMPIEZA_RECORDATORIO', entidadTipo: 'MAQUINARIA', entidadId: m.id },
+        );
+        count++;
+      }
+      return { count };
+    } catch (err: any) {
+      this.logger.error(`[Cron] Error en recordatorio de limpieza: ${err.message}`);
+      return { error: err.message };
+    }
+  }
+
+  // Cron diario: todos los días a las 08:00 AM, una hora después del recordatorio (escalación al coordinador)
+  @Cron('0 8 * * *')
+  async escalarLimpiezaAtrasada() {
+    this.logger.log('[Cron] Verificando máquinas atrasadas de limpieza...');
+    const ahora = new Date();
+    try {
+      const candidatas = await this.candidatasLimpieza();
+      if (!candidatas.length) return { count: 0 };
+
+      const ultimas = await this.prisma.limpiezaMaquinaria.groupBy({
+        by: ['maquinariaId'],
+        where: { maquinariaId: { in: candidatas.map((m) => m.id) } },
+        _max: { fecha: true },
+      });
+      const ultimaFechaPorMaquina = new Map(ultimas.map((r) => [r.maquinariaId, r._max.fecha ?? null]));
+
+      let count = 0;
+      for (const m of candidatas) {
+        const regla = reglaLimpieza(m);
+        const ultimaFecha = ultimaFechaPorMaquina.get(m.id) ?? null;
+        if (!limpiezaAtrasada(regla, ultimaFecha, ahora)) continue;
+
+        // Ya se avisó este mismo episodio de atraso (no hubo limpieza nueva desde entonces): no duplicar.
+        const yaAvisado = await this.prisma.notification.findFirst({
+          where: {
+            tipo: 'LIMPIEZA_ATRASADA',
+            entidadId: m.id,
+            createdAt: ultimaFecha ? { gte: ultimaFecha } : undefined,
+          },
+        });
+        if (yaAvisado) continue;
+
+        await this.notifications.notificarCoordinadorRegion({
+          regionId: m.agencia?.regionId,
+          title: `Limpieza atrasada: ${m.codigo}`,
+          body: `${m.nombre} no se ha limpiado según la regla vigente.`,
+          data: { type: 'LIMPIEZA_ATRASADA', maquinariaId: m.id },
+          opts: { tipo: 'LIMPIEZA_ATRASADA', entidadTipo: 'MAQUINARIA', entidadId: m.id },
+        });
+        count++;
+      }
+      return { count };
+    } catch (err: any) {
+      this.logger.error(`[Cron] Error escalando limpieza atrasada: ${err.message}`);
       return { error: err.message };
     }
   }

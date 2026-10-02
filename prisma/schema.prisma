@@ -151,6 +151,7 @@ model User {
   alertasEmitidas     AlertaStock[]
   alertasKitPulidor   AlertaStock[]          @relation("AlertaStockPulidor")
   devices             SyncDevice[]
+  notifications       Notification[]
   incidentesReportados IncidenteTecnico[]        @relation("ReportadoPor")
   incidentesResueltos  IncidenteTecnico[]        @relation("ResueltoPor")
   mantenimientos       MantenimientoMaquinaria[]
@@ -175,6 +176,7 @@ model User {
   mantenimientosEjecutados   MantenimientoMaquinaria[] @relation("MantenimientoEjecutadoPor")
   evidenciasIncidenteSubidas EvidenciaIncidente[]    @relation("EvidenciaIncidenteSubidaPor")
   evidenciasMantenimientoSubidas EvidenciaMantenimiento[] @relation("EvidenciaMantenimientoSubidaPor")
+  limpiezasMaquinariaRegistradas LimpiezaMaquinaria[] @relation("LimpiezaRegistradaPor")
 
   @@index([email])
   @@index([roleId])
@@ -882,6 +884,44 @@ model SyncDevice {
 }
 
 // =========================================================================
+// NOTIFICACIONES (persistentes, en tiempo real por WebSocket + push Expo)
+// =========================================================================
+
+enum TipoNotificacion {
+  INCIDENTE_NUEVO
+  INCIDENCIA_ASIGNADA
+  MANTENIMIENTO_ASIGNADO
+  INCIDENCIA_RESUELTA
+  MANTENIMIENTO_VENCIDO
+  STOCK_CRITICO
+  APROBACION_PENDIENTE
+  DESPACHO_PENDIENTE
+  LIMPIEZA_RECORDATORIO
+  LIMPIEZA_ATRASADA
+}
+
+model Notification {
+  id          String           @id @default(uuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id])
+  tipo        TipoNotificacion
+  titulo      String
+  mensaje     String
+  /// Payload libre con ids/datos de la entidad relacionada (p. ej. maquinariaId, incidenteId).
+  data        Json?
+  entidadTipo String?
+  /// Junto con `tipo`, resuelve "una sola vez por episodio" para la escalación de limpieza atrasada.
+  entidadId   String?
+  leida       Boolean          @default(false)
+  leidaEn     DateTime?
+  createdAt   DateTime         @default(now())
+
+  @@index([userId, leida])
+  @@index([userId, createdAt])
+  @@index([tipo, entidadId])
+}
+
+// =========================================================================
 // EVIDENCIAS FOTOGRÁFICAS MÚLTIPLES (1-a-N)
 // =========================================================================
 
@@ -942,6 +982,7 @@ model Maquinaria {
   mantenimientos  MantenimientoMaquinaria[]
   movimientos     MovimientoMaquinaria[]
   eventos         MaquinariaEvento[]
+  limpiezas       LimpiezaMaquinaria[]
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -979,6 +1020,31 @@ model MaquinariaEvento {
   @@index([actorId])
   @@index([regionId])
   @@index([entidadId])
+}
+
+/**
+ * Limpieza periódica de la máquina: 2x/semana (miércoles y sábado) para las que están en una agencia
+ * (la cumple el líder), diaria para las asignadas a un pulidor (la cumple ese pulidor). Un registro
+ * por máquina y día — varias fotos del mismo día se agregan al mismo registro, no lo pisan.
+ */
+model LimpiezaMaquinaria {
+  id              String     @id @default(uuid())
+  maquinariaId    String
+  maquinaria      Maquinaria @relation(fields: [maquinariaId], references: [id], onDelete: Cascade)
+  /// Fecha de calendario (sin hora) que cubre esta limpieza, para compararla contra la regla vigente.
+  fecha           DateTime   @db.Date
+  /// Regla vigente al momento de registrar: "AGENCIA" (miércoles/sábado) o "PULIDOR" (diaria).
+  tipo            String
+  fotos           String[]
+  observaciones   String?
+  registradoPorId String
+  registradoPor   User       @relation("LimpiezaRegistradaPor", fields: [registradoPorId], references: [id])
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@unique([maquinariaId, fecha])
+  @@index([maquinariaId])
+  @@index([fecha])
 }
 
 model IncidenteTecnico {
@@ -1324,6 +1390,10 @@ model Reto {
   creadorRol      String?
   estado          String   @default("ACTIVO")
   criterios       String[] @default([])
+  ganadorNombre   String?
+  resultado       String?
+  cerradoPorId    String?
+  cerradoEn       DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

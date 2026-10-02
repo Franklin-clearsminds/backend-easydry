@@ -83,3 +83,18 @@ export class DeleteRetoDto {
   @IsString()
   id!: string;
 }
+
+export class CerrarRetoDto {
+  @IsString()
+  id!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  ganadorNombre?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  resultado?: string;
+}

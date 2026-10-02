@@ -19,6 +19,9 @@ export const TIPOS_EVENTO_MAQUINARIA = [
   'MANTENIMIENTO_EJECUTADO',
   'MANTENIMIENTO_EDITADO',
   'EVIDENCIA_AGREGADA',
+  'LIMPIEZA_REGISTRADA',
+  'LIMPIEZA_EDITADA',
+  'LIMPIEZA_ELIMINADA',
 ] as const;
 export type TipoEventoMaquinaria = (typeof TIPOS_EVENTO_MAQUINARIA)[number];
 
@@ -229,4 +232,63 @@ export class AgregarEvidenciaDto {
   @IsOptional()
   @IsString()
   reemplazaEvidenciaId?: string;
+}
+
+export class RegistrarLimpiezaDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  maquinariaId: string;
+
+  @ApiProperty({ type: [EvidenciaInputDto], description: 'Una o varias fotos de la limpieza realizada.' })
+  @IsArray()
+  fotos: EvidenciaInputDto[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha (YYYY-MM-DD) que cubre esta limpieza. Por defecto, hoy.' })
+  @IsOptional()
+  @IsString()
+  fecha?: string;
+}
+
+export class ListLimpiezasDto extends PaginacionDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  maquinariaId?: string;
+}
+
+export class ExportarLimpiezasDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  maquinariaId?: string;
+}
+
+export class EditarLimpiezaDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  limpiezaId: string;
+
+  @ApiPropertyOptional({ description: 'Observaciones nuevas (vacío borra las actuales). Si se omite, no se tocan.' })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
+}
+
+export class EliminarLimpiezaDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  limpiezaId: string;
+
+  @ApiPropertyOptional({ description: 'Por qué se elimina el registro (queda en la línea de tiempo).' })
+  @IsOptional()
+  @IsString()
+  motivo?: string;
 }

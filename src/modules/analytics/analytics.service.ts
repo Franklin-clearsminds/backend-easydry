@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto } from './dto/analytics.dto.js';
+import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto, RankingLavadoresDto } from './dto/analytics.dto.js';
 import { ServiceStatus } from '@prisma/client';
 import { SIN_RESULTADOS, resolverAlcance } from '../../common/permisos/alcance.js';
 
@@ -265,6 +265,81 @@ export class AnalyticsService {
       granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)),
       totalInsumosDistintos: listaOrdenada.length,
       insumos: listaOrdenada,
+    };
+  }
+
+  async getRankingLavadores(dto: RankingLavadoresDto, user: any) {
+    const filtro = this.filtroAgencia(user, dto);
+    const hayFiltro = Object.keys(filtro).length > 0;
+
+    const ahora = new Date();
+    const fechaDesde = dto.fechaDesde ? new Date(dto.fechaDesde) : new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+    const fechaHasta = dto.fechaHasta ? new Date(dto.fechaHasta) : ahora;
+
+    const where: any = {
+      estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] },
+      horaIngreso: { gte: fechaDesde, lte: fechaHasta },
+    };
+
+    if (hayFiltro) {
+      where.bahia = { agencia: filtro };
+    }
+
+    const servicios = await this.prisma.servicioLavado.findMany({
+      where,
+      select: {
+        operadorId: true,
+        horaIngreso: true,
+        horaSalida: true,
+        operador: { select: { id: true, name: true, lastname: true } },
+      },
+    });
+
+    const acumuladoPorOperador: Record<string, {
+      operadorId: string;
+      nombre: string;
+      cantidadServicios: number;
+      tiempoTotalMin: number;
+      serviciosConTiempo: number;
+    }> = {};
+
+    for (const s of servicios) {
+      if (!s.operadorId) continue;
+      if (!acumuladoPorOperador[s.operadorId]) {
+        acumuladoPorOperador[s.operadorId] = {
+          operadorId: s.operadorId,
+          nombre: s.operador ? `${s.operador.name} ${s.operador.lastname}` : 'Operador',
+          cantidadServicios: 0,
+          tiempoTotalMin: 0,
+          serviciosConTiempo: 0,
+        };
+      }
+      const acc = acumuladoPorOperador[s.operadorId];
+      acc.cantidadServicios += 1;
+      if (s.horaSalida) {
+        const duracionMs = new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime();
+        acc.tiempoTotalMin += Math.max(0, Math.round(duracionMs / (1000 * 60)));
+        acc.serviciosConTiempo += 1;
+      }
+    }
+
+    const ranking = Object.values(acumuladoPorOperador)
+      .map((a) => ({
+        operadorId: a.operadorId,
+        nombre: a.nombre,
+        cantidadServicios: a.cantidadServicios,
+        tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0,
+      }))
+      .sort((a, b) => b.cantidadServicios - a.cantidadServicios)
+      .slice(0, 10);
+
+    return {
+      success: true,
+      rango: {
+        desde: fechaDesde.toISOString().split('T')[0],
+        hasta: fechaHasta.toISOString().split('T')[0],
+      },
+      ranking,
     };
   }
 }

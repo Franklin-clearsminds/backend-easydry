@@ -63,3 +63,31 @@ describe('consumo de químicos — alcance', () => {
     expect(b.prisma.consumoServicio.findMany.mock.calls[0][0].where).not.toHaveProperty('agenciaId');
   });
 });
+
+describe('ranking de lavadores', () => {
+  it('agrupa por operador, calcula cantidad y tiempo promedio solo sobre los que tienen hora de salida', async () => {
+    const { prisma, service } = armar();
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { operadorId: 'op1', horaIngreso: new Date('2026-10-01T10:00:00Z'), horaSalida: new Date('2026-10-01T10:30:00Z'), operador: { id: 'op1', name: 'Juan', lastname: 'Pérez' } },
+      { operadorId: 'op1', horaIngreso: new Date('2026-10-01T11:00:00Z'), horaSalida: new Date('2026-10-01T11:50:00Z'), operador: { id: 'op1', name: 'Juan', lastname: 'Pérez' } },
+      { operadorId: 'op1', horaIngreso: new Date('2026-10-01T12:00:00Z'), horaSalida: null, operador: { id: 'op1', name: 'Juan', lastname: 'Pérez' } },
+      { operadorId: 'op2', horaIngreso: new Date('2026-10-01T09:00:00Z'), horaSalida: new Date('2026-10-01T09:20:00Z'), operador: { id: 'op2', name: 'Ana', lastname: 'Soto' } },
+    ]);
+
+    const res = await service.getRankingLavadores({} as any, usuario('ADMIN'));
+    expect(res.ranking).toHaveLength(2);
+    const op1 = res.ranking.find((r: any) => r.operadorId === 'op1');
+    expect(op1).toMatchObject({ nombre: 'Juan Pérez', cantidadServicios: 3, tiempoPromedioMin: 40 });
+    const op2 = res.ranking.find((r: any) => r.operadorId === 'op2');
+    expect(op2).toMatchObject({ nombre: 'Ana Soto', cantidadServicios: 1, tiempoPromedioMin: 20 });
+    expect(res.ranking[0].operadorId).toBe('op1'); // ordenado por cantidad desc
+  });
+
+  it('se limita a las agencias de su alcance', async () => {
+    const { prisma, service } = armar();
+    await service.getRankingLavadores({ agenciaId: 'a-ajena' } as any, usuario('LIDER', { agenciaId: 'a1' }));
+    const where = prisma.servicioLavado.findMany.mock.calls[0][0].where;
+    expect(JSON.stringify(where)).toContain('"id":"a1"');
+    expect(JSON.stringify(where)).not.toContain('a-ajena');
+  });
+});

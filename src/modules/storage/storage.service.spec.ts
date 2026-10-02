@@ -55,6 +55,16 @@ describe('StorageService', () => {
     expect(foto.key.startsWith('maquinaria/')).toBe(true);
   });
 
+  it('guarda las fotos de limpieza en una carpeta por día dentro del equipo', async () => {
+    const limpieza = await createService().buildS3Key({
+      maquinariaCodigo: 'MQ-HIDRO-01',
+      type: 'FOTO_LIMPIEZA',
+      category: 'MAQUINARIA_LIMPIEZA',
+      fileName: 'limpieza.jpg',
+    });
+    expect(limpieza.key).toMatch(/^maquinaria\/mq-hidro-01\/limpiezas\/\d{4}-\d{2}-\d{2}\//);
+  });
+
   it('separa evidencias de reporte y de reparación del mismo incidente', async () => {
     const resolucion = await createService().buildS3Key({
       maquinariaCodigo: 'MQ-HIDRO-01',

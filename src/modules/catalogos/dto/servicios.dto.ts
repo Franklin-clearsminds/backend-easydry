@@ -4,6 +4,9 @@ import { IsNotEmpty, IsString, IsNumber, IsOptional, Min, IsIn } from 'class-val
 import { Type } from 'class-transformer';
 import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
+export const CATEGORIAS_CATALOGO_SERVICIO = ['GENERAL', 'ESPECIAL'] as const;
+export type CategoriaCatalogoServicio = (typeof CATEGORIAS_CATALOGO_SERVICIO)[number];
+
 export class CreateCatalogoServicioDto {
   @ApiProperty({ example: 'SER-001', description: 'Código único del servicio' })
   @IsString()
@@ -15,10 +18,9 @@ export class CreateCatalogoServicioDto {
   @IsNotEmpty()
   nombre: string;
 
-  @ApiProperty({ example: 'GENERAL', description: 'Categoría: GENERAL o ESPECIAL' })
-  @IsString()
-  @IsNotEmpty()
-  categoria: string;
+  @ApiProperty({ example: 'GENERAL', enum: CATEGORIAS_CATALOGO_SERVICIO, description: 'Categoría: GENERAL o ESPECIAL' })
+  @IsIn(CATEGORIAS_CATALOGO_SERVICIO)
+  categoria: CategoriaCatalogoServicio;
 
   @ApiPropertyOptional({ example: 'Lavado exterior en seco con cera bio-protectora' })
   @IsOptional()
@@ -64,10 +66,10 @@ export class UpdateCatalogoServicioDto {
   @IsString()
   nombre?: string;
 
-  @ApiPropertyOptional({ example: 'GENERAL' })
+  @ApiPropertyOptional({ example: 'GENERAL', enum: CATEGORIAS_CATALOGO_SERVICIO })
   @IsOptional()
-  @IsString()
-  categoria?: string;
+  @IsIn(CATEGORIAS_CATALOGO_SERVICIO)
+  categoria?: CategoriaCatalogoServicio;
 
   @ApiPropertyOptional({ example: 'Descripción actualizada' })
   @IsOptional()

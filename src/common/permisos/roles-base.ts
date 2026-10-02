@@ -52,7 +52,7 @@ export const ROLES_BASE: RolBase[] = [
       ...LECTURA_RED, 'dashboard.ver', 'productividad.ver', 'agencias.editar', 'bahias.editar', 'bahias.asignar',
       'servicios.ver', 'servicios.decidir', 'solicitudes.ver', 'especiales.ver', 'consumos.ver', 'recetas.ver', 'retos.ver',
       'inventario.ver', 'despachos.ver', 'alertas.ver', 'maquinaria.ver', 'incidentes.ver', 'incidentes.reportar',
-      'maquinaria.evidencias', 'evidencias.subir', 'sync.usar',
+      'maquinaria.evidencias', 'limpiezas.ver', 'limpiezas.editar', 'evidencias.subir', 'sync.usar',
     ),
   },
   {
@@ -66,8 +66,8 @@ export const ROLES_BASE: RolBase[] = [
     namerol: 'COORD_COMERCIAL',
     descripcion: 'Coordinador comercial: asigna y monitorea retos, productividad y reportes de su región.',
     ambito: 'REGION',
-    modulos: ['dashboard', 'notificaciones', 'productividad', 'servicios', 'configuracion/servicios', 'reportes', 'perfil'],
-    capacidades: p(...LECTURA_RED, 'dashboard.ver', 'productividad.ver', 'servicios.ver', 'retos.ver', 'retos.crear', 'retos.eliminar', 'sync.usar'),
+    modulos: ['dashboard', 'notificaciones', 'productividad', 'servicios', 'configuracion/servicios', 'reportes', 'taller-tecnico', 'perfil'],
+    capacidades: p(...LECTURA_RED, 'dashboard.ver', 'productividad.ver', 'servicios.ver', 'retos.ver', 'retos.crear', 'retos.eliminar', 'limpiezas.ver', 'sync.usar'),
   },
   {
     namerol: 'APROBADOR',
@@ -88,7 +88,7 @@ export const ROLES_BASE: RolBase[] = [
       ...LECTURA_RED, 'dashboard.ver', 'bahias.editar', 'bahias.asignar', 'servicios.ver', 'servicios.crear', 'servicios.editar',
       'servicios.anular', 'solicitudes.ver', 'solicitudes.crear', 'consumos.ver', 'recetas.ver', 'retos.ver', 'inventario.ver',
       'stock.consumir', 'despachos.ver', 'despachos.crear', 'despachos.recibir', 'alertas.ver', 'alertas.crear', 'maquinaria.ver',
-      'incidentes.ver', 'incidentes.reportar', 'mantenimientos.ver', 'maquinaria.evidencias', 'evidencias.subir', 'sync.usar',
+      'incidentes.ver', 'incidentes.reportar', 'mantenimientos.ver', 'maquinaria.evidencias', 'limpiezas.ver', 'evidencias.subir', 'sync.usar',
     ),
   },
   {
@@ -102,11 +102,11 @@ export const ROLES_BASE: RolBase[] = [
     namerol: 'COORD_SERVICIOS_ESPECIALES',
     descripcion: 'Coordinador de servicios especiales: crea, asigna, reasigna y anula servicios especiales de la red especializada.',
     ambito: 'GLOBAL',
-    modulos: ['dashboard', 'notificaciones', 'servicios', 'configuracion/servicios', 'operadores', 'asignaciones', 'productividad', 'maquinaria', 'perfil'],
+    modulos: ['dashboard', 'notificaciones', 'servicios', 'configuracion/servicios', 'operadores', 'asignaciones', 'productividad', 'maquinaria', 'taller-tecnico', 'perfil'],
     capacidades: p(
       ...LECTURA_RED, 'dashboard.ver', 'productividad.ver', 'especiales.ver', 'especiales.crear',
       'especiales.reasignar', 'especiales.anular', 'recetas.ver', 'retos.ver', 'maquinaria.ver', 'incidentes.ver',
-      'incidentes.reportar', 'maquinaria.evidencias', 'evidencias.subir', 'sync.usar',
+      'incidentes.reportar', 'maquinaria.evidencias', 'limpiezas.ver', 'evidencias.subir', 'sync.usar',
     ),
   },
   {
@@ -118,7 +118,7 @@ export const ROLES_BASE: RolBase[] = [
       'agencias.ver', 'catalogo.ver', 'evidencias.ver', 'dashboard.ver', 'especiales.ver', 'especiales.crear',
       'especiales.operar', 'recetas.ver', 'retos.ver', 'inventario.ver', 'stock.consumir', 'despachos.ver', 'despachos.recibir',
       'alertas.ver', 'alertas.crear', 'maquinaria.ver', 'incidentes.ver', 'incidentes.reportar', 'mantenimientos.ver', 'maquinaria.evidencias',
-      'evidencias.subir', 'sync.usar',
+      'limpiezas.ver', 'evidencias.subir', 'sync.usar',
     ),
   },
   {
@@ -129,7 +129,7 @@ export const ROLES_BASE: RolBase[] = [
     capacidades: p(
       'agencias.ver', 'usuarios.ver', 'evidencias.ver', 'dashboard.ver', 'maquinaria.ver', 'maquinaria.crear', 'maquinaria.gestionar',
       'maquinaria.trazabilidad', 'incidentes.ver', 'incidentes.resolver', 'mantenimientos.ver', 'mantenimientos.ejecutar',
-      'checklist.gestionar', 'maquinaria.evidencias', 'evidencias.subir', 'sync.usar',
+      'checklist.gestionar', 'maquinaria.evidencias', 'limpiezas.ver', 'limpiezas.editar', 'evidencias.subir', 'sync.usar',
     ),
   },
   {
@@ -146,11 +146,11 @@ export const ROLES_BASE: RolBase[] = [
     namerol: 'COORD_BODEGA',
     descripcion: 'Coordinador de bodega: opera todo el stock nacional, compra a la bodega central y despacha a cualquier destino.',
     ambito: 'GLOBAL',
-    modulos: ['dashboard', 'notificaciones', 'inventario', 'envios', 'reportes', 'configuracion/servicios', 'perfil'],
+    modulos: ['dashboard', 'notificaciones', 'inventario', 'envios', 'reportes', 'configuracion/servicios', 'taller-tecnico', 'perfil'],
     capacidades: p(
       'agencias.ver', 'usuarios.ver', 'catalogo.ver', 'dashboard.ver', 'consumos.ver', 'recetas.ver', 'recetas.gestionar',
       'recetas.historial', 'inventario.ver', 'stock.ajustar', 'compras.registrar', 'despachos.ver', 'despachos.crear',
-      'despachos.recibir', 'alertas.ver', 'alertas.atender', 'maquinaria.ver', 'sync.usar',
+      'despachos.recibir', 'alertas.ver', 'alertas.atender', 'maquinaria.ver', 'limpiezas.ver', 'sync.usar',
     ),
   },
   {

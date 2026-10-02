@@ -969,7 +969,13 @@ export class ServiciosEspecialesService {
     if (tipo === 'PAUSA' && estado === 'pausado') {
       return this.pausar({ id: params.id, motivo: params.motivo || '', videoPausaUrl: params.url } as any, currentUser);
     }
-    if (tipo === 'REANUDACION' && estado === 'pausado') {
+    // También cuando ya está "en proceso": si la reanudación offline ya llegó por su propio
+    // endpoint (sin conexión real, el cliente la aplica igual y la reintenta al reconectar) y el
+    // video queda confirmando después, `reanudar()` ya sabe vincularlo al último ciclo del
+    // historial (ver su rama `estadoActual === 'en proceso'`). Sin este caso, el video caía en el
+    // flujo genérico de abajo, que puede no encontrar un ciclo pendiente (`idx === -1`) y responder
+    // 200 sin vincular nada: el móvil interpreta eso como éxito y borra su única copia del archivo.
+    if (tipo === 'REANUDACION' && (estado === 'pausado' || estado === 'en proceso')) {
       return this.reanudar({ id: params.id, videoReanudarUrl: params.url, observaciones: params.observaciones } as any, currentUser);
     }
 
@@ -997,7 +1003,10 @@ export class ServiciosEspecialesService {
           return this.pausar({ id: params.id, motivo: params.motivo || '', videoPausaUrl: params.url } as any, currentUser);
         }
       }
-      // Ya estaba vinculado (o no hay ciclo al que atarlo): no hay nada que hacer.
+      // Ya estaba vinculado (o no hay ciclo al que atarlo): no hay nada que hacer. Se deja registro
+      // porque el móvil borra su copia local al recibir 200 — si esto no era realmente un duplicado,
+      // el video se pierde sin aviso.
+      console.warn(`[ServiciosEspeciales] adjuntarVideoCiclo(${tipo}) sin ciclo pendiente para ${item.codigoSE || item.id} (estado=${estado}); video no vinculado: ${params.url}`);
       return this._formatItem(item);
     }
 

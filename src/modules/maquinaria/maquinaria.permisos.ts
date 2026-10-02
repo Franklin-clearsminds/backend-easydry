@@ -9,6 +9,7 @@ export const ROL = {
   COORD_MANTENIMIENTO: 'COORD_MANTENIMIENTO',
   COORD_SERVICIOS_ESPECIALES: 'COORD_SERVICIOS_ESPECIALES',
   COORD_BODEGA: 'COORD_BODEGA',
+  COORD_COMERCIAL: 'COORD_COMERCIAL',
   TECNICO: 'TECNICO',
   PULIDOR: 'PULIDOR',
   LIDER: 'LIDER',
@@ -52,6 +53,7 @@ export const esOperador = (actor: Actor): boolean => ROLES_OPERADOR.includes(act
 export const esSupervisor = (actor: Actor): boolean => actor.rol === ROL.SUPERVISOR;
 export const esCoordServiciosEspeciales = (actor: Actor): boolean => actor.rol === ROL.COORD_SERVICIOS_ESPECIALES;
 export const esCoordMantenimiento = (actor: Actor): boolean => actor.rol === ROL.COORD_MANTENIMIENTO;
+export const esCoordComercial = (actor: Actor): boolean => actor.rol === ROL.COORD_COMERCIAL;
 export const esTecnico = (actor: Actor): boolean => actor.rol === ROL.TECNICO;
 export const esLider = (actor: Actor): boolean => actor.rol === ROL.LIDER;
 export const esPulidor = (actor: Actor): boolean => actor.rol === ROL.PULIDOR;

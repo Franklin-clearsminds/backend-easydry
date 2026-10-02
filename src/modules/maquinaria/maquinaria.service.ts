@@ -14,6 +14,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { ChecklistService } from './checklist.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
+import { normalizarRol } from '../../common/permisos/alias-roles.js';
 import {
   columnasSimples,
   combinarWhere,
@@ -44,10 +45,15 @@ import {
   ConfigurarVentanaDto,
   DetalleMaquinariaDto,
   EditarIncidenteDto,
+  EditarLimpiezaDto,
   EditarMantenimientoDto,
+  EliminarLimpiezaDto,
   EvidenciaInputDto,
+  ExportarLimpiezasDto,
   HistorialMaquinariaDto,
+  ListLimpiezasDto,
   PaginacionDto,
+  RegistrarLimpiezaDto,
   SetActivaMaquinariaDto,
   type TipoEventoMaquinaria,
 } from './dto/trazabilidad.dto.js';
@@ -56,6 +62,7 @@ import {
   addDays,
   assertRegion,
   esAdmin,
+  esCoordComercial,
   esCoordMantenimiento,
   esCoordServiciosEspeciales,
   esSupervisor,
@@ -66,6 +73,10 @@ import {
   ROLES_OPERADOR,
   startOfDay,
 } from './maquinaria.permisos.js';
+import {
+  limpiezaAtrasada as limpiezaAtrasadaUtil,
+  reglaLimpieza as reglaLimpiezaUtil,
+} from '../../common/utils/limpieza-maquinaria.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -258,7 +269,7 @@ export class MaquinariaService {
 
   private scopeMaquinaria(actor: Actor): Prisma.MaquinariaWhereInput {
     if (esAdmin(actor) || actor.rol === ROL.COORD_BODEGA) return {};
-    if (esCoordMantenimiento(actor) || esSupervisor(actor) || esTecnico(actor)) {
+    if (esCoordMantenimiento(actor) || esSupervisor(actor) || esTecnico(actor) || esCoordComercial(actor)) {
       return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
     }
     if (esCoordServiciosEspeciales(actor)) return { operadorAsignado: { role: { namerol: 'PULIDOR' } } };
@@ -335,7 +346,8 @@ export class MaquinariaService {
       select: { id: true, estado: true, regionId: true, role: { select: { namerol: true } } },
     });
     if (!u || u.estado !== 1) throw new NotFoundException('El técnico indicado no existe o está inactivo.');
-    if (u.role.namerol !== ROL.TECNICO && u.role.namerol !== ROL.COORD_MANTENIMIENTO) {
+    const rolUsuario = normalizarRol(u.role.namerol);
+    if (rolUsuario !== ROL.TECNICO && rolUsuario !== ROL.COORD_MANTENIMIENTO) {
       throw new BadRequestException('Solo se puede asignar a un técnico o al coordinador de mantenimiento.');
     }
     if (!regionMaquina || u.regionId !== regionMaquina) {
@@ -456,9 +468,10 @@ export class MaquinariaService {
         incidentes: new Map<string, number>(),
         mantenimientos: new Map<string, number>(),
         proximoMantenimiento: new Map<string, Date>(),
+        ultimaLimpieza: new Map<string, Date>(),
       };
     }
-    const [inc, man, proximo] = await Promise.all([
+    const [inc, man, proximo, limpieza] = await Promise.all([
       this.prisma.incidenteTecnico.groupBy({
         by: ['maquinariaId'],
         where: { maquinariaId: { in: ids }, estado: 'ABIERTO', tecnicoAsignadoId: null },
@@ -480,6 +493,11 @@ export class MaquinariaService {
         where: { maquinariaId: { in: ids }, estado: { in: ['PENDIENTE', 'EN_PROCESO'] } },
         _min: { fechaProgramada: true },
       }),
+      this.prisma.limpiezaMaquinaria.groupBy({
+        by: ['maquinariaId'],
+        where: { maquinariaId: { in: ids } },
+        _max: { fecha: true },
+      }),
     ]);
     return {
       incidentes: new Map(inc.map((r) => [r.maquinariaId, r._count._all])),
@@ -488,6 +506,11 @@ export class MaquinariaService {
         proximo
           .filter((r) => r._min.fechaProgramada)
           .map((r) => [r.maquinariaId, r._min.fechaProgramada as Date]),
+      ),
+      ultimaLimpieza: new Map(
+        limpieza
+          .filter((r) => r._max.fecha)
+          .map((r) => [r.maquinariaId, r._max.fecha as Date]),
       ),
     };
   }
@@ -517,12 +540,18 @@ export class MaquinariaService {
     // Los conteos de pendientes se calculan solo para las filas que se devuelven (antes, para todas las máquinas).
     const conPendientes = async (items: any[]) => {
       const pendientes = await this.conteosPendientes(items.map((i) => i.id));
-      return items.map((m) => ({
-        ...m,
-        incidentesNoAtendidos: pendientes.incidentes.get(m.id) ?? 0,
-        mantenimientosVencidos: pendientes.mantenimientos.get(m.id) ?? 0,
-        proximoMantenimiento: pendientes.proximoMantenimiento.get(m.id) ?? null,
-      }));
+      const ahora = new Date();
+      return items.map((m) => {
+        const regla = this.reglaLimpieza(m);
+        return {
+          ...m,
+          incidentesNoAtendidos: pendientes.incidentes.get(m.id) ?? 0,
+          mantenimientosVencidos: pendientes.mantenimientos.get(m.id) ?? 0,
+          proximoMantenimiento: pendientes.proximoMantenimiento.get(m.id) ?? null,
+          limpiezaRegla: regla,
+          limpiezaAtrasada: this.limpiezaAtrasada(regla, pendientes.ultimaLimpieza.get(m.id) ?? null, ahora),
+        };
+      });
     };
 
     const resultado = await listarPaginable(dto, {
@@ -579,7 +608,7 @@ export class MaquinariaService {
     });
     if (!m) throw new NotFoundException(`Equipo ${dto.id} no encontrado`);
 
-    const [pendientes, proximo, totales] = await Promise.all([
+    const [pendientes, proximo, totales, ultimaLimpieza] = await Promise.all([
       this.conteosPendientes([m.id]),
       this.prisma.mantenimientoMaquinaria.findFirst({
         where: { maquinariaId: m.id, estado: { in: ['PENDIENTE', 'EN_PROCESO'] } },
@@ -591,8 +620,14 @@ export class MaquinariaService {
         this.prisma.mantenimientoMaquinaria.count({ where: { maquinariaId: m.id } }),
         this.prisma.movimientoMaquinaria.count({ where: { maquinariaId: m.id } }),
       ]),
+      this.prisma.limpiezaMaquinaria.findFirst({
+        where: { maquinariaId: m.id },
+        orderBy: { fecha: 'desc' },
+        select: { fecha: true, fotos: true },
+      }),
     ]);
 
+    const reglaLimpieza = this.reglaLimpieza(m);
     return {
       success: true,
       data: {
@@ -601,6 +636,12 @@ export class MaquinariaService {
         mantenimientosVencidos: pendientes.mantenimientos.get(m.id) ?? 0,
         proximoMantenimiento: proximo,
         totales: { incidentes: totales[0], mantenimientos: totales[1], movimientos: totales[2] },
+        limpieza: {
+          regla: reglaLimpieza,
+          ultimaFecha: ultimaLimpieza?.fecha ?? null,
+          ultimasFotos: ultimaLimpieza?.fotos ?? [],
+          atrasada: this.limpiezaAtrasada(reglaLimpieza, ultimaLimpieza?.fecha ?? null, new Date()),
+        },
       },
     };
   }
@@ -777,11 +818,26 @@ export class MaquinariaService {
     if (operadorId) {
       const u = await this.prisma.user.findUnique({
         where: { id: operadorId },
-        select: { id: true, estado: true, role: { select: { namerol: true } } },
+        select: {
+          id: true,
+          estado: true,
+          regionId: true,
+          role: { select: { namerol: true } },
+          agencia: { select: { regionId: true } },
+        },
       });
       if (!u || u.estado !== 1) throw new NotFoundException('El usuario indicado no existe o está inactivo.');
-      if (!ROLES_OPERADOR.includes(u.role.namerol)) {
+      // Normalizado: cuentas viejas aún pueden tener el rol guardado como PULIDOR_FIJO/PULIDOR_MOVIL.
+      if (!ROLES_OPERADOR.includes(normalizarRol(u.role.namerol))) {
         throw new BadRequestException('Solo se puede asignar la máquina a un pulidor (fijo o móvil).');
+      }
+      // Fuera de admin/super admin, solo se puede asignar a un pulidor de la propia región
+      // (fijo: región de su agencia; móvil: su región directa).
+      if (!esAdmin(actor)) {
+        const regionPulidor = u.regionId ?? u.agencia?.regionId ?? null;
+        if (!regionPulidor || regionPulidor !== actor.regionId) {
+          throw new ForbiddenException('Solo puedes asignar máquinas a pulidores de tu región.');
+        }
       }
     }
     if (operadorId === m.operadorAsignadoId) {
@@ -940,6 +996,7 @@ export class MaquinariaService {
       title: `Nueva incidencia: ${maquina.codigo}`,
       body: `${incidente.titulo} (Gravedad: ${gravedad})`,
       data: { type: 'INCIDENTE_NUEVO', incidenteId: incidente.id, maquinariaId: maquina.id },
+      opts: { tipo: 'INCIDENTE_NUEVO', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
     });
 
     return { success: true, data: this.ubicacionIncidente(incidente) };
@@ -994,6 +1051,7 @@ export class MaquinariaService {
         `Incidencia asignada: ${maquina.codigo}`,
         inc.titulo,
         { type: 'INCIDENTE_ASIGNADO', incidenteId: inc.id, maquinariaId: maquina.id },
+        { tipo: 'INCIDENCIA_ASIGNADA', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
       );
     }
     return { success: true, data: this.ubicacionIncidente(updated) };
@@ -1074,6 +1132,7 @@ export class MaquinariaService {
         `Incidencia reparada: ${maquina.codigo}`,
         inc.titulo,
         { type: 'INCIDENTE_REPARADO', incidenteId: inc.id, maquinariaId: maquina.id },
+        { tipo: 'INCIDENCIA_RESUELTA', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
       );
     }
     return { success: true, data: this.ubicacionIncidente(updated) };
@@ -1256,6 +1315,7 @@ export class MaquinariaService {
         `Mantenimiento asignado: ${maquina.codigo}`,
         `Programado para ${fechaProgramada.toISOString().slice(0, 10)}`,
         { type: 'MANTENIMIENTO_ASIGNADO', mantenimientoId: mantenimiento.id, maquinariaId: maquina.id },
+        { tipo: 'MANTENIMIENTO_ASIGNADO', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
       );
     }
     return { success: true, data: mantenimiento };
@@ -1299,6 +1359,7 @@ export class MaquinariaService {
         `Mantenimiento asignado: ${maquina.codigo}`,
         `Programado para ${(m.fechaProgramada ?? m.fechaMantenimiento).toISOString().slice(0, 10)}`,
         { type: 'MANTENIMIENTO_ASIGNADO', mantenimientoId: m.id, maquinariaId: maquina.id },
+        { tipo: 'MANTENIMIENTO_ASIGNADO', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
       );
     }
     return { success: true, data: updated };
@@ -1580,6 +1641,224 @@ export class MaquinariaService {
   }
 
   // ==============================================================
+  // LIMPIEZA (2x/semana para la maquinaria de agencia, diaria para la asignada a un pulidor)
+  // ==============================================================
+
+  /**
+   * Regla vigente de una máquina, según a quién está asignada hoy (no según su tipo): con pulidor
+   * asignado, diaria; si no, con agencia, 2x/semana (miércoles y sábado); sin ninguna de las dos
+   * (p. ej. en un taller), no aplica ninguna regla.
+   */
+  private reglaLimpieza(m: Pick<MaquinaCtx, 'agenciaId' | 'operadorAsignadoId'>): 'AGENCIA' | 'PULIDOR' | null {
+    return reglaLimpiezaUtil(m);
+  }
+
+  /** `true` si la última limpieza registrada es anterior al último día que tocaba cumplir la regla. */
+  private limpiezaAtrasada(regla: 'AGENCIA' | 'PULIDOR' | null, ultimaFecha: Date | null, ahora: Date): boolean {
+    return limpiezaAtrasadaUtil(regla, ultimaFecha, ahora);
+  }
+
+  /**
+   * Quién puede registrar la limpieza de esta máquina hoy: únicamente el líder de su agencia o el
+   * pulidor (fijo o móvil) asignado — quien de verdad la limpia. Ni admin ni super admin registran
+   * limpiezas: solo auditan (con `limpiezas.ver`/`limpiezas.editar`) lo que estos registraron.
+   */
+  private assertPuedeLimpiar(actor: Actor, m: Pick<MaquinaCtx, 'agenciaId' | 'operadorAsignadoId'>, regla: 'AGENCIA' | 'PULIDOR' | null): void {
+    if (regla === 'PULIDOR' && esOperador(actor) && actor.id === m.operadorAsignadoId) return;
+    if (regla === 'AGENCIA' && esLider(actor) && actor.agenciaId === m.agenciaId) return;
+    throw new ForbiddenException('No puedes registrar la limpieza de esta máquina.');
+  }
+
+  /**
+   * Registra que se limpió la máquina en una fecha (hoy, si no se indica otra). Una fila por máquina
+   * y día: si ya había una de ese día, las fotos nuevas se agregan a las que ya estaban (no las pisa).
+   */
+  async registrarLimpieza(dto: RegistrarLimpiezaDto, actor: Actor) {
+    const maquina = await this.cargarMaquina(dto.maquinariaId);
+    this.assertActiva(maquina);
+
+    const regla = this.reglaLimpieza(maquina);
+    if (!regla) {
+      throw new BadRequestException('Esta máquina no tiene agencia ni pulidor asignado: no le aplica una regla de limpieza.');
+    }
+    this.assertPuedeLimpiar(actor, maquina, regla);
+
+    let fecha = startOfDay(new Date());
+    if (dto.fecha) {
+      const parsed = new Date(`${dto.fecha}T00:00:00.000Z`);
+      if (Number.isNaN(parsed.getTime())) throw new BadRequestException('Fecha inválida (usa AAAA-MM-DD).');
+      fecha = parsed;
+    }
+
+    const fotos = await this.verificarEvidencias(maquina, dto.fotos, { requiereMultimedia: true });
+    const urls = fotos.map((f) => f.url);
+
+    const existente = await this.prisma.limpiezaMaquinaria.findUnique({
+      where: { maquinariaId_fecha: { maquinariaId: maquina.id, fecha } },
+    });
+
+    const registro = await this.prisma.$transaction(async (tx) => {
+      const data = existente
+        ? await tx.limpiezaMaquinaria.update({
+            where: { id: existente.id },
+            data: {
+              fotos: [...existente.fotos, ...urls],
+              observaciones: dto.observaciones?.trim() || existente.observaciones,
+            },
+          })
+        : await tx.limpiezaMaquinaria.create({
+            data: {
+              maquinariaId: maquina.id,
+              fecha,
+              tipo: regla,
+              fotos: urls,
+              observaciones: dto.observaciones?.trim() || null,
+              registradoPorId: actor.id,
+            },
+          });
+      await this.registrarEvento(tx, maquina, 'LIMPIEZA_REGISTRADA', actor.id, data.id, {
+        tipo: regla,
+        fecha: fecha.toISOString(),
+        fotosAgregadas: urls.length,
+        fotosTotal: data.fotos.length,
+      });
+      return data;
+    });
+
+    return { success: true, data: registro };
+  }
+
+  /** Historial de limpiezas de una máquina (o de todas dentro del alcance del actor), más reciente primero. */
+  async listLimpiezas(dto: ListLimpiezasDto, actor: Actor) {
+    const where: Prisma.LimpiezaMaquinariaWhereInput = {
+      maquinaria: this.scopeMaquinaria(actor),
+      ...(dto.maquinariaId ? { maquinariaId: dto.maquinariaId } : {}),
+    };
+    const { page, pageSize, skip, take } = this.pagina(dto);
+    const [items, total] = await Promise.all([
+      this.prisma.limpiezaMaquinaria.findMany({
+        where,
+        orderBy: { fecha: 'desc' },
+        skip,
+        take,
+        include: {
+          maquinaria: { select: { id: true, codigo: true, nombre: true } },
+          registradoPor: { select: { id: true, name: true, lastname: true } },
+        },
+      }),
+      this.prisma.limpiezaMaquinaria.count({ where }),
+    ]);
+    return this.respuestaPagina(items, total, page, pageSize);
+  }
+
+  private async cargarLimpieza(id: string) {
+    const l = await this.prisma.limpiezaMaquinaria.findUnique({
+      where: { id },
+      include: {
+        maquinaria: { include: this.includeMaquinaCtx },
+        registradoPor: { select: { id: true, name: true, lastname: true } },
+      },
+    });
+    if (!l) throw new NotFoundException(`Registro de limpieza ${id} no encontrado`);
+    return l;
+  }
+
+  /**
+   * Corrige las observaciones de un registro ya creado (fotos, fecha y tipo no se pueden editar).
+   * Solo dentro del alcance de quien edita: admin/super admin, cualquiera; supervisor y coordinador
+   * de mantenimiento, solo los de su región.
+   */
+  async editarLimpieza(dto: EditarLimpiezaDto, actor: Actor) {
+    const limpieza = await this.cargarLimpieza(dto.limpiezaId);
+    const maquina = limpieza.maquinaria as unknown as MaquinaCtx;
+    assertRegion(actor, this.regionDe(maquina));
+
+    if (dto.observaciones === undefined) {
+      return { success: true, data: limpieza, sinCambios: true };
+    }
+    const nuevas = dto.observaciones.trim() || null;
+    if (nuevas === limpieza.observaciones) {
+      return { success: true, data: limpieza, sinCambios: true };
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.limpiezaMaquinaria.update({
+        where: { id: limpieza.id },
+        data: { observaciones: nuevas },
+        include: {
+          maquinaria: { select: { id: true, codigo: true, nombre: true } },
+          registradoPor: { select: { id: true, name: true, lastname: true } },
+        },
+      });
+      await this.registrarEvento(tx, maquina, 'LIMPIEZA_EDITADA', actor.id, limpieza.id, {
+        cambios: { observaciones: { antes: limpieza.observaciones, despues: nuevas } },
+      });
+      return u;
+    });
+    return { success: true, data: updated };
+  }
+
+  /**
+   * Elimina un registro de limpieza (queda el evento en la línea de tiempo de la máquina, con una
+   * instantánea de lo que tenía). Mismo alcance que editarLimpieza.
+   */
+  async eliminarLimpieza(dto: EliminarLimpiezaDto, actor: Actor) {
+    const limpieza = await this.cargarLimpieza(dto.limpiezaId);
+    const maquina = limpieza.maquinaria as unknown as MaquinaCtx;
+    assertRegion(actor, this.regionDe(maquina));
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.registrarEvento(tx, maquina, 'LIMPIEZA_ELIMINADA', actor.id, limpieza.id, {
+        fecha: limpieza.fecha.toISOString(),
+        tipo: limpieza.tipo,
+        fotos: limpieza.fotos.length,
+        observaciones: limpieza.observaciones,
+        motivo: dto.motivo?.trim() || null,
+      });
+      await tx.limpiezaMaquinaria.delete({ where: { id: limpieza.id } });
+    });
+    return { success: true };
+  }
+
+  /** Historial completo (hasta 5000 filas) dentro del alcance del actor, para exportar a CSV desde el cliente. */
+  async exportarLimpiezas(dto: ExportarLimpiezasDto, actor: Actor) {
+    const where: Prisma.LimpiezaMaquinariaWhereInput = {
+      maquinaria: this.scopeMaquinaria(actor),
+      ...(dto.maquinariaId ? { maquinariaId: dto.maquinariaId } : {}),
+    };
+    const items = await this.prisma.limpiezaMaquinaria.findMany({
+      where,
+      orderBy: { fecha: 'desc' },
+      take: 5000,
+      include: {
+        maquinaria: { select: { id: true, codigo: true, nombre: true } },
+        registradoPor: { select: { id: true, name: true, lastname: true } },
+      },
+    });
+    return { success: true, data: items };
+  }
+
+  /** Cuántas máquinas dentro del alcance del actor están atrasadas de limpieza (para el badge de alerta). */
+  async resumenLimpiezas(actor: Actor) {
+    const candidatas = await this.prisma.maquinaria.findMany({
+      where: {
+        ...this.scopeMaquinaria(actor),
+        activa: true,
+        OR: [{ agenciaId: { not: null } }, { operadorAsignadoId: { not: null } }],
+      },
+      select: { id: true, agenciaId: true, operadorAsignadoId: true },
+    });
+    if (!candidatas.length) return { success: true, pendientes: 0 };
+
+    const pendientes = await this.conteosPendientes(candidatas.map((m) => m.id));
+    const ahora = new Date();
+    const atrasadas = candidatas.filter((m) =>
+      this.limpiezaAtrasada(this.reglaLimpieza(m), pendientes.ultimaLimpieza.get(m.id) ?? null, ahora),
+    ).length;
+    return { success: true, pendientes: atrasadas };
+  }
+
+  // ==============================================================
   // MOVIMIENTOS (agencias, bahías y talleres)
   // ==============================================================
 
@@ -1593,6 +1872,12 @@ export class MaquinariaService {
       select: { id: true, nombre: true, tipoUbicacion: true, regionId: true },
     });
     if (!destino) throw new NotFoundException('Agencia o taller destino no encontrado');
+
+    // Cambiar de región es exclusivo de admin/super admin; el coordinador y el técnico
+    // solo mueven la máquina entre agencias o talleres de su propia región.
+    if (!esAdmin(actor) && destino.regionId !== actor.regionId) {
+      throw new ForbiddenException('No puedes mover esta máquina fuera de tu región.');
+    }
 
     let destinoBahia: { id: string; nombre: string } | null = null;
     if (dto.destinoBahiaId) {
@@ -1689,9 +1974,13 @@ export class MaquinariaService {
     return this.respuestaPagina(data, total, page, pageSize);
   }
 
-  async listTalleres() {
+  async listTalleres(actor: Actor) {
     const items = await this.prisma.agencia.findMany({
-      where: { tipoUbicacion: { in: ['TALLER_NACIONAL', 'TALLER_REGIONAL'] }, estado: 1 },
+      where: {
+        tipoUbicacion: { in: ['TALLER_NACIONAL', 'TALLER_REGIONAL'] },
+        estado: 1,
+        ...(esAdmin(actor) ? {} : { regionId: actor.regionId ?? SIN_REGION }),
+      },
       select: {
         id: true,
         codigo: true,

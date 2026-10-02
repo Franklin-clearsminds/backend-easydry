@@ -15,6 +15,7 @@ function armar(existente: any = null, agenciasEnRegion = 1) {
       create: vi.fn().mockImplementation(async (a: any) => ({ id: 'r1', ...a.data })),
       findUnique: vi.fn().mockResolvedValue(existente),
       delete: vi.fn().mockResolvedValue({}),
+      update: vi.fn().mockImplementation(async (a: any) => ({ ...existente, ...a.data })),
     },
     agencia: { count: vi.fn().mockResolvedValue(agenciasEnRegion) },
   };
@@ -74,5 +75,34 @@ describe('RetosService.delete', () => {
     await expect(armar(mio).service.delete('r1', usuario('COORD_COMERCIAL'))).resolves.toMatchObject({ success: true });
     await expect(armar(mio).service.delete('r1', usuario('ADMIN'))).resolves.toMatchObject({ success: true });
     await expect(armar(mio).service.delete('r1', usuario('JEFE_COMERCIAL'))).rejects.toThrow(/creador o un administrador/);
+  });
+});
+
+describe('RetosService.cerrar', () => {
+  const activo = { id: 'r1', creadoPorId: 'id-COORD_COMERCIAL', estado: 'ACTIVO' };
+
+  it('lo cierra su creador o un administrador; nadie más', async () => {
+    await expect(
+      armar(activo).service.cerrar({ id: 'r1', ganadorNombre: 'Juan' } as any, usuario('COORD_COMERCIAL')),
+    ).resolves.toMatchObject({ estado: 'FINALIZADO', ganadorNombre: 'Juan' });
+    await expect(
+      armar(activo).service.cerrar({ id: 'r1' } as any, usuario('ADMIN')),
+    ).resolves.toMatchObject({ estado: 'FINALIZADO' });
+    await expect(
+      armar(activo).service.cerrar({ id: 'r1' } as any, usuario('JEFE_COMERCIAL')),
+    ).rejects.toThrow(/creador o un administrador/);
+  });
+
+  it('no permite cerrar un reto ya finalizado', async () => {
+    const finalizado = { id: 'r1', creadoPorId: 'id-ADMIN', estado: 'FINALIZADO' };
+    await expect(
+      armar(finalizado).service.cerrar({ id: 'r1' } as any, usuario('ADMIN')),
+    ).rejects.toThrow(/ya fue cerrado/);
+  });
+
+  it('falla si el reto no existe', async () => {
+    await expect(
+      armar(null).service.cerrar({ id: 'r1' } as any, usuario('ADMIN')),
+    ).rejects.toThrow(/no encontrado/);
   });
 });

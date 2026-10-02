@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SolicitarAprobacionDto, DecidirAprobacionDto, ListAprobacionesDto } from './dto/aprobaciones.dto.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { resolverAlcance } from '../../common/permisos/alcance.js';
 import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 @Injectable()
 export class AprobacionesService {
@@ -12,8 +13,26 @@ export class AprobacionesService {
 
   private readonly decisiones: DecisionesService;
 
-  constructor(private readonly prisma: PrismaService, decisiones?: DecisionesService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    decisiones?: DecisionesService,
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {
     this.decisiones = decisiones ?? new DecisionesService(prisma);
+  }
+
+  /** Aprobador designado de la agencia (APROBADOR/GERENTE activos); si no hay, respaldo en ADMIN/SUPER_ADMIN. */
+  private async resolverAprobadores(agenciaId: string): Promise<string[]> {
+    const titulares = await this.prisma.user.findMany({
+      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR', 'GERENTE'] }, estado: 1 } },
+      select: { id: true },
+    });
+    if (titulares.length) return titulares.map((u) => u.id);
+    const respaldo = await this.prisma.user.findMany({
+      where: { estado: 1, role: { namerol: { in: ['ADMIN', 'SUPER_ADMIN'] }, estado: 1 } },
+      select: { id: true },
+    });
+    return respaldo.map((u) => u.id);
   }
 
   async list(dto: ListAprobacionesDto, user: any) {
@@ -99,6 +118,20 @@ export class AprobacionesService {
         agencia: { select: { id: true, nombre: true } },
       },
     });
+
+    if (agenciaId && this.notifications) {
+      void this.resolverAprobadores(agenciaId).then((ids) => {
+        if (ids.length) {
+          void this.notifications!.notificarUsuarios(
+            ids,
+            'Nueva solicitud de aprobación',
+            solicitud.titulo,
+            { solicitudId: solicitud.id },
+            { tipo: 'APROBACION_PENDIENTE', entidadTipo: 'SOLICITUD_APROBACION', entidadId: solicitud.id },
+          );
+        }
+      });
+    }
 
     return {
       success: true,

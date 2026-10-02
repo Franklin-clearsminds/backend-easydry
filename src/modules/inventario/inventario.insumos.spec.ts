@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { InventarioService } from './inventario.service.js';
-import { ListInsumosDto } from './dto/insumos.dto.js';
+import { CreateInsumoDto, ListInsumosDto, UpdateInsumoDto } from './dto/insumos.dto.js';
 import { cumpleNivel, nivelStock } from './stock-nivel.js';
 
 interface Opciones {
@@ -105,6 +105,18 @@ describe('listInsumos — modo heredado (sin página)', () => {
     expect(txt).toContain('"agenciaId":"ag1"');
     expect(txt).toContain('"catalogoServicioId":{"in":[5]}');
     expect(r[0]).toMatchObject({ stockActual: 4, stockMinimoAgencia: 3 });
+  });
+
+  it('un rol de sede siempre ve SU agencia, aunque el cliente mande otro agenciaId (nunca amplía su alcance)', async () => {
+    const { service, findMany, prisma } = construir({
+      insumos: [insumo('1', { stocks: [{ cantidadActual: 4, cantidadMinima: 3 }] })],
+      agencia: { id: 'ag-mia', servicioIds: [], tieneServiciosEspeciales: false },
+    });
+    await service.listInsumos({ agenciaId: 'ag-ajena' } as any, { role: 'LIDER', agenciaId: 'ag-mia' });
+    expect(prisma.agencia.findFirst.mock.calls[0][0].where).toEqual({
+      OR: [{ id: 'ag-mia' }, { nombre: { equals: 'ag-mia', mode: 'insensitive' } }],
+    });
+    expect(JSON.stringify(findMany.mock.calls[0][0].where)).toContain('"agenciaId":"ag-mia"');
   });
 
   it('una agencia inexistente no devuelve nada', async () => {
@@ -227,5 +239,24 @@ describe('ListInsumosDto', () => {
     expect(await validate(vacio)).toHaveLength(0);
     expect(await validate(plainToInstance(ListInsumosDto, { page: '2', pageSize: 50, nivelStock: 'alerta_total', sortField: 'stock', sortOrder: 'asc' }))).toHaveLength(0);
     expect((await validate(plainToInstance(ListInsumosDto, { nivelStock: 'inventado' }))).length).toBeGreaterThan(0);
+  });
+});
+
+describe('categoria de insumo — @IsIn', () => {
+  const base = { codigoSKU: 'SKU-1', nombre: 'Insumo', unidadMedidaId: 'u1', stockMinimoBodega: 1, stockMinimoAgencia: 1, stockOptimoBodega: 2 };
+
+  it('CreateInsumoDto acepta una categoría válida del catálogo y rechaza cualquier otra', async () => {
+    const valido = plainToInstance(CreateInsumoDto, { ...base, categoria: 'QUIMICOS_LAVADO' });
+    expect(await validate(valido)).toHaveLength(0);
+
+    const invalido = plainToInstance(CreateInsumoDto, { ...base, categoria: 'GENERAL' });
+    const errores = await validate(invalido);
+    expect(errores.some((e) => e.property === 'categoria')).toBe(true);
+  });
+
+  it('UpdateInsumoDto rechaza una categoría fuera del catálogo', async () => {
+    const invalido = plainToInstance(UpdateInsumoDto, { id: 'i1', categoria: 'OTRA' });
+    const errores = await validate(invalido);
+    expect(errores.some((e) => e.property === 'categoria')).toBe(true);
   });
 });

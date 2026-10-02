@@ -4,6 +4,17 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 import { NIVELES_STOCK_FILTRO } from '../stock-nivel.js';
 
+export const CATEGORIAS_INSUMO = [
+  'QUIMICOS_LAVADO',
+  'CERAS_SELLADORES',
+  'PULIMENTOS',
+  'DESENGRASANTES',
+  'TEXTILES',
+  'EPP',
+  'ACCESORIOS',
+] as const;
+export type CategoriaInsumo = (typeof CATEGORIAS_INSUMO)[number];
+
 export class CreateInsumoDto {
   @ApiProperty({ example: 'INS-LAV-001', description: 'Código SKU único del insumo' })
   @IsString()
@@ -15,11 +26,12 @@ export class CreateInsumoDto {
 
   @ApiProperty({
     example: 'QUIMICOS_LAVADO',
+    enum: CATEGORIAS_INSUMO,
     description:
       'Categoría: QUIMICOS_LAVADO | CERAS_SELLADORES | PULIMENTOS | DESENGRASANTES | TEXTILES | EPP | ACCESORIOS',
   })
-  @IsString()
-  categoria: string;
+  @IsIn(CATEGORIAS_INSUMO)
+  categoria: CategoriaInsumo;
 
   @ApiPropertyOptional({ example: 'Shampoo concentrado biodegradable de alta espuma' })
   @IsOptional()
@@ -89,10 +101,10 @@ export class UpdateInsumoDto {
   @IsString()
   nombre?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: CATEGORIAS_INSUMO })
   @IsOptional()
-  @IsString()
-  categoria?: string;
+  @IsIn(CATEGORIAS_INSUMO)
+  categoria?: CategoriaInsumo;
 
   @ApiPropertyOptional()
   @IsOptional()

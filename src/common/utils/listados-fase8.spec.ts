@@ -22,6 +22,7 @@ function maquinaria(total = 40) {
     mantenimientoMaquinaria: {
       groupBy: vi.fn().mockResolvedValue([{ maquinariaId: 'm2', _count: { _all: 1 }, _min: { fechaProgramada: null } }]),
     },
+    limpiezaMaquinaria: { groupBy: vi.fn().mockResolvedValue([]) },
   };
   return { prisma, service: new MaquinariaService(prisma as never, {} as never, {} as never) };
 }

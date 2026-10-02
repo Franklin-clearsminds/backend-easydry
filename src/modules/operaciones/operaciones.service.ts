@@ -764,6 +764,17 @@ export class OperacionesService {
         }
         motivoCorreccion = this.decisiones.exigirMotivo(updateDto.motivoCorreccion, 'corregir un servicio aprobado');
       }
+      // La web ya exige el vídeo/foto de salida antes de finalizar (confirmarFinalizarServicio); se
+      // repite acá para que nadie finalice sin evidencia llamando al endpoint directo. No aplica al
+      // offline sync (su propio flujo lo maneja más abajo) ni si ya estaba finalizado (reintentos).
+      if (
+        !isOfflineSync &&
+        updateDto.estado === ServiceStatus.FINALIZADO &&
+        servicio.estado !== ServiceStatus.FINALIZADO &&
+        !(data.fotoSalidaUrl ?? servicio.fotoSalidaUrl)
+      ) {
+        throw new BadRequestException('La evidencia de salida (foto o vídeo) es obligatoria para finalizar el servicio.');
+      }
     }
     data.version = { increment: 1 };
 
@@ -1153,6 +1164,7 @@ export class OperacionesService {
               insumoNombre: receta.insumo?.nombre || 'Insumo Químico',
               nivel: 'CRITICO',
               agenciaId,
+              entidadId: receta.insumoId,
             });
           }
         }
@@ -1184,6 +1196,7 @@ export class OperacionesService {
                 insumoNombre: receta.insumo?.nombre || 'Insumo Químico',
                 nivel,
                 agenciaId,
+                entidadId: receta.insumoId,
               });
             }
           }

@@ -12,6 +12,8 @@ const lider: Actor = { id: 'lider-1', rol: 'LIDER', regionId: null, agenciaId: '
 const admin: Actor = { id: 'adm-1', rol: 'ADMIN', regionId: null, agenciaId: null };
 const supervisorCosta: Actor = { id: 'sup-1', rol: 'SUPERVISOR', regionId: 'costa', agenciaId: null };
 const coordEspeciales: Actor = { id: 'coord-esp-1', rol: 'COORD_SERVICIOS_ESPECIALES', regionId: null, agenciaId: null };
+const coordBodega: Actor = { id: 'coord-bod-1', rol: 'COORD_BODEGA', regionId: null, agenciaId: null };
+const coordComercialCosta: Actor = { id: 'coord-com-1', rol: 'COORD_COMERCIAL', regionId: 'costa', agenciaId: null };
 
 function maquina(over: Record<string, unknown> = {}) {
   return {
@@ -41,14 +43,26 @@ function build(prismaOver: Record<string, unknown> = {}) {
     incidenteTecnico: {
       create: vi.fn().mockResolvedValue({ id: 'inc-1', titulo: 't', fechaReporte: new Date() }),
     },
+    movimientoMaquinaria: { create: vi.fn().mockResolvedValue({ id: 'mov-1' }) },
+    limpiezaMaquinaria: {
+      create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: 'lim-1', ...data })),
+      update: vi.fn().mockImplementation(async ({ where, data }: any) => ({ id: where.id, ...data })),
+      delete: vi.fn().mockResolvedValue({}),
+    },
   };
   const prisma: Record<string, any> = {
     maquinaria: {
       findUnique: vi.fn().mockResolvedValue(maquina()),
       findUniqueOrThrow: vi.fn().mockResolvedValue(maquina()),
     },
-    incidenteTecnico: { findMany: vi.fn(), findUnique: vi.fn() },
-    mantenimientoMaquinaria: { findUnique: vi.fn() },
+    incidenteTecnico: { findMany: vi.fn(), findUnique: vi.fn(), groupBy: vi.fn().mockResolvedValue([]) },
+    mantenimientoMaquinaria: { findUnique: vi.fn(), groupBy: vi.fn().mockResolvedValue([]) },
+    limpiezaMaquinaria: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+    },
     // sin plantilla de checklist para el tipo: la orden se cierra como siempre
     checklistRespuesta: { findMany: vi.fn().mockResolvedValue([]), createMany: vi.fn() },
     checklistPlantilla: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -254,6 +268,22 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
         service.asignarOperador({ maquinariaId: 'm1', operadorId: 'lider-1' } as never, admin),
       ).rejects.toThrow(/solo.*pulidor/i);
     });
+
+    it('acepta un pulidor con el rol legado PULIDOR_FIJO o PULIDOR_MOVIL (cuentas viejas sin normalizar en BD)', async () => {
+      const fijo = build({
+        user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-3', estado: 1, role: { namerol: 'PULIDOR_FIJO' } }) },
+      });
+      await expect(
+        fijo.service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-3' } as never, admin),
+      ).resolves.toBeDefined();
+
+      const movil = build({
+        user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-4', estado: 1, role: { namerol: 'PULIDOR_MOVIL' } }) },
+      });
+      await expect(
+        movil.service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-4' } as never, admin),
+      ).resolves.toBeDefined();
+    });
   });
 
   describe('activar / desactivar', () => {
@@ -307,6 +337,44 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       )).rejects.toThrow(/otra región/);
     });
 
+    it('un coordinador no puede mover una máquina a una agencia de otra región (solo admin cambia de región)', async () => {
+      const { service, prisma } = build({
+        agencia: { findUnique: vi.fn().mockResolvedValue({ id: 'ag-9', nombre: 'Quito', tipoUbicacion: 'OPERATIVA', regionId: 'sierra' }) },
+      });
+      await expect(service.transferirMaquinaria(
+        { maquinariaId: 'm1', destinoAgenciaId: 'ag-9', motivo: 'x' } as never,
+        coordCosta,
+      )).rejects.toThrow(/fuera de tu región/);
+    });
+
+    it('un admin sí puede mover una máquina a una agencia de otra región (cambiar región)', async () => {
+      const { service } = build({
+        agencia: { findUnique: vi.fn().mockResolvedValue({ id: 'ag-9', nombre: 'Quito', tipoUbicacion: 'OPERATIVA', regionId: 'sierra' }) },
+      });
+      await expect(service.transferirMaquinaria(
+        { maquinariaId: 'm1', destinoAgenciaId: 'ag-9', motivo: 'x' } as never,
+        admin,
+      )).resolves.toBeDefined();
+    });
+
+    it('un coordinador no puede asignar la máquina a un pulidor de otra región', async () => {
+      const { service } = build({
+        user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-9', estado: 1, regionId: null, agencia: { regionId: 'sierra' }, role: { namerol: 'PULIDOR' } }) },
+      });
+      await expect(
+        service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-9' } as never, coordCosta),
+      ).rejects.toThrow(/tu región/);
+    });
+
+    it('un coordinador sí puede asignar la máquina a un pulidor de su misma región', async () => {
+      const { service } = build({
+        user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-costa', estado: 1, regionId: null, agencia: { regionId: 'costa' }, role: { namerol: 'PULIDOR' } }) },
+      });
+      await expect(
+        service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-costa' } as never, coordCosta),
+      ).resolves.toBeDefined();
+    });
+
     it('un técnico solo puede asignarse a técnicos de la misma región', async () => {
       const { service, prisma } = build();
       prisma.incidenteTecnico.findUnique.mockResolvedValue({
@@ -318,6 +386,228 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       };
       await expect(service.asignarIncidente({ incidenteId: 'i1', tecnicoId: 'tec-x' } as never, coordCosta))
         .rejects.toThrow(/misma región/);
+    });
+  });
+
+  describe('limpieza de maquinaria', () => {
+    const fotoReal = 'maquinaria/mq-01/limpiezas/foto1.jpg';
+
+    it('el pulidor asignado registra la limpieza de su máquina como tipo PULIDOR', async () => {
+      const { service, tx } = build(); // maquina() por defecto tiene operadorAsignadoId: 'pul-1'
+      const r: any = await service.registrarLimpieza(
+        { maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never,
+        pulidor,
+      );
+      expect(r.success).toBe(true);
+      expect(tx.limpiezaMaquinaria.create).toHaveBeenCalledTimes(1);
+      const data = tx.limpiezaMaquinaria.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({ maquinariaId: 'm1', tipo: 'PULIDOR', fotos: [fotoReal], registradoPorId: 'pul-1' });
+    });
+
+    it('otro pulidor no puede registrar la limpieza de una máquina que no tiene asignada', async () => {
+      const { service } = build();
+      const otroPulidor: Actor = { id: 'pul-2', rol: 'PULIDOR', regionId: null, agenciaId: null };
+      await expect(
+        service.registrarLimpieza({ maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never, otroPulidor),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('el líder registra la limpieza de una máquina de su agencia (sin pulidor asignado) como tipo AGENCIA', async () => {
+      const { service, prisma, tx } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: null }));
+      const r: any = await service.registrarLimpieza(
+        { maquinariaId: 'm1', fotos: [{ url: fotoReal }], observaciones: 'Todo en orden' } as never,
+        lider,
+      );
+      expect(r.success).toBe(true);
+      const data = tx.limpiezaMaquinaria.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({ tipo: 'AGENCIA', registradoPorId: 'lider-1', observaciones: 'Todo en orden' });
+    });
+
+    it('el líder de otra agencia no puede registrar la limpieza', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: null }));
+      const otroLider: Actor = { id: 'lider-2', rol: 'LIDER', regionId: null, agenciaId: 'ag-9' };
+      await expect(
+        service.registrarLimpieza({ maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never, otroLider),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rechaza si la máquina no tiene agencia ni pulidor asignado (sin regla)', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ agenciaId: null, operadorAsignadoId: null, agencia: null }));
+      await expect(
+        service.registrarLimpieza({ maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never, admin),
+      ).rejects.toThrow(/no le aplica/);
+    });
+
+    it('si ya hay un registro del mismo día, las fotos nuevas se agregan a las que ya estaban', async () => {
+      const { service, tx } = build({
+        limpiezaMaquinaria: {
+          findUnique: vi.fn().mockResolvedValue({ id: 'lim-0', fotos: ['foto-previa.jpg'], observaciones: null }),
+        },
+      });
+      await service.registrarLimpieza({ maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never, pulidor);
+      expect(tx.limpiezaMaquinaria.create).not.toHaveBeenCalled();
+      expect(tx.limpiezaMaquinaria.update).toHaveBeenCalledTimes(1);
+      const data = tx.limpiezaMaquinaria.update.mock.calls[0][0].data;
+      expect(data.fotos).toEqual(['foto-previa.jpg', fotoReal]);
+    });
+
+    it('ni admin ni super admin pueden registrar la limpieza: solo la registra quien de verdad la hace', async () => {
+      const { service } = build(); // maquina() por defecto sí tiene regla (operadorAsignadoId: 'pul-1')
+      const superAdmin: Actor = { id: 'sa-1', rol: 'SUPER_ADMIN', regionId: null, agenciaId: null };
+      await expect(
+        service.registrarLimpieza({ maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never, admin),
+      ).rejects.toThrow(ForbiddenException);
+      await expect(
+        service.registrarLimpieza({ maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never, superAdmin),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('listLimpiezas acota por el alcance del actor (coordinador: su región)', async () => {
+      const { service, prisma } = build();
+      await service.listLimpiezas({} as never, coordCosta);
+      const where = prisma.limpiezaMaquinaria.findMany.mock.calls[0][0].where;
+      expect(JSON.stringify(where)).toContain('"regionId":"costa"');
+    });
+
+    it('listLimpiezas no acota al coordinador de bodega (ve todo el país)', async () => {
+      const { service, prisma } = build();
+      await service.listLimpiezas({} as never, coordBodega);
+      const where = prisma.limpiezaMaquinaria.findMany.mock.calls[0][0].where;
+      expect(where.maquinaria).toEqual({});
+    });
+
+    it('listLimpiezas acota al coordinador comercial por su región', async () => {
+      const { service, prisma } = build();
+      await service.listLimpiezas({} as never, coordComercialCosta);
+      const where = prisma.limpiezaMaquinaria.findMany.mock.calls[0][0].where;
+      expect(JSON.stringify(where)).toContain('"regionId":"costa"');
+    });
+
+    it('listLimpiezas acota al líder por su agencia (puede ver el historial de la máquina que registra)', async () => {
+      const { service, prisma } = build();
+      await service.listLimpiezas({} as never, lider);
+      const where = prisma.limpiezaMaquinaria.findMany.mock.calls[0][0].where;
+      expect(JSON.stringify(where)).toContain('"agenciaId":"ag-1"');
+    });
+
+    it('listLimpiezas acota al pulidor a lo que tiene asignado', async () => {
+      const { service, prisma } = build();
+      await service.listLimpiezas({} as never, pulidor);
+      const where = prisma.limpiezaMaquinaria.findMany.mock.calls[0][0].where;
+      expect(JSON.stringify(where)).toContain('"operadorAsignadoId":"pul-1"');
+    });
+
+    it('resumenLimpiezas cuenta solo las máquinas atrasadas dentro del alcance del actor', async () => {
+      const unDiaMs = 86_400_000;
+      const hoy = new Date();
+      const { service, prisma } = build({
+        maquinaria: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 'm1', agenciaId: null, operadorAsignadoId: 'pul-1' }, // regla PULIDOR
+            { id: 'm2', agenciaId: 'ag-1', operadorAsignadoId: null }, // regla AGENCIA
+          ]),
+        },
+        limpiezaMaquinaria: {
+          groupBy: vi.fn().mockResolvedValue([
+            { maquinariaId: 'm1', _max: { fecha: new Date(hoy.getTime() - unDiaMs) } }, // ayer: atrasada (regla diaria)
+            // m2 sin ninguna limpieza registrada: también cuenta como atrasada
+          ]),
+        },
+      });
+      const r: any = await service.resumenLimpiezas(pulidor);
+      expect(prisma.maquinaria.findMany).toHaveBeenCalledTimes(1);
+      expect(r).toEqual({ success: true, pendientes: 2 });
+    });
+
+    describe('editar, eliminar y exportar', () => {
+      const registro = (over: Record<string, unknown> = {}) => ({
+        id: 'lim-1',
+        maquinariaId: 'm1',
+        fecha: new Date('2026-01-01T00:00:00.000Z'),
+        tipo: 'PULIDOR',
+        fotos: ['foto1.jpg'],
+        observaciones: 'Obs original',
+        registradoPorId: 'pul-1',
+        maquinaria: maquina(),
+        registradoPor: { id: 'pul-1', name: 'P', lastname: 'U' },
+        ...over,
+      });
+
+      it('el coordinador de mantenimiento de la misma región puede editar las observaciones', async () => {
+        const { service, tx } = build({
+          limpiezaMaquinaria: { findUnique: vi.fn().mockResolvedValue(registro()) },
+        });
+        const r: any = await service.editarLimpieza(
+          { limpiezaId: 'lim-1', observaciones: 'Nueva observación' } as never,
+          coordCosta,
+        );
+        expect(r.success).toBe(true);
+        expect(tx.limpiezaMaquinaria.update).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 'lim-1' }, data: { observaciones: 'Nueva observación' } }),
+        );
+        expect(tx.maquinariaEvento.create).toHaveBeenCalledTimes(1);
+      });
+
+      it('un coordinador de otra región no puede editar', async () => {
+        const { service } = build({
+          limpiezaMaquinaria: { findUnique: vi.fn().mockResolvedValue(registro()) },
+        });
+        const otroCoord: Actor = { id: 'coord-sierra', rol: 'COORD_MANTENIMIENTO', regionId: 'sierra', agenciaId: null };
+        await expect(
+          service.editarLimpieza({ limpiezaId: 'lim-1', observaciones: 'x' } as never, otroCoord),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      it('sin "observaciones" en el dto no hay cambios (no toca el registro)', async () => {
+        const { service, tx } = build({
+          limpiezaMaquinaria: { findUnique: vi.fn().mockResolvedValue(registro()) },
+        });
+        const r: any = await service.editarLimpieza({ limpiezaId: 'lim-1' } as never, admin);
+        expect(r.sinCambios).toBe(true);
+        expect(tx.limpiezaMaquinaria.update).not.toHaveBeenCalled();
+      });
+
+      it('observaciones en blanco borran el valor existente (null)', async () => {
+        const { service, tx } = build({
+          limpiezaMaquinaria: { findUnique: vi.fn().mockResolvedValue(registro()) },
+        });
+        await service.editarLimpieza({ limpiezaId: 'lim-1', observaciones: '   ' } as never, admin);
+        expect(tx.limpiezaMaquinaria.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { observaciones: null } }),
+        );
+      });
+
+      it('admin puede eliminar un registro de limpieza de cualquier región', async () => {
+        const { service, tx } = build({
+          limpiezaMaquinaria: { findUnique: vi.fn().mockResolvedValue(registro()) },
+        });
+        const r: any = await service.eliminarLimpieza({ limpiezaId: 'lim-1', motivo: 'Duplicado' } as never, admin);
+        expect(r).toEqual({ success: true });
+        expect(tx.limpiezaMaquinaria.delete).toHaveBeenCalledWith({ where: { id: 'lim-1' } });
+        expect(tx.maquinariaEvento.create).toHaveBeenCalledTimes(1);
+      });
+
+      it('un supervisor de otra región no puede eliminar', async () => {
+        const { service } = build({
+          limpiezaMaquinaria: { findUnique: vi.fn().mockResolvedValue(registro()) },
+        });
+        const otroSup: Actor = { id: 'sup-2', rol: 'SUPERVISOR', regionId: 'sierra', agenciaId: null };
+        await expect(
+          service.eliminarLimpieza({ limpiezaId: 'lim-1' } as never, otroSup),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      it('exportarLimpiezas devuelve hasta 5000 filas dentro del alcance del actor', async () => {
+        const { service, prisma } = build();
+        prisma.limpiezaMaquinaria.findMany.mockResolvedValue([registro()]);
+        const r: any = await service.exportarLimpiezas({} as never, coordCosta);
+        expect(r.success).toBe(true);
+        expect(r.data).toHaveLength(1);
+        expect(prisma.limpiezaMaquinaria.findMany.mock.calls[0][0].take).toBe(5000);
+      });
     });
   });
 });
