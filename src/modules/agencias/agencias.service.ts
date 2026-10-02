@@ -12,6 +12,7 @@ import {
   ListAgenciasDto,
   ToggleEstadoAgenciaDto,
 } from './dto/agencias.dto.js';
+import { ListPreciosAgenciaDto, SetPreciosAgenciaDto } from './dto/precios-agencia.dto.js';
 import {
   CreateClienteDto,
   UpdateClienteDto,
@@ -1443,6 +1444,98 @@ export class AgenciasService {
       liderOperadorId: lider?.id || null,
       liderOperadorNombre: lider ? `${lider.name} ${lider.lastname}`.trim() : null,
     };
+  }
+
+  // =========================================================================
+  // PRECIOS POR AGENCIA (override de CatalogoServicio.precio, solo servicios GENERAL)
+  // =========================================================================
+
+  /**
+   * Precio de cada servicio GENERAL activo de la agencia: el override propio si existe, o si no el
+   * precio global del catálogo. Lo puede consultar cualquiera con `agencias.ver` dentro de su alcance;
+   * solo ADMIN/SUPER_ADMIN (permiso `agencias.precios.gestionar`) pueden fijarlo (ver `setPreciosServicios`).
+   */
+  async listPreciosServicios(dto: ListPreciosAgenciaDto, user?: any) {
+    const agencia = await this.prisma.agencia.findUnique({
+      where: { id: dto.agenciaId },
+      select: { id: true, nombre: true, regionId: true, servicioIds: true },
+    });
+    if (!agencia) throw new NotFoundException(`Agencia con ID "${dto.agenciaId}" no encontrada`);
+    if (user) this.asegurarAgencia(user, agencia);
+
+    const rawIds = Array.isArray(agencia.servicioIds) ? agencia.servicioIds : [];
+    const ids = rawIds.map((id: any) => Number(id)).filter((n: number) => !Number.isNaN(n) && n > 0);
+
+    const [servicios, overrides] = await Promise.all([
+      this.prisma.catalogoServicio.findMany({
+        where: { id: { in: ids }, categoria: 'GENERAL' },
+        select: { id: true, codigo: true, nombre: true, precio: true, estado: true },
+        orderBy: { nombre: 'asc' },
+      }),
+      this.prisma.precioAgenciaServicio.findMany({
+        where: { agenciaId: agencia.id, catalogoServicioId: { in: ids } },
+        select: { catalogoServicioId: true, precio: true },
+      }),
+    ]);
+    const overridePorServicio = new Map(overrides.map((o) => [o.catalogoServicioId, Number(o.precio)]));
+
+    return servicios.map((s) => {
+      const precioAgencia = overridePorServicio.has(s.id) ? overridePorServicio.get(s.id)! : null;
+      return {
+        catalogoServicioId: s.id,
+        codigo: s.codigo,
+        nombre: s.nombre,
+        estado: s.estado,
+        precioCatalogo: Number(s.precio),
+        precioAgencia,
+        precioEfectivo: precioAgencia ?? Number(s.precio),
+      };
+    });
+  }
+
+  /** Fija el precio override de uno o varios servicios GENERAL para una agencia. Solo ADMIN/SUPER_ADMIN (gateado en el controlador). */
+  async setPreciosServicios(dto: SetPreciosAgenciaDto, user?: any) {
+    const agencia = await this.prisma.agencia.findUnique({
+      where: { id: dto.agenciaId },
+      select: { id: true, nombre: true, regionId: true, servicioIds: true },
+    });
+    if (!agencia) throw new NotFoundException(`Agencia con ID "${dto.agenciaId}" no encontrada`);
+    if (user) this.asegurarAgencia(user, agencia);
+
+    const rawIds = Array.isArray(agencia.servicioIds) ? agencia.servicioIds : [];
+    const habilitados = new Set(rawIds.map((id: any) => Number(id)));
+
+    const idsSolicitados = dto.precios.map((p) => Number(p.catalogoServicioId));
+    const noHabilitados = idsSolicitados.filter((id) => !habilitados.has(id));
+    if (noHabilitados.length > 0) {
+      throw new BadRequestException(
+        `Los servicios con ID ${noHabilitados.join(', ')} no están habilitados para la agencia "${agencia.nombre}".`,
+      );
+    }
+
+    const servicios = await this.prisma.catalogoServicio.findMany({
+      where: { id: { in: idsSolicitados } },
+      select: { id: true, categoria: true },
+    });
+    const servicioPorId = new Map(servicios.map((s) => [s.id, s]));
+    const invalidos = idsSolicitados.filter((id) => servicioPorId.get(id)?.categoria !== 'GENERAL');
+    if (invalidos.length > 0) {
+      throw new BadRequestException(
+        `Los servicios con ID ${invalidos.join(', ')} no existen o no son servicios GENERALES: el precio por agencia solo aplica a servicios generales.`,
+      );
+    }
+
+    await this.prisma.$transaction(
+      dto.precios.map((p) =>
+        this.prisma.precioAgenciaServicio.upsert({
+          where: { agenciaId_catalogoServicioId: { agenciaId: dto.agenciaId, catalogoServicioId: Number(p.catalogoServicioId) } },
+          create: { agenciaId: dto.agenciaId, catalogoServicioId: Number(p.catalogoServicioId), precio: p.precio },
+          update: { precio: p.precio },
+        }),
+      ),
+    );
+
+    return this.listPreciosServicios({ agenciaId: dto.agenciaId }, user);
   }
 
   async toggleEstadoAgencia(dto: ToggleEstadoAgenciaDto) {

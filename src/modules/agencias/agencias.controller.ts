@@ -27,6 +27,7 @@ import {
   ToggleEstadoAgenciaDto,
   ResumenAgenciaDto,
 } from './dto/agencias.dto.js';
+import { ListPreciosAgenciaDto, SetPreciosAgenciaDto } from './dto/precios-agencia.dto.js';
 import {
   CreateClienteDto,
   UpdateClienteDto,
@@ -242,6 +243,22 @@ export class AgenciasController {
   @ApiOperation({ summary: 'Actualizar datos de agencia (SUPER_ADMIN, ADMIN, SUPERVISOR)' })
   async updateAgencia(@Body() dto: UpdateAgenciaDto, @CurrentUser() user: any) {
     return this.agenciasService.updateAgencia(dto, user);
+  }
+
+  @Permiso('agencias.ver')
+  @Post('precios/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Precio de cada servicio general activo de la agencia (override propio o precio del catálogo)' })
+  async listPreciosServicios(@Body() dto: ListPreciosAgenciaDto, @CurrentUser() user: any) {
+    return this.agenciasService.listPreciosServicios(dto, user);
+  }
+
+  @Permiso('agencias.precios.gestionar')
+  @Post('precios/set')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Fijar el precio por agencia de uno o varios servicios generales (solo ADMIN/SUPER_ADMIN)' })
+  async setPreciosServicios(@Body() dto: SetPreciosAgenciaDto, @CurrentUser() user: any) {
+    return this.agenciasService.setPreciosServicios(dto, user);
   }
 
   @Permiso('agencias.estado')

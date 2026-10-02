@@ -225,6 +225,7 @@ model Agencia {
   maquinarias          Maquinaria[]
   solicitudesAprobacion SolicitudAprobacion[]
   serviciosEspeciales   ServicioEspecial[]
+  preciosServicio       PrecioAgenciaServicio[]
   incidentesDestinoTaller IncidenteTecnico[] @relation("DestinoTallerIncidente")
   movimientosMaquinariaOrigen  MovimientoMaquinaria[] @relation("MovimientoOrigenAgencia")
   movimientosMaquinariaDestino MovimientoMaquinaria[] @relation("MovimientoDestinoAgencia")
@@ -278,6 +279,28 @@ model CatalogoServicio {
   serviciosEspeciales ServicioEspecial[]
   recetas           RecetaInsumo[]
   recetasHistorial  RecetaInsumoHistorial[]
+  preciosAgencia    PrecioAgenciaServicio[]
+}
+
+// -----------------------------------------------------------------------
+// Precio override por agencia de un servicio GENERAL del catálogo. Sin registro aquí, rige el
+// precio global de `CatalogoServicio.precio`. Solo aplica a servicios GENERAL (los ESPECIAL usan
+// directamente el precio del catálogo, sin variación por agencia). Lo fija únicamente ADMIN/SUPER_ADMIN
+// desde Sucursales; el precio efectivo se congela en cada OT al crearla (ServicioLavado.precio).
+// -----------------------------------------------------------------------
+model PrecioAgenciaServicio {
+  id                 String           @id @default(uuid())
+  agenciaId          String
+  agencia            Agencia          @relation(fields: [agenciaId], references: [id], onDelete: Cascade)
+  catalogoServicioId Int
+  catalogoServicio   CatalogoServicio @relation(fields: [catalogoServicioId], references: [id], onDelete: Cascade)
+  precio             Decimal          @db.Decimal(10, 2)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@unique([agenciaId, catalogoServicioId])
+  @@index([agenciaId])
+  @@index([catalogoServicioId])
 }
 
 // -----------------------------------------------------------------------
@@ -325,6 +348,10 @@ model ServicioLavado {
   catalogo           CatalogoServicio @relation(fields: [servicioCatalogoId], references: [id])
   operadorId         String
   operador           User             @relation(fields: [operadorId], references: [id])
+
+  // Precio efectivo (override de agencia o precio global del catálogo) congelado al crear la OT:
+  // no cambia después aunque luego se ajuste el precio de la agencia o del catálogo.
+  precio             Decimal?         @db.Decimal(10, 2)
 
   fotoIngresoUrl     String?
   fotoSalidaUrl      String?
@@ -1061,6 +1088,9 @@ model IncidenteTecnico {
   estado           String      @default("ABIERTO") // "ABIERTO" | "EN_PROCESO" | "RESUELTO" | "CANCELADO"
   fotoEvidenciaUrl String?
   solucion         String?
+  // Costo de la reparación: obligatorio al resolver (estado RESUELTO), nunca al cancelar. Corregirlo
+  // después de cerrado requiere ADMIN, SUPER_ADMIN o COORD_MANTENIMIENTO (nunca el técnico).
+  costoTotal       Decimal?    @db.Decimal(10, 2)
 
   resueltoPorId    String?
   resueltoPor      User?       @relation("ResueltoPor", fields: [resueltoPorId], references: [id])
@@ -1307,6 +1337,9 @@ model ServicioEspecial {
   tipoServicio        String    // 'Pulido' | 'Micro Pulido' | 'Recubrimiento Cerámico' | 'Lavado de motor' | 'Tratamientos especiales'
   servicioCatalogoId  Int?
   catalogo            CatalogoServicio? @relation(fields: [servicioCatalogoId], references: [id])
+  // Precio del catálogo (CatalogoServicio.precio) congelado al crear la OT: no cambia después
+  // aunque luego se edite el precio de ese servicio en el catálogo.
+  precio              Decimal?  @db.Decimal(10, 2)
   clienteNombre       String?
   cliente             String?   // Alias unificado con ServicioLavado
   placa               String

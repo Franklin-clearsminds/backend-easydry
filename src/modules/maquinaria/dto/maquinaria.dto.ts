@@ -265,6 +265,13 @@ export class ResolverIncidenteDto {
   @IsString()
   repuestosUtilizados?: string;
 
+  @ApiPropertyOptional({ description: 'Costo de la reparación. Obligatorio cuando estado es RESUELTO (se valida en el servicio).' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  costoTotal?: number;
+
   @ApiPropertyOptional({ description: 'Fotos, videos y PDFs de la reparación' })
   @IsOptional()
   @IsArray()
@@ -414,6 +421,13 @@ export class EjecutarMantenimientoDto {
   @IsOptional()
   @IsString()
   fechaFin?: string;
+
+  @ApiProperty({ description: 'Costo del mantenimiento. Obligatorio (se valida en el servicio).' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  costoTotal?: number;
 
   @ApiProperty({ description: 'Evidencias del trabajo. Debe incluir al menos una imagen.' })
   @IsArray()

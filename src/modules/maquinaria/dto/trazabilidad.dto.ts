@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsInt, IsArray, IsIn, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsInt, IsNumber, IsArray, IsIn, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -169,6 +169,13 @@ export class EditarIncidenteDto {
   @IsOptional()
   @IsString()
   solucion?: string;
+
+  @ApiPropertyOptional({ description: 'Corrección del costo de la reparación (solo ADMIN, SUPER_ADMIN o COORD_MANTENIMIENTO)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  costoTotal?: number;
 }
 
 export class EditarMantenimientoDto {

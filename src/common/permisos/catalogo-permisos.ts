@@ -31,6 +31,7 @@ export const CATALOGO_PERMISOS = [
   def('Agencias', 'bahias.crear', 'Crear bahías', 'Registrar bahías nuevas.'),
   def('Agencias', 'bahias.editar', 'Editar bahías', 'Modificar y activar o desactivar bahías de su ámbito.'),
   def('Agencias', 'bahias.asignar', 'Asignar operadores a bahías', 'Asignar y desasignar operadores de una bahía de su ámbito.'),
+  def('Agencias', 'agencias.precios.gestionar', 'Fijar precios por agencia', 'Fijar o editar el precio override de un servicio general para una agencia (solo ADMIN/SUPER_ADMIN).'),
 
   def('Usuarios', 'usuarios.ver', 'Ver usuarios', 'Listar usuarios y operadores de su ámbito (nombre, rol y estado).'),
   def('Usuarios', 'usuarios.gestionar', 'Gestionar usuarios', 'Crear, editar, activar, eliminar y asignar usuarios.'),
