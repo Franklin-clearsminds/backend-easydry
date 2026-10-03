@@ -354,4 +354,295 @@ export class AnalyticsService {
     const ranking = Object.values(acumulado).map(a => ({ operadorId: a.operadorId, nombre: a.nombre, cantidadServicios: a.cantidadServicios, tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0 })).sort((a, b) => b.cantidadServicios - a.cantidadServicios).slice(0, 10);
     return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, ranking };
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DASHBOARD TALLER: Coordinador Mantenimiento + Técnico
+  // Datos reales: incidentes, mantenimientos, maquinaria, costos de reparación
+  // ═══════════════════════════════════════════════════════════════════════
+  async getDashboardTaller(user: any) {
+    const filtro = this.filtroAgencia(user, {});
+    const hayFiltro = Object.keys(filtro).length > 0;
+    const maqWhere = hayFiltro ? { agencia: filtro } : {};
+    const incWhere: any = { ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
+    const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
+    const hoy = new Date(); const startOfDay = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
+
+    const [maquinarias, incidentesActivos, incidentes30Dias, mantenimientos30Dias, proxMantenimientos] = await Promise.all([
+      // Estado actual del parque de maquinaria
+      this.prisma.maquinaria.findMany({
+        where: maqWhere,
+        select: { id: true, nombre: true, codigo: true, tipo: true, estadoOperativo: true, agencia: { select: { nombre: true } } }
+      }),
+      // Incidentes abiertos ahora mismo
+      this.prisma.incidenteTecnico.count({ where: { estado: { in: ['ABIERTO', 'EN_PROCESO'] }, ...incWhere } }),
+      // Incidentes de los últimos 30 días con datos de tiempo y costo
+      this.prisma.incidenteTecnico.findMany({
+        where: { createdAt: { gte: hace30Dias }, ...incWhere },
+        select: {
+          id: true, titulo: true, gravedad: true, estado: true, costoTotal: true,
+          fechaReporte: true, fechaSolucion: true, createdAt: true,
+          maquinaria: { select: { nombre: true, codigo: true, tipo: true } }
+        }
+      }),
+      // Mantenimientos ejecutados en 30 días
+      this.prisma.mantenimientoMaquinaria.findMany({
+        where: { createdAt: { gte: hace30Dias }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
+        select: { tipo: true, estado: true, costoTotal: true, fechaEjecucion: true, proximoMantenimiento: true, maquinaria: { select: { nombre: true, tipo: true } } }
+      }),
+      // Próximos mantenimientos preventivos programados
+      this.prisma.mantenimientoMaquinaria.findMany({
+        where: { estado: 'PENDIENTE', fechaProgramada: { gte: startOfDay }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
+        orderBy: { fechaProgramada: 'asc' },
+        take: 5,
+        select: { tipo: true, fechaProgramada: true, maquinaria: { select: { nombre: true, codigo: true } } }
+      }),
+    ]);
+
+    // Estado del parque
+    const estadoMaq: Record<string, number> = { OPERATIVA: 0, EN_MANTENIMIENTO: 0, FUERA_SERVICIO: 0, BAJA: 0 };
+    const tipoMaq: Record<string, number> = {};
+    for (const m of maquinarias) {
+      const est = m.estadoOperativo || 'OPERATIVA';
+      estadoMaq[est] = (estadoMaq[est] || 0) + 1;
+      tipoMaq[m.tipo] = (tipoMaq[m.tipo] || 0) + 1;
+    }
+
+    // Procesar incidentes 30d
+    const gravedadCount: Record<string, number> = { BAJA: 0, MEDIA: 0, ALTA: 0, CRITICA: 0 };
+    const estadoIncCount: Record<string, number> = { ABIERTO: 0, EN_PROCESO: 0, RESUELTO: 0, CANCELADO: 0 };
+    const maquinaMasProblematica: Record<string, { nombre: string; total: number; costoTotal: number }> = {};
+    let costoTotalReparaciones = 0;
+    let tiempoTotalResolucionHoras = 0;
+    let incidentesResueltos = 0;
+
+    for (const inc of incidentes30Dias) {
+      gravedadCount[inc.gravedad] = (gravedadCount[inc.gravedad] || 0) + 1;
+      estadoIncCount[inc.estado] = (estadoIncCount[inc.estado] || 0) + 1;
+      if (inc.costoTotal) costoTotalReparaciones += Number(inc.costoTotal);
+      if (inc.estado === 'RESUELTO' && inc.fechaSolucion) {
+        const horas = (new Date(inc.fechaSolucion).getTime() - new Date(inc.fechaReporte).getTime()) / 3600000;
+        tiempoTotalResolucionHoras += horas;
+        incidentesResueltos++;
+      }
+      if (inc.maquinaria) {
+        const key = `${inc.maquinaria.codigo} · ${inc.maquinaria.nombre}`;
+        if (!maquinaMasProblematica[key]) maquinaMasProblematica[key] = { nombre: key, total: 0, costoTotal: 0 };
+        maquinaMasProblematica[key].total++;
+        if (inc.costoTotal) maquinaMasProblematica[key].costoTotal += Number(inc.costoTotal);
+      }
+    }
+
+    const tiempoPromedioResolucionHoras = incidentesResueltos > 0 ? Number((tiempoTotalResolucionHoras / incidentesResueltos).toFixed(1)) : 0;
+    const topMaquinasProblematicas = Object.values(maquinaMasProblematica).sort((a, b) => b.total - a.total).slice(0, 5);
+
+    // Mantenimientos preventivos vs correctivos
+    const tipoMantenimiento: Record<string, number> = { PREVENTIVO: 0, CORRECTIVO: 0 };
+    for (const m of mantenimientos30Dias) tipoMantenimiento[m.tipo] = (tipoMantenimiento[m.tipo] || 0) + 1;
+
+    return {
+      success: true,
+      kpis: {
+        totalMaquinaria: maquinarias.length,
+        maquinariaOperativa: estadoMaq['OPERATIVA'] || 0,
+        maquinariaEnMantenimiento: estadoMaq['EN_MANTENIMIENTO'] || 0,
+        maquinariaFueraServicio: (estadoMaq['FUERA_SERVICIO'] || 0) + (estadoMaq['BAJA'] || 0),
+        incidentesActivos,
+        costoTotalReparaciones: Number(costoTotalReparaciones.toFixed(2)),
+        tiempoPromedioResolucionHoras,
+        mantenimientosEjecutados30d: mantenimientos30Dias.length,
+      },
+      estadoParque: Object.keys(estadoMaq).filter(k => estadoMaq[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), total: estadoMaq[k] })),
+      gravedadIncidentes: Object.keys(gravedadCount).filter(k => gravedadCount[k] > 0).map(k => ({ nombre: k, cantidad: gravedadCount[k] })),
+      estadoIncidentes: Object.keys(estadoIncCount).filter(k => estadoIncCount[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: estadoIncCount[k] })),
+      topMaquinasProblematicas,
+      tipoMantenimiento: Object.keys(tipoMantenimiento).map(k => ({ nombre: k, cantidad: tipoMantenimiento[k] })),
+      distribucionTipoMaquinaria: Object.keys(tipoMaq).map(k => ({ nombre: k, total: tipoMaq[k] })).sort((a, b) => b.total - a.total),
+      proxMantenimientos: proxMantenimientos.map(m => ({ nombre: m.maquinaria.nombre, codigo: m.maquinaria.codigo, tipo: m.tipo, fechaProgramada: m.fechaProgramada })),
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DASHBOARD BODEGA: Coordinador + Asistente de Bodega
+  // Datos reales: stock, alertas, movimientos de inventario, despachos pendientes
+  // ═══════════════════════════════════════════════════════════════════════
+  async getDashboardBodega(user: any) {
+    const filtro = this.filtroAgencia(user, {});
+    const hayFiltro = Object.keys(filtro).length > 0;
+    const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
+
+    // Obtener las bodegas del usuario
+    const bodegaWhere: any = {};
+    if (hayFiltro && filtro['regionId']) bodegaWhere.regionId = filtro['regionId'];
+
+    const [alertasActivas, movimientos30Dias, stocks] = await Promise.all([
+      this.prisma.alertaStock.findMany({
+        where: { estado: { notIn: ['RESUELTO', 'DESPACHADO'] }, ...(hayFiltro ? { agencia: filtro } : {}) },
+        include: { insumo: { select: { nombre: true, categoria: true } }, agencia: { select: { nombre: true } } },
+        orderBy: [{ nivel: 'desc' }, { createdAt: 'desc' }],
+      }),
+      this.prisma.movimientoInventario.findMany({
+        where: { createdAt: { gte: hace30Dias }, ...(hayFiltro ? { OR: [{ origenAgenciaId: { not: null } }, { destinoAgenciaId: { not: null } }] } : {}) },
+        select: { tipo: true, estadoDespacho: true, createdAt: true, detalles: { select: { cantidadEnviada: true, costoUnitarioUSD: true, insumo: { select: { nombre: true, categoria: true } } } } },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      }),
+      this.prisma.stockUbicacion.findMany({
+        where: { cantidadActual: { gt: 0 } },
+        include: { insumo: { select: { nombre: true, categoria: true, costoUnitarioUSD: true } } },
+        take: 100,
+      }),
+    ]);
+
+    // KPIs alertas
+    const alertasCriticas = alertasActivas.filter(a => a.nivel === 'CRITICO' || a.nivel === 'AGOTADO').length;
+    const alertasBajas = alertasActivas.filter(a => a.nivel === 'BAJO').length;
+    const alertasPorInsumo: Record<string, number> = {};
+    for (const a of alertasActivas) {
+      const k = a.insumo?.nombre || 'Sin nombre';
+      alertasPorInsumo[k] = (alertasPorInsumo[k] || 0) + 1;
+    }
+
+    // Movimientos: despachados pendientes, en tránsito, recibidos
+    const despachosEstado: Record<string, number> = { PENDIENTE: 0, EN_TRANSITO: 0, RECIBIDO: 0, RECHAZADO: 0 };
+    const consumoPorCategoria: Record<string, number> = {};
+    let valorEnTransito = 0;
+    let despachos30d = 0;
+
+    for (const mov of movimientos30Dias) {
+      if (mov.tipo === 'DESPACHO_AGENCIA' || mov.tipo === 'DESPACHO_BODEGA') {
+        despachosEstado[mov.estadoDespacho] = (despachosEstado[mov.estadoDespacho] || 0) + 1;
+        despachos30d++;
+        if (mov.estadoDespacho === 'EN_TRANSITO') {
+          for (const d of mov.detalles) valorEnTransito += Number(d.cantidadEnviada || 0) * Number(d.costoUnitarioUSD || 0);
+        }
+      }
+      for (const d of mov.detalles) {
+        const cat = d.insumo?.categoria || 'Sin Categoría';
+        consumoPorCategoria[cat] = (consumoPorCategoria[cat] || 0) + Number(d.cantidadEnviada || 0);
+      }
+    }
+
+    // Valor total del stock disponible
+    let valorStockUSD = 0;
+    for (const s of stocks) valorStockUSD += Number(s.cantidadActual || 0) * Number(s.insumo?.costoUnitarioUSD || 0);
+
+    // Top insumos con alerta
+    const topInsumosCriticos = Object.keys(alertasPorInsumo).map(k => ({ nombre: k, alertas: alertasPorInsumo[k] })).sort((a, b) => b.alertas - a.alertas).slice(0, 7);
+
+    return {
+      success: true,
+      kpis: {
+        totalAlertasActivas: alertasActivas.length,
+        alertasCriticas,
+        alertasBajas,
+        despachosEnTransito: despachosEstado['EN_TRANSITO'] || 0,
+        despachosPendientes: despachosEstado['PENDIENTE'] || 0,
+        despachos30d,
+        valorEnTransitoUSD: Number(valorEnTransito.toFixed(2)),
+        valorStockUSD: Number(valorStockUSD.toFixed(2)),
+      },
+      topInsumosCriticos,
+      despachosEstado: Object.keys(despachosEstado).filter(k => despachosEstado[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: despachosEstado[k] })),
+      consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),
+      nivelAlertas: [
+        { nombre: 'CRÍTICO/AGOTADO', cantidad: alertasCriticas },
+        { nombre: 'BAJO', cantidad: alertasBajas },
+      ].filter(x => x.cantidad > 0),
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DASHBOARD ESPECIALES: Coordinador + Pulidor de Servicios Especiales
+  // Datos reales: ServicioEspecial, tiempos efectivos, estados, tipos, calidad
+  // ═══════════════════════════════════════════════════════════════════════
+  async getDashboardEspeciales(user: any) {
+    const filtro = this.filtroAgencia(user, {});
+    const hayFiltro = Object.keys(filtro).length > 0;
+    const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
+    const hoy = new Date();
+    const startOfDay = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
+    const endOfDay = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59, 999);
+
+    const seWhere: any = { deletedAt: null, ...(hayFiltro ? { agencia: filtro } : {}) };
+
+    const [serviciosHoy, servicios30Dias, serviciosPendientes] = await Promise.all([
+      this.prisma.servicioEspecial.findMany({
+        where: { ...seWhere, createdAt: { gte: startOfDay, lte: endOfDay } },
+        select: { estado: true, tipoServicio: true, tiempoEfectivoSeg: true, calificacionCalidad: true, precio: true, prioridad: true },
+      }),
+      this.prisma.servicioEspecial.findMany({
+        where: { ...seWhere, createdAt: { gte: hace30Dias } },
+        select: {
+          estado: true, tipoServicio: true, tiempoEfectivoSeg: true,
+          calificacionCalidad: true, precio: true, prioridad: true,
+          createdAt: true, fechaFin: true,
+          operador: { select: { name: true, lastname: true } },
+        },
+      }),
+      this.prisma.servicioEspecial.findMany({
+        where: { ...seWhere, estado: { in: ['Pendiente', 'En Proceso'] } },
+        select: { estado: true, prioridad: true, tipoServicio: true, placa: true, clienteNombre: true, fechaProgramada: true },
+        orderBy: [{ prioridad: 'desc' }, { fechaProgramada: 'asc' }],
+        take: 10,
+      }),
+    ]);
+
+    // KPIs del día
+    const estadosHoy: Record<string, number> = { Pendiente: 0, 'En Proceso': 0, Completado: 0, Cancelado: 0 };
+    for (const s of serviciosHoy) estadosHoy[s.estado] = (estadosHoy[s.estado] || 0) + 1;
+    const ingresoHoy = serviciosHoy.filter(s => s.estado === 'Completado').reduce((sum, s) => sum + Number(s.precio || 0), 0);
+
+    // Métricas de 30 días
+    const tipoServicioCount: Record<string, number> = {};
+    const prioridadCount: Record<string, number> = {};
+    const calificaciones: number[] = [];
+    const operadoresCount: Record<string, number> = {};
+    let tiempoEfectivoTotal = 0; let serviciosConTiempo = 0;
+    let ingresoTotal30d = 0;
+    const flujoDiario: Record<string, number> = {};
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      flujoDiario[d.toISOString().split('T')[0]] = 0;
+    }
+
+    for (const s of servicios30Dias) {
+      tipoServicioCount[s.tipoServicio] = (tipoServicioCount[s.tipoServicio] || 0) + 1;
+      prioridadCount[s.prioridad] = (prioridadCount[s.prioridad] || 0) + 1;
+      if (s.calificacionCalidad) calificaciones.push(s.calificacionCalidad);
+      if (s.tiempoEfectivoSeg) { tiempoEfectivoTotal += s.tiempoEfectivoSeg; serviciosConTiempo++; }
+      if (s.estado === 'Completado') ingresoTotal30d += Number(s.precio || 0);
+      if (s.operador) {
+        const k = `${s.operador.name} ${s.operador.lastname}`;
+        operadoresCount[k] = (operadoresCount[k] || 0) + 1;
+      }
+      const k = s.createdAt.toISOString().split('T')[0];
+      if (flujoDiario[k] !== undefined) flujoDiario[k]++;
+    }
+
+    const calificacionPromedio = calificaciones.length > 0 ? Number((calificaciones.reduce((a, b) => a + b, 0) / calificaciones.length).toFixed(1)) : 0;
+    const tiempoPromedioMin = serviciosConTiempo > 0 ? Math.round((tiempoEfectivoTotal / serviciosConTiempo) / 60) : 0;
+
+    const topOperadores = Object.keys(operadoresCount).map(k => ({ nombre: k, servicios: operadoresCount[k] })).sort((a, b) => b.servicios - a.servicios).slice(0, 5);
+
+    return {
+      success: true,
+      kpis: {
+        serviciosHoy: serviciosHoy.length,
+        completadosHoy: estadosHoy['Completado'] || 0,
+        enProcesoHoy: estadosHoy['En Proceso'] || 0,
+        pendientesHoy: estadosHoy['Pendiente'] || 0,
+        ingresoHoy: Number(ingresoHoy.toFixed(2)),
+        ingresoTotal30d: Number(ingresoTotal30d.toFixed(2)),
+        calificacionPromedio,
+        tiempoPromedioMin,
+      },
+      flujoSemanal: Object.keys(flujoDiario).sort().map(hora => ({ hora, cantidad: flujoDiario[hora] })),
+      tipoServicio: Object.keys(tipoServicioCount).map(k => ({ nombre: k, cantidad: tipoServicioCount[k] })).sort((a, b) => b.cantidad - a.cantidad),
+      prioridad: Object.keys(prioridadCount).map(k => ({ nombre: k, cantidad: prioridadCount[k] })),
+      estadosHoy: Object.keys(estadosHoy).filter(k => estadosHoy[k] > 0).map(k => ({ nombre: k, cantidad: estadosHoy[k] })),
+      topOperadores,
+      colaActiva: serviciosPendientes.map(s => ({ placa: s.placa, cliente: s.clienteNombre, tipo: s.tipoServicio, estado: s.estado, prioridad: s.prioridad, fecha: s.fechaProgramada })),
+    };
+  }
 }
+

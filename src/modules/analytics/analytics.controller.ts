@@ -46,4 +46,31 @@ export class AnalyticsController {
   ) {
     return this.analyticsService.getRankingLavadores(dto, user);
   }
+
+  @Permiso('maquinaria.ver')
+  @Post('dashboard-taller')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Dashboard para Coordinador de Mantenimiento y Técnico: estado del parque, incidentes, tiempos y costos de reparación' })
+  @ApiResponse({ status: 200, description: 'KPIs reales del taller técnico' })
+  async getDashboardTaller(@CurrentUser() user: any) {
+    return this.analyticsService.getDashboardTaller(user);
+  }
+
+  @Permiso('inventario.ver')
+  @Post('dashboard-bodega')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Dashboard para Coordinador y Asistente de Bodega: alertas de stock, despachos en tránsito y consumo por categoría' })
+  @ApiResponse({ status: 200, description: 'KPIs reales de bodega e inventario' })
+  async getDashboardBodega(@CurrentUser() user: any) {
+    return this.analyticsService.getDashboardBodega(user);
+  }
+
+  @Permiso('especiales.ver')
+  @Post('dashboard-especiales')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Dashboard para Coordinador y Pulidor de Servicios Especiales: estado de OTs, tiempos efectivos, calificación de calidad y cola activa' })
+  @ApiResponse({ status: 200, description: 'KPIs reales de servicios especiales' })
+  async getDashboardEspeciales(@CurrentUser() user: any) {
+    return this.analyticsService.getDashboardEspeciales(user);
+  }
 }
