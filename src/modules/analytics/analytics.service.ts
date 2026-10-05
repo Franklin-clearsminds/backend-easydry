@@ -511,7 +511,8 @@ export class AnalyticsService {
     // Cumplimiento de tiempos (SLA): se compara el tiempo real contra el estimado del catálogo.
     let slaTotal = 0, slaCumplen = 0, desviacionTotalMin = 0;
     const bahiasStats: Record<string, { id: string; nombre: string; total: number; tiempoTotalMin: number; finalizados: number }> = {};
-    const mixServicios: Record<string, number> = {};
+    const mixGenerales: Record<string, number> = {};
+    const mixEspeciales: Record<string, number> = {};
     const topMarcas: Record<string, number> = {};
     const flujoHorario: Record<string, number> = {};
     for (let i = 7; i <= 21; i++) flujoHorario[`${i.toString().padStart(2, '0')}:00`] = 0;
@@ -520,7 +521,11 @@ export class AnalyticsService {
       estadosCount[s.estado] = (estadosCount[s.estado] || 0) + 1;
       const time = s.horaInicio || s.horaIngreso;
       if (time) { const key = `${new Date(time).getHours().toString().padStart(2, '0')}:00`; flujoHorario[key] = (flujoHorario[key] || 0) + 1; }
-      if (s.catalogo?.nombre) mixServicios[s.catalogo.nombre] = (mixServicios[s.catalogo.nombre] || 0) + 1;
+      if (s.catalogo?.nombre) {
+        const cat = s.catalogo.categoria === 'ESPECIAL' ? 'especial' : 'general';
+        if (cat === 'especial') mixEspeciales[s.catalogo.nombre] = (mixEspeciales[s.catalogo.nombre] || 0) + 1;
+        else mixGenerales[s.catalogo.nombre] = (mixGenerales[s.catalogo.nombre] || 0) + 1;
+      }
       if (s.marca) topMarcas[s.marca] = (topMarcas[s.marca] || 0) + 1;
 
       let duracionMin = 0;
@@ -560,6 +565,7 @@ export class AnalyticsService {
     const maquinasDañadas: Record<string, { nombre: string; total: number }> = {};
     const agenciasIncidentes: Record<string, { nombre: string; total: number }> = {};
     const incidentesPorTipo: Record<string, number> = {};
+    const reparacionesPorAgencia: Record<string, number> = {};
     for (const inc of todosIncidentes30Dias) {
       if (inc.maquinaria) {
         const mKey = `${inc.maquinaria.codigo} - ${inc.maquinaria.nombre}`;
@@ -567,10 +573,12 @@ export class AnalyticsService {
         incidentesPorTipo[inc.maquinaria.tipo || 'Desconocido'] = (incidentesPorTipo[inc.maquinaria.tipo || 'Desconocido'] || 0) + 1;
         const aKey = inc.maquinaria.agencia?.nombre || 'Desconocida';
         agenciasIncidentes[aKey] = { nombre: aKey, total: (agenciasIncidentes[aKey]?.total || 0) + 1 };
+        reparacionesPorAgencia[aKey] = (reparacionesPorAgencia[aKey] || 0) + Number(inc.costoTotal || 0);
       }
     }
     const topMaquinasDañadas = Object.values(maquinasDañadas).sort((a, b) => b.total - a.total).slice(0, 5);
     const topAgenciasIncidentes = Object.values(agenciasIncidentes).sort((a, b) => b.total - a.total).slice(0, 5);
+    const topAgenciasReparaciones = Object.keys(reparacionesPorAgencia).map(n => ({ nombre: n, costo: Number(reparacionesPorAgencia[n].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5);
 
     return {
       success: true,
@@ -591,7 +599,9 @@ export class AnalyticsService {
       tiemposBahias,
       topMaquinasDañadas,
       topAgenciasIncidentes,
-      mixServicios: Object.keys(mixServicios).map(k => ({ nombre: k, cantidad: mixServicios[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
+      topAgenciasReparaciones,
+      mixGenerales: Object.keys(mixGenerales).map(k => ({ nombre: k, cantidad: mixGenerales[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
+      mixEspeciales: Object.keys(mixEspeciales).map(k => ({ nombre: k, cantidad: mixEspeciales[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
       topMarcas: Object.keys(topMarcas).map(k => ({ nombre: k, cantidad: topMarcas[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 5),
       incidentesPorTipo: Object.keys(incidentesPorTipo).map(k => ({ nombre: k, cantidad: incidentesPorTipo[k] })),
       // Alertas operativas unificadas: stock + mantenimiento (incidentes abiertos y preventivos vencidos).
@@ -919,7 +929,13 @@ export class AnalyticsService {
       }),
       this.prisma.movimientoInventario.findMany({
         where: movWhere,
-        select: { tipo: true, estadoDespacho: true, createdAt: true, detalles: { select: { cantidadEnviada: true, costoUnitarioUSD: true, insumo: { select: { nombre: true, categoria: true } } } } },
+        select: { 
+          tipo: true, 
+          estadoDespacho: true, 
+          createdAt: true, 
+          destinoUbicacion: true,
+          detalles: { select: { cantidadEnviada: true, costoUnitarioUSD: true, insumo: { select: { nombre: true, categoria: true } } } } 
+        },
       }),
       this.prisma.stockUbicacion.findMany({
         where: stockWhere,
@@ -931,15 +947,22 @@ export class AnalyticsService {
     const alertasCriticas = alertasActivas.filter(a => a.nivel === 'CRITICO' || a.nivel === 'AGOTADO').length;
     const alertasBajas = alertasActivas.filter(a => a.nivel === 'BAJO').length;
     const alertasPorInsumo: Record<string, number> = {};
+    const alertasPorAgencia: Record<string, number> = {};
     for (const a of alertasActivas) {
       const k = a.insumo?.nombre || 'Sin nombre';
       alertasPorInsumo[k] = (alertasPorInsumo[k] || 0) + 1;
+      const ag = a.agencia?.nombre || 'Sin Agencia';
+      alertasPorAgencia[ag] = (alertasPorAgencia[ag] || 0) + 1;
     }
+
+    // Top agencias con alertas
+    const topAgenciasConAlertas = Object.keys(alertasPorAgencia).map(k => ({ nombre: k, alertas: alertasPorAgencia[k] })).sort((a, b) => b.alertas - a.alertas).slice(0, 7);
 
     // Movimientos: despachados pendientes, en tránsito, recibidos
     const despachosEstado: Record<string, number> = { PENDIENTE: 0, EN_TRANSITO: 0, RECIBIDO: 0, RECHAZADO: 0 };
     const consumoPorCategoria: Record<string, number> = {};
     const consumoPorInsumo: Record<string, number> = {};
+    const consumoPorAgencia: Record<string, number> = {};
     let valorEnTransito = 0;
     let despachos30d = 0;
 
@@ -951,12 +974,20 @@ export class AnalyticsService {
           for (const d of mov.detalles) valorEnTransito += Number(d.cantidadEnviada || 0) * Number(d.costoUnitarioUSD || 0);
         }
       }
+      
+      let cantidadTotalMov = 0;
       for (const d of mov.detalles) {
         const cantidad = Number(d.cantidadEnviada || 0);
+        cantidadTotalMov += cantidad;
         const cat = d.insumo?.categoria || 'Sin Categoría';
         consumoPorCategoria[cat] = (consumoPorCategoria[cat] || 0) + cantidad;
         const insumo = d.insumo?.nombre || 'Insumo';
         consumoPorInsumo[insumo] = (consumoPorInsumo[insumo] || 0) + cantidad;
+      }
+      
+      if (mov.destinoUbicacion && cantidadTotalMov > 0) {
+        const agenciaNombre = mov.destinoUbicacion;
+        consumoPorAgencia[agenciaNombre] = (consumoPorAgencia[agenciaNombre] || 0) + cantidadTotalMov;
       }
     }
 
@@ -965,10 +996,23 @@ export class AnalyticsService {
       .map((nombre) => ({ nombre, cantidad: Number(consumoPorInsumo[nombre].toFixed(2)) }))
       .sort((a, b) => b.cantidad - a.cantidad)
       .slice(0, 7);
+      
+    // Top agencias por consumo
+    const topAgenciasConsumo = Object.keys(consumoPorAgencia)
+      .map((nombre) => ({ nombre, cantidad: Number(consumoPorAgencia[nombre].toFixed(2)) }))
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .slice(0, 7);
 
-    // Valor total del stock disponible
+    // Valor total del stock disponible y valor por categoria
     let valorStockUSD = 0;
-    for (const s of stocks) valorStockUSD += Number(s.cantidadActual || 0) * Number(s.insumo?.costoUnitarioUSD || 0);
+    const valorStockPorCategoria: Record<string, number> = {};
+    
+    for (const s of stocks) {
+      const valor = Number(s.cantidadActual || 0) * Number(s.insumo?.costoUnitarioUSD || 0);
+      valorStockUSD += valor;
+      const cat = s.insumo?.categoria || 'Sin Categoría';
+      valorStockPorCategoria[cat] = (valorStockPorCategoria[cat] || 0) + valor;
+    }
 
     // Top insumos con alerta
     const topInsumosCriticos = Object.keys(alertasPorInsumo).map(k => ({ nombre: k, alertas: alertasPorInsumo[k] })).sort((a, b) => b.alertas - a.alertas).slice(0, 7);
@@ -986,7 +1030,10 @@ export class AnalyticsService {
         valorStockUSD: Number(valorStockUSD.toFixed(2)),
       },
       topInsumosCriticos,
+      topAgenciasConAlertas,
       topInsumosConsumo,
+      topAgenciasConsumo,
+      valorStockPorCategoria: Object.keys(valorStockPorCategoria).map(k => ({ nombre: k, cantidad: Number(valorStockPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),
       despachosEstado: Object.keys(despachosEstado).filter(k => despachosEstado[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: despachosEstado[k] })),
       consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),
       nivelAlertas: [

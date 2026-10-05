@@ -40,7 +40,7 @@ export class AnalyticsController {
     return this.analyticsService.getConsumoQuimicos(dto, user);
   }
 
-  @Permiso('productividad.ver')
+  @Permiso('usuarios.ver')
   @Post('ranking-lavadores')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ranking de lavadores: cantidad de servicios y tiempo promedio por servicio' })
@@ -72,7 +72,7 @@ export class AnalyticsController {
     return this.analyticsService.getDashboardTaller(dto, user);
   }
 
-  @Permiso('inventario.ver')
+  @Permiso('inventario.ver', 'maquinaria.ver')
   @Post('dashboard-bodega')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard para Coordinador y Asistente de Bodega: alertas de stock, despachos en tránsito y consumo por categoría' })

@@ -4,7 +4,9 @@ import crypto from 'crypto';
 const prisma = new PrismaClient();
 
 function randomDate(start: Date, end: Date) {
-  return new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
+  return new Date(
+    start.getTime() + Math.random() * (end.getTime() - start.getTime()),
+  );
 }
 
 function getRandomItem(arr: any[]) {
@@ -22,11 +24,22 @@ async function main() {
   const agencias = await prisma.agencia.findMany({ include: { bahias: true } });
   if (agencias.length === 0) throw new Error('No hay agencias en la BD.');
 
-  const operadores = await prisma.user.findMany({ where: { role: { namerol: 'PULIDOR' } } });
-  if (operadores.length === 0) throw new Error('No hay operadores (PULIDOR) en la BD.');
+  const operadores = await prisma.user.findMany({
+    where: { role: { namerol: 'PULIDOR' } },
+  });
+  if (operadores.length === 0)
+    throw new Error('No hay operadores (PULIDOR) en la BD.');
 
   const catalogos = await prisma.catalogoServicio.findMany();
-  if (catalogos.length === 0) throw new Error('No hay servicios en el catálogo.');
+  if (catalogos.length === 0)
+    throw new Error('No hay servicios en el catálogo.');
+
+  const lideres = await prisma.user.findMany({
+    where: { role: { namerol: 'LIDER' } },
+  });
+  const aprobadores = await prisma.user.findMany({
+    where: { role: { namerol: 'APROBADOR' } },
+  });
 
   const insumos = await prisma.insumo.findMany();
   if (insumos.length === 0) throw new Error('No hay insumos.');
@@ -41,8 +54,12 @@ async function main() {
           nombre: `Hidrolavadora Industrial ${getRandomNumber(1, 10)}`,
           tipo: 'HIDROLAVADORA',
           agenciaId: ag.id,
-          estadoOperativo: getRandomItem(['OPERATIVA', 'EN_MANTENIMIENTO', 'OPERATIVA'])
-        }
+          estadoOperativo: getRandomItem([
+            'OPERATIVA',
+            'EN_MANTENIMIENTO',
+            'OPERATIVA',
+          ]),
+        },
       });
       await prisma.maquinaria.create({
         data: {
@@ -50,8 +67,8 @@ async function main() {
           nombre: `Aspiradora Seco Húmedo ${getRandomNumber(1, 10)}`,
           tipo: 'ASPIRADORA',
           agenciaId: ag.id,
-          estadoOperativo: getRandomItem(['OPERATIVA', 'OPERATIVA', 'DE_BAJA'])
-        }
+          estadoOperativo: getRandomItem(['OPERATIVA', 'OPERATIVA', 'DE_BAJA']),
+        },
       });
     }
   }
@@ -72,39 +89,64 @@ async function main() {
     const bahia = getRandomItem(agencia.bahias);
     const operador = getRandomItem(operadores);
     const catalogo = getRandomItem(catalogos);
-    
+
     // Distribuir más servicios históricos
     const isHoy = Math.random() > 0.9; // Solo 10% de los servicios son estrictamente de hoy
-    
+
     let fechaBase: Date;
     if (isHoy) {
-      fechaBase = new Date(today.getFullYear(), today.getMonth(), today.getDate(), getRandomNumber(7, 20), getRandomNumber(0, 59));
+      fechaBase = new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate(),
+        getRandomNumber(7, 20),
+        getRandomNumber(0, 59),
+      );
     } else {
       fechaBase = randomDate(past30Days, today);
       fechaBase.setHours(getRandomNumber(7, 20));
     }
 
-    const estado = getRandomItem([ServiceStatus.FINALIZADO, ServiceStatus.FINALIZADO, ServiceStatus.EN_PROCESO, ServiceStatus.CANCELADO, ServiceStatus.FINALIZADO]);
-    
+    const estado = getRandomItem([
+      ServiceStatus.FINALIZADO,
+      ServiceStatus.FINALIZADO,
+      ServiceStatus.EN_PROCESO,
+      ServiceStatus.CANCELADO,
+      ServiceStatus.FINALIZADO,
+    ]);
+
     let horaInicio = null;
     let horaSalida = null;
-    
-    if (estado !== ServiceStatus.EN_ESPERA && estado !== ServiceStatus.CANCELADO) {
-      horaInicio = new Date(fechaBase.getTime() + getRandomNumber(1, 15) * 60000); // 1-15 min después del ingreso
+
+    if (
+      estado !== ServiceStatus.EN_ESPERA &&
+      estado !== ServiceStatus.CANCELADO
+    ) {
+      horaInicio = new Date(
+        fechaBase.getTime() + getRandomNumber(1, 15) * 60000,
+      ); // 1-15 min después del ingreso
       if (estado === ServiceStatus.FINALIZADO) {
-        horaSalida = new Date(horaInicio.getTime() + getRandomNumber(20, 60) * 60000); // 20-60 min de lavado
+        horaSalida = new Date(
+          horaInicio.getTime() + getRandomNumber(20, 60) * 60000,
+        ); // 20-60 min de lavado
       }
     }
 
     const servicioId = crypto.randomUUID();
-    
+
     await prisma.servicioLavado.create({
       data: {
         id: servicioId,
         clientUuid: crypto.randomUUID(),
         ordenTrabajoOT: `OT-SIM-${getRandomNumber(1000, 9999)}`,
         placa: `SIM-${getRandomNumber(100, 999)}`,
-        marca: getRandomItem(['Toyota', 'Chevrolet', 'Kia', 'Hyundai', 'Nissan']),
+        marca: getRandomItem([
+          'Toyota',
+          'Chevrolet',
+          'Kia',
+          'Hyundai',
+          'Nissan',
+        ]),
         modelo: 'Generico',
         color: getRandomItem(['Rojo', 'Azul', 'Blanco', 'Negro', 'Gris']),
         estado,
@@ -113,8 +155,8 @@ async function main() {
         operadorId: operador.id,
         horaIngreso: fechaBase,
         horaInicio,
-        horaSalida
-      }
+        horaSalida,
+      },
     });
 
     if (estado === ServiceStatus.FINALIZADO) {
@@ -130,8 +172,8 @@ async function main() {
             agenciaId: agencia.id,
             insumoNombre: insumo.nombre,
             insumoSKU: insumo.codigoSKU,
-            createdAt: horaSalida || new Date()
-          }
+            createdAt: horaSalida || new Date(),
+          },
         });
       }
     }
@@ -143,8 +185,13 @@ async function main() {
     const maquina = getRandomItem(allMaquinarias);
     const operador = getRandomItem(operadores);
     const fechaReporte = randomDate(past30Days, today);
-    const estado = getRandomItem(['ABIERTO', 'EN_PROCESO', 'RESUELTO', 'RESUELTO']);
-    
+    const estado = getRandomItem([
+      'ABIERTO',
+      'EN_PROCESO',
+      'RESUELTO',
+      'RESUELTO',
+    ]);
+
     await prisma.incidenteTecnico.create({
       data: {
         maquinariaId: maquina.id,
@@ -154,9 +201,14 @@ async function main() {
         gravedad: getRandomItem(['BAJA', 'MEDIA', 'ALTA', 'CRITICA']),
         estado,
         fechaReporte,
-        fechaSolucion: estado === 'RESUELTO' ? new Date(fechaReporte.getTime() + getRandomNumber(24, 72) * 3600000) : null,
-        createdAt: fechaReporte
-      }
+        fechaSolucion:
+          estado === 'RESUELTO'
+            ? new Date(
+                fechaReporte.getTime() + getRandomNumber(24, 72) * 3600000,
+              )
+            : null,
+        createdAt: fechaReporte,
+      },
     });
   }
 
@@ -168,7 +220,7 @@ async function main() {
     const operador = getRandomItem(operadores);
     const fecha = randomDate(past30Days, today);
     const nivel = getRandomItem(['BAJO', 'CRITICO', 'AGOTADO']);
-    
+
     await prisma.alertaStock.create({
       data: {
         insumoId: insumo.id,
@@ -178,9 +230,54 @@ async function main() {
         usuarioEmisorId: operador.id,
         mensaje: `Stock ${nivel} en ${insumo.nombre}`,
         stockReportado: getRandomNumber(0, 5),
-        createdAt: fecha
-      }
+        createdAt: fecha,
+      },
     });
+  }
+
+  // 5. Generar Solicitudes de Aprobación
+  console.log('Generando 200 solicitudes de aprobación ficticias...');
+  if (lideres.length > 0 && aprobadores.length > 0) {
+    for (let i = 0; i < 200; i++) {
+      const lider = getRandomItem(lideres);
+      const agencia = getRandomItem(agencias);
+      const aprobador = aprobadores.find(a => a.agenciaId === agencia.id) || getRandomItem(aprobadores);
+      
+      const isHoy = Math.random() > 0.7; // 30% son de hoy
+      const fecha = isHoy ? new Date(today.getFullYear(), today.getMonth(), today.getDate(), getRandomNumber(7, 20), getRandomNumber(0, 59)) : randomDate(past30Days, today);
+
+
+      const estado = getRandomItem([
+        'PENDIENTE',
+        'APROBADO',
+        'RECHAZADO',
+        'PENDIENTE',
+      ]);
+      const tipo = getRandomItem([
+        'DESPACHO_QUIMICOS',
+        'AJUSTE_MERMA',
+        'SERVICIO_ESPECIAL_PRECIO',
+        'COMPRA_REPUESTO',
+      ]);
+
+      await prisma.solicitudAprobacion.create({
+        data: {
+          tipo,
+          titulo: `Solicitud de ${tipo.replace(/_/g, ' ')}`,
+          descripcion: 'Justificación automática para pruebas del dashboard.',
+          montoUSD: getRandomNumber(10, 500) + 0.5,
+          estado,
+          solicitanteId: lider.id,
+          aprobadorId: estado !== 'PENDIENTE' ? aprobador.id : null,
+          agenciaId: agencia.id,
+          fechaDecision:
+            estado !== 'PENDIENTE'
+              ? new Date(fecha.getTime() + getRandomNumber(2, 24) * 3600000)
+              : null,
+          createdAt: fecha,
+        },
+      });
+    }
   }
 
   console.log('✅ Poblamiento finalizado con éxito.');
