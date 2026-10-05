@@ -2,7 +2,12 @@ import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AnalyticsService } from './analytics.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto, RankingLavadoresDto } from './dto/analytics.dto.js';
+import {
+  DashboardAnalyticsDto,
+  DashboardDedicadoDto,
+  ConsumoQuimicosAnalyticsDto,
+  RankingLavadoresDto,
+} from './dto/analytics.dto.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Analítica & Dashboards (100% POST)')
@@ -52,8 +57,8 @@ export class AnalyticsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard para Coordinador de Mantenimiento y Técnico: estado del parque, incidentes, tiempos y costos de reparación' })
   @ApiResponse({ status: 200, description: 'KPIs reales del taller técnico' })
-  async getDashboardTaller(@CurrentUser() user: any) {
-    return this.analyticsService.getDashboardTaller(user);
+  async getDashboardTaller(@Body() dto: DashboardDedicadoDto, @CurrentUser() user: any) {
+    return this.analyticsService.getDashboardTaller(dto, user);
   }
 
   @Permiso('inventario.ver')
@@ -61,8 +66,8 @@ export class AnalyticsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard para Coordinador y Asistente de Bodega: alertas de stock, despachos en tránsito y consumo por categoría' })
   @ApiResponse({ status: 200, description: 'KPIs reales de bodega e inventario' })
-  async getDashboardBodega(@CurrentUser() user: any) {
-    return this.analyticsService.getDashboardBodega(user);
+  async getDashboardBodega(@Body() dto: DashboardDedicadoDto, @CurrentUser() user: any) {
+    return this.analyticsService.getDashboardBodega(dto, user);
   }
 
   @Permiso('especiales.ver')
@@ -70,7 +75,7 @@ export class AnalyticsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard para Coordinador y Pulidor de Servicios Especiales: estado de OTs, tiempos efectivos, calificación de calidad y cola activa' })
   @ApiResponse({ status: 200, description: 'KPIs reales de servicios especiales' })
-  async getDashboardEspeciales(@CurrentUser() user: any) {
-    return this.analyticsService.getDashboardEspeciales(user);
+  async getDashboardEspeciales(@Body() dto: DashboardDedicadoDto, @CurrentUser() user: any) {
+    return this.analyticsService.getDashboardEspeciales(dto, user);
   }
 }

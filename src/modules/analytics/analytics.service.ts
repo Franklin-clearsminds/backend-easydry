@@ -1,8 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto, RankingLavadoresDto } from './dto/analytics.dto.js';
+import {
+  DashboardAnalyticsDto,
+  DashboardDedicadoDto,
+  ConsumoQuimicosAnalyticsDto,
+  RankingLavadoresDto,
+} from './dto/analytics.dto.js';
 import { ServiceStatus } from '@prisma/client';
 import { SIN_RESULTADOS, resolverAlcance } from '../../common/permisos/alcance.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+
+/** % máximo de descuento permitido sin autorización: por encima se considera "fuera de rango". */
+const UMBRAL_DESCUENTO_PCT = 15;
 
 @Injectable()
 export class AnalyticsService {
@@ -25,6 +34,17 @@ export class AnalyticsService {
     }
   }
 
+  /**
+   * Región efectiva del filtro, si aplica: la del usuario con alcance REGION, o la que pidió un usuario GLOBAL.
+   * Permite acotar tablas sin relación directa a agencia (movimientos de inventario, stock de bodega).
+   */
+  private regionDeAlcance(user: any, dto: { regionId?: string }): string | null {
+    const a = resolverAlcance(user);
+    if (a.tipo === 'REGION') return a.regionId;
+    if (a.tipo === 'GLOBAL' && dto?.regionId) return dto.regionId;
+    return null;
+  }
+
   async getDashboardMetrics(dto: DashboardAnalyticsDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
@@ -34,7 +54,7 @@ export class AnalyticsService {
     const endOfDay = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 23, 59, 59, 999);
     const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
 
-    const roleName = user?.role?.namerol;
+    const roleName = rolDeUsuario(user);
 
     if (roleName === 'ADMIN') {
       return { success: true, isAdminView: true, ...(await this.getAdminMetrics(startOfDay, endOfDay, hace30Dias)) };
@@ -85,6 +105,8 @@ export class AnalyticsService {
       if (flujoUsuarios[k] !== undefined) flujoUsuarios[k]++;
     }
 
+    const estrategicos = await this.getAdminEstrategicos(startOfDay, endOfDay, hace30Dias);
+
     return {
       fechaConsultada: startOfDay.toISOString().split('T')[0],
       kpis: {
@@ -95,11 +117,91 @@ export class AnalyticsService {
         decisionesHoy,
         totalServiciosCatalogo: totalServicios,
         totalInsumos,
+        ...estrategicos.kpis,
       },
       flujoHorario: Object.keys(flujoUsuarios).sort().map(hora => ({ hora, cantidad: flujoUsuarios[hora] })),
       distribucionRoles,
       distribucionDecisiones: decisionesAgrupadas.map(d => ({ nombre: d.accion, total: d._count.id })).sort((a, b) => b.total - a.total),
       distribucionCategorias: serviciosPorCategoria.map(s => ({ nombre: s.categoria, total: s._count.id })).sort((a, b) => b.total - a.total),
+      topAgenciasProductivas: estrategicos.topAgenciasProductivas,
+    };
+  }
+
+  /**
+   * KPIs estratégicos de la red (visión 360° del Admin): ingresos, ticket, crecimiento, productividad
+   * nacional, costo de reparaciones y valor del inventario. Todo el país, sin filtro de alcance.
+   */
+  private async getAdminEstrategicos(startOfDay: Date, endOfDay: Date, hace30Dias: Date) {
+    const inicioMes = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), 1);
+    const inicioMesAnterior = new Date(startOfDay.getFullYear(), startOfDay.getMonth() - 1, 1);
+    const finalizados: ServiceStatus[] = [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO];
+
+    const [
+      ingresoHoyAgg, ingresoMesAgg, ingresoMesAnteriorAgg,
+      completadosHoy, completadosMes, serviciosConTiempoHoy,
+      serviciosBucketsMes, bahias, costoReparacionesAgg, stocks, movEnTransito,
+    ] = await Promise.all([
+      this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, estado: { in: finalizados } } }),
+      this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: { horaIngreso: { gte: inicioMes, lte: endOfDay }, estado: { in: finalizados } } }),
+      this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: { horaIngreso: { gte: inicioMesAnterior, lt: inicioMes }, estado: { in: finalizados } } }),
+      this.prisma.servicioLavado.count({ where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, estado: { in: finalizados } } }),
+      this.prisma.servicioLavado.count({ where: { horaIngreso: { gte: inicioMes, lte: endOfDay }, estado: { in: finalizados } } }),
+      this.prisma.servicioLavado.findMany({
+        where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, estado: { in: finalizados }, horaSalida: { not: null } },
+        select: { horaIngreso: true, horaInicio: true, horaSalida: true },
+      }),
+      this.prisma.servicioLavado.groupBy({ by: ['bahiaId'], _count: { id: true }, where: { horaIngreso: { gte: inicioMes, lte: endOfDay } } }),
+      this.prisma.bahia.findMany({ select: { id: true, agencia: { select: { nombre: true } } } }),
+      this.prisma.incidenteTecnico.aggregate({ _sum: { costoTotal: true }, where: { createdAt: { gte: hace30Dias } } }),
+      this.prisma.stockUbicacion.findMany({ select: { cantidadActual: true, insumo: { select: { costoUnitarioUSD: true } } } }),
+      this.prisma.movimientoInventario.findMany({ where: { estadoDespacho: 'EN_TRANSITO' }, select: { detalles: { select: { cantidadEnviada: true, costoUnitarioUSD: true } } } }),
+    ]);
+
+    const ingresoHoy = Number(ingresoHoyAgg._sum.precio || 0);
+    const ingresoMes = Number(ingresoMesAgg._sum.precio || 0);
+    const ingresoMesAnterior = Number(ingresoMesAnteriorAgg._sum.precio || 0);
+    const variacionMesPct = ingresoMesAnterior > 0
+      ? Number((((ingresoMes - ingresoMesAnterior) / ingresoMesAnterior) * 100).toFixed(1))
+      : null;
+
+    let tiempoTotalMin = 0;
+    for (const s of serviciosConTiempoHoy) {
+      const inicio = s.horaInicio || s.horaIngreso;
+      if (s.horaSalida && inicio) tiempoTotalMin += Math.max(0, (new Date(s.horaSalida).getTime() - new Date(inicio).getTime()) / 60000);
+    }
+    const tiempoPromedioServicioMin = serviciosConTiempoHoy.length > 0 ? Math.round(tiempoTotalMin / serviciosConTiempoHoy.length) : 0;
+
+    const agenciaPorBahia = new Map(bahias.map((b) => [b.id, b.agencia?.nombre || 'Sin agencia']));
+    const serviciosPorAgencia: Record<string, number> = {};
+    for (const g of serviciosBucketsMes) {
+      const nombre = agenciaPorBahia.get(g.bahiaId) || 'Sin agencia';
+      serviciosPorAgencia[nombre] = (serviciosPorAgencia[nombre] || 0) + g._count.id;
+    }
+    const topAgenciasProductivas = Object.keys(serviciosPorAgencia)
+      .map((nombre) => ({ nombre, cantidad: serviciosPorAgencia[nombre] }))
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .slice(0, 3);
+
+    let valorInventarioUSD = 0;
+    for (const s of stocks) valorInventarioUSD += Number(s.cantidadActual || 0) * Number(s.insumo?.costoUnitarioUSD || 0);
+    let valorEnTransitoUSD = 0;
+    for (const m of movEnTransito) for (const d of m.detalles) valorEnTransitoUSD += Number(d.cantidadEnviada || 0) * Number(d.costoUnitarioUSD || 0);
+
+    return {
+      kpis: {
+        ingresoHoy: Number(ingresoHoy.toFixed(2)),
+        ingresoMes: Number(ingresoMes.toFixed(2)),
+        ingresoMesAnterior: Number(ingresoMesAnterior.toFixed(2)),
+        variacionMesPct,
+        ticketPromedioHoy: completadosHoy > 0 ? Number((ingresoHoy / completadosHoy).toFixed(2)) : 0,
+        serviciosCompletadosHoy: completadosHoy,
+        serviciosCompletadosMes: completadosMes,
+        tiempoPromedioServicioMin,
+        costoReparaciones30d: Number(Number(costoReparacionesAgg._sum.costoTotal || 0).toFixed(2)),
+        valorInventarioUSD: Number(valorInventarioUSD.toFixed(2)),
+        valorEnTransitoUSD: Number(valorEnTransitoUSD.toFixed(2)),
+      },
+      topAgenciasProductivas,
     };
   }
 
@@ -107,9 +209,11 @@ export class AnalyticsService {
   private async getAprobadorMetrics(filtro: any, hayFiltro: boolean, startOfDay: Date, endOfDay: Date, hace30Dias: Date) {
     const whereBase = hayFiltro ? { agencia: filtro } : {};
 
-    const [todasSolicitudes, solicitudesHoy] = await Promise.all([
-      this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: hace30Dias }, ...whereBase }, select: { tipo: true, estado: true, createdAt: true, montoUSD: true } }),
+    const [todasSolicitudes, solicitudesHoy, anuladasHoy] = await Promise.all([
+      this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: hace30Dias }, ...whereBase }, select: { tipo: true, estado: true, createdAt: true, montoUSD: true, entidadRefId: true } }),
       this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: startOfDay, lte: endOfDay }, ...whereBase }, select: { tipo: true, estado: true, montoUSD: true } }),
+      // Anulaciones (control antifraude) de servicios de su alcance registradas hoy.
+      this.prisma.servicioLavado.count({ where: { anuladoEn: { gte: startOfDay, lte: endOfDay }, ...(hayFiltro ? { bahia: { agencia: filtro } } : {}) } }),
     ]);
 
     const pendientesHoy = solicitudesHoy.filter(s => s.estado === 'PENDIENTE').length;
@@ -134,9 +238,28 @@ export class AnalyticsService {
       if (estadosCount[s.estado] !== undefined) estadosCount[s.estado]++;
     }
 
+    // Descuentos "fuera de rango": solicitudes de descuento cuyo monto supera el % máximo permitido
+    // respecto al precio del servicio enlazado (`entidadRefId`), dentro de los últimos 30 días.
+    const solicitudesDescuento = todasSolicitudes.filter((s) => s.tipo === 'DESCUENTO' && s.entidadRefId && s.montoUSD !== null);
+    let descuentosFueraDeRango = 0;
+    if (solicitudesDescuento.length > 0) {
+      const ids = [...new Set(solicitudesDescuento.map((s) => s.entidadRefId as string))];
+      const [servicios, especiales] = await Promise.all([
+        this.prisma.servicioLavado.findMany({ where: { id: { in: ids } }, select: { id: true, precio: true } }),
+        this.prisma.servicioEspecial.findMany({ where: { id: { in: ids } }, select: { id: true, precio: true } }),
+      ]);
+      const precioBase = new Map<string, number>();
+      for (const s of servicios) if (s.precio !== null) precioBase.set(s.id, Number(s.precio));
+      for (const e of especiales) if (e.precio !== null) precioBase.set(e.id, Number(e.precio));
+      for (const s of solicitudesDescuento) {
+        const base = precioBase.get(s.entidadRefId as string) || 0;
+        if (base > 0 && (Number(s.montoUSD) / base) * 100 > UMBRAL_DESCUENTO_PCT) descuentosFueraDeRango++;
+      }
+    }
+
     return {
       fechaConsultada: startOfDay.toISOString().split('T')[0],
-      kpis: { pendientesHoy, aprobadasHoy, rechazadasHoy, montoAprobadoHoy: Number(montoAprobadoHoy.toFixed(2)), totalHoy: solicitudesHoy.length },
+      kpis: { pendientesHoy, aprobadasHoy, rechazadasHoy, anuladasHoy, descuentosFueraDeRango, montoAprobadoHoy: Number(montoAprobadoHoy.toFixed(2)), totalHoy: solicitudesHoy.length },
       flujoHorario: Object.keys(flujoSolicitudes).sort().map(hora => ({ hora, cantidad: flujoSolicitudes[hora] })),
       distribucionTipos: Object.keys(tiposCount).map(k => ({ nombre: k, cantidad: tiposCount[k] })).sort((a, b) => b.cantidad - a.cantidad),
       distribucionEstados: Object.keys(estadosCount).map(k => ({ nombre: k, cantidad: estadosCount[k] })),
@@ -149,7 +272,11 @@ export class AnalyticsService {
     const [servicios30Dias, serviciosHoy, solicitudesComerciales] = await Promise.all([
       this.prisma.servicioLavado.findMany({
         where: { horaIngreso: { gte: hace30Dias }, ...base30 },
-        select: { horaIngreso: true, marca: true, catalogo: { select: { nombre: true, categoria: true } }, consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true } } } } },
+        select: {
+          horaIngreso: true, horaInicio: true, horaSalida: true, estado: true, marca: true,
+          catalogo: { select: { nombre: true, categoria: true, tiempoEstimadoMin: true } },
+          consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true } } } },
+        },
       }),
       this.prisma.servicioLavado.count({ where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, ...base30 } }),
       this.prisma.solicitudAprobacion.findMany({
@@ -159,8 +286,11 @@ export class AnalyticsService {
     ]);
 
     const mix: Record<string, number> = {};
+    const mixCategoria: Record<string, number> = {};
     const marcas: Record<string, number> = {};
     let costoQuimicos30d = 0;
+    // Cumplimiento de tiempos (SLA) y desviación real vs. estimado en los últimos 30 días.
+    let slaTotal = 0, slaCumplen = 0, desviacionTotalMin = 0;
     const flujoServicios: Record<string, number> = {};
     for (let i = 6; i >= 0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i);
@@ -169,10 +299,20 @@ export class AnalyticsService {
 
     for (const s of servicios30Dias) {
       if (s.catalogo?.nombre) mix[s.catalogo.nombre] = (mix[s.catalogo.nombre] || 0) + 1;
+      if (s.catalogo?.categoria) mixCategoria[s.catalogo.categoria] = (mixCategoria[s.catalogo.categoria] || 0) + 1;
       if (s.marca) marcas[s.marca] = (marcas[s.marca] || 0) + 1;
       for (const c of s.consumos || []) costoQuimicos30d += Number(c.cantidadUsada || 0) * Number(c.insumo?.costoUnitarioUSD || 0);
       const k = s.horaIngreso.toISOString().split('T')[0];
       if (flujoServicios[k] !== undefined) flujoServicios[k]++;
+      if (s.estado === ServiceStatus.FINALIZADO && s.horaSalida) {
+        const inicio = s.horaInicio || s.horaIngreso;
+        const real = Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(inicio).getTime()) / 60000));
+        const estimado = Number(s.catalogo?.tiempoEstimadoMin || 0);
+        if (estimado > 0) {
+          slaTotal++; desviacionTotalMin += real - estimado;
+          if (real <= estimado) slaCumplen++;
+        }
+      }
     }
 
     const estComercial: Record<string, number> = { PENDIENTE: 0, APROBADO: 0, RECHAZADO: 0 };
@@ -188,9 +328,14 @@ export class AnalyticsService {
         costoQuimicos30d: Number(costoQuimicos30d.toFixed(2)),
         descuentosPendientes: estComercial.PENDIENTE,
         descuentosAprobados: estComercial.APROBADO,
+        cumplimientoSlaPct: slaTotal > 0 ? Math.round((slaCumplen / slaTotal) * 100) : null,
+        desviacionPromedioMin: slaTotal > 0 ? Math.round(desviacionTotalMin / slaTotal) : null,
+        // Mix Básico (GENERAL) vs Premium/Especial (ESPECIAL) del catálogo.
+        premiumPct: servicios30Dias.length > 0 ? Math.round(((mixCategoria['ESPECIAL'] || 0) / servicios30Dias.length) * 100) : null,
       },
       flujoHorario: Object.keys(flujoServicios).sort().map(hora => ({ hora, cantidad: flujoServicios[hora] })),
       mixServicios: Object.keys(mix).map(k => ({ nombre: k, cantidad: mix[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 7),
+      mixCategoria: Object.keys(mixCategoria).map(k => ({ nombre: k, cantidad: mixCategoria[k] })).sort((a, b) => b.cantidad - a.cantidad),
       topMarcas: Object.keys(marcas).map(k => ({ nombre: k, cantidad: marcas[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 7),
       solicitudesComerciales: Object.keys(estComercial).map(k => ({ nombre: k, cantidad: estComercial[k] })),
     };
@@ -206,7 +351,7 @@ export class AnalyticsService {
         where: servicioWhere,
         select: {
           id: true, estado: true, horaIngreso: true, horaInicio: true, horaSalida: true, marca: true,
-          catalogo: { select: { nombre: true, categoria: true } },
+          catalogo: { select: { nombre: true, categoria: true, tiempoEstimadoMin: true } },
           bahia: { select: { id: true, nombre: true } },
           consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true } } } },
         },
@@ -220,6 +365,8 @@ export class AnalyticsService {
 
     const estadosCount: Record<string, number> = { EN_ESPERA: 0, EN_PROCESO: 0, FINALIZADO: 0, CANCELADO: 0 };
     let tiempoTotalMinutos = 0, serviciosFinalizadosConTiempo = 0, costoTotalQuimicosUSD = 0;
+    // Cumplimiento de tiempos (SLA): se compara el tiempo real contra el estimado del catálogo.
+    let slaTotal = 0, slaCumplen = 0, desviacionTotalMin = 0;
     const bahiasStats: Record<string, { id: string; nombre: string; total: number; tiempoTotalMin: number; finalizados: number }> = {};
     const mixServicios: Record<string, number> = {};
     const topMarcas: Record<string, number> = {};
@@ -238,6 +385,11 @@ export class AnalyticsService {
         const inicio = s.horaInicio || s.horaIngreso;
         duracionMin = Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(inicio).getTime()) / 60000));
         tiempoTotalMinutos += duracionMin; serviciosFinalizadosConTiempo++;
+        const estimado = Number(s.catalogo?.tiempoEstimadoMin || 0);
+        if (estimado > 0) {
+          slaTotal++; desviacionTotalMin += duracionMin - estimado;
+          if (duracionMin <= estimado) slaCumplen++;
+        }
       }
       for (const c of s.consumos || []) costoTotalQuimicosUSD += Number(c.cantidadUsada || 0) * Number(c.insumo?.costoUnitarioUSD || 0);
       if (s.bahia) {
@@ -275,14 +427,16 @@ export class AnalyticsService {
       kpis: {
         totalLavadosHoy, lavadosFinalizados: estadosCount['FINALIZADO'] || 0, lavadosEnProceso: estadosCount['EN_PROCESO'] || 0,
         lavadosEnEspera: estadosCount['EN_ESPERA'] || 0, lavadosCancelados: estadosCount['CANCELADO'] || 0,
+        cumplimientoSlaPct: slaTotal > 0 ? Math.round((slaCumplen / slaTotal) * 100) : null,
+        desviacionPromedioMin: slaTotal > 0 ? Math.round(desviacionTotalMin / slaTotal) : null,
         tiempoPromedioMin, costoQuimicosTotalUSD: Number(costoTotalQuimicosUSD.toFixed(2)), bahiaMasActiva,
         incidentesAbiertos, alertasStockPendientes: alertasPendientes.length,
         alertasCriticas: alertasPendientes.filter(a => a.nivel === 'CRITICO').length,
       },
       flujoHorario: flujoArr,
-      distribucionBahias: isSupervisorView ? topAgenciasIncidentes : distribucionBahias,
+      distribucionBahias,
       tiemposBahias,
-      topMaquinasDañadas: isSupervisorView ? topAgenciasIncidentes : topMaquinasDañadas,
+      topMaquinasDañadas,
       topAgenciasIncidentes,
       mixServicios: Object.keys(mixServicios).map(k => ({ nombre: k, cantidad: mixServicios[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
       topMarcas: Object.keys(topMarcas).map(k => ({ nombre: k, cantidad: topMarcas[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 5),
@@ -330,7 +484,33 @@ export class AnalyticsService {
     }
 
     const listaOrdenada = Object.values(acumuladoPorInsumo).map(item => ({ ...item, cantidadTotal: Number(item.cantidadTotal.toFixed(3)), costoTotalUSD: Number(item.costoTotalUSD.toFixed(2)) })).sort((a, b) => b.costoTotalUSD - a.costoTotalUSD);
-    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, consumoPorAgencia: Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
+
+    // Serie temporal de costo, agrupada según lo pidió el cliente (para graficar la evolución del consumo).
+    const agrupacion = dto.agrupacion ?? 'DIA';
+    const costoPorPeriodo: Record<string, number> = {};
+    for (const c of consumos) {
+      const periodo = this.clavePeriodo(c.createdAt, agrupacion);
+      costoPorPeriodo[periodo] = (costoPorPeriodo[periodo] || 0) + Number(c.cantidadUsada) * Number(c.insumo.costoUnitarioUSD || 0);
+    }
+    const serie = Object.keys(costoPorPeriodo).sort().map((periodo) => ({ periodo, costoUSD: Number(costoPorPeriodo[periodo].toFixed(2)) }));
+
+    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
+  }
+
+  /** Clave de agrupación temporal (día, semana ISO o mes) para las series de analítica. */
+  private clavePeriodo(fecha: Date, agrupacion: 'DIA' | 'SEMANA' | 'MES'): string {
+    const y = fecha.getUTCFullYear();
+    const m = String(fecha.getUTCMonth() + 1).padStart(2, '0');
+    if (agrupacion === 'MES') return `${y}-${m}`;
+    if (agrupacion === 'SEMANA') {
+      const d = new Date(Date.UTC(y, fecha.getUTCMonth(), fecha.getUTCDate()));
+      const dow = d.getUTCDay() || 7;
+      d.setUTCDate(d.getUTCDate() + 4 - dow);
+      const inicioAnio = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+      const semana = Math.ceil(((d.getTime() - inicioAnio.getTime()) / 86400000 + 1) / 7);
+      return `${d.getUTCFullYear()}-S${String(semana).padStart(2, '0')}`;
+    }
+    return `${y}-${m}-${String(fecha.getUTCDate()).padStart(2, '0')}`;
   }
 
   async getRankingLavadores(dto: RankingLavadoresDto, user: any) {
@@ -359,8 +539,8 @@ export class AnalyticsService {
   // DASHBOARD TALLER: Coordinador Mantenimiento + Técnico
   // Datos reales: incidentes, mantenimientos, maquinaria, costos de reparación
   // ═══════════════════════════════════════════════════════════════════════
-  async getDashboardTaller(user: any) {
-    const filtro = this.filtroAgencia(user, {});
+  async getDashboardTaller(dto: DashboardDedicadoDto, user: any) {
+    const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const maqWhere = hayFiltro ? { agencia: filtro } : {};
     const incWhere: any = { ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
@@ -465,31 +645,47 @@ export class AnalyticsService {
   // DASHBOARD BODEGA: Coordinador + Asistente de Bodega
   // Datos reales: stock, alertas, movimientos de inventario, despachos pendientes
   // ═══════════════════════════════════════════════════════════════════════
-  async getDashboardBodega(user: any) {
-    const filtro = this.filtroAgencia(user, {});
+  async getDashboardBodega(dto: DashboardDedicadoDto, user: any) {
+    const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
 
-    // Obtener las bodegas del usuario
-    const bodegaWhere: any = {};
-    if (hayFiltro && filtro['regionId']) bodegaWhere.regionId = filtro['regionId'];
+    // El alcance del usuario se resuelve a ids de agencia (y de bodega si hay región) y se aplica a las
+    // tres consultas: sin esto, movimientos y stock mostraban datos de agencias fuera del alcance.
+    const agenciaIds = hayFiltro
+      ? (await this.prisma.agencia.findMany({ where: filtro as any, select: { id: true } })).map((a) => a.id)
+      : null;
+    const regionId = this.regionDeAlcance(user, dto);
+    const bodegaIds = regionId
+      ? (await this.prisma.bodega.findMany({ where: { regionId }, select: { id: true } })).map((b) => b.id)
+      : [];
+
+    const alertaWhere: any = { estado: { notIn: ['RESUELTO', 'DESPACHADO'] } };
+    const movWhere: any = { createdAt: { gte: hace30Dias } };
+    let stockWhere: any = { cantidadActual: { gt: 0 } };
+    if (agenciaIds) {
+      alertaWhere.agenciaId = { in: agenciaIds };
+      movWhere.OR = [
+        { origenAgenciaId: { in: agenciaIds } },
+        { destinoAgenciaId: { in: agenciaIds } },
+        ...(bodegaIds.length ? [{ origenBodegaId: { in: bodegaIds } }, { destinoBodegaId: { in: bodegaIds } }] : []),
+      ];
+      stockWhere = { ...stockWhere, OR: [{ agenciaId: { in: agenciaIds } }, ...(regionId ? [{ bodega: { regionId } }] : [])] };
+    }
 
     const [alertasActivas, movimientos30Dias, stocks] = await Promise.all([
       this.prisma.alertaStock.findMany({
-        where: { estado: { notIn: ['RESUELTO', 'DESPACHADO'] }, ...(hayFiltro ? { agencia: filtro } : {}) },
+        where: alertaWhere,
         include: { insumo: { select: { nombre: true, categoria: true } }, agencia: { select: { nombre: true } } },
         orderBy: [{ nivel: 'desc' }, { createdAt: 'desc' }],
       }),
       this.prisma.movimientoInventario.findMany({
-        where: { createdAt: { gte: hace30Dias }, ...(hayFiltro ? { OR: [{ origenAgenciaId: { not: null } }, { destinoAgenciaId: { not: null } }] } : {}) },
+        where: movWhere,
         select: { tipo: true, estadoDespacho: true, createdAt: true, detalles: { select: { cantidadEnviada: true, costoUnitarioUSD: true, insumo: { select: { nombre: true, categoria: true } } } } },
-        orderBy: { createdAt: 'desc' },
-        take: 200,
       }),
       this.prisma.stockUbicacion.findMany({
-        where: { cantidadActual: { gt: 0 } },
+        where: stockWhere,
         include: { insumo: { select: { nombre: true, categoria: true, costoUnitarioUSD: true } } },
-        take: 100,
       }),
     ]);
 
@@ -505,6 +701,7 @@ export class AnalyticsService {
     // Movimientos: despachados pendientes, en tránsito, recibidos
     const despachosEstado: Record<string, number> = { PENDIENTE: 0, EN_TRANSITO: 0, RECIBIDO: 0, RECHAZADO: 0 };
     const consumoPorCategoria: Record<string, number> = {};
+    const consumoPorInsumo: Record<string, number> = {};
     let valorEnTransito = 0;
     let despachos30d = 0;
 
@@ -517,10 +714,19 @@ export class AnalyticsService {
         }
       }
       for (const d of mov.detalles) {
+        const cantidad = Number(d.cantidadEnviada || 0);
         const cat = d.insumo?.categoria || 'Sin Categoría';
-        consumoPorCategoria[cat] = (consumoPorCategoria[cat] || 0) + Number(d.cantidadEnviada || 0);
+        consumoPorCategoria[cat] = (consumoPorCategoria[cat] || 0) + cantidad;
+        const insumo = d.insumo?.nombre || 'Insumo';
+        consumoPorInsumo[insumo] = (consumoPorInsumo[insumo] || 0) + cantidad;
       }
     }
+
+    // Rotación real desde bodega: insumos con más unidades despachadas en 30 días.
+    const topInsumosConsumo = Object.keys(consumoPorInsumo)
+      .map((nombre) => ({ nombre, cantidad: Number(consumoPorInsumo[nombre].toFixed(2)) }))
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .slice(0, 7);
 
     // Valor total del stock disponible
     let valorStockUSD = 0;
@@ -542,6 +748,7 @@ export class AnalyticsService {
         valorStockUSD: Number(valorStockUSD.toFixed(2)),
       },
       topInsumosCriticos,
+      topInsumosConsumo,
       despachosEstado: Object.keys(despachosEstado).filter(k => despachosEstado[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: despachosEstado[k] })),
       consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),
       nivelAlertas: [
@@ -555,8 +762,8 @@ export class AnalyticsService {
   // DASHBOARD ESPECIALES: Coordinador + Pulidor de Servicios Especiales
   // Datos reales: ServicioEspecial, tiempos efectivos, estados, tipos, calidad
   // ═══════════════════════════════════════════════════════════════════════
-  async getDashboardEspeciales(user: any) {
-    const filtro = this.filtroAgencia(user, {});
+  async getDashboardEspeciales(dto: DashboardDedicadoDto, user: any) {
+    const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
     const hoy = new Date();
