@@ -1,0 +1,22 @@
+{
+  "Rules": [
+    {
+      "ID": "VideosToStandardIAAfter60Days",
+      "Status": "Enabled",
+      "Filter": { "Tag": { "Key": "storage-class", "Value": "video" } },
+      "Transitions": [{ "Days": 60, "StorageClass": "STANDARD_IA" }]
+    },
+    {
+      "ID": "DocumentsToGlacierAfter180Days",
+      "Status": "Enabled",
+      "Filter": { "Tag": { "Key": "storage-class", "Value": "document" } },
+      "Transitions": [{ "Days": 180, "StorageClass": "GLACIER" }]
+    },
+    {
+      "ID": "AbortIncompleteMultipartUploads",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

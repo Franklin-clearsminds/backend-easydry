@@ -1,4 +1,5 @@
-import { IsString, IsNotEmpty, IsOptional, IsInt, IsIn, IsEmail } from 'class-validator';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
+import { IsString, IsNotEmpty, IsOptional, IsInt, IsIn, IsEmail, IsArray, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateAgenciaDto {
@@ -42,7 +43,17 @@ export class CreateAgenciaDto {
   @IsInt()
   numeroBahias?: number = 2;
 
-  @ApiPropertyOptional({ example: 'uuid-marca', description: 'ID de la marca a la que pertenece la agencia' })
+  @ApiPropertyOptional({ example: 2, description: 'Máximo de lavadores simultáneos por bahía' })
+  @IsOptional()
+  @IsInt()
+  maxLavadoresPorBahia?: number = 1;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'ID del cliente corporativo al que pertenece la agencia' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Alias retrocompatible para clienteId' })
   @IsOptional()
   @IsString()
   marcaId?: string;
@@ -57,6 +68,34 @@ export class CreateAgenciaDto {
   @IsOptional()
   @IsString()
   gerenteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-lider', description: 'ID del usuario líder operador de la agencia' })
+  @IsOptional()
+  @IsString()
+  liderOperadorId?: string;
+
+  @ApiPropertyOptional({ example: [6, 7, 8, 9], description: 'IDs de los servicios del catálogo que ofrece la agencia' })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  servicioIds?: number[];
+
+  @ApiPropertyOptional({ example: ['Lavado Express', 'Lavado Full'], description: 'Nombres de los servicios asignados' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  serviciosNombres?: string[];
+
+  @ApiPropertyOptional({ example: true, description: 'Si la agencia tiene activos los servicios especiales' })
+  @IsOptional()
+  @IsBoolean()
+  tieneServiciosEspeciales?: boolean;
+
+  @ApiPropertyOptional({ example: 'OPERATIVA', enum: ['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'])
+  tipoUbicacion?: string;
 }
 
 export class UpdateAgenciaDto {
@@ -105,7 +144,17 @@ export class UpdateAgenciaDto {
   @IsInt()
   numeroBahias?: number;
 
-  @ApiPropertyOptional({ example: 'uuid-marca' })
+  @ApiPropertyOptional({ example: 2, description: 'Máximo de lavadores simultáneos por bahía' })
+  @IsOptional()
+  @IsInt()
+  maxLavadoresPorBahia?: number;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'ID del cliente corporativo' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Alias retrocompatible para clienteId' })
   @IsOptional()
   @IsString()
   marcaId?: string;
@@ -120,14 +169,42 @@ export class UpdateAgenciaDto {
   @IsOptional()
   @IsString()
   gerenteId?: string;
-}
 
-export class ListAgenciasDto {
-  @ApiPropertyOptional({ example: 'Quito', description: 'Buscar por nombre o código' })
+  @ApiPropertyOptional({ example: 'uuid-lider', description: 'ID del usuario líder operador de la agencia' })
   @IsOptional()
   @IsString()
-  search?: string;
+  liderOperadorId?: string;
 
+  @ApiPropertyOptional({ example: [6, 7, 8, 9], description: 'IDs de los servicios del catálogo que ofrece la agencia' })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  servicioIds?: number[];
+
+  @ApiPropertyOptional({ example: ['Lavado Express', 'Lavado Full'], description: 'Nombres de los servicios asignados' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  serviciosNombres?: string[];
+
+  @ApiPropertyOptional({ example: true, description: 'Si la agencia tiene activos los servicios especiales' })
+  @IsOptional()
+  @IsBoolean()
+  tieneServiciosEspeciales?: boolean;
+
+  @ApiPropertyOptional({ example: 'OPERATIVA', enum: ['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'])
+  tipoUbicacion?: string;
+}
+
+/**
+ * Sin page/pageSize: arreglo con hasta 100 agencias (con todos sus usuarios, como siempre). Con alguno: página estándar; los
+ * datos calculados (productividad del mes, gerente, líder) se resuelven solo para las agencias de la página.
+ * Orden: nombre, codigo, region, estado, cliente, bahias, usuarios, fecha.
+ */
+export class ListAgenciasDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'Pichincha', description: 'Filtrar por región (nombre)' })
   @IsOptional()
   @IsString()
@@ -138,16 +215,39 @@ export class ListAgenciasDto {
   @IsString()
   regionId?: string;
 
-  @ApiPropertyOptional({ example: 'uuid-marca', description: 'Filtrar por marca' })
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Filtrar por cliente corporativo' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-cliente', description: 'Alias retrocompatible para clienteId' })
   @IsOptional()
   @IsString()
   marcaId?: string;
 
-  @ApiPropertyOptional({ example: 1, description: '1 activo, 0 inactivo' })
+  @ApiPropertyOptional({ example: 1, description: '1 activo, 0 inactivo, 2 mantenimiento' })
   @IsOptional()
   @IsInt()
-  @IsIn([0, 1])
+  @IsIn([0, 1, 2])
   estado?: number;
+
+  @ApiPropertyOptional({ example: 'Norte', description: 'Región por nombre exacto (sin distinguir mayúsculas)' })
+  @IsOptional()
+  @IsString()
+  regionNombre?: string;
+
+  @ApiPropertyOptional({ example: 'Corporación Favorita', description: 'Cliente por nombre exacto (sin distinguir mayúsculas)' })
+  @IsOptional()
+  @IsString()
+  clienteNombre?: string;
+
+  @ApiPropertyOptional({
+    default: true,
+    description: 'false omite la productividad del mes (una consulta de todos los servicios del mes); úsalo si solo necesitas la lista de agencias',
+  })
+  @IsOptional()
+  @IsBoolean()
+  incluirProductividad?: boolean;
 }
 
 export class DetailAgenciaDto {

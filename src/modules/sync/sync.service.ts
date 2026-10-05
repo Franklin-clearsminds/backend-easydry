@@ -1,7 +1,9 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { OperacionesService } from '../operaciones/operaciones.service.js';
+import { ServiciosEspecialesService } from '../operaciones/servicios-especiales.service.js';
 import { StorageService } from '../storage/storage.service.js';
+import type { MediaEvidenceType } from '../storage/storage.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { SyncPushDto } from './dto/sync-push.dto.js';
 import { SyncPullQueryDto } from './dto/sync-pull.dto.js';
@@ -10,11 +12,20 @@ import { ServiceStatus } from '@prisma/client';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
 
+import { tienePermiso } from '../../common/permisos/capacidades.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { resolverAlcance, SIN_RESULTADOS } from '../../common/permisos/alcance.js';
+const publicMediaUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return /^https:\/\//i.test(normalized) ? normalized : undefined;
+};
+
 export interface SyncMutationResult {
   mutationId: string;
   clientUuid: string;
   serverAssignedId: string;
-  status: 'APPLIED' | 'ALREADY_EXISTS' | 'FAILED';
+  status: 'APPLIED' | 'ALREADY_EXISTS' | 'FAILED' | 'DEAD_LETTER';
   syncedAt: string;
   error?: string;
 }
@@ -26,7 +37,8 @@ export class SyncService {
   constructor(
     private prisma: PrismaService,
     private operacionesService: OperacionesService,
-    @Optional() private storageService?: StorageService,
+    private serviciosEspecialesService: ServiciosEspecialesService,
+    private storageService: StorageService,
     @Optional() private notifications?: NotificationsService,
   ) {}
 
@@ -76,6 +88,7 @@ export class SyncService {
     const currentUser = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
+        role: true,
         agencia: {
           include: { bahias: true },
         },
@@ -103,6 +116,7 @@ export class SyncService {
             errorMotivo: `OPERADOR_INACTIVO_RESCATE: Operador ${currentUser.email} fue desactivado`,
             intentos: 1,
             resuelto: false,
+            usuarioId: userId,
           },
         });
         results.push({
@@ -148,11 +162,23 @@ export class SyncService {
 
     for (const mut of mutations) {
       try {
+        const processedMutation = mut.mutationId
+          ? await this.prisma.syncOutboxAudit.findFirst({ where: { mutationId: mut.mutationId } })
+          : null;
+        if (processedMutation) {
+          results.push({
+            mutationId: mut.mutationId,
+            clientUuid: mut.clientUuid,
+            serverAssignedId: '',
+            status: 'ALREADY_EXISTS',
+            syncedAt: processedMutation.syncedAt.toISOString(),
+          });
+          continue;
+        }
         const entity = String(mut.entity || '').toLowerCase();
         const isServicio =
           entity === 'servicio_lavado' ||
-          entity === 'work_order' ||
-          entity === 'extra_assignment';
+          entity === 'work_order';
 
         if (isServicio) {
           const action = String(mut.action || 'CREATE').toUpperCase();
@@ -178,35 +204,36 @@ export class SyncService {
             let bahiaId = mut.data?.bahiaId;
             if (bahiaId) {
               const b = await this.prisma.bahia.findUnique({ where: { id: bahiaId } });
-              if (!b) bahiaId = null;
+              const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(currentUser?.role?.namerol || '');
+              if (!b || (!isAdmin && currentUser?.agenciaId && b.agenciaId !== currentUser.agenciaId)) bahiaId = null;
             }
             if (!bahiaId) {
-              // Usar primera bahía de la agencia asignada al operador
               bahiaId = currentUser?.agencia?.bahias?.[0]?.id;
             }
             if (!bahiaId) {
-              // Fallback a primera bahía del sistema
-              const primeraBahia = await this.prisma.bahia.findFirst({ where: { activa: true } });
-              bahiaId = primeraBahia?.id;
+              throw new BadRequestException('El operador no tiene una bahía activa disponible.');
             }
 
-            if (!bahiaId) {
-              throw new BadRequestException('No hay bahías activas disponibles en el sistema.');
+            let servicioCatalogoId = Number(mut.data?.servicioCatalogoId || mut.data?.serviceId);
+            let catalogo = servicioCatalogoId
+              ? await this.prisma.catalogoServicio.findUnique({ where: { id: servicioCatalogoId } })
+              : null;
+            if (!catalogo && (mut.data?.servicio || mut.data?.tipoLavado)) {
+              const nombre = String(mut.data.servicio || mut.data.tipoLavado).split(' + ')[0].trim();
+              catalogo = await this.prisma.catalogoServicio.findFirst({
+                where: { OR: [{ nombre: { equals: nombre, mode: 'insensitive' } }, { codigo: { equals: nombre, mode: 'insensitive' } }] },
+              });
+              servicioCatalogoId = catalogo?.id || 0;
             }
-
-            // 3. Determinar Servicio de Catálogo
-            let servicioCatalogoId = Number(mut.data?.servicioCatalogoId || mut.data?.serviceId || 1);
-            const catalogo = await this.prisma.catalogoServicio.findUnique({
-              where: { id: servicioCatalogoId },
-            });
-
             if (!catalogo) {
-              const primerCat = await this.prisma.catalogoServicio.findFirst();
-              if (primerCat) servicioCatalogoId = primerCat.id;
+              throw new BadRequestException('No se pudo resolver el servicio en el catálogo offline.');
             }
 
-            const placa = (mut.data?.placa || mut.data?.vehiclePlate || 'ABC-0000').toUpperCase().trim();
-            const modelo = (mut.data?.modelo || mut.data?.vehicleModel || 'Vehículo General').trim();
+            const placa = String(mut.data?.placa || mut.data?.vehiclePlate || '').toUpperCase().trim();
+            if (!placa) {
+              throw new BadRequestException('La placa del vehículo es obligatoria.');
+            }
+            const modelo = String(mut.data?.modelo || mut.data?.vehicleModel || '').trim();
 
             // Blindaje Huella Operativa: Detección de vehículo ya activo en la misma agencia (Ventana 4 horas)
             const cuatroHorasAtras = new Date(now.getTime() - 4 * 60 * 60 * 1000);
@@ -214,7 +241,10 @@ export class SyncService {
               ? await this.prisma.bahia.findUnique({ where: { id: bahiaId }, select: { agenciaId: true } })
               : null;
             const targetAgenciaId = bahiaObj?.agenciaId || currentUser?.agenciaId || currentUser?.agencia?.id;
+            const otMutacion = String(mut.data?.ordenTrabajoOT || mut.data?.numeroOrden || '').trim();
 
+            // Una OT general puede tener varios servicios (una fila por servicio): las filas
+            // activas de la misma OT no son duplicados, salvo que repitan el mismo servicio.
             const duplicateActive = await this.prisma.servicioLavado.findFirst({
               where: {
                 placa,
@@ -223,6 +253,15 @@ export class SyncService {
                 horaIngreso: { gte: cuatroHorasAtras },
                 deletedAt: null,
                 NOT: { clientUuid: mut.clientUuid },
+                ...(otMutacion
+                  ? {
+                      OR: [
+                        { ordenTrabajoOT: null },
+                        { NOT: { ordenTrabajoOT: { equals: otMutacion, mode: 'insensitive' } } },
+                        { servicioCatalogoId },
+                      ],
+                    }
+                  : {}),
               },
             });
 
@@ -247,6 +286,7 @@ export class SyncService {
                   errorMotivo: `POSIBLE_DUPLICADO_PLACA: El vehículo ya tiene orden activa ${duplicateActive.id} (${duplicateActive.placa})`,
                   intentos: 1,
                   resuelto: false,
+                  usuarioId: userId,
                 },
               });
 
@@ -254,7 +294,12 @@ export class SyncService {
                 mutationId: mut.mutationId,
                 clientUuid: mut.clientUuid,
                 serverAssignedId: duplicateActive.id,
-                status: 'FAILED',
+                // DEAD_LETTER, no FAILED: esta condición (otra orden activa con la misma placa) no se
+                // resuelve sola reintentando — ya quedó registrada en syncDeadLetterQueue para
+                // resolución manual arriba. Devolver FAILED hacía que el cliente reintentara el mismo
+                // rechazo cada 30s para siempre, sin que nadie se enterara (ver conversación con el
+                // usuario del 2026-09-30).
+                status: 'DEAD_LETTER',
                 error: `POSIBLE_DUPLICADO_PLACA: Ya existe la orden activa ${duplicateActive.id} para el vehículo ${placa}`,
                 syncedAt: now.toISOString(),
               });
@@ -291,23 +336,57 @@ export class SyncService {
               }
             }
 
+            // Servicios agregados a una OT existente heredan la evidencia de ingreso de la OT.
+            const hermanaOT = otMutacion
+              ? await this.prisma.servicioLavado.findFirst({
+                  where: {
+                    ordenTrabajoOT: { equals: otMutacion, mode: 'insensitive' },
+                    placa,
+                    deletedAt: null,
+                    OR: [{ videoInicialUrl: { not: null } }, { fotoIngresoUrl: { not: null } }],
+                  },
+                  select: { videoInicialUrl: true, fotoIngresoUrl: true },
+                  orderBy: { createdAt: 'asc' },
+                })
+              : null;
+
+            // Blindaje Agencia: si la app indicó qué lavador realiza el servicio, debe
+            // pertenecer a la misma agencia que la bahía y estar activo. Si no se indicó,
+            // la OT se atribuye a quien está autenticado (comportamiento previo).
+            if (mut.data?.operadorId) {
+              const lavador = await this.prisma.user.findUnique({ where: { id: String(mut.data.operadorId) } });
+              if (!lavador) {
+                throw new BadRequestException('El lavador seleccionado no existe.');
+              }
+              if (targetAgenciaId && String(lavador.agenciaId || '') !== String(targetAgenciaId)) {
+                throw new BadRequestException('El lavador seleccionado no pertenece a la agencia de la bahía indicada.');
+              }
+              if (lavador.estado !== 1) {
+                throw new BadRequestException('El lavador seleccionado está inactivo y no puede recibir nuevas OTs.');
+              }
+            }
+
             let nuevoServicio: any;
             try {
               nuevoServicio = await this.prisma.servicioLavado.create({
                 data: {
                   clientUuid: mut.clientUuid,
+                  ordenTrabajoOT: String(mut.data?.ordenTrabajoOT || mut.data?.numeroOrden || '').trim() || undefined,
                   placa,
+                  marca: mut.data?.marca?.trim() || undefined,
                   modelo,
                   color: mut.data?.color?.trim(),
                   cliente: mut.data?.cliente?.trim() || mut.data?.clientName?.trim(),
                   estado: estadoInicial,
                   bahiaId,
                   servicioCatalogoId,
-                  operadorId: userId,
+                  operadorId: String(mut.data?.operadorId || userId),
                   horaIngreso: sanitizedHoraIngreso,
                   horaSalida: estadoFinal === ServiceStatus.FINALIZADO ? now : null,
-                  fotoIngresoUrl: mut.data?.fotoIngresoUrl || mut.data?.evidenceInLocalUri,
-                  fotoSalidaUrl: mut.data?.fotoSalidaUrl || mut.data?.evidenceOutLocalUri,
+                  fotoIngresoUrl: publicMediaUrl(mut.data?.fotoIngresoUrl) || hermanaOT?.fotoIngresoUrl || undefined,
+                  videoInicialUrl:
+                    publicMediaUrl(mut.data?.videoInicialUrl || mut.data?.videoUrl) || hermanaOT?.videoInicialUrl || undefined,
+                  fotoSalidaUrl: publicMediaUrl(mut.data?.fotoSalidaUrl),
                   observaciones: mut.data?.observaciones || mut.data?.notes,
                   syncedAt: now,
                 },
@@ -335,13 +414,19 @@ export class SyncService {
               throw createErr;
             }
 
+            try {
+              await this.operacionesService.consumirInsumosSiPendiente(nuevoServicio.id, true);
+            } catch (e: any) {
+              this.logger.warn(`Advertencia al descontar insumos de orden offline: ${e.message}`);
+            }
+
             // Si se creó directamente como finalizado, invocar hook oficial de descuento de insumos con No-Block Policy
             if (estadoFinal === ServiceStatus.FINALIZADO) {
               try {
                 await this.operacionesService.update(nuevoServicio.id, {
                   id: nuevoServicio.id,
                   estado: ServiceStatus.FINALIZADO,
-                  fotoSalidaUrl: mut.data?.fotoSalidaUrl || mut.data?.evidenceOutLocalUri,
+                  fotoSalidaUrl: publicMediaUrl(mut.data?.fotoSalidaUrl),
                   observaciones: mut.data?.observaciones || mut.data?.notes,
                 }, true); // isOfflineSync = true
               } catch (e: any) {
@@ -352,6 +437,7 @@ export class SyncService {
             // Auditoría
             await this.prisma.syncOutboxAudit.create({
               data: {
+                mutationId: mut.mutationId,
                 clientUuid: mut.clientUuid,
                 deviceInfo: deviceId,
                 entity: 'ServicioLavado',
@@ -370,9 +456,15 @@ export class SyncService {
             });
           } else if (action === 'UPDATE' || action === 'COMPLETE') {
             // Actualización de orden existente
+            // `id` es un uuid String en Prisma; algunos clientes (móvil, al crear offline) usan
+            // internamente un id numérico de placeholder que nunca corresponde a una fila real. Sin
+            // este `String(...)`, Prisma rechaza la consulta ENTERA con un error de validación
+            // ("Invalid invocation") en vez de simplemente no encontrar coincidencia por ese lado —
+            // tumbaba toda la mutación (y dejaba la OT sin finalizar) por un tipo de dato, no por un
+            // rechazo de negocio real. clientUuid sigue siendo la clave de idempotencia confiable.
             const existing = await this.prisma.servicioLavado.findFirst({
               where: {
-                OR: [{ clientUuid: mut.clientUuid }, { id: mut.data?.id || mut.clientUuid }],
+                OR: [{ clientUuid: mut.clientUuid }, { id: String(mut.data?.id || mut.clientUuid) }],
               },
             });
 
@@ -451,7 +543,7 @@ export class SyncService {
             const updated = await this.operacionesService.update(existing.id, {
               id: existing.id,
               estado: estadoNuevo,
-              fotoSalidaUrl: mut.data?.fotoSalidaUrl || mut.data?.evidenceOutLocalUri || existing.fotoSalidaUrl,
+              fotoSalidaUrl: publicMediaUrl(mut.data?.fotoSalidaUrl) || existing.fotoSalidaUrl || undefined,
               observaciones: observacionesFinales,
             }, true); // isOfflineSync = true
 
@@ -471,6 +563,7 @@ export class SyncService {
 
             await this.prisma.syncOutboxAudit.create({
               data: {
+                mutationId: mut.mutationId,
                 clientUuid: mut.clientUuid,
                 deviceInfo: deviceId,
                 entity: 'ServicioLavado',
@@ -491,75 +584,33 @@ export class SyncService {
         } else if (
           entity === 'incidente' ||
           entity === 'incidente_tecnico' ||
-          entity === 'incidente_maquinaria'
+          entity === 'incidente_maquinaria' ||
+          entity === 'maintenance_incident'
         ) {
-          const mutData = mut.data || {};
-          let maquinariaId = mutData.maquinariaId;
-          if (!maquinariaId && mutData.maquinariaCodigo) {
-            const maq = await this.prisma.maquinaria.findUnique({
-              where: { codigo: mutData.maquinariaCodigo },
-            });
-            if (maq) maquinariaId = maq.id;
-          }
-          if (!maquinariaId) {
-            const primeraMaq = await this.prisma.maquinaria.findFirst();
-            maquinariaId = primeraMaq?.id;
-          }
-          if (!maquinariaId) {
-            throw new BadRequestException('No existe maquinaria registrada para vincular el incidente técnico.');
-          }
-
-          const gravedad = mutData.gravedad || 'MEDIA';
-          if (gravedad === 'ALTA' || gravedad === 'CRITICA') {
-            await this.prisma.maquinaria.update({
-              where: { id: maquinariaId },
-              data: { estadoOperativo: 'EN_MANTENIMIENTO' },
-            });
-          }
-
-          const inc = await this.prisma.incidenteTecnico.create({
-            data: {
-              maquinariaId,
-              reportadoPorId: userId,
-              titulo: mutData.titulo || 'Incidente reportado desde App Móvil',
-              descripcion: mutData.descripcion || 'Reporte de incidente técnico en campo',
-              gravedad,
-              estado: 'ABIERTO',
-              fotoEvidenciaUrl: mutData.fotoEvidenciaUrl || mutData.fileUrl || undefined,
-            },
+          const incidentAction = String(mut.action || 'CREATE').toUpperCase();
+          const existingIncident = await this.prisma.incidenteTecnico.findFirst({
+            where: { clientUuid: mut.clientUuid },
           });
-
-          if (gravedad === 'ALTA' || gravedad === 'CRITICA') {
-            await this.notifications?.notificarIncidenteCritico({
-              incidenteId: inc.id,
-              titulo: inc.titulo,
-              gravedad,
-              maquinariaCodigo: mutData.maquinariaCodigo || 'Equipo Taller',
-            });
-          }
-
-          await this.prisma.syncOutboxAudit.create({
-            data: {
+          if (incidentAction === 'CREATE' && existingIncident) {
+            results.push({
+              mutationId: mut.mutationId,
               clientUuid: mut.clientUuid,
-              deviceInfo: deviceId,
-              entity: 'IncidenteTecnico',
-              action: 'CREATE',
-              payload: mut as any,
-              syncedAt: now,
-            },
-          });
-
-          results.push({
-            mutationId: mut.mutationId,
-            clientUuid: mut.clientUuid,
-            serverAssignedId: inc.id,
-            status: 'APPLIED',
-            syncedAt: now.toISOString(),
-          });
+              serverAssignedId: existingIncident.id,
+              status: 'ALREADY_EXISTS',
+              syncedAt: existingIncident.updatedAt.toISOString(),
+            });
+            continue;
+          }
+          // Las incidencias de maquinaria ya no se crean ni se cierran por sincronización offline:
+          // el reporte exige conexión (hora del servidor, máquina asignada y evidencia verificada en S3).
+          throw new BadRequestException(
+            'Las incidencias de maquinaria requieren conexión a internet. Repórtalas o ciérralas en línea.',
+          );
         } else if (
           entity === 'servicio_especial' ||
           entity === 'servicio_extra' ||
-          entity === 'special_service'
+          entity === 'special_service' ||
+          entity === 'extra_assignment'
         ) {
           const mutData = mut.data || {};
           const action = String(mut.action || 'CREATE').toUpperCase();
@@ -587,23 +638,34 @@ export class SyncService {
 
             let targetAgenciaId = mutData.agenciaId || currentUser?.agenciaId;
             if (!targetAgenciaId) {
-              const firstAg = await this.prisma.agencia.findFirst({ where: { estado: 1 } });
-              targetAgenciaId = firstAg?.id;
+              throw new BadRequestException('Debe indicar la agencia en la cual se realizará el servicio especial.');
+            }
+            const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(currentUser?.role?.namerol || '');
+            if (!isAdmin && currentUser?.agenciaId && targetAgenciaId !== currentUser.agenciaId) {
+              targetAgenciaId = currentUser.agenciaId;
             }
 
             const vInfo = mutData.vehiculoInfo || mutData;
-            const placa = (vInfo.placa || mutData.placa || 'ABC-0000').toUpperCase().trim();
+            const placa = String(vInfo.placa || mutData.placa || '').toUpperCase().trim();
+            if (!placa) {
+              throw new BadRequestException('La placa del vehículo es obligatoria.');
+            }
             const marca = vInfo.marca || mutData.marca || null;
             const modelo = vInfo.modelo || mutData.modelo || null;
             const color = vInfo.color || mutData.color || null;
             const clienteNombre = vInfo.cliente || vInfo.clienteNombre || mutData.cliente || null;
+
+            const tipoServicio = String(mutData.tipoServicio || mutData.servicioNombre || '').trim();
+            if (!tipoServicio) {
+              throw new BadRequestException('El tipo de servicio especial es obligatorio.');
+            }
 
             const codigoSE = mutData.codigoSE || `SE-${Date.now().toString().slice(-6)}`;
             const created = await this.prisma.servicioEspecial.create({
               data: {
                 clientUuid: mut.clientUuid,
                 codigoSE,
-                tipoServicio: String(mutData.tipoServicio || 'PULIDO'),
+                tipoServicio,
                 placa,
                 marca,
                 modelo,
@@ -611,6 +673,10 @@ export class SyncService {
                 clienteNombre,
                 agenciaId: targetAgenciaId,
                 operadorId: userId,
+                creadoPorId: userId,
+                creadoPorNombre: currentUser
+                  ? `${currentUser.name || ''} ${currentUser.lastname || ''}`.replace(/(CI:[^)]*)/, '').trim() || null
+                  : null,
                 prioridad: mutData.prioridad || 'Media',
                 estado: mutData.estado || 'Pendiente',
                 recetaInsumos: mutData.recetaInsumos || null,
@@ -623,6 +689,7 @@ export class SyncService {
 
             await this.prisma.syncOutboxAudit.create({
               data: {
+                mutationId: mut.mutationId,
                 clientUuid: mut.clientUuid,
                 deviceInfo: deviceId,
                 entity: 'ServicioEspecial',
@@ -659,7 +726,8 @@ export class SyncService {
               syncedAt: now,
             };
             if (mutData.estado) updateData.estado = mutData.estado;
-            if (mutData.fechaInicio) updateData.fechaInicio = new Date(mutData.fechaInicio);
+            // La hora de inicio se fija una sola vez (la primera que llegue: API o cola offline).
+            if (mutData.fechaInicio && !existing.fechaInicio) updateData.fechaInicio = new Date(mutData.fechaInicio);
             if (mutData.fechaFin) updateData.fechaFin = new Date(mutData.fechaFin);
             if (mutData.evidencias) updateData.evidencias = mutData.evidencias;
             if (mutData.calificacionCalidad !== undefined) updateData.calificacionCalidad = Number(mutData.calificacionCalidad);
@@ -670,6 +738,26 @@ export class SyncService {
               data: updateData,
             });
 
+            if (String(updated.estado || '').toLowerCase() === 'completado') {
+              try {
+                await this.serviciosEspecialesService.descontarKitPulidorSiPendiente(updated.id);
+              } catch (e: any) {
+                this.logger.warn(`Advertencia al descontar kit del pulidor (sync ${updated.codigoSE || updated.id}): ${e.message}`);
+              }
+            }
+
+            await this.prisma.syncOutboxAudit.create({
+              data: {
+                mutationId: mut.mutationId,
+                clientUuid: mut.clientUuid,
+                deviceInfo: deviceId,
+                entity: 'ServicioEspecial',
+                action: 'UPDATE',
+                payload: mut as any,
+                syncedAt: now,
+              },
+            });
+
             results.push({
               mutationId: mut.mutationId,
               clientUuid: mut.clientUuid,
@@ -678,6 +766,8 @@ export class SyncService {
               syncedAt: now.toISOString(),
             });
           }
+        } else {
+          throw new BadRequestException(`Entidad de sincronización no soportada: ${mut.entity}`);
         }
       } catch (err: any) {
         this.logger.error(`Error procesando mutación ${mut.mutationId}: ${err.message}`);
@@ -697,6 +787,7 @@ export class SyncService {
                 payload: mut.data || mut,
                 errorMotivo: err.message,
                 intentos,
+                usuarioId: userId,
               },
             });
           } catch (dlqErr) {
@@ -707,7 +798,7 @@ export class SyncService {
             mutationId: mut.mutationId,
             clientUuid: mut.clientUuid,
             serverAssignedId: '',
-            status: 'DEAD_LETTER' as any,
+            status: 'DEAD_LETTER',
             syncedAt: now.toISOString(),
             error: `Movido a DLQ (Superó umbral o error irrecuperable): ${err.message}`,
           });
@@ -755,19 +846,38 @@ export class SyncService {
       whereClause.OR = orConditions;
     }
 
-    // Scoping por Permisos y Sede
+    // Scoping por permisos y alcance: solo quien puede ver servicios (servicios.ver) recibe algo; el resto
+    // (bodega, mantenimiento, técnico — el plan dice explícitamente que no ven OT) se queda sin resultados.
+    let esAdminOSuperAdmin = false;
+    let ocultarContactoOperador = true;
     if (userId) {
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
         include: { role: true },
       });
 
-      if (user && !['SUPER_ADMIN', 'ADMIN'].includes(user.role?.namerol || '')) {
-        if (user.role?.namerol === 'SUPERVISOR' && user.regionId) {
-          whereClause.bahia = { agencia: { regionId: user.regionId } };
-        } else if (user.agenciaId && !query.operadorId) {
-          whereClause.bahia = { agenciaId: user.agenciaId };
+      if (!user || !tienePermiso(user, 'servicios.ver')) {
+        Object.assign(whereClause, SIN_RESULTADOS);
+      } else {
+        const alcance = resolverAlcance(user);
+        switch (alcance.tipo) {
+          case 'GLOBAL':
+            break;
+          case 'REGION':
+            whereClause.bahia = { agencia: { regionId: alcance.regionId } };
+            break;
+          case 'AGENCIA':
+            whereClause.bahia = { agenciaId: alcance.agenciaId };
+            break;
+          case 'PROPIO':
+            whereClause.operadorId = alcance.userId;
+            break;
+          default:
+            Object.assign(whereClause, SIN_RESULTADOS);
         }
+        const rol = rolDeUsuario(user);
+        esAdminOSuperAdmin = rol === 'SUPER_ADMIN' || rol === 'ADMIN';
+        ocultarContactoOperador = !esAdminOSuperAdmin;
       }
     }
 
@@ -779,12 +889,13 @@ export class SyncService {
       include: {
         bahia: { include: { agencia: true } },
         catalogo: true,
-        operador: { select: { id: true, name: true, lastname: true, email: true } },
+        // Quien no es administrador nunca recibe el correo de otro usuario (D9).
+        operador: { select: { id: true, name: true, lastname: true, email: !ocultarContactoOperador } },
         consumos: { include: { insumo: true } },
         evidencias: true,
       },
-      orderBy: { updatedAt: 'asc' },
-      take: limit,
+      orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
     };
 
     if (query.cursor) {
@@ -792,13 +903,14 @@ export class SyncService {
       findArgs.skip = 1;
     }
 
-    const [servicios, total] = await Promise.all([
+    const [serviciosConExtra, total] = await Promise.all([
       this.prisma.servicioLavado.findMany(findArgs),
       this.prisma.servicioLavado.count({ where: whereClause }),
     ]);
 
-    const nextCursor = servicios.length > 0 ? servicios[servicios.length - 1].id : null;
-    const hasMore = servicios.length === limit;
+    const hasMore = serviciosConExtra.length > limit;
+    const servicios = hasMore ? serviciosConExtra.slice(0, limit) : serviciosConExtra;
+    const nextCursor = hasMore && servicios.length > 0 ? servicios[servicios.length - 1].id : null;
     const page = query.page ? Number(query.page) : 1;
     const totalPages = Math.ceil(total / limit) || 1;
 
@@ -848,7 +960,7 @@ export class SyncService {
         recetas: {
           include: {
             insumo: { select: { id: true, codigoSKU: true, nombre: true } },
-            unidadConsumo: { select: { id: true, codigo: true, nombre: true, simbolo: true } },
+            unidadConsumo: { select: { id: true, codigo: true, nombre: true, simbolo: true, factorBase: true } },
           },
         },
       },
@@ -878,7 +990,7 @@ export class SyncService {
 
     return {
       serverTime: new Date().toISOString(),
-      syncToken: `sync_${Date.now()}`,
+      syncToken: new Date().toISOString(),
       user: {
         id: user?.id,
         email: user?.email,
@@ -900,8 +1012,11 @@ export class SyncService {
         recetas: c.recetas.map((r) => ({
           insumoId: r.insumoId,
           insumoNombre: r.insumo.nombre,
+          productoSKU: r.insumo.codigoSKU,
           cantidad: Number(r.cantidadUsada),
+          cantidadSugerida: Number(r.cantidadUsada) * (Number(r.unidadConsumo?.factorBase) || 1),
           unidad: r.unidadConsumo.codigo,
+          esOpcional: r.esOpcional,
         })),
       })),
       bahias,
@@ -909,28 +1024,91 @@ export class SyncService {
     };
   }
 
-  async generateMediaUploadTicket(body: { clientUuid: string; type: string; fileName?: string }) {
-    if (this.storageService) {
-      return this.storageService.generateUploadTicket(body);
+  async generateMediaUploadTicket(body: {
+    clientUuid: string;
+    userId?: string;
+    type: string;
+    fileName?: string;
+    agenciaId?: string;
+    servicioId?: string;
+    category?: any;
+    maquinariaId?: string;
+    maquinariaNombre?: string;
+    maquinariaCodigo?: string;
+    incidenteId?: string;
+    incidenteFase?: 'fallas' | 'resoluciones';
+    mantenimientoId?: string;
+    contentType?: string;
+  }) {
+    let agenciaId = body.agenciaId;
+    let servicioId = body.servicioId;
+    let maquinariaId = body.maquinariaId;
+    let maquinariaNombre = body.maquinariaNombre;
+    let maquinariaCodigo = body.maquinariaCodigo;
+    let incidenteId = body.incidenteId;
+    if (body.category === 'MAQUINARIA_INCIDENTE' && (body.incidenteId || body.clientUuid)) {
+      const incidentReference = body.incidenteId || body.clientUuid;
+      const incident = await this.prisma.incidenteTecnico.findFirst({
+        where: { OR: [{ id: incidentReference }, { clientUuid: incidentReference }] },
+        select: { id: true, maquinariaId: true, maquinaria: { select: { agenciaId: true, codigo: true, nombre: true } } },
+      });
+      if (incident) {
+        incidenteId = incident.id;
+        maquinariaId = incident.maquinariaId;
+        agenciaId = incident.maquinaria?.agenciaId || agenciaId;
+        maquinariaCodigo = incident.maquinaria?.codigo || maquinariaCodigo;
+        maquinariaNombre = incident.maquinaria?.nombre || maquinariaNombre;
+      }
     }
-    const ext = body.fileName?.split('.').pop() || 'jpg';
-    const typeClean = String(body.type || 'foto').toLowerCase().replace(/[^a-z0-9_]/g, '_');
-    const uniqueFile = `${body.clientUuid}_${typeClean}_${Date.now()}.${ext}`;
-    const uploadUrl = `/api/v1/uploads/sync-media?file=${uniqueFile}&type=${body.type}`;
-    const publicUrl = `/uploads/${uniqueFile}`;
+    if (body.clientUuid) {
+      const service = await this.prisma.servicioLavado.findFirst({
+        where: { OR: [{ clientUuid: body.clientUuid }, { id: body.clientUuid }] },
+        select: { ordenTrabajoOT: true, bahia: { select: { agenciaId: true } } },
+      });
+      if (service) {
+        if (!agenciaId && service.bahia?.agenciaId) {
+          agenciaId = service.bahia.agenciaId;
+        }
+        if (!servicioId && (body.category === 'SERVICIOS_GENERALES' || !body.category)) {
+          servicioId = service.ordenTrabajoOT || servicioId;
+        }
+      }
+    }
 
-    return {
-      ticketId: `tkt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.clientUuid) {
+      const specialService = await this.prisma.servicioEspecial.findFirst({
+        where: {
+          OR: [
+            { id: body.clientUuid },
+            { clientUuid: body.clientUuid },
+            { codigoSE: body.clientUuid },
+            { ordenTrabajoOT: body.clientUuid },
+          ],
+        },
+        select: { id: true, clientUuid: true, codigoSE: true, ordenTrabajoOT: true, agenciaId: true },
+      });
+      if (specialService) {
+        agenciaId = specialService.agenciaId || agenciaId;
+        servicioId = specialService.ordenTrabajoOT || specialService.codigoSE || specialService.id;
+      }
+    }
+
+    return this.storageService.generateUploadTicket({
       clientUuid: body.clientUuid,
-      type: body.type,
-      uploadUrl,
-      publicUrl,
-      driver: 'local' as const,
-      expiresInSeconds: 900,
-      headers: {
-        'Content-Type': ext === 'png' ? 'image/png' : 'image/jpeg',
-      },
-    };
+      userId: body.userId,
+      type: body.type as MediaEvidenceType,
+      fileName: body.fileName,
+      agenciaId,
+      servicioId,
+      category: body.category,
+      maquinariaId,
+      maquinariaNombre,
+      maquinariaCodigo,
+      incidenteId,
+      incidenteFase: body.incidenteFase,
+      mantenimientoId: body.mantenimientoId,
+      contentType: body.contentType,
+    });
   }
 
   async registerPushToken(dto: RegisterPushTokenDto, userId: string) {
@@ -966,7 +1144,96 @@ export class SyncService {
     fileUrl: string;
     descripcion?: string;
     metadata?: any;
-  }) {
+    category?: string;
+    maquinariaId?: string;
+    incidenteId?: string;
+    servicioId?: string;
+    specialAction?: 'START' | 'PAUSE' | 'RESUME' | 'FINISH';
+    specialOperatorId?: string;
+    pauseReason?: string;
+    resumeNotes?: string;
+    capturedAt?: string;
+  }, currentUser?: any) {
+    if (!this.storageService.isManagedPublicUrl(body.fileUrl)) {
+      throw new BadRequestException('La evidencia debe corresponder a un archivo subido por EasyDry al bucket configurado.');
+    }
+
+    // Fotos: se genera en segundo plano la miniatura liviana para los listados.
+    if (String(body.type || '').startsWith('FOTO_')) {
+      void this.storageService.generarMiniaturaDesdeUrl(body.fileUrl);
+    }
+
+    const specialServiceKey = body.servicioId || body.clientUuid;
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'START') {
+      const updated = await this.serviciosEspecialesService.iniciar({
+        id: specialServiceKey,
+        operadorId: body.specialOperatorId,
+        videoInicialUrl: body.fileUrl,
+      }, currentUser);
+      return { success: true, action: 'START', ...body, service: updated };
+    }
+
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'PAUSE') {
+      if (!body.pauseReason?.trim()) {
+        throw new BadRequestException('El motivo de la pausa es obligatorio.');
+      }
+      const updated = await this.serviciosEspecialesService.adjuntarVideoCiclo('PAUSA', {
+        id: specialServiceKey,
+        url: body.fileUrl,
+        motivo: body.pauseReason.trim(),
+        capturadoEn: body.capturedAt,
+      }, currentUser);
+      return { success: true, action: 'PAUSE', ...body, service: updated };
+    }
+
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'RESUME') {
+      const updated = await this.serviciosEspecialesService.adjuntarVideoCiclo('REANUDACION', {
+        id: specialServiceKey,
+        url: body.fileUrl,
+        observaciones: body.resumeNotes,
+        capturadoEn: body.capturedAt,
+      }, currentUser);
+      return { success: true, action: 'RESUME', ...body, service: updated };
+    }
+
+    if (body.category === 'SERVICIOS_ESPECIALES' && body.specialAction === 'FINISH') {
+      const updated = await this.serviciosEspecialesService.completar({
+        id: specialServiceKey,
+        videoFinalUrl: body.fileUrl,
+        observaciones: body.resumeNotes,
+      }, currentUser);
+      return { success: true, action: 'FINISH', ...body, service: updated };
+    }
+
+    if (body.category === 'MAQUINARIA_INCIDENTE') {
+      const incidenteId = body.incidenteId || body.clientUuid;
+      const incidente = await this.prisma.incidenteTecnico.findFirst({
+        where: { OR: [{ id: incidenteId }, { clientUuid: incidenteId }] },
+      });
+      if (!incidente) {
+        throw new BadRequestException(`No se encontró el incidente con id: ${incidenteId}`);
+      }
+      const resolvedIncidentId = incidente.id;
+      const existing = await this.prisma.evidenciaIncidente.findFirst({
+        where: { incidenteId: resolvedIncidentId, tipo: body.type, url: body.fileUrl },
+      });
+      if (existing) return { success: true, status: 'ALREADY_EXISTS', evidenciaId: existing.id, ...body };
+
+      const evidencia = await this.prisma.evidenciaIncidente.create({
+        data: {
+          incidenteId: resolvedIncidentId,
+          tipo: body.type,
+          url: body.fileUrl,
+          descripcion: body.descripcion,
+          metadata: body.metadata,
+        },
+      });
+      if (body.type === 'FOTO_INCIDENTE' && !incidente.fotoEvidenciaUrl) {
+        await this.prisma.incidenteTecnico.update({ where: { id: resolvedIncidentId }, data: { fotoEvidenciaUrl: body.fileUrl } });
+      }
+      return { success: true, incidenteId: resolvedIncidentId, evidenciaId: evidencia.id, type: body.type, fileUrl: body.fileUrl };
+    }
+
     const service = await this.prisma.servicioLavado.findFirst({
       where: {
         OR: [{ clientUuid: body.clientUuid }, { id: body.clientUuid }],
@@ -984,7 +1251,9 @@ export class SyncService {
     );
     const yaVinculadaEnColumnas =
       (body.type === 'FOTO_INGRESO' && service.fotoIngresoUrl === body.fileUrl) ||
-      (body.type === 'FOTO_SALIDA' && service.fotoSalidaUrl === body.fileUrl);
+      (body.type === 'FOTO_SALIDA' && service.fotoSalidaUrl === body.fileUrl) ||
+      (['VIDEO_INICIAL', 'VIDEO_INGRESO'].includes(body.type) && service.videoInicialUrl === body.fileUrl) ||
+      (['VIDEO_FINAL', 'VIDEO_SALIDA'].includes(body.type) && service.videoFinalUrl === body.fileUrl);
 
     if (yaVinculadaEnEvidencias || yaVinculadaEnColumnas) {
       return {
@@ -999,16 +1268,39 @@ export class SyncService {
     }
 
     const dataToUpdate: any = {};
-    if (body.type === 'FOTO_INGRESO' || body.type === 'INGRESO') {
+    if (['FOTO_INGRESO', 'INGRESO'].includes(body.type)) {
       dataToUpdate.fotoIngresoUrl = body.fileUrl;
-    } else if (body.type === 'FOTO_SALIDA' || body.type === 'SALIDA') {
+    } else if (['FOTO_SALIDA', 'SALIDA'].includes(body.type)) {
       dataToUpdate.fotoSalidaUrl = body.fileUrl;
+    } else if (['VIDEO_INICIAL', 'VIDEO_INGRESO'].includes(body.type)) {
+      dataToUpdate.videoInicialUrl = body.fileUrl;
+    } else if (['VIDEO_FINAL', 'VIDEO_SALIDA'].includes(body.type)) {
+      dataToUpdate.videoFinalUrl = body.fileUrl;
     }
 
     const updated = await this.prisma.servicioLavado.update({
       where: { id: service.id },
       data: dataToUpdate,
     });
+
+    // La evidencia de ingreso es del vehículo: se comparte con los demás servicios de la misma OT.
+    const columnaIngreso = dataToUpdate.videoInicialUrl
+      ? 'videoInicialUrl'
+      : dataToUpdate.fotoIngresoUrl
+        ? 'fotoIngresoUrl'
+        : null;
+    if (columnaIngreso && service.ordenTrabajoOT) {
+      await this.prisma.servicioLavado.updateMany({
+        where: {
+          id: { not: service.id },
+          ordenTrabajoOT: { equals: service.ordenTrabajoOT, mode: 'insensitive' },
+          placa: service.placa,
+          deletedAt: null,
+          [columnaIngreso]: null,
+        },
+        data: { [columnaIngreso]: body.fileUrl },
+      });
+    }
 
     // Guardar en colección 1-a-N EvidenciaServicio para inspección completa
     const evidencia = await this.prisma.evidenciaServicio.create({
@@ -1042,10 +1334,14 @@ export class SyncService {
     };
   }
 
-  async listDeadLetterQueue(resuelto?: boolean) {
+  async listDeadLetterQueue(resuelto?: boolean, user?: any) {
     const where: any = {};
     if (resuelto !== undefined) {
       where.resuelto = resuelto;
+    }
+    // Quien no gestiona la cola (sync.dlq.gestionar) solo ve los errores de su propia sincronización.
+    if (!user || !tienePermiso(user, 'sync.dlq.gestionar')) {
+      where.usuarioId = user?.id ? String(user.id) : '__ninguno__';
     }
     const items = await this.prisma.syncDeadLetterQueue.findMany({
       where,
@@ -1059,7 +1355,7 @@ export class SyncService {
     };
   }
 
-  async resolveDeadLetterItem(id: string, resuelto: boolean = true) {
+  async resolveDeadLetterItem(id: string, resuelto: boolean = true, actor?: any) {
     const item = await this.prisma.syncDeadLetterQueue.findUnique({
       where: { id },
     });
@@ -1072,6 +1368,7 @@ export class SyncService {
       where: { id },
       data: { resuelto },
     });
+    await this.registrarDecisionDlq(actor, id, 'RESOLVER', { resuelto });
 
     return {
       success: true,
@@ -1081,7 +1378,24 @@ export class SyncService {
   }
 
   // Punto 3: Replay y Reingreso de Mutaciones en Dead-Letter Queue (/sync/dlq/replay)
-  async replayDeadLetterItem(dlqId: string, payloadCorregido?: any, userId?: string) {
+  /** Deja registrado quién resolvió o reintentó un error de sincronización. */
+  private async registrarDecisionDlq(actor: any, dlqId: string, accion: 'RESOLVER' | 'REINTENTAR', detalle: Record<string, unknown>) {
+    if (!actor?.id) return;
+    await this.prisma.auditoriaDecision.create({
+      data: {
+        entidad: 'SYNC_DLQ',
+        entidadId: dlqId,
+        accion,
+        usuarioId: String(actor.id),
+        usuarioNombre: [actor.name, actor.lastname].filter(Boolean).join(' ').trim() || actor.email || 'Usuario',
+        rol: rolDeUsuario(actor),
+        regla: 'ADMIN',
+        detalle: detalle as any,
+      },
+    });
+  }
+
+  async replayDeadLetterItem(dlqId: string, payloadCorregido?: any, userId?: string, actor?: any) {
     const item = await this.prisma.syncDeadLetterQueue.findUnique({
       where: { id: dlqId },
     });
@@ -1140,6 +1454,7 @@ export class SyncService {
         },
       });
 
+      await this.registrarDecisionDlq(actor, dlqId, 'REINTENTAR', { payloadCorregido: !!payloadCorregido });
       return {
         success: true,
         replayed: true,

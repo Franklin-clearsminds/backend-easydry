@@ -2,35 +2,63 @@ import {
   Controller,
   Post,
   Body,
-  UseGuards,
   HttpCode,
   HttpStatus,
+  Request,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { CatalogosService } from './catalogos.service.js';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import {
   CreateCatalogoServicioDto,
   UpdateCatalogoServicioDto,
   ListCatalogoServiciosDto,
+  ServiciosOpcionesDto,
   DeleteCatalogoServicioDto,
+  SiguienteCodigoServicioDto,
 } from './dto/servicios.dto.js';
 
+import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Catálogo de Servicios (100% POST)')
 @Controller('catalogos')
-@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class CatalogosController {
   constructor(private readonly catalogosService: CatalogosService) {}
 
+  @Permiso('catalogo.ver')
   @Post('servicios/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Listar catálogo de servicios (GENERAL / ESPECIAL) con sus recetas de insumos' })
-  @ApiResponse({ status: 200, description: 'Listado de servicios de catálogo' })
-  async listServicios(@Body() dto?: ListCatalogoServiciosDto) {
-    return this.catalogosService.listServicios(dto);
+  @ApiOperation({ summary: 'Listar catálogo de servicios — auto-filtrado por agencia para roles LIDER/APROBADOR' })
+  @ApiResponse({ status: 200, description: 'Lista de servicios (plain array para admins, objeto {servicios, agencia} para roles acotados)' })
+  async listServicios(@Request() req: any, @Body() dto?: ListCatalogoServiciosDto) {
+    const user = req.user;
+    const userCtx = {
+      agenciaId: user?.agenciaId || user?.agencia?.id || undefined,
+      namerol: user?.roleDetails?.namerol || user?.role || undefined,
+    };
+    return this.catalogosService.listServicios(dto, userCtx);
   }
 
+  @Permiso('catalogo.ver')
+  @Post('servicios/opciones')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Servicios del catálogo para un desplegable con buscador (mismo alcance que servicios/list)' })
+  async opcionesServicios(@Request() req: any, @Body() dto: ServiciosOpcionesDto) {
+    const user = req.user;
+    return this.catalogosService.listServiciosOpciones(dto, {
+      agenciaId: user?.agenciaId || user?.agencia?.id || undefined,
+      namerol: user?.roleDetails?.namerol || user?.role || undefined,
+    });
+  }
+
+  @Permiso('catalogo.ver')
+  @Post('servicios/siguiente-codigo')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Siguiente código libre para un servicio nuevo (SER-### o ESP-###)' })
+  async siguienteCodigo(@Body() dto: SiguienteCodigoServicioDto) {
+    return this.catalogosService.siguienteCodigo(dto?.categoria);
+  }
+
+  @Permiso('catalogo.gestionar')
   @Post('servicios/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo servicio en el catálogo maestro' })
@@ -39,6 +67,7 @@ export class CatalogosController {
     return this.catalogosService.createServicio(dto);
   }
 
+  @Permiso('catalogo.gestionar')
   @Post('servicios/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar servicio en el catálogo maestro' })
@@ -47,6 +76,7 @@ export class CatalogosController {
     return this.catalogosService.updateServicio(dto);
   }
 
+  @Permiso('catalogo.gestionar')
   @Post('servicios/delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar servicio del catálogo (si no tiene servicios asociados)' })

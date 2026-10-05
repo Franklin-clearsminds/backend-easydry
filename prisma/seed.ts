@@ -1,86 +1,168 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
+import { ROLES_BASE } from '../src/common/permisos/roles-base.js';
+import { accionesLegacy } from '../src/common/permisos/acciones-legacy.js';
 
+/**
+ * Seed idempotente de EasyDry.
+ *
+ * Por defecto NO borra nada: crea lo que falta (módulos, los 14 roles oficiales con sus permisos, catálogos base de inventario
+ * y las cuentas Super Admin y Admin) y deja intacto lo que ya existe.
+ *
+ * Variables de entorno:
+ *   SEED_SUPERADMIN_EMAIL / SEED_SUPERADMIN_PASSWORD   cuenta Super Admin (la contraseña es obligatoria)
+ *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD             cuenta Admin (la contraseña es obligatoria)
+ *   SEED_ACTUALIZAR_ROLES=SI     restablece los permisos de los roles oficiales a los valores de fábrica
+ *   SEED_RESET=SI                VACÍA toda la base antes de sembrar (en producción exige además SEED_CONFIRMAR_PRODUCCION=SI)
+ */
 const prisma = new PrismaClient();
 
+const esProduccion = process.env.NODE_ENV === 'production';
+
+function credencial(nombre: string, valorPorDefecto?: string): string {
+  const valor = process.env[nombre]?.trim();
+  if (valor) return valor;
+  if (valorPorDefecto !== undefined) return valorPorDefecto;
+  throw new Error(`Falta la variable de entorno ${nombre} (defínela en el .env o en el entorno).`);
+}
+
+/** Catálogo oficial de módulos — fuente de verdad sembrada en BD */
+const MODULOS_DATA = [
+  { codigo: 'dashboard', nombre: 'Dashboard Principal', descripcion: 'Métricas clave, KPIs generales, gráficos de rendimiento y alertas de la red', icono: 'layout-dashboard', rutaPrincipal: '/dashboard', grupo: 'Panel Principal', orden: 10 },
+  { codigo: 'mapa-operativo', nombre: 'Mapa Operativo en Vivo', descripcion: 'Trazabilidad visual jerárquica: Agencias, Bahías, Operadores y Maquinaria en tiempo real', icono: 'sliders', rutaPrincipal: '/mapa-operativo', grupo: 'Panel Principal', orden: 20 },
+  { codigo: 'notificaciones', nombre: 'Centro de Notificaciones', descripcion: 'Alertas operativas, aprobaciones pendientes, inventario y avisos del sistema', icono: 'bell', rutaPrincipal: '/notificaciones', grupo: 'Panel Principal', orden: 30 },
+  { codigo: 'agencias', nombre: 'Control de Agencias', descripcion: 'Gestión y estado operativo de las agencias de la red', icono: 'building-2', rutaPrincipal: '/agencias', grupo: 'Operación & Agencias', orden: 40 },
+  { codigo: 'operadores', nombre: 'Gestión de Lavadores', descripcion: 'Directorio, métricas y estado del personal de lavado', icono: 'user-check', rutaPrincipal: '/operadores', grupo: 'Operación & Agencias', orden: 50 },
+  { codigo: 'asignaciones', nombre: 'Asignación de Bahías', descripcion: 'Matriz dinámica para asignar operadores a bahías con historial', icono: 'check-circle-2', rutaPrincipal: '/asignaciones', grupo: 'Operación & Agencias', orden: 60 },
+  { codigo: 'configuracion/servicios', nombre: 'Catálogo de Servicios', descripcion: 'Tarifario, tipos de lavado y políticas de evidencias (foto/video)', icono: 'file-text', rutaPrincipal: '/configuracion/servicios', grupo: 'Servicios de Lavado', orden: 70 },
+  { codigo: 'servicios', nombre: 'Servicios de Lavado (OT)', descripcion: 'Digitalización de Hoja de Control, ingreso de placas y registro de vehículos', icono: 'car', rutaPrincipal: '/servicios', grupo: 'Servicios de Lavado', orden: 80 },
+  { codigo: 'aprobaciones', nombre: 'Aprobaciones y Cierre Diario', descripcion: 'Auditoría gerencial de evidencias y aprobación de servicios para cierre de día', icono: 'shield-check', rutaPrincipal: '/aprobaciones', grupo: 'Servicios de Lavado', orden: 90 },
+  { codigo: 'productividad', nombre: 'Productividad & Reto EasyDry', descripcion: 'Comparativa de agencias y ranking mensual de operarios', icono: 'trophy', rutaPrincipal: '/productividad', grupo: 'Servicios de Lavado', orden: 100 },
+  { codigo: 'maquinaria', nombre: 'Maquinaria & Equipos', descripcion: 'Inventario de activos industriales y trazabilidad de transferencias', icono: 'hard-drive', rutaPrincipal: '/maquinaria', grupo: 'Gestión de Activos', orden: 110 },
+  { codigo: 'taller-tecnico', nombre: 'Taller Técnico e Incidentes', descripcion: 'Control de mantenimientos preventivos y reporte/resolución de incidencias', icono: 'wrench', rutaPrincipal: '/taller-tecnico', grupo: 'Gestión de Activos', orden: 120 },
+  { codigo: 'inventario', nombre: 'Inventario de Insumos & Bodega', descripcion: 'Control de stock central vs sucursales, tipos de producto, envases, transferencias y alertas', icono: 'boxes', rutaPrincipal: '/inventario', grupo: 'Gestión de Activos', orden: 130 },
+  { codigo: 'envios', nombre: 'Envíos & Confirmación', descripcion: 'Control logístico de envíos de suministros y confirmación de recepción en agencia', icono: 'send', rutaPrincipal: '/envios', grupo: 'Gestión de Activos', orden: 140 },
+  { codigo: 'reportes', nombre: 'Reportes Operativos', descripcion: 'Generación e impresión de informes consolidados de servicios y rendimiento', icono: 'file-bar-chart', rutaPrincipal: '/reportes', grupo: 'Administración', orden: 150 },
+  { codigo: 'usuarios', nombre: 'Usuarios, Roles y Permisos', descripcion: 'Directorio de colaboradores y matriz de creación/configuración de roles dinámicos', icono: 'users', rutaPrincipal: '/usuarios', grupo: 'Administración', orden: 160 },
+  { codigo: 'perfil', nombre: 'Mi Perfil de Usuario', descripcion: 'Información personal, credenciales y datos de sucursal', icono: 'user', rutaPrincipal: '/perfil', grupo: 'Mi Cuenta', orden: 170 },
+];
+
+
 async function main() {
-  console.log('🧹 Limpiando toda la base de datos EasyDry...');
+  const reset = process.env.SEED_RESET === 'SI';
 
-  // Limpieza dinámica de todas las tablas existentes en el esquema public
-  const tables = await prisma.$queryRaw<Array<{ tablename: string }>>`
-    SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename != '_prisma_migrations';
-  `;
-
-  for (const { tablename } of tables) {
-    await prisma.$executeRawUnsafe(`TRUNCATE TABLE "${tablename}" CASCADE;`);
+  if (reset) {
+    if (esProduccion && process.env.SEED_CONFIRMAR_PRODUCCION !== 'SI') {
+      throw new Error('SEED_RESET vaciaría la base de PRODUCCIÓN. Si es lo que quieres, define también SEED_CONFIRMAR_PRODUCCION=SI.');
+    }
+    console.log('🧹 Vaciando toda la base de datos EasyDry (SEED_RESET=SI)...');
+    const tables = await prisma.$queryRaw<Array<{ tablename: string }>>`
+      SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename != '_prisma_migrations';
+    `;
+    for (const { tablename } of tables) {
+      await prisma.$executeRawUnsafe(`TRUNCATE TABLE "${tablename}" CASCADE;`);
+    }
+    console.log('✅ Base de datos vaciada.');
   }
 
-  console.log('✅ Base de datos vaciada con éxito.');
-
-  // 1. Crear Roles Oficiales del Sistema
-  console.log('🛡️ Creando los 14 roles oficiales...');
-  const rolesData = [
-    { namerol: 'SUPER_ADMIN', estado: 1, permisos: ['dashboard', 'usuarios', 'sucursales', 'agencias', 'regiones', 'operadores', 'servicios', 'maquinaria', 'inventario', 'reportes', 'configuracion'] },
-    { namerol: 'ADMIN', estado: 1, permisos: ['dashboard', 'usuarios', 'sucursales', 'agencias', 'regiones', 'operadores', 'servicios', 'maquinaria', 'inventario', 'reportes'] },
-    { namerol: 'APROBADOR', estado: 1, permisos: ['dashboard', 'notificaciones', 'servicios', 'aprobaciones', 'reportes', 'sync'] },
-    { namerol: 'SUPERVISOR', estado: 1, permisos: ['dashboard', 'notificaciones', 'mapa-operativo', 'sucursales', 'agencias', 'regiones', 'operadores', 'asignaciones', 'servicios', 'productividad', 'maquinaria', 'inventario', 'reportes', 'sync'] },
-    { namerol: 'COORD_MANTENIMIENTO', estado: 1, permisos: ['dashboard', 'maquinaria', 'taller-tecnico', 'inventario', 'sync'] },
-    { namerol: 'TECNICO', estado: 1, permisos: ['dashboard', 'maquinaria', 'taller-tecnico', 'inventario', 'sync'] },
-    { namerol: 'LIDER_AGENCIA', estado: 1, permisos: ['servicios', 'bahias', 'maquinaria', 'taller-tecnico', 'inventario', 'sync'] },
-    { namerol: 'JEFE_COMERCIAL', estado: 1, permisos: ['dashboard', 'sucursales', 'agencias', 'regiones', 'reportes', 'retos', 'notificaciones'] },
-    { namerol: 'COORD_COMERCIAL', estado: 1, permisos: ['dashboard', 'sucursales', 'agencias', 'regiones', 'reportes', 'retos', 'notificaciones'] },
-    { namerol: 'COORD_SERVICIOS_ESPECIALES', estado: 1, permisos: ['servicios', 'pulidores', 'agenda', 'sync'] },
-    { namerol: 'PULIDOR_FIJO', estado: 1, permisos: ['servicios', 'bahias', 'inventario', 'sync'] },
-    { namerol: 'PULIDOR_MOVIL', estado: 1, permisos: ['servicios', 'bahias', 'inventario', 'sync'] },
-    { namerol: 'COORD_BODEGA', estado: 1, permisos: ['dashboard', 'inventario', 'bodega', 'notificaciones', 'reportes', 'sync'] },
-    { namerol: 'ASISTENTE_BODEGA', estado: 1, permisos: ['inventario', 'bodega', 'notificaciones', 'sync'] },
-  ];
-
-  const rolesMap = new Map<string, string>();
-  for (const r of rolesData) {
-    const role = await prisma.role.create({
-      data: { namerol: r.namerol, estado: r.estado, permisos: r.permisos },
+  // 1. Módulos del sistema
+  console.log('📦 Sembrando catálogo de módulos del sistema...');
+  for (const m of MODULOS_DATA) {
+    await prisma.moduloSistema.upsert({
+      where: { codigo: m.codigo },
+      update: { nombre: m.nombre, descripcion: m.descripcion, icono: m.icono, rutaPrincipal: m.rutaPrincipal, grupo: m.grupo, orden: m.orden },
+      create: {
+        id: randomUUID(),
+        codigo: m.codigo,
+        nombre: m.nombre,
+        descripcion: m.descripcion,
+        icono: m.icono,
+        rutaPrincipal: m.rutaPrincipal,
+        grupo: m.grupo,
+        orden: m.orden,
+        estado: 1,
+      },
     });
-    rolesMap.set(r.namerol, role.id);
   }
 
-  // 2. Crear Usuarios Exclusivos: Super Admin y Admin
-  console.log('👥 Creando usuarios Super Admin y Admin...');
-  const superAdminPassHash = await bcrypt.hash('Super123*', 10);
-  const adminPassHash = await bcrypt.hash('Admin123*', 10);
+  // 2. Los 14 roles oficiales, con los permisos que exige el backend
+  console.log('🛡️ Sembrando roles oficiales con permisos, ámbito y acciones...');
+  const actualizarRoles = reset || process.env.SEED_ACTUALIZAR_ROLES === 'SI';
+  const rolesMap = new Map<string, string>();
+  for (const r of ROLES_BASE) {
+    const datos = {
+      descripcion: r.descripcion,
+      estado: 1,
+      permisos: r.modulos,
+      capacidades: r.capacidades,
+      ambito: r.ambito,
+      esSistema: true,
+      acciones: accionesLegacy(r.capacidades, r.ambito) as unknown as Prisma.InputJsonValue,
+    };
+    const existente = await prisma.role.findUnique({ where: { namerol: r.namerol } });
+    if (!existente) {
+      const creado = await prisma.role.create({ data: { namerol: r.namerol, ...datos } });
+      rolesMap.set(r.namerol, creado.id);
+    } else if (actualizarRoles) {
+      await prisma.role.update({ where: { id: existente.id }, data: datos });
+      rolesMap.set(r.namerol, existente.id);
+    } else {
+      // Se respetan los permisos que el Super Admin haya ajustado; solo se marca como rol oficial.
+      // El ámbito NO es una preferencia ajustable: es una invariante estructural del rol (define qué
+      // región/agencia/registros propios puede ver y asignar), así que el seed lo fuerza siempre,
+      // aunque no se pida actualizar el resto de permisos. Si difiere, también se recalculan las
+      // acciones legacy con las capacidades actuales (las del Super Admin) y el ámbito correcto.
+      const datosForzados: Prisma.RoleUpdateInput = { esSistema: true };
+      if (existente.ambito !== r.ambito) {
+        datosForzados.ambito = r.ambito;
+        datosForzados.acciones = accionesLegacy(existente.capacidades, r.ambito) as unknown as Prisma.InputJsonValue;
+      }
+      await prisma.role.update({ where: { id: existente.id }, data: datosForzados });
+      rolesMap.set(r.namerol, existente.id);
+    }
+  }
 
-  const superAdmin = await prisma.user.create({
-    data: {
-      email: 'superadmin@easydry.com',
-      passwordHash: superAdminPassHash,
+  // 3. Cuentas Super Admin y Admin
+  console.log('👥 Verificando cuentas Super Admin y Admin...');
+  const cuentas = [
+    {
+      rol: 'SUPER_ADMIN',
+      email: credencial('SEED_SUPERADMIN_EMAIL', 'superadmin@easydry.com').toLowerCase(),
+      password: credencial('SEED_SUPERADMIN_PASSWORD'),
       name: 'Super',
       lastname: 'Admin',
-      roleId: rolesMap.get('SUPER_ADMIN')!,
-      agenciaId: null,
-      agenciasIds: [],
-      regionId: null,
-      estado: 1,
     },
-  });
-
-  const admin = await prisma.user.create({
-    data: {
-      email: 'admin@easydry.com',
-      passwordHash: adminPassHash,
+    {
+      rol: 'ADMIN',
+      email: credencial('SEED_ADMIN_EMAIL', 'admin@easydry.com').toLowerCase(),
+      password: credencial('SEED_ADMIN_PASSWORD'),
       name: 'Administrador',
       lastname: 'EasyDry',
-      roleId: rolesMap.get('ADMIN')!,
-      agenciaId: null,
-      agenciasIds: [],
-      regionId: null,
-      estado: 1,
     },
-  });
+  ];
+  for (const c of cuentas) {
+    const existe = await prisma.user.findUnique({ where: { email: c.email } });
+    if (existe) continue;
+    await prisma.user.create({
+      data: {
+        email: c.email,
+        passwordHash: await bcrypt.hash(c.password, 10),
+        name: c.name,
+        lastname: c.lastname,
+        roleId: rolesMap.get(c.rol)!,
+        agenciaId: null,
+        agenciasIds: [],
+        regionId: null,
+        estado: 1,
+      },
+    });
+    console.log(`   ✔ Creada la cuenta ${c.rol}: ${c.email}`);
+  }
 
-  // 3. Catálogos Dinámicos de Inventario (Base para el sistema, 100% editables desde BD)
+  // 4. Catálogos base de inventario (solo si están vacíos)
   console.log('📦 Sembrando catálogos dinámicos de inventario...');
 
-  // 3.1 Tipos de Producto
   const tiposProductoData = [
     { codigo: 'LIQUIDO', nombre: 'Líquido', descripcion: 'Productos en estado líquido de dosificación volumétrica', estado: 1 },
     { codigo: 'POLVO', nombre: 'Polvo', descripcion: 'Insumos en polvo de disolución o aplicación directa', estado: 1 },
@@ -88,11 +170,10 @@ async function main() {
     { codigo: 'UNIDAD', nombre: 'Unidad', descripcion: 'Piezas, herramientas o accesorios unitarios', estado: 1 },
     { codigo: 'TEXTIL', nombre: 'Textil / Microfibra', descripcion: 'Paños, toallas y aplicadores textiles', estado: 1 },
   ];
-  for (const tp of tiposProductoData) {
-    await prisma.tipoProducto.create({ data: tp });
+  if ((await prisma.tipoProducto.count()) === 0) {
+    for (const tp of tiposProductoData) await prisma.tipoProducto.create({ data: tp });
   }
 
-  // 3.2 Unidades de Medida
   const unidadesData = [
     { codigo: 'ML', nombre: 'Mililitro', simbolo: 'ml', tipo: 'VOLUMEN', factorBase: 0.001, estado: 1 },
     { codigo: 'L', nombre: 'Litro', simbolo: 'L', tipo: 'VOLUMEN', factorBase: 1.0, estado: 1 },
@@ -101,33 +182,73 @@ async function main() {
     { codigo: 'KG', nombre: 'Kilogramo', simbolo: 'kg', tipo: 'MASA', factorBase: 1.0, estado: 1 },
     { codigo: 'UND', nombre: 'Unidad', simbolo: 'und', tipo: 'UNITARIO', factorBase: 1.0, estado: 1 },
   ];
-  for (const u of unidadesData) {
-    await prisma.unidadMedida.create({ data: u });
+  if ((await prisma.unidadMedida.count()) === 0) {
+    for (const u of unidadesData) await prisma.unidadMedida.create({ data: u });
   }
 
-
-  // 3.4 Tipos de Movimiento de Inventario
   const tiposMovData = [
-    { codigo: 'ENTRY', nombre: 'Entrada / Compra', descripcion: 'Ingreso físico de producto al inventario', esEntrada: true, estado: 1 },
-    { codigo: 'CONSUMPTION', nombre: 'Consumo Operativo', descripcion: 'Consumo o gasto de producto en operaciones', esEntrada: false, estado: 1 },
-    { codigo: 'POSITIVE_ADJUSTMENT', nombre: 'Ajuste Positivo', descripcion: 'Incremento de stock por corrección física', esEntrada: true, estado: 1 },
-    { codigo: 'NEGATIVE_ADJUSTMENT', nombre: 'Ajuste Negativo', descripcion: 'Disminución de stock por corrección o faltante', esEntrada: false, estado: 1 },
-    { codigo: 'WASTE', nombre: 'Merma / Daño', descripcion: 'Baja de producto por daño, derrame o caducidad', esEntrada: false, estado: 1 },
+    { codigo: 'ENTRY', nombre: 'Ingreso', descripcion: 'Ingreso físico de producto al inventario (compra / abastecimiento)', esEntrada: true, estado: 1 },
+    { codigo: 'CONSUMPTION', nombre: 'Consumo', descripcion: 'Consumo o gasto de producto en operaciones', esEntrada: false, estado: 1 },
+    { codigo: 'POSITIVE_ADJUSTMENT', nombre: 'Ajuste (+)', descripcion: 'Incremento de stock por corrección física', esEntrada: true, estado: 1 },
+    { codigo: 'NEGATIVE_ADJUSTMENT', nombre: 'Ajuste (−)', descripcion: 'Disminución de stock por corrección o faltante', esEntrada: false, estado: 1 },
+    { codigo: 'WASTE', nombre: 'Merma', descripcion: 'Baja de producto por daño, derrame o caducidad', esEntrada: false, estado: 1 },
     { codigo: 'RETURN', nombre: 'Devolución', descripcion: 'Devolución de producto al proveedor o almacén', esEntrada: true, estado: 1 },
-    { codigo: 'TRANSFER', nombre: 'Transferencia', descripcion: 'Movimiento entre bodegas o ubicaciones', esEntrada: false, estado: 1 },
+    { codigo: 'TRANSFER', nombre: 'Envío / Transferencia', descripcion: 'Movimiento entre bodegas o ubicaciones', esEntrada: false, estado: 1 },
   ];
-  const tiposMovMap = new Map<string, string>();
-  for (const tm of tiposMovData) {
-    const created = await prisma.tipoMovimientoInventario.create({ data: tm });
-    tiposMovMap.set(tm.codigo, created.id);
+  if ((await prisma.tipoMovimientoInventario.count()) === 0) {
+    for (const tm of tiposMovData) await prisma.tipoMovimientoInventario.create({ data: tm });
+  }
+
+  // 5. Checklist de mantenimiento: plantillas base de seguridad (solo si no hay ninguna). Se editan desde la plataforma:
+  //    cada cambio crea una versión nueva.
+  if ((await prisma.checklistPlantilla.count()) === 0) {
+    const base: Array<{ tipo: string; nombre: string; pasos: Array<[string, boolean]> }> = [
+      {
+        tipo: 'PREVENTIVO',
+        nombre: 'Checklist de mantenimiento preventivo',
+        pasos: [
+          ['Desconectar el equipo de la energía y bloquearlo antes de intervenir', true],
+          ['Revisar el estado de cables, enchufes y conexiones eléctricas', true],
+          ['Revisar mangueras, acoples y uniones: sin fugas ni desgaste', true],
+          ['Inspeccionar y limpiar los filtros; reemplazarlos si están dañados', true],
+          ['Revisar cepillos, pads y accesorios; reemplazar los desgastados', false],
+          ['Lubricar y ajustar las partes móviles según las indicaciones del fabricante', false],
+          ['Probar el funcionamiento del equipo antes de devolverlo a operación', true],
+          ['Dejar el equipo y el área de trabajo limpios y ordenados', false],
+        ],
+      },
+      {
+        tipo: 'CORRECTIVO',
+        nombre: 'Checklist de mantenimiento correctivo',
+        pasos: [
+          ['Desconectar el equipo de la energía y bloquearlo antes de intervenir', true],
+          ['Confirmar y registrar la falla reportada (qué ocurre y cuándo)', true],
+          ['Identificar el componente o la causa de la falla', true],
+          ['Reparar o reemplazar el componente defectuoso', true],
+          ['Verificar que la causa de la falla quedó resuelta', true],
+          ['Probar el funcionamiento completo del equipo antes de devolverlo a operación', true],
+          ['Registrar los repuestos utilizados', false],
+        ],
+      },
+    ];
+    for (const p of base) {
+      await prisma.checklistPlantilla.create({
+        data: {
+          tipo: p.tipo,
+          nombre: p.nombre,
+          version: 1,
+          activa: true,
+          creadaPorNombre: 'Sistema (plantilla base)',
+          pasos: { create: p.pasos.map(([texto, obligatorio], i) => ({ orden: i + 1, texto, obligatorio })) },
+        },
+      });
+    }
+    console.log('✅ Plantillas base de checklist de mantenimiento creadas');
   }
 
   console.log('=====================================================');
   console.log('🚀 Seed ejecutado con éxito');
-  console.log(`👤 Super Admin: ${superAdmin.email} | Contraseña: Super123*`);
-  console.log(`👤 Admin:       ${admin.email}      | Contraseña: Admin123*`);
-  console.log(`🛡️ Roles creados: ${rolesMap.size}`);
-  console.log('📦 Catálogos base de inventario sembrados (0 productos iniciales)');
+  console.log(`📦 Módulos: ${MODULOS_DATA.length} | 🛡️ Roles oficiales: ${rolesMap.size}`);
   console.log('=====================================================');
 }
 

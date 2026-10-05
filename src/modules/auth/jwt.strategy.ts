@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import { secretoObligatorio } from '../../common/config/secretos.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export interface JwtPayload {
@@ -20,7 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET') || 'EasyDrySecretKey2026*OfflineSync',
+      secretOrKey: secretoObligatorio(configService.get<string>('JWT_SECRET'), 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync'),
     });
   }
 
@@ -33,13 +34,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       where: { id: payload.sub },
       include: {
         role: {
-          select: { id: true, namerol: true, permisos: true, estado: true },
+          select: { id: true, namerol: true, permisos: true, acciones: true, capacidades: true, ambito: true, esSistema: true, estado: true },
         },
         agencia: {
           select: { id: true, codigo: true, nombre: true, region: true },
         },
         region: {
           select: { id: true, codigo: true, nombre: true },
+        },
+        bodega: {
+          select: { id: true, codigo: true, nombre: true, regionId: true, tipo: true },
         },
       },
     });
@@ -67,6 +71,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       agencia: user.agencia,
       regionId: user.regionId,
       region: user.region,
+      bodegaId: user.bodegaId,
+      bodega: user.bodega,
       estado: user.estado,
     };
   }

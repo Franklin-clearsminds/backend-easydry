@@ -7,6 +7,11 @@ import {
   ValidateNested,
   ArrayNotEmpty,
   IsPositive,
+  IsInt,
+  IsIn,
+  IsBoolean,
+  Min,
+  Max,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -15,16 +20,19 @@ export enum TipoMovimientoInvEnum {
   COMPRA_PROVEEDOR = 'COMPRA_PROVEEDOR',
   DESPACHO_AGENCIA = 'DESPACHO_AGENCIA',
   DESPACHO_PULIDOR = 'DESPACHO_PULIDOR',
+  DESPACHO_BODEGA = 'DESPACHO_BODEGA',
   AJUSTE_MERMA = 'AJUSTE_MERMA',
 }
 
-// ——— Sub-DTO para líneas de despacho/compra ———
 export class DetalleMovimientoDto {
   @ApiProperty({ description: 'ID del insumo' })
   @IsString()
   insumoId: string;
 
-  @ApiProperty({ description: 'Cantidad a despachar/recibir (en unidades del envase)' })
+  @ApiProperty({
+    description:
+      'Cantidad en UNIDADES completas del envase (enteros). El backend convierte a unidad base (volumen) usando contenidoNeto al reservar/mover stock. Aplica a DESPACHO_AGENCIA, DESPACHO_PULIDOR y DESPACHO_BODEGA.',
+  })
   @IsNumber()
   @IsPositive()
   cantidadEnviada: number;
@@ -35,7 +43,6 @@ export class DetalleMovimientoDto {
   costoUnitarioUSD?: number;
 }
 
-// ——— Registrar compra a proveedor ———
 export class RegistrarCompraDto {
   @ApiPropertyOptional({ description: 'Número de guía/factura. Si no se envía, se autogenera.' })
   @IsOptional()
@@ -64,31 +71,55 @@ export class RegistrarCompraDto {
   detalles: DetalleMovimientoDto[];
 }
 
-// ——— Crear despacho hacia agencia o pulidor ———
 export class CrearDespachoDto {
   @ApiPropertyOptional({ description: 'Número de guía. Si no se envía, se autogenera.' })
   @IsOptional()
   @IsString()
   numeroGuia?: string;
 
-  @ApiProperty({ enum: ['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR'] })
-  @IsEnum(['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR'])
-  tipo: 'DESPACHO_AGENCIA' | 'DESPACHO_PULIDOR';
+  @ApiProperty({ enum: ['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR', 'DESPACHO_BODEGA'] })
+  @IsEnum(['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR', 'DESPACHO_BODEGA'])
+  tipo: 'DESPACHO_AGENCIA' | 'DESPACHO_PULIDOR' | 'DESPACHO_BODEGA';
 
-  @ApiPropertyOptional({ description: 'ID de la agencia destino (si tipo=DESPACHO_AGENCIA)' })
+  @ApiPropertyOptional({ description: 'ID de la agencia destino' })
   @IsOptional()
   @IsString()
   sucursalDestinoId?: string;
 
-  @ApiPropertyOptional({ description: 'Alias de sucursalDestinoId' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   agenciaId?: string;
 
-  @ApiPropertyOptional({ description: 'ID del pulidor destino (si tipo=DESPACHO_PULIDOR)' })
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  agenciaDestinoId?: string;
+
+  @ApiPropertyOptional({ description: 'ID de bodega destino (DESPACHO_BODEGA)' })
+  @IsOptional()
+  @IsString()
+  destinoBodegaId?: string;
+
+  @ApiPropertyOptional({ description: 'ID bodega origen (opcional; se infiere del usuario)' })
+  @IsOptional()
+  @IsString()
+  origenBodegaId?: string;
+
+  @ApiPropertyOptional({ description: 'ID agencia origen (opcional; se infiere del líder)' })
+  @IsOptional()
+  @IsString()
+  origenAgenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'ID del pulidor destino' })
   @IsOptional()
   @IsString()
   pulidorDestinoId?: string;
+
+  @ApiPropertyOptional({ description: 'Alias de pulidorDestinoId' })
+  @IsOptional()
+  @IsString()
+  destinoPulidorId?: string;
 
   @ApiPropertyOptional({ example: 'Bodega Central Pifo' })
   @IsOptional()
@@ -108,7 +139,6 @@ export class CrearDespachoDto {
   detalles: DetalleMovimientoDto[];
 }
 
-// ——— Confirmar/rechazar recepción ———
 export class ConfirmarRecepcionDto {
   @ApiProperty({ description: 'ID del movimiento de inventario' })
   @IsString()
@@ -118,24 +148,29 @@ export class ConfirmarRecepcionDto {
   @IsEnum(['RECIBIDO', 'RECHAZADO'])
   accion: 'RECIBIDO' | 'RECHAZADO';
 
-  @ApiPropertyOptional({ description: 'ID de la agencia que recibe (opcional)' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   agenciaId?: string;
 
-  @ApiPropertyOptional({ description: 'Alias de agenciaId' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   sucursalId?: string;
 
-  @ApiPropertyOptional({ description: 'Observaciones (obligatorio si se rechaza)' })
+  @ApiPropertyOptional({ description: 'Motivo (obligatorio si se rechaza)' })
   @IsOptional()
   @IsString()
   observaciones?: string;
 
+  @ApiPropertyOptional({ description: 'Motivo de rechazo (alias)' })
+  @IsOptional()
+  @IsString()
+  motivo?: string;
+
   @ApiPropertyOptional({
     type: [Object],
-    description: 'Cantidades realmente recibidas por detalle (id y cantidadRecibida)',
+    description: 'Cantidades realmente recibidas por detalle',
   })
   @IsOptional()
   @IsArray()
@@ -143,50 +178,111 @@ export class ConfirmarRecepcionDto {
 }
 
 export class RechazarDespachoDto {
-  @ApiProperty({ description: 'ID del movimiento de despacho a rechazar' })
+  @ApiProperty()
   @IsString()
   movimientoId: string;
 
-  @ApiPropertyOptional({ description: 'Motivo técnico del rechazo' })
+  @ApiProperty({ description: 'Motivo del rechazo (obligatorio, texto libre)' })
+  @IsString()
+  motivo: string;
+
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  motivo?: string;
+  observaciones?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
 }
 
-// ——— Listar movimientos ———
 export class ListMovimientosDto {
   @ApiPropertyOptional({ enum: TipoMovimientoInvEnum })
   @IsOptional()
   @IsEnum(TipoMovimientoInvEnum)
   tipo?: TipoMovimientoInvEnum;
 
-  @ApiPropertyOptional({ description: 'Filtrar por estado: PENDIENTE, EN_TRANSITO, RECIBIDO, RECHAZADO, CANCELADO' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   estadoDespacho?: string;
 
-  @ApiPropertyOptional({ description: 'Filtrar por ID de agencia involucrada' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   sucursalId?: string;
 
-  @ApiPropertyOptional({ description: 'Filtrar por ID de pulidor involucrado' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   pulidorId?: string;
 
-  @ApiPropertyOptional({ description: 'Fecha inicio (ISO 8601)' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   fechaDesde?: string;
 
-  @ApiPropertyOptional({ description: 'Fecha fin (ISO 8601)' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   fechaHasta?: string;
 
-  @ApiPropertyOptional({ description: 'Número de guía para búsqueda directa' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   numeroGuia?: string;
+}
+
+/**
+ * Filtros y paginación de `despachos/list`. Sin `page` ni `pageSize` (clientes antiguos, como la app móvil) responde
+ * un arreglo con hasta 100 despachos; con alguno de los dos responde `{ items, total, page, … }`.
+ * No fija valores por defecto para poder distinguir ambos casos.
+ */
+export class ListDespachosDto extends ListMovimientosDto {
+  // Estos dos ya los enviaban los clientes, pero al no estar declarados el validador global los descartaba.
+  @ApiPropertyOptional({ description: 'Agencia destino (id, nombre o código)' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'Agencia destino (id, nombre o código)' })
+  @IsOptional()
+  @IsString()
+  agenciaDestinoId?: string;
+
+  @ApiPropertyOptional({ example: 1, description: 'Página (1 = primera)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 25, description: 'Filas por página (máximo 100; un valor mayor se recorta)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  pageSize?: number;
+
+  @ApiPropertyOptional({ example: 'fecha', description: 'Columna: fecha, guia, estado, origen, destino, recepcion. Por defecto: más reciente primero.' })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ example: 'desc', enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ description: 'Búsqueda por palabras: guía, origen, destino, responsables e insumos (mínimo 2 letras)' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Incluye los contadores por estado con los mismos filtros (menos el de estado)' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
 }

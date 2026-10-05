@@ -46,7 +46,11 @@ async function bootstrap() {
   // Middleware global para detectar peticiones cifradas y desempaquetarlas
   app.use((req: any, res: any, next: any) => {
     // Ignorar Swagger y utilidades de cifrado
-    if (req.originalUrl?.includes('/api/docs') || req.originalUrl?.includes('/crypto/')) {
+    if (
+      req.originalUrl?.includes('/api/docs')
+      || req.originalUrl?.includes('/crypto/')
+      || req.originalUrl?.includes('/storage/upload')
+    ) {
       return next();
     }
 
@@ -85,9 +89,10 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document);
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
-  logger.log(`🚀 Servidor EasyDry backend ejecutándose en: http://localhost:${port}/api/v1`);
-  logger.log(`📖 Documentación Swagger interactiva disponible en: http://localhost:${port}/api/docs`);
+  logger.log(`Servidor EasyDry backend ejecutándose en: http://localhost:${port}/api/v1`);
+  logger.log(`Acceso LAN (app Expo): http://192.168.100.6:${port}/api/v1`);
+  logger.log(`Documentación Swagger interactiva disponible en: http://localhost:${port}/api/docs`);
 }
 bootstrap();

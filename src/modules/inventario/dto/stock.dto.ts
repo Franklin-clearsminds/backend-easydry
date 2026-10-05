@@ -48,3 +48,43 @@ export class AjusteStockDto {
   @IsString()
   razon: string;
 }
+
+export class ReajusteStockDto {
+  @ApiPropertyOptional({ description: 'ID de StockUbicacion. Si no se envía, se resuelve con insumoId + bodegaId' })
+  @IsOptional()
+  @IsString()
+  stockUbicacionId?: string;
+
+  @ApiPropertyOptional({ description: 'ID del insumo a reajustar' })
+  @IsOptional()
+  @IsString()
+  insumoId?: string;
+
+  @ApiPropertyOptional({ description: 'ID de la bodega donde se reajusta el stock' })
+  @IsOptional()
+  @IsString()
+  bodegaId?: string;
+
+  @ApiPropertyOptional({ description: 'ID de la agencia donde se reajusta el stock' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'ID del pulidor cuyo kit se reajusta' })
+  @IsOptional()
+  @IsString()
+  pulidorId?: string;
+
+  @ApiProperty({ description: 'Cantidad física contada (valor absoluto, >= 0)' })
+  @IsNumber()
+  @Type(() => Number)
+  cantidadContada: number;
+
+  @ApiProperty({ description: 'Explicación escrita de por qué se aumenta o disminuye el stock' })
+  @IsString()
+  motivoTexto: string;
+
+  @ApiProperty({ description: 'URL S3 de la foto de evidencia del conteo' })
+  @IsString()
+  evidenciaUrl: string;
+}

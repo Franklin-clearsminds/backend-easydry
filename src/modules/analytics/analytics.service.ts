@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto } from './dto/analytics.dto.js';
+import { DashboardAnalyticsDto, ConsumoQuimicosAnalyticsDto, RankingLavadoresDto } from './dto/analytics.dto.js';
 import { ServiceStatus } from '@prisma/client';
+import { SIN_RESULTADOS, resolverAlcance } from '../../common/permisos/alcance.js';
 
 @Injectable()
 export class AnalyticsService {
@@ -9,17 +10,29 @@ export class AnalyticsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async getDashboardMetrics(dto: DashboardAnalyticsDto, user: any) {
-    // 1. Determinar scoping por rol
-    const userRole = user?.roleDetails?.namerol;
-    let agenciaId = dto.agenciaId;
-    let regionId = dto.regionId;
-
-    if (userRole === 'LIDER_AGENCIA' || userRole === 'LIDER_OPERADOR' || userRole === 'APROBADOR' || userRole === 'OPERADOR') {
-      agenciaId = user?.agenciaId || agenciaId;
-    } else if (userRole === 'SUPERVISOR') {
-      regionId = user?.regionId || regionId;
+  /**
+   * Filtro sobre agencias según el alcance del usuario (país, región o agencia). Lo que manda el cliente solo acota dentro de
+   * ese alcance, nunca lo amplía; sin dato de su ámbito no se ve nada.
+   */
+  private filtroAgencia(user: any, dto: { agenciaId?: string; regionId?: string }): Record<string, unknown> {
+    const a = resolverAlcance(user);
+    switch (a.tipo) {
+      case 'GLOBAL':
+        if (dto.agenciaId) return { id: dto.agenciaId };
+        return dto.regionId ? { regionId: dto.regionId } : {};
+      case 'REGION':
+        return { regionId: a.regionId, ...(dto.agenciaId ? { id: dto.agenciaId } : {}) };
+      case 'AGENCIA':
+        return { id: a.agenciaId };
+      default:
+        return SIN_RESULTADOS;
     }
+  }
+
+  async getDashboardMetrics(dto: DashboardAnalyticsDto, user: any) {
+    // 1. Alcance del usuario (país, región o agencia)
+    const filtro = this.filtroAgencia(user, dto);
+    const hayFiltro = Object.keys(filtro).length > 0;
 
     // 2. Rango de fecha (Por defecto hoy desde 00:00:00 hasta 23:59:59)
     const baseDate = dto.fecha ? new Date(dto.fecha) : new Date();
@@ -31,10 +44,8 @@ export class AnalyticsService {
       horaIngreso: { gte: startOfDay, lte: endOfDay },
     };
 
-    if (agenciaId) {
-      servicioWhere.bahia = { agenciaId };
-    } else if (regionId) {
-      servicioWhere.bahia = { agencia: { regionId } };
+    if (hayFiltro) {
+      servicioWhere.bahia = { agencia: filtro };
     }
 
     // Consultas paralelas para el dashboard
@@ -66,19 +77,19 @@ export class AnalyticsService {
       this.prisma.incidenteTecnico.count({
         where: {
           estado: { notIn: ['RESUELTO', 'CANCELADO'] },
-          ...(agenciaId ? { maquinaria: { agenciaId } } : {}),
+          ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}),
         },
       }),
       this.prisma.alertaStock.count({
         where: {
           estado: { notIn: ['RESUELTO', 'DESPACHADO'] },
-          ...(agenciaId ? { agenciaId } : {}),
+          ...(hayFiltro ? { agencia: filtro } : {}),
         },
       }),
       this.prisma.maquinaria.groupBy({
         by: ['estadoOperativo'],
         _count: { id: true },
-        where: agenciaId ? { agenciaId } : {},
+        where: hayFiltro ? { agencia: filtro } : {},
       }),
     ]);
 
@@ -160,12 +171,8 @@ export class AnalyticsService {
   }
 
   async getConsumoQuimicos(dto: ConsumoQuimicosAnalyticsDto, user: any) {
-    let agenciaId = dto.agenciaId;
-    const userRole = user?.roleDetails?.namerol;
-
-    if (userRole === 'LIDER_AGENCIA' || userRole === 'LIDER_OPERADOR' || userRole === 'APROBADOR' || userRole === 'OPERADOR') {
-      agenciaId = user?.agenciaId || agenciaId;
-    }
+    const filtro = this.filtroAgencia(user, dto);
+    const hayFiltro = Object.keys(filtro).length > 0;
 
     // Rango de fechas
     const ahora = new Date();
@@ -176,8 +183,9 @@ export class AnalyticsService {
       createdAt: { gte: fechaDesde, lte: fechaHasta },
     };
 
-    if (agenciaId) {
-      where.agenciaId = agenciaId;
+    if (hayFiltro) {
+      const agencias = await this.prisma.agencia.findMany({ where: filtro as any, select: { id: true } });
+      where.agenciaId = { in: agencias.map((a) => a.id) };
     }
 
     const consumos = await this.prisma.consumoServicio.findMany({
@@ -219,12 +227,15 @@ export class AnalyticsService {
       granTotalCostoUSD += costoSubtotal;
 
       if (!acumuladoPorInsumo[insumoId]) {
+        // Nombre/SKU/unidad: preferir el snapshot congelado al momento del consumo
+        // (sobrevive a que el producto cambie de nombre/SKU). Cae al dato actual
+        // solo para registros creados antes de que existiera el snapshot.
         acumuladoPorInsumo[insumoId] = {
           insumoId,
-          codigoSKU: c.insumo.codigoSKU,
-          nombre: c.insumo.nombre,
+          codigoSKU: c.insumoSKU || c.insumo.codigoSKU,
+          nombre: c.insumoNombre || c.insumo.nombre,
           categoria: c.insumo.categoria,
-          simboloUnidad: c.insumo.unidadMedida?.simbolo || 'u',
+          simboloUnidad: c.unidadSimbolo || c.insumo.unidadMedida?.simbolo || 'u',
           cantidadTotal: 0,
           costoUnitario: costoUnit,
           costoTotalUSD: 0,
@@ -254,6 +265,81 @@ export class AnalyticsService {
       granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)),
       totalInsumosDistintos: listaOrdenada.length,
       insumos: listaOrdenada,
+    };
+  }
+
+  async getRankingLavadores(dto: RankingLavadoresDto, user: any) {
+    const filtro = this.filtroAgencia(user, dto);
+    const hayFiltro = Object.keys(filtro).length > 0;
+
+    const ahora = new Date();
+    const fechaDesde = dto.fechaDesde ? new Date(dto.fechaDesde) : new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+    const fechaHasta = dto.fechaHasta ? new Date(dto.fechaHasta) : ahora;
+
+    const where: any = {
+      estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] },
+      horaIngreso: { gte: fechaDesde, lte: fechaHasta },
+    };
+
+    if (hayFiltro) {
+      where.bahia = { agencia: filtro };
+    }
+
+    const servicios = await this.prisma.servicioLavado.findMany({
+      where,
+      select: {
+        operadorId: true,
+        horaIngreso: true,
+        horaSalida: true,
+        operador: { select: { id: true, name: true, lastname: true } },
+      },
+    });
+
+    const acumuladoPorOperador: Record<string, {
+      operadorId: string;
+      nombre: string;
+      cantidadServicios: number;
+      tiempoTotalMin: number;
+      serviciosConTiempo: number;
+    }> = {};
+
+    for (const s of servicios) {
+      if (!s.operadorId) continue;
+      if (!acumuladoPorOperador[s.operadorId]) {
+        acumuladoPorOperador[s.operadorId] = {
+          operadorId: s.operadorId,
+          nombre: s.operador ? `${s.operador.name} ${s.operador.lastname}` : 'Operador',
+          cantidadServicios: 0,
+          tiempoTotalMin: 0,
+          serviciosConTiempo: 0,
+        };
+      }
+      const acc = acumuladoPorOperador[s.operadorId];
+      acc.cantidadServicios += 1;
+      if (s.horaSalida) {
+        const duracionMs = new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime();
+        acc.tiempoTotalMin += Math.max(0, Math.round(duracionMs / (1000 * 60)));
+        acc.serviciosConTiempo += 1;
+      }
+    }
+
+    const ranking = Object.values(acumuladoPorOperador)
+      .map((a) => ({
+        operadorId: a.operadorId,
+        nombre: a.nombre,
+        cantidadServicios: a.cantidadServicios,
+        tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0,
+      }))
+      .sort((a, b) => b.cantidadServicios - a.cantidadServicios)
+      .slice(0, 10);
+
+    return {
+      success: true,
+      rango: {
+        desde: fechaDesde.toISOString().split('T')[0],
+        hasta: fechaHasta.toISOString().split('T')[0],
+      },
+      ranking,
     };
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -10,16 +10,66 @@ import {
   EliminarRecetaItemDto,
   SimularConsumoDto,
 } from './dto/receta.dto.js';
+import { ListConsumosServicioDto } from './dto/consumos-servicio.dto.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import {
+  columnasSimples,
+  combinarWhere,
+  resolverOrden,
+  resolverPaginacion,
+  whereBusqueda,
+} from '../../common/utils/data-grid.helpers.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
+import { DecisionesService } from '../../common/permisos/decisiones.service.js';
+import { Alcance, puedeSobreAgencia, resolverAlcance } from '../../common/permisos/alcance.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+
+/** Columnas por las que se puede ordenar la lista de servicios (nombre público → campo de la base). */
+const ORDEN_SERVICIOS = columnasSimples({
+  fecha: 'horaIngreso',
+  createdAt: 'createdAt',
+  ot: 'ordenTrabajoOT',
+  placa: 'placa',
+  modelo: 'modelo',
+  cliente: 'cliente',
+  estado: 'estado',
+  servicio: 'catalogo.nombre',
+  operador: 'operador.name',
+  agencia: 'bahia.agencia.nombre',
+  bahia: 'bahia.nombre',
+});
 
 @Injectable()
 export class OperacionesService {
+  private readonly logger = new Logger(OperacionesService.name);
+
+  private readonly decisiones: DecisionesService;
+
   constructor(
     private prisma: PrismaService,
     @Optional() private notifications?: NotificationsService,
-  ) {}
+    @Optional() decisiones?: DecisionesService,
+  ) {
+    this.decisiones = decisiones ?? new DecisionesService(prisma);
+  }
+
+  /** Nombre visible de quien decide, tomado de la sesión. */
+  private nombreDe(user: any): string {
+    return [user?.name, user?.lastname].filter(Boolean).join(' ').trim() || user?.email || 'Usuario';
+  }
+
+  /** El servicio debe estar dentro del alcance del usuario (agencia, región o lo propio). */
+  private asegurarAlcanceServicio(actor: any, servicio: any): void {
+    if (!actor) return;
+    const alcance: Alcance = resolverAlcance(actor);
+    if (alcance.tipo === 'PROPIO') {
+      if (servicio.operadorId === actor.id) return;
+    } else if (puedeSobreAgencia(alcance, { id: servicio.bahia?.agencia?.id ?? servicio.bahia?.agenciaId, regionId: servicio.bahia?.agencia?.regionId })) {
+      return;
+    }
+    throw new ForbiddenException('Este servicio no pertenece a tu alcance.');
+  }
 
   // ============================================================
   //  SERVICIOS DE LAVADO
@@ -28,50 +78,138 @@ export class OperacionesService {
   async findAll(params?: {
     agenciaId?: string;
     sucursalId?: string;
-    estado?: ServiceStatus;
+    regionId?: string;
+    estado?: string | ServiceStatus;
     search?: string;
     page?: number;
     pageSize?: number;
     sortField?: string;
     sortOrder?: 'asc' | 'desc';
-  }) {
-    const where: any = {};
+    bahiaId?: string;
+    operadorId?: string;
+    servicioId?: number;
+    clienteId?: string;
+    agenciaNombre?: string;
+    bahiaNombre?: string;
+    operadorNombre?: string;
+    clienteNombre?: string;
+    fechaDesde?: string;
+    fechaHasta?: string;
+    incluirResumen?: boolean;
+  }, currentUser?: any) {
+    const where: any = {
+      deletedAt: null,
+    };
 
-    const targetAgencia = params?.agenciaId || params?.sucursalId;
-    if (targetAgencia) {
-      where.bahia = { agenciaId: targetAgencia };
+    // 1. Alcance del usuario (regla única): país, región, agencia o lo propio. Sin usuario o sin dato de su ámbito no ve nada.
+    //    Nunca se toma una agencia o región del cliente para ampliar el alcance: solo para acotar dentro de él.
+    const alcance: Alcance = currentUser ? resolverAlcance(currentUser) : { tipo: 'NINGUNO' };
+    const pideAgencia = [params?.agenciaId, params?.sucursalId].find((v) => v && v !== 'Todas' && v !== 'TODAS');
+    const pideRegion = params?.regionId && params.regionId !== 'Todas' && params.regionId !== 'TODAS' ? params.regionId : undefined;
+    switch (alcance.tipo) {
+      case 'GLOBAL':
+        if (pideAgencia) where.bahia = { agenciaId: pideAgencia };
+        else if (pideRegion) where.bahia = { agencia: { regionId: pideRegion } };
+        break;
+      case 'REGION':
+        where.bahia = { agencia: { regionId: alcance.regionId, ...(pideAgencia ? { id: pideAgencia } : {}) } };
+        break;
+      case 'AGENCIA':
+        where.bahia = { agenciaId: alcance.agenciaId };
+        break;
+      case 'PROPIO':
+        where.operadorId = currentUser.id;
+        break;
+      default:
+        where.id = { in: [] };
     }
 
-    if (params?.estado) {
-      where.estado = params.estado;
+    // 2. Filtro por Estado Operativo
+    if (params?.estado && params.estado !== 'Todos' && params.estado !== 'TODOS') {
+      const st = String(params.estado).toUpperCase().trim();
+      if (st === 'EN_PROCESO' || st === 'EN PROCESO') {
+        where.estado = { in: [ServiceStatus.EN_ESPERA, ServiceStatus.EN_PROCESO] };
+      } else if (st === 'POR_APROBAR' || st === 'POR APROBAR' || st === 'FALTAN DE APROBAR') {
+        where.estado = ServiceStatus.FINALIZADO;
+        where.aprobadoPor = null;
+      } else if (st === 'APROBADO' || st === 'APROBADOS') {
+        where.estado = ServiceStatus.APROBADO;
+      } else if (st === 'FINALIZADO' || st === 'REALIZADO' || st === 'REALIZADOS') {
+        where.estado = { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] };
+      } else if (st === 'RECHAZADO' || st === 'RECHAZADOS') {
+        where.estado = ServiceStatus.RECHAZADO;
+      } else if (st === 'CANCELADO' || st === 'CANCELADOS') {
+        where.estado = ServiceStatus.CANCELADO;
+      } else if (Object.values(ServiceStatus).includes(st as ServiceStatus)) {
+        where.estado = st as ServiceStatus;
+      }
     }
 
-    if (params?.search) {
-      const q = params.search.trim().toUpperCase();
-      where.OR = [
-        { placa: { contains: q } },
-        { modelo: { contains: q, mode: 'insensitive' } },
-        { cliente: { contains: q, mode: 'insensitive' } },
-      ];
+    // 3. Filtros adicionales: todos se resuelven en el servidor (antes la web los aplicaba sobre lo que ya había cargado)
+    const extra: Record<string, unknown>[] = [];
+    if (params?.bahiaId) {
+      // Acepta varios ids separados por coma: las bahías se llaman igual en varias agencias ("Bahía 1").
+      const ids = String(params.bahiaId).split(',').map((v) => v.trim()).filter(Boolean);
+      if (ids.length === 1) extra.push({ bahiaId: ids[0] });
+      else if (ids.length > 1) extra.push({ bahiaId: { in: ids } });
     }
+    if (params?.servicioId !== undefined && params?.servicioId !== null && String(params.servicioId) !== '') {
+      const catalogoId = Number(params.servicioId);
+      if (Number.isInteger(catalogoId)) extra.push({ servicioCatalogoId: catalogoId });
+    }
+    if (params?.clienteId) extra.push({ bahia: { agencia: { clienteId: params.clienteId } } });
+    // Filtros por nombre (exactos, sin distinguir mayúsculas); el alcance por rol de arriba se mantiene.
+    const igual = (valor: string) => ({ equals: valor.trim(), mode: 'insensitive' as const });
+    if (params?.agenciaNombre?.trim()) extra.push({ bahia: { agencia: { nombre: igual(params.agenciaNombre) } } });
+    if (params?.bahiaNombre?.trim()) extra.push({ bahia: { nombre: igual(params.bahiaNombre) } });
+    if (params?.clienteNombre?.trim()) extra.push({ bahia: { agencia: { cliente: { nombre: igual(params.clienteNombre) } } } });
+    const operadorNombre = whereBusqueda(['operador.name', 'operador.lastname'], params?.operadorNombre);
+    if (operadorNombre) extra.push(operadorNombre);
+    // Un lavador ya está limitado a sus propios servicios: no puede pedir los de otro operador.
+    if (params?.operadorId && !where.operadorId) where.operadorId = params.operadorId;
 
-    const page = params?.page ? Number(params.page) : 1;
-    const pageSize = params?.pageSize ? Number(params.pageSize) : 50;
-    const skip = (page - 1) * pageSize;
-    const sortField = params?.sortField || 'createdAt';
-    const sortOrder = params?.sortOrder || 'desc';
+    const desde = params?.fechaDesde ? new Date(params.fechaDesde) : null;
+    const hasta = params?.fechaHasta ? new Date(params.fechaHasta) : null;
+    const rangoFechas = {
+      ...(desde && !Number.isNaN(desde.getTime()) ? { gte: desde } : {}),
+      ...(hasta && !Number.isNaN(hasta.getTime()) ? { lte: hasta } : {}),
+    };
+    if (Object.keys(rangoFechas).length) extra.push({ horaIngreso: rangoFechas });
+
+    const busqueda = whereBusqueda(
+      ['placa', 'modelo', 'marca', 'cliente', 'ordenTrabajoOT', 'operador.name', 'operador.lastname'],
+      params?.search,
+    );
+
+    // Estado aparte: el resumen por estado usa los mismos filtros pero sin el de estado.
+    const { estado: estadoFiltrado, aprobadoPor: aprobadoPorFiltrado, ...whereSinEstado } = where;
+    const whereBase = combinarWhere(whereSinEstado, ...extra, busqueda);
+    const whereFinal = combinarWhere(
+      whereBase,
+      estadoFiltrado !== undefined || aprobadoPorFiltrado !== undefined
+        ? {
+            ...(estadoFiltrado !== undefined ? { estado: estadoFiltrado } : {}),
+            ...(aprobadoPorFiltrado !== undefined ? { aprobadoPor: aprobadoPorFiltrado } : {}),
+          }
+        : undefined,
+    );
+
+    // 4. Paginación y orden. Un cliente antiguo que no envía tamaño de página recibe hasta 100 (antes, 20).
+    const sinTamano = params?.pageSize === undefined || params?.pageSize === null;
+    const { page, pageSize, skip, take } = resolverPaginacion(params ?? {}, sinTamano ? { defecto: 100 } : {});
+    const orderBy = resolverOrden(params?.sortField, params?.sortOrder, ORDEN_SERVICIOS, { campo: 'fecha', dir: 'desc' });
 
     const [items, total] = await Promise.all([
       this.prisma.servicioLavado.findMany({
-        where,
+        where: whereFinal,
         skip,
-        take: pageSize,
-        orderBy: { [sortField]: sortOrder },
+        take,
+        orderBy: orderBy as any,
         include: {
           bahia: {
             include: {
               agencia: {
-                select: { id: true, nombre: true, codigo: true },
+                select: { id: true, nombre: true, codigo: true, regionId: true },
               },
             },
           },
@@ -90,10 +228,46 @@ export class OperacionesService {
           },
         },
       }),
-      this.prisma.servicioLavado.count({ where }),
+      this.prisma.servicioLavado.count({ where: whereFinal }),
     ]);
 
-    return buildDataGridResponse(items.map(serializeServicioLavado), total, page, pageSize);
+    // A cada servicio finalizado se le marca si quien consulta puede decidirlo ahora (aprobar o rechazar) y si su agencia tiene
+    // aprobador designado: así la pantalla de aprobaciones muestra solo acciones que el servidor aceptaría.
+    let serializados: any[] = items.map(serializeServicioLavado);
+    const finalizados = items.filter((s: any) => s.estado === ServiceStatus.FINALIZADO && !s.deletedAt);
+    if (finalizados.length && currentUser) {
+      const conAprobador = await this.decisiones.agenciasConAprobador(finalizados.map((s: any) => s.bahia?.agencia?.id));
+      serializados = serializados.map((s, i) => {
+        const bruto: any = items[i];
+        if (bruto.estado !== ServiceStatus.FINALIZADO || bruto.deletedAt) return s;
+        const agencia = bruto.bahia?.agencia;
+        const tiene = conAprobador.has(String(agencia?.id));
+        return {
+          ...s,
+          agenciaSinAprobador: !tiene,
+          puedeDecidir: this.decisiones.puedeDecidirAhora(currentUser, { id: agencia?.id, regionId: agencia?.regionId }, tiene),
+        };
+      });
+    }
+    const respuesta: Record<string, unknown> = { ...buildDataGridResponse(serializados, total, page, pageSize) };
+
+    if (params?.incluirResumen) {
+      const [porEstado, porAprobar] = await Promise.all([
+        this.prisma.servicioLavado.groupBy({ by: ['estado'], where: whereBase, _count: { _all: true } }),
+        this.prisma.servicioLavado.count({
+          where: combinarWhere(whereBase, { estado: ServiceStatus.FINALIZADO, aprobadoPor: null }),
+        }),
+      ]);
+      const conteo: Record<string, number> = {};
+      let totalResumen = 0;
+      for (const fila of porEstado) {
+        conteo[fila.estado] = fila._count._all;
+        totalResumen += fila._count._all;
+      }
+      respuesta['resumen'] = { porEstado: conteo, porAprobar, total: totalResumen };
+    }
+
+    return respuesta;
   }
 
   async findOneRaw(id: string) {
@@ -109,7 +283,12 @@ export class OperacionesService {
           include: {
             recetas: {
               include: {
-                insumo: { select: { id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true } },
+                insumo: {
+                  select: {
+                    id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true, costoUnitarioUSD: true,
+                    unidadMedida: { select: { simbolo: true } },
+                  },
+                },
                 unidadConsumo: { select: { codigo: true, simbolo: true, factorBase: true } },
               },
             },
@@ -136,62 +315,397 @@ export class OperacionesService {
     return servicio;
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actor?: any) {
     const servicio = await this.findOneRaw(id);
+    this.asegurarAlcanceServicio(actor, servicio);
     return serializeServicioLavado(servicio);
   }
 
-  async create(createDto: CreateServicioDto, operadorId: string) {
-    const clientUuid = createDto.clientUuid || randomUUID();
-    const now = new Date();
+  /** Quién aprobó, rechazó, anuló o corrigió este servicio, con qué regla y por qué (del más reciente al más antiguo). */
+  async historialDecisiones(id: string, actor: any) {
+    const servicio = await this.findOneRaw(id);
+    this.asegurarAlcanceServicio(actor, servicio);
+    return this.prisma.auditoriaDecision.findMany({
+      where: { entidad: 'SERVICIO_LAVADO', entidadId: servicio.id },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+  }
 
-    // Control físico de Bahía: Impedir doble auto simultáneo en proceso en la misma bahía
-    if (createDto.estado === ServiceStatus.EN_PROCESO && createDto.bahiaId) {
-      const activoEnBahia = await this.prisma.servicioLavado.findFirst({
-        where: {
-          bahiaId: createDto.bahiaId,
-          estado: ServiceStatus.EN_PROCESO,
-          deletedAt: null,
-        },
-      });
-      if (activoEnBahia) {
+  async consumirInsumosSiPendiente(servicioId: string, isOfflineSync = false) {
+    const servicio = await this.findOneRaw(servicioId);
+    if (servicio.consumos && servicio.consumos.length > 0) return;
+    await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
+  }
+
+  /**
+   * Una OT general puede tener varios servicios (una fila por servicio) siempre que sea
+   * el mismo vehículo y no se repita un servicio ya registrado en esa OT.
+   */
+  private async _validarOTServicioGeneral(ordenTrabajoOT: string, placa: string, catalogoIds: number[]) {
+    // La OT de servicios generales (lavado) y la OT de servicios especiales viven en espacios de
+    // numeración independientes: el mismo número puede existir una vez como lavado y otra vez
+    // como especial (decisión de producto, ver PLAN-PERMISOS-Y-ROLES.md). Por eso aquí solo se
+    // valida contra otros servicios generales, nunca contra ServicioEspecial.
+    const normalizarPlaca = (value?: string | null) => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const placaNueva = normalizarPlaca(placa);
+
+    const existentes = await this.prisma.servicioLavado.findMany({
+      where: {
+        ordenTrabajoOT: { equals: ordenTrabajoOT, mode: 'insensitive' },
+        deletedAt: null,
+        estado: { not: ServiceStatus.CANCELADO },
+      },
+      select: { placa: true, servicioCatalogoId: true, catalogo: { select: { nombre: true } } },
+    });
+    if (existentes.length === 0) return;
+
+    const otroVehiculo = existentes.find((s) => normalizarPlaca(s.placa) !== placaNueva);
+    if (otroVehiculo) {
+      throw new BadRequestException(
+        `La Orden de Trabajo "${ordenTrabajoOT}" pertenece al vehículo ${otroVehiculo.placa}. Solo se pueden agregar servicios del mismo vehículo.`,
+      );
+    }
+
+    const repetido = existentes.find((s) => catalogoIds.includes(Number(s.servicioCatalogoId)));
+    if (repetido) {
+      throw new BadRequestException(
+        `El servicio "${repetido.catalogo?.nombre || repetido.servicioCatalogoId}" ya está registrado en la OT "${ordenTrabajoOT}".`,
+      );
+    }
+  }
+
+  /**
+   * Crea una o varias filas de servicio general para la misma OT y vehículo.
+   * Con varios servicios valida primero el stock combinado para no dejar la OT a medias.
+   */
+  async createMultiple(createDto: CreateServicioDto, operadorId: string, actor?: any) {
+    const ids = Array.from(new Set(
+      [...(createDto.servicioCatalogoIds || []), createDto.servicioCatalogoId]
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ));
+    if (ids.length <= 1) {
+      return this.create({ ...createDto, servicioCatalogoId: ids[0] ?? createDto.servicioCatalogoId }, operadorId, actor);
+    }
+
+    const ordenTrabajoOT = createDto.ordenTrabajoOT?.trim().toUpperCase();
+    if (!ordenTrabajoOT) {
+      throw new BadRequestException('El número de Orden de Trabajo (OT) es obligatorio y debe ser ingresado por el usuario.');
+    }
+    await this._validarOTServicioGeneral(ordenTrabajoOT, createDto.placa, ids);
+
+    const bahia = await this.prisma.bahia.findFirst({
+      where: { OR: [{ id: createDto.bahiaId }, { nombre: { equals: createDto.bahiaId, mode: 'insensitive' } }] },
+      select: { agenciaId: true },
+    });
+    const catalogos = await this.prisma.catalogoServicio.findMany({
+      where: { id: { in: ids } },
+      include: { recetas: { include: { insumo: true, unidadConsumo: true } } },
+    });
+    const faltantesCatalogo = ids.filter((id) => !catalogos.some((c) => c.id === id));
+    if (faltantesCatalogo.length > 0) {
+      throw new BadRequestException(`Servicios no encontrados en el catálogo: ${faltantesCatalogo.join(', ')}.`);
+    }
+    if (catalogos.some((c) => c.categoria !== 'GENERAL')) {
+      throw new BadRequestException('Solo se pueden registrar varios servicios en la misma OT para servicios generales.');
+    }
+    const inactivo = catalogos.find((c) => c.estado === 'Inactivo');
+    if (inactivo) {
+      throw new BadRequestException(`El servicio "${inactivo.nombre}" está inactivo y no se puede usar en una nueva OT.`);
+    }
+
+    if (bahia?.agenciaId) {
+      const requerido = new Map<string, { nombre: string; simbolo: string; cantidad: number }>();
+      for (const catalogo of catalogos) {
+        for (const receta of catalogo.recetas) {
+          if (receta.esOpcional) continue;
+          const cantidad = this._convertirAUnidadBase(
+            Number(receta.cantidadUsada),
+            receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+          );
+          const prev = requerido.get(receta.insumoId);
+          requerido.set(receta.insumoId, {
+            nombre: receta.insumo.nombre,
+            simbolo: receta.unidadConsumo?.simbolo || 'und',
+            cantidad: (prev?.cantidad || 0) + cantidad,
+          });
+        }
+      }
+      const faltantes: string[] = [];
+      for (const [insumoId, req] of requerido) {
+        const stock = await this._getStockAgencia(insumoId, bahia.agenciaId);
+        const disponible = Number(stock?.cantidadActual ?? 0);
+        if (disponible < req.cantidad) {
+          faltantes.push(`"${req.nombre}": disponible ${disponible.toFixed(2)} ${req.simbolo}, requerido ${req.cantidad.toFixed(2)} ${req.simbolo}`);
+        }
+      }
+      if (faltantes.length > 0) {
         throw new BadRequestException(
-          `La bahía seleccionada ya se encuentra ocupada por el vehículo ${activoEnBahia.placa}. Espere a que finalice o seleccione otra bahía disponible.`,
+          `No se pueden iniciar los servicios: Stock insuficiente en la agencia para los insumos obligatorios:\n` +
+            faltantes.map((f) => `  • ${f}`).join('\n') +
+            `\nPor favor solicite suministros a Bodega Central antes de crear la OT.`,
         );
       }
     }
 
-    // Advertencia de Maquinaria Averiada o Fuera de Servicio
-    let observacionesFinales = createDto.observaciones;
+    const baseUuid = createDto.clientUuid || randomUUID();
+    const creados: any[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      creados.push(await this.create({
+        ...createDto,
+        ordenTrabajoOT,
+        servicioCatalogoId: ids[i],
+        servicioCatalogoIds: undefined,
+        clientUuid: i === 0 ? baseUuid : `${baseUuid}-${i + 1}`,
+      }, operadorId, actor));
+    }
+    return creados;
+  }
+
+  async create(createDto: CreateServicioDto, operadorId: string, actor?: any) {
+    const clientUuid = createDto.clientUuid || randomUUID();
+    const now = new Date();
+
+    // 1. Resolución Defensiva de Bahía (Soporta UUID, nombre de bahía o fallback a bahía activa)
+    let bahia: any = null;
     if (createDto.bahiaId) {
-      const maquinaAveriada = await this.prisma.maquinaria.findFirst({
-        where: {
-          bahiaId: createDto.bahiaId,
-          estadoOperativo: { in: ['FUERA_DE_SERVICIO', 'DE_BAJA'] },
-        },
-      });
-      if (maquinaAveriada) {
-        const advertencia = `[ALERTA TÉCNICA: Maquinaria ${maquinaAveriada.codigo} (${maquinaAveriada.nombre}) en estado ${maquinaAveriada.estadoOperativo}]`;
-        observacionesFinales = observacionesFinales
-          ? `${observacionesFinales} | ${advertencia}`
-          : advertencia;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(createDto.bahiaId);
+      if (isUuid) {
+        bahia = await this.prisma.bahia.findUnique({
+          where: { id: createDto.bahiaId },
+          include: { agencia: true },
+        });
+      }
+      if (!bahia) {
+        const busquedaNombre = createDto.bahiaId.replace(/\(.*?\)/g, '').trim();
+        if (busquedaNombre) {
+          bahia = await this.prisma.bahia.findFirst({
+            where: {
+              nombre: { contains: busquedaNombre, mode: 'insensitive' },
+            },
+            include: { agencia: true },
+          });
+        }
+      }
+    }
+    if (!bahia) {
+      throw new BadRequestException('Debe indicar una bahía válida de la agencia para registrar el servicio.');
+    }
+
+    if (actor && !puedeSobreAgencia(resolverAlcance(actor), { id: bahia.agenciaId, regionId: bahia.agencia?.regionId })) {
+      throw new ForbiddenException('La bahía indicada no pertenece a tu alcance.');
+    }
+    const resolvedBahiaId = bahia.id;
+    const agenciaId = bahia.agenciaId;
+
+    // 2. Resolución de Operador: si la app indicó qué lavador realiza el servicio
+    //    (createDto.operadorId), la OT se le atribuye a él -siempre que sea de la misma
+    //    agencia que la bahía-. Si no se indicó, se atribuye a quien está autenticado.
+    let validOperadorId = createDto.operadorId || operadorId;
+    let user = validOperadorId ? await this.prisma.user.findUnique({ where: { id: validOperadorId } }) : null;
+    if (!user) {
+      throw new BadRequestException('No se encontró el operador autenticado para registrar el servicio.');
+    }
+    if (createDto.operadorId) {
+      if (String(user.agenciaId || '') !== String(agenciaId || '')) {
+        throw new BadRequestException('El lavador seleccionado no pertenece a la agencia de la bahía indicada.');
+      }
+      if (user.estado !== 1) {
+        throw new BadRequestException('El lavador seleccionado está inactivo y no puede recibir nuevas OTs.');
       }
     }
 
-    const created = await this.prisma.servicioLavado.create({
+    // 3. Resolución Defensiva de Catálogo de Servicio y sus Recetas
+    let catalogo: any = null;
+    if (createDto.servicioCatalogoId) {
+      catalogo = await this.prisma.catalogoServicio.findUnique({
+        where: { id: Number(createDto.servicioCatalogoId) },
+        include: {
+          recetas: {
+            include: {
+              insumo: true,
+              unidadConsumo: true,
+            },
+          },
+        },
+      });
+    }
+    if (!catalogo) {
+      throw new BadRequestException('Debe indicar un servicio válido del catálogo asignado a la agencia.');
+    }
+    if (catalogo.estado === 'Inactivo') {
+      throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar en una nueva OT.`);
+    }
+    const resolvedCatalogoId = catalogo.id;
+
+    // Validar que el servicio esté en la lista de la agencia (Agencia.servicioIds)
+    if (agenciaId) {
+      const agenciaOt = await this.prisma.agencia.findUnique({
+        where: { id: agenciaId },
+        select: { id: true, nombre: true, servicioIds: true },
+      });
+      if (agenciaOt) {
+        const rawIds = Array.isArray(agenciaOt.servicioIds) ? agenciaOt.servicioIds : [];
+        const ids = rawIds.map((id: any) => Number(id)).filter((n: number) => !Number.isNaN(n) && n > 0);
+        if (ids.length === 0) {
+          throw new BadRequestException(
+            `La agencia "${agenciaOt.nombre}" no tiene servicios asignados. Configúralos en Sucursales.`,
+          );
+        }
+        if (!ids.includes(Number(resolvedCatalogoId))) {
+          throw new BadRequestException(
+            `El servicio "${catalogo.nombre}" no está en la lista de servicios de la agencia "${agenciaOt.nombre}".`,
+          );
+        }
+      }
+    }
+
+    // Precio efectivo de este servicio para esta agencia (override si lo fijó un admin, si no el precio
+    // global del catálogo), congelado en la OT: cambios posteriores al precio no la afectan.
+    let precioResuelto: number | null = catalogo.precio != null ? Number(catalogo.precio) : null;
+    if (agenciaId) {
+      const overridePrecio = await this.prisma.precioAgenciaServicio.findUnique({
+        where: { agenciaId_catalogoServicioId: { agenciaId, catalogoServicioId: resolvedCatalogoId } },
+        select: { precio: true },
+      });
+      if (overridePrecio) precioResuelto = Number(overridePrecio.precio);
+    }
+
+    // 4. Estado físico de la bahía: se informa, pero ya no bloquea el registro (decisión de
+    // producto). El estado real en tiempo real lo entrega `bahias/list` / `bahias/opciones`
+    // (campo `ocupada`) para que la pantalla lo muestre antes de crear el servicio.
+    let advertenciaBahiaOcupada: string | undefined;
+    if (createDto.estado === ServiceStatus.EN_PROCESO) {
+      const activoEnBahia = await this.prisma.servicioLavado.findFirst({
+        where: {
+          bahiaId: resolvedBahiaId,
+          estado: ServiceStatus.EN_PROCESO,
+          deletedAt: null,
+        },
+      });
+      if (activoEnBahia && activoEnBahia.placa !== createDto.placa.toUpperCase().trim()) {
+        advertenciaBahiaOcupada = `[ALERTA: la bahía "${bahia.nombre}" ya tenía en proceso al vehículo ${activoEnBahia.placa} (OT ${activoEnBahia.ordenTrabajoOT || '—'}) al registrar esta OT]`;
+      }
+    }
+
+    // 5. VALIDACIÓN ESTRICTA DE STOCK ANTES DE CREAR EL SERVICIO
+    // "solo no me debe permitir si no tengo stock de uno de los suministros necesarios para el servicio"
+    const recetas = catalogo.recetas ?? [];
+    if (agenciaId && recetas.length > 0) {
+      const faltantes: string[] = [];
+      for (const receta of recetas) {
+        if (receta.esOpcional) continue;
+
+        const cantidadBaseNecesaria = this._convertirAUnidadBase(
+          Number(receta.cantidadUsada),
+          receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+        );
+
+        const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
+        const disponible = Number(stock?.cantidadActual ?? 0);
+
+        if (disponible < cantidadBaseNecesaria) {
+          const simbolo = receta.unidadConsumo?.simbolo || 'und';
+          faltantes.push(
+            `"${receta.insumo.nombre}": disponible ${disponible.toFixed(2)} ${simbolo}, requerido ${cantidadBaseNecesaria.toFixed(2)} ${simbolo}`,
+          );
+        }
+      }
+
+      if (faltantes.length > 0) {
+        throw new BadRequestException(
+          `No se puede iniciar el servicio: Stock insuficiente en la agencia para los insumos obligatorios:\n` +
+            faltantes.map((f) => `  • ${f}`).join('\n') +
+            `\nPor favor solicite suministros a Bodega Central antes de crear el servicio.`,
+        );
+      }
+    }
+
+    // 6. Advertencia de Maquinaria Averiada o Fuera de Servicio
+    let observacionesFinales = createDto.observaciones;
+    if (advertenciaBahiaOcupada) {
+      observacionesFinales = observacionesFinales
+        ? `${observacionesFinales} | ${advertenciaBahiaOcupada}`
+        : advertenciaBahiaOcupada;
+    }
+    const maquinaAveriada = await this.prisma.maquinaria.findFirst({
+      where: {
+        bahiaId: resolvedBahiaId,
+        estadoOperativo: { in: ['FUERA_DE_SERVICIO', 'DE_BAJA'] },
+      },
+    });
+    if (maquinaAveriada) {
+      const advertencia = `[ALERTA TÉCNICA: Maquinaria ${maquinaAveriada.codigo} (${maquinaAveriada.nombre}) en estado ${maquinaAveriada.estadoOperativo}]`;
+      observacionesFinales = observacionesFinales
+        ? `${observacionesFinales} | ${advertencia}`
+        : advertencia;
+    }
+
+    // 7. Registro seguro del servicio de lavado en base de datos
+    let estadoInicial = createDto.estado || ServiceStatus.EN_ESPERA;
+    // Un servicio finalizado siempre queda pendiente de aprobación: lo decide el aprobador designado de la agencia o,
+    // si no tiene, un administrador o el supervisor de su región. No hay auto-aprobación.
+
+    // Hora salida estimada desde CatalogoServicio.tiempoEstimadoMin (BD)
+    const minsEstimados = Math.max(1, Number(catalogo.tiempoEstimadoMin) || 30);
+    const horaSalidaEstimada = new Date(now.getTime() + minsEstimados * 60_000);
+    const horaSalidaFinal =
+      estadoInicial === ServiceStatus.FINALIZADO || estadoInicial === ServiceStatus.APROBADO
+        ? now
+        : horaSalidaEstimada;
+
+    // Validar y resolver el número de OT asignado al servicio (obligatorio y único)
+    let ordenTrabajoOT = createDto.ordenTrabajoOT?.trim().toUpperCase();
+    if (!ordenTrabajoOT && createDto.fotoIngresoUrl) {
+      const match = createDto.fotoIngresoUrl.match(/\/servicios\/(?:generales|especiales)\/([^/]+)\//i);
+      if (match && match[1] && match[1] !== 'sin-orden') {
+        ordenTrabajoOT = match[1].toUpperCase();
+      }
+    }
+
+    if (!ordenTrabajoOT) {
+      throw new BadRequestException('El número de Orden de Trabajo (OT) es obligatorio y debe ser ingresado por el usuario.');
+    }
+
+    await this._validarOTServicioGeneral(ordenTrabajoOT, createDto.placa, [resolvedCatalogoId]);
+
+    // La evidencia de ingreso es del vehículo: un servicio agregado a una OT existente la hereda.
+    let fotoIngresoUrl = createDto.fotoIngresoUrl || undefined;
+    let videoInicialHeredado: string | undefined;
+    if (!fotoIngresoUrl) {
+      const hermana = await this.prisma.servicioLavado.findFirst({
+        where: {
+          ordenTrabajoOT: { equals: ordenTrabajoOT, mode: 'insensitive' },
+          deletedAt: null,
+          OR: [{ fotoIngresoUrl: { not: null } }, { videoInicialUrl: { not: null } }],
+        },
+        select: { fotoIngresoUrl: true, videoInicialUrl: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      fotoIngresoUrl = hermana?.fotoIngresoUrl || undefined;
+      videoInicialHeredado = hermana?.videoInicialUrl || undefined;
+    }
+
+    const created = await (this.prisma.servicioLavado as any).create({
       data: {
         clientUuid,
+        ordenTrabajoOT,
         placa: createDto.placa.toUpperCase().trim(),
+        marca: createDto.marca?.trim() || null,
         modelo: createDto.modelo.trim(),
         color: createDto.color?.trim(),
         cliente: createDto.cliente?.trim(),
-        estado: createDto.estado || ServiceStatus.EN_ESPERA,
-        bahiaId: createDto.bahiaId,
-        servicioCatalogoId: createDto.servicioCatalogoId,
-        operadorId,
+        estado: estadoInicial,
+        bahiaId: resolvedBahiaId,
+        servicioCatalogoId: resolvedCatalogoId,
+        precio: precioResuelto,
+        operadorId: validOperadorId,
         horaIngreso: now,
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,
-        fotoIngresoUrl: createDto.fotoIngresoUrl,
+        horaSalida: horaSalidaFinal,
+        fotoIngresoUrl,
+        videoInicialUrl: videoInicialHeredado,
         fotoSalidaUrl: createDto.fotoSalidaUrl,
         observaciones: observacionesFinales,
         syncedAt: now,
@@ -204,8 +718,13 @@ export class OperacionesService {
           include: {
             recetas: {
               include: {
-                insumo: { select: { codigoSKU: true, nombre: true } },
-                unidadConsumo: { select: { codigo: true, simbolo: true } },
+                insumo: {
+                  select: {
+                    id: true, codigoSKU: true, nombre: true, costoUnitarioUSD: true,
+                    unidadMedida: { select: { simbolo: true } },
+                  },
+                },
+                unidadConsumo: { select: { id: true, codigo: true, simbolo: true, factorBase: true } },
               },
             },
           },
@@ -216,16 +735,63 @@ export class OperacionesService {
       },
     });
 
-    return serializeServicioLavado(created);
+    // 8. Descuento atómico de stock e inserción de Kardex
+    await this._ejecutarConsumoInsumos(created, false);
+
+    // 9. Persistir registro en tabla EvidenciaServicio si se adjuntó vídeo o foto de ingreso
+    if (fotoIngresoUrl || videoInicialHeredado) {
+      await this.prisma.evidenciaServicio.create({
+        data: {
+          servicioId: created.id,
+          tipo: 'VIDEO_INGRESO',
+          url: (fotoIngresoUrl || videoInicialHeredado) as string,
+          descripcion: 'Vídeo / Foto de Ingreso del Vehículo',
+        },
+      }).catch((err) => {
+        this.logger.warn(`No se pudo registrar EvidenciaServicio en create: ${err?.message}`);
+      });
+    }
+
+    const finalCreated = await this.findOneRaw(created.id);
+    return serializeServicioLavado(finalCreated);
   }
 
-  async update(id: string, updateDto: UpdateServicioDto, isOfflineSync: boolean = false) {
+  async update(id: string, updateDto: UpdateServicioDto, isOfflineSync: boolean = false, actor?: any) {
     const servicio = await this.findOneRaw(id);
     const data: any = { ...updateDto };
     delete data.id;
+    delete data.motivoCorreccion;
+
+    let motivoCorreccion: string | undefined;
+    if (actor) {
+      this.asegurarAlcanceServicio(actor, servicio);
+      if (servicio.deletedAt) throw new BadRequestException('El servicio está anulado y no se puede modificar.');
+      // Aprobar, rechazar y anular tienen sus propias acciones (con regla y registro): no se cuelan por aquí.
+      if (updateDto.estado && ([ServiceStatus.APROBADO, ServiceStatus.RECHAZADO, ServiceStatus.CANCELADO] as ServiceStatus[]).includes(updateDto.estado)) {
+        throw new BadRequestException('Para aprobar, rechazar o anular usa la acción correspondiente.');
+      }
+      if (servicio.estado === ServiceStatus.APROBADO) {
+        if (!['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor))) {
+          throw new ForbiddenException('Un servicio aprobado solo lo puede editar un administrador.');
+        }
+        motivoCorreccion = this.decisiones.exigirMotivo(updateDto.motivoCorreccion, 'corregir un servicio aprobado');
+      }
+      // La web ya exige el vídeo/foto de salida antes de finalizar (confirmarFinalizarServicio); se
+      // repite acá para que nadie finalice sin evidencia llamando al endpoint directo. No aplica al
+      // offline sync (su propio flujo lo maneja más abajo) ni si ya estaba finalizado (reintentos).
+      if (
+        !isOfflineSync &&
+        updateDto.estado === ServiceStatus.FINALIZADO &&
+        servicio.estado !== ServiceStatus.FINALIZADO &&
+        !(data.fotoSalidaUrl ?? servicio.fotoSalidaUrl)
+      ) {
+        throw new BadRequestException('La evidencia de salida (foto o vídeo) es obligatoria para finalizar el servicio.');
+      }
+    }
     data.version = { increment: 1 };
 
-    if (updateDto.estado === ServiceStatus.FINALIZADO && !servicio.horaSalida) {
+    if (updateDto.estado === ServiceStatus.FINALIZADO) {
+      // Al finalizar, horaSalida pasa a ser la real (antes era estimada por tiempoEstimadoMin)
       data.horaSalida = new Date();
     }
 
@@ -257,13 +823,16 @@ export class OperacionesService {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // HOOK: Al finalizar un servicio, descontar insumos de la receta
+    // HOOK: Al finalizar un servicio, descontar insumos de la receta (si no fueron descontados al registrar)
     // ──────────────────────────────────────────────────────────────────
     if (
       data.estado === ServiceStatus.FINALIZADO &&
       servicio.estado !== ServiceStatus.FINALIZADO
     ) {
-      await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
+      if (!servicio.consumos || servicio.consumos.length === 0) {
+        await this._ejecutarConsumoInsumos(servicio, isOfflineSync);
+      }
+
     }
 
     const updated = await this.prisma.servicioLavado.update({
@@ -288,14 +857,78 @@ export class OperacionesService {
       },
     });
 
+    if (actor && motivoCorreccion) {
+      await this.decisiones.registrar({
+        entidad: 'SERVICIO_LAVADO',
+        entidadId: servicio.id,
+        accion: 'EDITAR_APROBADO',
+        user: actor,
+        regla: 'ADMIN',
+        motivo: motivoCorreccion,
+        agenciaId: servicio.bahia?.agencia?.id ?? null,
+        detalle: { cambios: Object.keys(data).filter((k) => k !== 'version') },
+      });
+    }
+
+    // Persistir en EvidenciaServicio si se envió vídeo o foto de salida/ingreso
+    if (updateDto.fotoSalidaUrl) {
+      const yaExisteSalida = updated.evidencias?.some((e) => e.url === updateDto.fotoSalidaUrl);
+      if (!yaExisteSalida) {
+        await this.prisma.evidenciaServicio.create({
+          data: {
+            servicioId: updated.id,
+            tipo: 'VIDEO_SALIDA',
+            url: updateDto.fotoSalidaUrl,
+            descripcion: 'Vídeo / Foto de Salida y Acabado del Vehículo',
+          },
+        }).catch((err) => {
+          this.logger.warn(`No se pudo registrar EvidenciaServicio de salida: ${err?.message}`);
+        });
+      }
+    }
+    if (updateDto.fotoIngresoUrl) {
+      const yaExisteIngreso = updated.evidencias?.some((e) => e.url === updateDto.fotoIngresoUrl);
+      if (!yaExisteIngreso) {
+        await this.prisma.evidenciaServicio.create({
+          data: {
+            servicioId: updated.id,
+            tipo: 'VIDEO_INGRESO',
+            url: updateDto.fotoIngresoUrl,
+            descripcion: 'Vídeo / Foto de Ingreso del Vehículo',
+          },
+        }).catch((err) => {
+          this.logger.warn(`No se pudo registrar EvidenciaServicio de ingreso: ${err?.message}`);
+        });
+      }
+    }
+
     return serializeServicioLavado(updated);
   }
 
-  async softDelete(id: string, motivo?: string, reponerInsumos: boolean = true) {
+  /**
+   * Anula un servicio (no se borra: queda con deletedAt para la sincronización y con quién, cuándo y por qué).
+   * Con `actor` (llamada desde la API) exige motivo y aplica la regla: antes de aprobar, el líder y el aprobador de la agencia y los
+   * administradores; ya aprobado, solo los administradores.
+   */
+  async softDelete(id: string, motivo?: string, reponerInsumos: boolean = true, actor?: any) {
     const servicio = await this.findOneRaw(id);
 
-    // Reversión de Insumos: Si el servicio estaba FINALIZADO y tenía consumos, reponer al inventario
-    if (servicio.estado === ServiceStatus.FINALIZADO && reponerInsumos && servicio.consumos?.length > 0) {
+    let regla: 'TITULAR' | 'RESPALDO' | 'ADMIN' | undefined;
+    let motivoAnulacion = motivo;
+    if (actor) {
+      this.asegurarAlcanceServicio(actor, servicio);
+      if (servicio.deletedAt) throw new BadRequestException('El servicio ya está anulado.');
+      motivoAnulacion = this.decisiones.exigirMotivo(motivo, 'anular un servicio');
+      regla = this.decisiones.reglaParaAnular(
+        actor,
+        { id: servicio.bahia.agencia.id, regionId: servicio.bahia.agencia.regionId },
+        servicio.estado === ServiceStatus.APROBADO,
+      );
+    }
+
+    // Reversión de Insumos: si el servicio ya había consumido insumos (finalizado o aprobado), reponer al inventario
+    const consumioInsumos = servicio.estado === ServiceStatus.FINALIZADO || servicio.estado === ServiceStatus.APROBADO;
+    if (consumioInsumos && reponerInsumos && servicio.consumos?.length > 0) {
       const agenciaId = servicio.bahia?.agencia?.id;
       for (const c of servicio.consumos) {
         const cantidadRevertir = Number(c.cantidadUsada);
@@ -337,9 +970,10 @@ export class OperacionesService {
       data: {
         deletedAt: new Date(),
         estado: ServiceStatus.CANCELADO,
-        observaciones: motivo
-          ? `${servicio.observaciones || ''} | [Eliminado/Anulado]: ${motivo}`.trim()
+        observaciones: motivoAnulacion
+          ? `${servicio.observaciones || ''} | [Eliminado/Anulado]: ${motivoAnulacion}`.trim()
           : servicio.observaciones,
+        ...(actor ? { anuladoPorId: String(actor.id), anuladoEn: new Date(), motivoAnulacion } : {}),
         version: servicio.version + 1,
       },
       include: {
@@ -351,7 +985,50 @@ export class OperacionesService {
       },
     });
 
+    if (actor && regla) {
+      await this.decisiones.registrar({
+        entidad: 'SERVICIO_LAVADO',
+        entidadId: servicio.id,
+        accion: 'ANULAR',
+        user: actor,
+        regla,
+        motivo: motivoAnulacion,
+        agenciaId: servicio.bahia.agencia.id,
+        detalle: { estadoAnterior: servicio.estado, insumosRepuestos: consumioInsumos && reponerInsumos },
+      });
+      await this.notificarDecisionServicio(servicio, servicio.bahia.agencia, 'ANULADO');
+    }
+
     return serializeServicioLavado(deleted);
+  }
+
+  /**
+   * Avisa que se decidió un servicio general (aprobar, rechazar o anular): al operador que lo ejecutó,
+   * al líder de esa agencia, al supervisor de su región y a admin/super admin. Nunca bloquea el flujo.
+   */
+  private async notificarDecisionServicio(
+    servicio: { id: string; placa: string; ordenTrabajoOT?: string | null; operadorId?: string | null },
+    agencia: { id: string; regionId?: string | null },
+    decision: 'APROBADO' | 'RECHAZADO' | 'ANULADO',
+  ): Promise<void> {
+    if (!this.notifications) return;
+    const [lideres, porRol] = await Promise.all([
+      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: 'LIDER' } }, select: { id: true } }),
+      this.notifications.resolverDestinatariosPorRol({
+        global: ['ADMIN', 'SUPER_ADMIN'],
+        regionales: ['SUPERVISOR'],
+        regionId: agencia.regionId,
+      }),
+    ]);
+    const ids = [servicio.operadorId, ...lideres.map((l) => l.id), ...porRol].filter(Boolean) as string[];
+    const verbo = decision === 'APROBADO' ? 'aprobado' : decision === 'RECHAZADO' ? 'rechazado' : 'anulado';
+    void this.notifications.notificarUsuarios(
+      ids,
+      `Servicio ${verbo}`,
+      `El servicio de la placa ${servicio.placa} (OT ${servicio.ordenTrabajoOT || servicio.id}) fue ${verbo}.`,
+      { type: 'SERVICIO_DECIDIDO', servicioId: servicio.id },
+      { tipo: 'SERVICIO_DECIDIDO', entidadTipo: 'SERVICIO_LAVADO', entidadId: servicio.id },
+    );
   }
 
   // ============================================================
@@ -418,7 +1095,7 @@ export class OperacionesService {
 
       if (faltantes.length > 0) {
         throw new BadRequestException(
-          `❌ Stock insuficiente en la agencia para finalizar el servicio. Insumos faltantes:\n` +
+          `Stock insuficiente en la agencia para finalizar el servicio. Insumos faltantes:\n` +
             faltantes.map((f) => `  • ${f}`).join('\n'),
         );
       }
@@ -493,6 +1170,11 @@ export class OperacionesService {
             cantidadUsada: cantidadADescontar,
             stockUbicacionId: stock.id,
             agenciaId,
+            // Snapshot congelado: el producto pudo cambiar de nombre/SKU, o la receta
+            // pudo reemplazarlo por otro, después de este consumo. Esto no cambia.
+            insumoNombre: receta.insumo?.nombre || '',
+            insumoSKU: receta.insumo?.codigoSKU || '',
+            unidadSimbolo: receta.insumo?.unidadMedida?.simbolo || receta.unidadConsumo?.simbolo || '',
           },
         });
       });
@@ -524,6 +1206,7 @@ export class OperacionesService {
               insumoNombre: receta.insumo?.nombre || 'Insumo Químico',
               nivel: 'CRITICO',
               agenciaId,
+              entidadId: receta.insumoId,
             });
           }
         }
@@ -555,6 +1238,7 @@ export class OperacionesService {
                 insumoNombre: receta.insumo?.nombre || 'Insumo Químico',
                 nivel,
                 agenciaId,
+                entidadId: receta.insumoId,
               });
             }
           }
@@ -624,7 +1308,7 @@ export class OperacionesService {
   //  RECETAS DE INSUMOS POR CATÁLOGO DE SERVICIO
   // ============================================================
 
-  async asignarReceta(dto: AsignarRecetaDto) {
+  async asignarReceta(dto: AsignarRecetaDto, usuarioId?: string) {
     // Verificar que el catálogo existe
     const catalogo = await this.prisma.catalogoServicio.findUnique({
       where: { id: dto.catalogoServicioId },
@@ -633,33 +1317,88 @@ export class OperacionesService {
       throw new NotFoundException(`Catálogo de servicio con ID ${dto.catalogoServicioId} no encontrado`);
     }
 
-    // Validar insumos y unidades
+    // Estado ANTES del cambio, para poder registrar el historial (qué salió, qué cambió).
+    const recetaAnterior = await this.prisma.recetaInsumo.findMany({
+      where: { catalogoServicioId: dto.catalogoServicioId },
+      include: {
+        insumo: { select: { nombre: true, codigoSKU: true } },
+        unidadConsumo: { select: { simbolo: true } },
+      },
+    });
+    const anteriorPorInsumo = new Map(recetaAnterior.map((r) => [r.insumoId, r]));
+    const loteId = randomUUID();
+    const historial: any[] = [];
+
+    if (!dto.items || dto.items.length === 0) {
+      for (const anterior of recetaAnterior) {
+        historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'ELIMINADO', anterior.insumoId, anterior.insumo.nombre, anterior.insumo.codigoSKU, anterior.unidadConsumo.simbolo, Number(anterior.cantidadUsada), null, usuarioId));
+      }
+      await this.prisma.$transaction([
+        ...(historial.length > 0 ? [this.prisma.recetaInsumoHistorial.createMany({ data: historial })] : []),
+        this.prisma.recetaInsumo.deleteMany({ where: { catalogoServicioId: dto.catalogoServicioId } }),
+      ]);
+      return {
+        catalogoServicioId: dto.catalogoServicioId,
+        catalogoNombre: catalogo.nombre,
+        categoria: catalogo.categoria,
+        recetaActualizada: [],
+      };
+    }
+
+    // Validar insumos y resolver unidades con fallback robusto
+    const insumosPorId = new Map<string, any>();
     for (const item of dto.items) {
       const insumo = await this.prisma.insumo.findUnique({ where: { id: item.insumoId } });
       if (!insumo) throw new NotFoundException(`Insumo con ID "${item.insumoId}" no encontrado`);
 
-      const unidad = await this.prisma.unidadMedida.findUnique({ where: { id: item.unidadConsumoId } });
-      if (!unidad) throw new NotFoundException(`Unidad con ID "${item.unidadConsumoId}" no encontrada`);
+      let unidad: any = null;
+      if (item.unidadConsumoId && item.unidadConsumoId !== 'und_default' && item.unidadConsumoId.trim().length > 0) {
+        unidad = await this.prisma.unidadMedida.findUnique({ where: { id: item.unidadConsumoId } });
+      }
+
+      if (!unidad && insumo.unidadMedidaId) {
+        unidad = await this.prisma.unidadMedida.findUnique({ where: { id: insumo.unidadMedidaId } });
+      }
+
+      if (!unidad) {
+        throw new NotFoundException(`No se encontró una unidad de medida para el insumo "${insumo.nombre}". Asigne la unidad en el catálogo.`);
+      }
+
+      item.unidadConsumoId = unidad.id;
+      insumosPorId.set(item.insumoId, { insumo, unidad });
     }
+
+    // Líneas que salen de la receta (estaban antes, no vienen en el nuevo guardado)
+    const incomingInsumoIds = new Set(dto.items.map((i) => i.insumoId));
+    for (const anterior of recetaAnterior) {
+      if (!incomingInsumoIds.has(anterior.insumoId)) {
+        historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'ELIMINADO', anterior.insumoId, anterior.insumo.nombre, anterior.insumo.codigoSKU, anterior.unidadConsumo.simbolo, Number(anterior.cantidadUsada), null, usuarioId));
+      }
+    }
+    await this.prisma.recetaInsumo.deleteMany({
+      where: {
+        catalogoServicioId: dto.catalogoServicioId,
+        insumoId: { notIn: Array.from(incomingInsumoIds) },
+      },
+    });
 
     // Upsert cada línea de receta
     const resultados = [];
     for (const item of dto.items) {
-      const existing = await this.prisma.recetaInsumo.findUnique({
-        where: {
-          catalogoServicioId_insumoId: {
-            catalogoServicioId: dto.catalogoServicioId,
-            insumoId: item.insumoId,
-          },
-        },
-      });
+      const { insumo, unidad } = insumosPorId.get(item.insumoId)!;
+      const existing = anteriorPorInsumo.get(item.insumoId);
 
       if (existing) {
+        const cambioCantidad = Number(existing.cantidadUsada) !== Number(item.cantidadUsada);
+        const cambioUnidad = existing.unidadConsumoId !== item.unidadConsumoId;
+        if (cambioCantidad || cambioUnidad) {
+          historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'MODIFICADO', item.insumoId, insumo.nombre, insumo.codigoSKU, unidad.simbolo, Number(existing.cantidadUsada), Number(item.cantidadUsada), usuarioId));
+        }
         const updated = await this.prisma.recetaInsumo.update({
           where: { id: existing.id },
           data: {
             cantidadUsada: item.cantidadUsada,
-            unidadConsumoId: item.unidadConsumoId,
+            unidadConsumoId: item.unidadConsumoId!,
             esOpcional: item.esOpcional ?? false,
             observacion: item.observacion,
           },
@@ -670,12 +1409,13 @@ export class OperacionesService {
         });
         resultados.push(updated);
       } else {
+        historial.push(this._historialRecetaEntry(dto.catalogoServicioId, loteId, 'AGREGADO', item.insumoId, insumo.nombre, insumo.codigoSKU, unidad.simbolo, null, Number(item.cantidadUsada), usuarioId));
         const created = await this.prisma.recetaInsumo.create({
           data: {
             catalogoServicioId: dto.catalogoServicioId,
             insumoId: item.insumoId,
             cantidadUsada: item.cantidadUsada,
-            unidadConsumoId: item.unidadConsumoId,
+            unidadConsumoId: item.unidadConsumoId!,
             esOpcional: item.esOpcional ?? false,
             observacion: item.observacion,
           },
@@ -688,12 +1428,235 @@ export class OperacionesService {
       }
     }
 
+    if (historial.length > 0) {
+      await this.prisma.recetaInsumoHistorial.createMany({ data: historial });
+    }
+
     return {
       catalogoServicioId: dto.catalogoServicioId,
       catalogoNombre: catalogo.nombre,
       categoria: catalogo.categoria,
       recetaActualizada: resultados,
     };
+  }
+
+  private _historialRecetaEntry(
+    catalogoServicioId: number,
+    loteId: string,
+    tipoCambio: 'AGREGADO' | 'MODIFICADO' | 'ELIMINADO',
+    insumoId: string,
+    insumoNombre: string,
+    insumoSKU: string,
+    unidadSimbolo: string,
+    cantidadAnterior: number | null,
+    cantidadNueva: number | null,
+    usuarioId?: string,
+  ) {
+    return {
+      catalogoServicioId,
+      loteId,
+      tipoCambio,
+      insumoId,
+      insumoNombre,
+      insumoSKU,
+      unidadSimbolo,
+      cantidadAnterior,
+      cantidadNueva,
+      usuarioId: usuarioId || null,
+    };
+  }
+
+  /**
+   * Libro de consumo por OT: una fila por OT con los insumos que descontó, tanto de
+   * lavado general (agencia) como de servicios especiales (kit del pulidor).
+   * Los insumos salen del snapshot congelado al momento del consumo.
+   */
+  async listConsumosPorServicio(dto: ListConsumosServicioDto) {
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+    const tipo = dto.tipo ?? 'TODOS';
+    const busqueda = dto.busqueda?.trim();
+    // Tope de líneas a agrupar en memoria; el filtro por fechas mantiene el volumen acotado.
+    const LIMITE_LINEAS = 5000;
+
+    const createdAt: any = {};
+    if (dto.fechaDesde) createdAt.gte = new Date(`${dto.fechaDesde}T00:00:00`);
+    if (dto.fechaHasta) createdAt.lte = new Date(`${dto.fechaHasta}T23:59:59.999`);
+    const rango = Object.keys(createdAt).length > 0 ? { createdAt } : {};
+
+    const insumoSelect = {
+      select: { nombre: true, codigoSKU: true, unidadMedida: { select: { simbolo: true } } },
+    };
+    const operadorSelect = { select: { name: true, lastname: true } };
+    const nombreOperador = (u?: { name?: string | null; lastname?: string | null } | null) =>
+      u ? `${u.name || ''} ${u.lastname || ''}`.replace(/\(CI:[^)]*\)/, '').trim() : '';
+
+    const whereGeneral: any = { ...rango };
+    if (dto.agenciaId) whereGeneral.agenciaId = dto.agenciaId;
+    if (busqueda) {
+      whereGeneral.OR = [
+        { insumoNombre: { contains: busqueda, mode: 'insensitive' } },
+        { insumo: { nombre: { contains: busqueda, mode: 'insensitive' } } },
+        { servicio: { ordenTrabajoOT: { contains: busqueda, mode: 'insensitive' } } },
+        { servicio: { placa: { contains: busqueda, mode: 'insensitive' } } },
+        { servicio: { catalogo: { nombre: { contains: busqueda, mode: 'insensitive' } } } },
+      ];
+    }
+
+    const whereEspecial: any = { ...rango };
+    if (dto.agenciaId) whereEspecial.servicioEspecial = { agenciaId: dto.agenciaId };
+    if (busqueda) {
+      whereEspecial.OR = [
+        { insumoNombre: { contains: busqueda, mode: 'insensitive' } },
+        { insumo: { nombre: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { codigoSE: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { ordenTrabajoOT: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { placa: { contains: busqueda, mode: 'insensitive' } } },
+        { servicioEspecial: { tipoServicio: { contains: busqueda, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [generales, especiales] = await Promise.all([
+      tipo === 'ESPECIAL' ? [] : this.prisma.consumoServicio.findMany({
+        where: whereGeneral,
+        orderBy: { createdAt: 'desc' },
+        take: LIMITE_LINEAS,
+        include: {
+          insumo: insumoSelect,
+          servicio: {
+            select: {
+              id: true,
+              ordenTrabajoOT: true,
+              placa: true,
+              catalogo: { select: { nombre: true } },
+              bahia: { select: { agencia: { select: { nombre: true } } } },
+              operador: operadorSelect,
+            },
+          },
+        },
+      }),
+      tipo === 'GENERAL' ? [] : this.prisma.consumoServicioEspecial.findMany({
+        where: whereEspecial,
+        orderBy: { createdAt: 'desc' },
+        take: LIMITE_LINEAS,
+        include: {
+          insumo: insumoSelect,
+          servicioEspecial: {
+            select: {
+              id: true,
+              codigoSE: true,
+              ordenTrabajoOT: true,
+              tipoServicio: true,
+              placa: true,
+              agencia: { select: { nombre: true } },
+              operador: operadorSelect,
+            },
+          },
+        },
+      }),
+    ]);
+
+    type ItemConsumo = {
+      servicioNombre: string;
+      insumoNombre: string;
+      insumoSKU: string;
+      cantidad: number;
+      unidadSimbolo: string;
+      fecha: Date;
+    };
+    type GrupoOT = {
+      key: string;
+      origen: 'GENERAL' | 'ESPECIAL';
+      codigoOT: string;
+      placa: string;
+      agenciaNombre: string;
+      responsable: string;
+      fecha: Date;
+      servicios: string[];
+      items: ItemConsumo[];
+    };
+    const grupos = new Map<string, GrupoOT>();
+
+    const agregar = (
+      key: string,
+      base: Omit<GrupoOT, 'key' | 'fecha' | 'servicios' | 'items'>,
+      item: ItemConsumo,
+    ) => {
+      let g = grupos.get(key);
+      if (!g) {
+        g = { key, ...base, fecha: item.fecha, servicios: [], items: [] };
+        grupos.set(key, g);
+      }
+      if (item.fecha > g.fecha) g.fecha = item.fecha;
+      if (!g.servicios.includes(item.servicioNombre)) g.servicios.push(item.servicioNombre);
+      g.items.push(item);
+    };
+
+    for (const c of generales) {
+      const ot = (c.servicio?.ordenTrabajoOT || '').trim().toUpperCase();
+      const placa = c.servicio?.placa || '';
+      // Una OT general puede tener varios servicios (una fila por servicio): comparten OT y placa.
+      const key = ot ? `G|${ot}|${placa.toUpperCase()}` : `G|${c.servicio?.id || c.servicioId}`;
+      agregar(
+        key,
+        {
+          origen: 'GENERAL',
+          codigoOT: c.servicio?.ordenTrabajoOT || '',
+          placa,
+          agenciaNombre: c.servicio?.bahia?.agencia?.nombre || '',
+          responsable: nombreOperador(c.servicio?.operador),
+        },
+        {
+          servicioNombre: c.servicio?.catalogo?.nombre || 'Servicio',
+          insumoNombre: c.insumoNombre || c.insumo?.nombre || 'Insumo',
+          insumoSKU: c.insumoSKU || c.insumo?.codigoSKU || '',
+          cantidad: Number(c.cantidadUsada),
+          unidadSimbolo: c.unidadSimbolo || c.insumo?.unidadMedida?.simbolo || '',
+          fecha: c.createdAt,
+        },
+      );
+    }
+
+    for (const c of especiales) {
+      const se = c.servicioEspecial;
+      agregar(
+        `E|${se?.id || c.servicioEspecialId}`,
+        {
+          origen: 'ESPECIAL',
+          codigoOT: se?.ordenTrabajoOT || se?.codigoSE || '',
+          placa: se?.placa || '',
+          agenciaNombre: se?.agencia?.nombre || 'Pulidor móvil',
+          responsable: nombreOperador(se?.operador),
+        },
+        {
+          servicioNombre: se?.tipoServicio || 'Servicio especial',
+          insumoNombre: c.insumoNombre || c.insumo?.nombre || 'Insumo',
+          insumoSKU: c.insumoSKU || c.insumo?.codigoSKU || '',
+          cantidad: Number(c.cantidadUsada),
+          unidadSimbolo: c.unidadSimbolo || c.insumo?.unidadMedida?.simbolo || '',
+          fecha: c.createdAt,
+        },
+      );
+    }
+
+    const todos = Array.from(grupos.values()).sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
+    const inicio = (page - 1) * pageSize;
+    return {
+      data: todos.slice(inicio, inicio + pageSize),
+      total: todos.length,
+      page,
+      pageSize,
+    };
+  }
+
+  async listRecetaHistorial(dto: ListRecetaDto) {
+    return this.prisma.recetaInsumoHistorial.findMany({
+      where: { catalogoServicioId: dto.catalogoServicioId },
+      include: {
+        usuario: { select: { id: true, name: true, lastname: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   async listReceta(dto: ListRecetaDto) {
@@ -725,13 +1688,17 @@ export class OperacionesService {
     return catalogo;
   }
 
-  async eliminarRecetaItem(dto: EliminarRecetaItemDto) {
+  async eliminarRecetaItem(dto: EliminarRecetaItemDto, usuarioId?: string) {
     const receta = await this.prisma.recetaInsumo.findUnique({
       where: {
         catalogoServicioId_insumoId: {
           catalogoServicioId: dto.catalogoServicioId,
           insumoId: dto.insumoId,
         },
+      },
+      include: {
+        insumo: { select: { nombre: true, codigoSKU: true } },
+        unidadConsumo: { select: { simbolo: true } },
       },
     });
 
@@ -741,7 +1708,23 @@ export class OperacionesService {
       );
     }
 
-    await this.prisma.recetaInsumo.delete({ where: { id: receta.id } });
+    await this.prisma.$transaction([
+      this.prisma.recetaInsumoHistorial.create({
+        data: this._historialRecetaEntry(
+          dto.catalogoServicioId,
+          randomUUID(),
+          'ELIMINADO',
+          receta.insumoId,
+          receta.insumo.nombre,
+          receta.insumo.codigoSKU,
+          receta.unidadConsumo.simbolo,
+          Number(receta.cantidadUsada),
+          null,
+          usuarioId,
+        ),
+      }),
+      this.prisma.recetaInsumo.delete({ where: { id: receta.id } }),
+    ]);
     return { ok: true, message: 'Insumo eliminado de la receta correctamente' };
   }
 
@@ -749,14 +1732,23 @@ export class OperacionesService {
   //  APROBACIONES Y CIERRE DIARIO GERENCIAL
   // ============================================================
 
-  async aprobarServicio(id: string, observacion?: string, gerenteNombre?: string) {
+  /** Aprobar: el aprobador designado de la agencia o, si no tiene, un administrador o el supervisor de su región. */
+  async aprobarServicio(id: string, observacion: string | undefined, actor: any) {
     const servicio = await this.findOneRaw(id);
+    if (servicio.deletedAt) throw new BadRequestException('El servicio está anulado.');
+    if (servicio.estado !== ServiceStatus.FINALIZADO) {
+      throw new BadRequestException('Solo se pueden aprobar servicios que ya han sido finalizados.');
+    }
+    const agencia = servicio.bahia.agencia;
+    const regla = await this.decisiones.reglaParaDecidir(actor, { id: agencia.id, regionId: agencia.regionId });
     const updated = await this.prisma.servicioLavado.update({
       where: { id: servicio.id },
       data: {
         estado: ServiceStatus.APROBADO,
-        observacionGerente: observacion || servicio.observacionGerente || 'Aprobado por gerencia',
-        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
+        observacionGerente: observacion || servicio.observacionGerente || 'Aprobado',
+        aprobadoPor: this.nombreDe(actor),
+        decididoPorId: String(actor.id),
+        reglaDecision: regla,
         fechaAprobacion: new Date(),
         version: servicio.version + 1,
       },
@@ -779,18 +1771,40 @@ export class OperacionesService {
       },
     });
 
+    await this.decisiones.registrar({
+      entidad: 'SERVICIO_LAVADO',
+      entidadId: servicio.id,
+      accion: 'APROBAR',
+      user: actor,
+      regla,
+      motivo: observacion,
+      agenciaId: agencia.id,
+    });
+
+    await this.notificarDecisionServicio(servicio, agencia, 'APROBADO');
+
     return serializeServicioLavado(updated);
   }
 
-  async rechazarServicio(id: string, motivo: string, gerenteNombre?: string) {
+  /** Rechazar: mismas reglas que aprobar; el motivo es obligatorio. */
+  async rechazarServicio(id: string, motivo: string, actor: any) {
     const servicio = await this.findOneRaw(id);
+    if (servicio.deletedAt) throw new BadRequestException('El servicio está anulado.');
+    if (servicio.estado !== ServiceStatus.FINALIZADO) {
+      throw new BadRequestException('Solo se pueden rechazar servicios que ya han sido finalizados.');
+    }
+    const motivoOk = this.decisiones.exigirMotivo(motivo, 'rechazar un servicio');
+    const agencia = servicio.bahia.agencia;
+    const regla = await this.decisiones.reglaParaDecidir(actor, { id: agencia.id, regionId: agencia.regionId });
     const updated = await this.prisma.servicioLavado.update({
       where: { id: servicio.id },
       data: {
         estado: ServiceStatus.RECHAZADO,
-        motivoRechazo: motivo,
-        observacionGerente: motivo,
-        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
+        motivoRechazo: motivoOk,
+        observacionGerente: motivoOk,
+        aprobadoPor: this.nombreDe(actor),
+        decididoPorId: String(actor.id),
+        reglaDecision: regla,
         fechaAprobacion: new Date(),
         version: servicio.version + 1,
       },
@@ -813,25 +1827,40 @@ export class OperacionesService {
       },
     });
 
+    await this.decisiones.registrar({
+      entidad: 'SERVICIO_LAVADO',
+      entidadId: servicio.id,
+      accion: 'RECHAZAR',
+      user: actor,
+      regla,
+      motivo: motivoOk,
+      agenciaId: agencia.id,
+    });
+
+    await this.notificarDecisionServicio(servicio, agencia, 'RECHAZADO');
+
     return serializeServicioLavado(updated);
   }
 
+  /** Cierre del día de UNA agencia (la agencia es obligatoria). Misma regla de quién puede decidir. */
   async aprobarTodosServicios(
-    agenciaId?: string,
-    sucursalId?: string,
+    actor: any,
+    agenciaId: string | undefined,
     fecha?: string,
-    gerenteNombre?: string,
     requiereFotoSalida: boolean = true,
   ) {
-    const targetAgencia = agenciaId || sucursalId;
+    if (!agenciaId) {
+      throw new BadRequestException('Indica la agencia cuyo día quieres cerrar: no se puede aprobar todo el país de una vez.');
+    }
+    const agencia = await this.prisma.agencia.findUnique({ where: { id: agenciaId }, select: { id: true, nombre: true, regionId: true } });
+    if (!agencia) throw new NotFoundException('Agencia no encontrada.');
+    const regla = await this.decisiones.reglaParaDecidir(actor, { id: agencia.id, regionId: agencia.regionId });
+
     const baseWhere: any = {
       estado: ServiceStatus.FINALIZADO,
       deletedAt: null,
+      bahia: { agenciaId: agencia.id },
     };
-
-    if (targetAgencia) {
-      baseWhere.bahia = { agenciaId: targetAgencia };
-    }
 
     if (fecha) {
       const start = new Date(`${fecha}T00:00:00.000Z`);
@@ -854,16 +1883,54 @@ export class OperacionesService {
       });
     }
 
-    const batchResult = await this.prisma.servicioLavado.updateMany({
-      where: whereParaAprobar,
-      data: {
-        estado: ServiceStatus.APROBADO,
-        observacionGerente: 'Aprobación masiva de cierre diario (Quality Gate)',
-        aprobadoPor: gerenteNombre || 'Gerencia Operativa',
-        fechaAprobacion: new Date(),
-        version: { increment: 1 },
-      },
-    });
+    const pendientes = await this.prisma.servicioLavado.findMany({ where: whereParaAprobar, select: { id: true, placa: true, ordenTrabajoOT: true, operadorId: true } });
+    const ids = pendientes.map((s) => s.id);
+    const batchResult = ids.length
+      ? await this.prisma.servicioLavado.updateMany({
+          where: { id: { in: ids }, estado: ServiceStatus.FINALIZADO },
+          data: {
+            estado: ServiceStatus.APROBADO,
+            observacionGerente: 'Aprobación masiva de cierre diario (Quality Gate)',
+            aprobadoPor: this.nombreDe(actor),
+            decididoPorId: String(actor.id),
+            reglaDecision: regla,
+            fechaAprobacion: new Date(),
+            version: { increment: 1 },
+          },
+        })
+      : { count: 0 };
+
+    if (ids.length) {
+      await this.decisiones.registrarLote({
+        entidad: 'SERVICIO_LAVADO',
+        entidadIds: ids,
+        accion: 'APROBAR',
+        user: actor,
+        regla,
+        motivo: 'Aprobación masiva de cierre diario',
+        agenciaId: agencia.id,
+      });
+
+      if (this.notifications) {
+        const [lideres, porRol] = await Promise.all([
+          this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: 'LIDER' } }, select: { id: true } }),
+          this.notifications.resolverDestinatariosPorRol({
+            global: ['ADMIN', 'SUPER_ADMIN'],
+            regionales: ['SUPERVISOR'],
+            regionId: agencia.regionId,
+          }),
+        ]);
+        const operadorIds = [...new Set(pendientes.map((s) => s.operadorId).filter(Boolean))] as string[];
+        const destinatarios = [...operadorIds, ...lideres.map((l) => l.id), ...porRol];
+        void this.notifications.notificarUsuarios(
+          destinatarios,
+          'Servicios aprobados (cierre de día)',
+          `Se aprobaron ${batchResult.count} servicios de la agencia "${agencia.nombre}" en el cierre de día.`,
+          { type: 'SERVICIO_DECIDIDO', agenciaId: agencia.id },
+          { tipo: 'SERVICIO_DECIDIDO', entidadTipo: 'AGENCIA', entidadId: agencia.id },
+        );
+      }
+    }
 
     return {
       ok: true,

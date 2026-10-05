@@ -46,3 +46,31 @@ export class AprobarTodosDto {
   requiereFotoSalida?: boolean;
 }
 
+
+export class AnularServicioDto {
+  @ApiProperty({ description: 'ID o clientUuid del servicio a anular' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'Motivo de la anulación (obligatorio: queda registrado quién anuló y por qué)' })
+  @IsString()
+  @IsNotEmpty()
+  motivo: string;
+
+  @ApiPropertyOptional({ description: 'Reponer al inventario los insumos ya consumidos (por defecto sí)', default: true })
+  @IsOptional()
+  reponerInsumos?: boolean;
+}
+
+export class AnularServicioEspecialDto {
+  @ApiProperty({ description: 'ID del servicio especial a anular' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'Motivo de la anulación (obligatorio: queda registrado quién anuló y por qué)' })
+  @IsString()
+  @IsNotEmpty()
+  motivo: string;
+}

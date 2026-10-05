@@ -1,5 +1,6 @@
 import { IsString, IsNotEmpty, IsOptional, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
 export class CreateBahiaDto {
   @ApiProperty({ example: 'QNOR-B04', description: 'Código único de la bahía' })
@@ -40,7 +41,8 @@ export class UpdateBahiaDto {
   activa?: boolean;
 }
 
-export class ListBahiasDto {
+/** Sin page/pageSize: arreglo (hasta 100). Con alguno: página. Orden: codigo, nombre, activa, agencia, servicios, fecha. */
+export class ListBahiasDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'uuid-agencia', description: 'Filtrar por agencia' })
   @IsOptional()
   @IsString()
@@ -81,7 +83,8 @@ export class AsignarOperadorBahiaDto {
   notas?: string;
 }
 
-export class ListHistorialAsignacionesDto {
+/** Página de 50 por defecto (máximo 100). Orden: fecha (inicio), bahia, operador. */
+export class ListHistorialAsignacionesDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'uuid-bahia', description: 'Filtrar por bahía' })
   @IsOptional()
   @IsString()
@@ -92,11 +95,21 @@ export class ListHistorialAsignacionesDto {
   @IsString()
   operadorId?: string;
 
-  @ApiPropertyOptional({ default: 1 })
-  @IsOptional()
-  page?: number;
+}
 
-  @ApiPropertyOptional({ default: 50 })
+export class DesasignarOperadorBahiaDto {
+  @ApiProperty({ example: 'uuid-bahia', description: 'ID de la bahía' })
+  @IsString()
+  @IsNotEmpty()
+  bahiaId: string;
+
+  @ApiProperty({ example: 'uuid-operador', description: 'ID del operador a desasignar' })
+  @IsString()
+  @IsNotEmpty()
+  operadorId: string;
+
+  @ApiPropertyOptional({ example: 'Fin de turno', description: 'Motivo de la desasignación' })
   @IsOptional()
-  pageSize?: number;
+  @IsString()
+  motivo?: string;
 }
