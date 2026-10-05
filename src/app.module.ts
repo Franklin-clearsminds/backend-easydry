@@ -17,7 +17,10 @@ import { StorageModule } from './modules/storage/storage.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { AprobacionesModule } from './modules/aprobaciones/aprobaciones.module.js';
 import { AppScheduleModule } from './modules/schedule/schedule.module.js';
+import { PermisosModule } from './common/permisos/decisiones.service.js';
+import { PermisosGuard } from './common/permisos/permisos.guard.js';
 import { DeviceThrottlerGuard } from './common/guards/throttler-behind-proxy.guard.js';
+import { RetosModule } from './modules/retos/retos.module.js';
 
 @Module({
   imports: [
@@ -31,6 +34,7 @@ import { DeviceThrottlerGuard } from './common/guards/throttler-behind-proxy.gua
       },
     ]),
     PrismaModule,
+    PermisosModule,
     CryptoModule,
     StorageModule,
     NotificationsModule,
@@ -45,11 +49,17 @@ import { DeviceThrottlerGuard } from './common/guards/throttler-behind-proxy.gua
     MaquinariaModule,
     AnalyticsModule,
     AprobacionesModule,
+    RetosModule,
   ],
   providers: [
     {
       provide: APP_GUARD,
       useClass: DeviceThrottlerGuard,
+    },
+    // Valida la sesión y exige el permiso que declara cada endpoint (falla cerrado).
+    {
+      provide: APP_GUARD,
+      useClass: PermisosGuard,
     },
   ],
 })

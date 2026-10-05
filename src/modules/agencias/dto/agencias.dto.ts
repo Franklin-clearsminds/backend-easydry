@@ -1,3 +1,4 @@
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsIn, IsEmail, IsArray, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -89,6 +90,12 @@ export class CreateAgenciaDto {
   @IsOptional()
   @IsBoolean()
   tieneServiciosEspeciales?: boolean;
+
+  @ApiPropertyOptional({ example: 'OPERATIVA', enum: ['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'])
+  tipoUbicacion?: string;
 }
 
 export class UpdateAgenciaDto {
@@ -184,14 +191,20 @@ export class UpdateAgenciaDto {
   @IsOptional()
   @IsBoolean()
   tieneServiciosEspeciales?: boolean;
-}
 
-export class ListAgenciasDto {
-  @ApiPropertyOptional({ example: 'Quito', description: 'Buscar por nombre o código' })
+  @ApiPropertyOptional({ example: 'OPERATIVA', enum: ['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'] })
   @IsOptional()
   @IsString()
-  search?: string;
+  @IsIn(['OPERATIVA', 'TALLER_NACIONAL', 'TALLER_REGIONAL'])
+  tipoUbicacion?: string;
+}
 
+/**
+ * Sin page/pageSize: arreglo con hasta 100 agencias (con todos sus usuarios, como siempre). Con alguno: página estándar; los
+ * datos calculados (productividad del mes, gerente, líder) se resuelven solo para las agencias de la página.
+ * Orden: nombre, codigo, region, estado, cliente, bahias, usuarios, fecha.
+ */
+export class ListAgenciasDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'Pichincha', description: 'Filtrar por región (nombre)' })
   @IsOptional()
   @IsString()
@@ -212,11 +225,29 @@ export class ListAgenciasDto {
   @IsString()
   marcaId?: string;
 
-  @ApiPropertyOptional({ example: 1, description: '1 activo, 0 inactivo' })
+  @ApiPropertyOptional({ example: 1, description: '1 activo, 0 inactivo, 2 mantenimiento' })
   @IsOptional()
   @IsInt()
-  @IsIn([0, 1])
+  @IsIn([0, 1, 2])
   estado?: number;
+
+  @ApiPropertyOptional({ example: 'Norte', description: 'Región por nombre exacto (sin distinguir mayúsculas)' })
+  @IsOptional()
+  @IsString()
+  regionNombre?: string;
+
+  @ApiPropertyOptional({ example: 'Corporación Favorita', description: 'Cliente por nombre exacto (sin distinguir mayúsculas)' })
+  @IsOptional()
+  @IsString()
+  clienteNombre?: string;
+
+  @ApiPropertyOptional({
+    default: true,
+    description: 'false omite la productividad del mes (una consulta de todos los servicios del mes); úsalo si solo necesitas la lista de agencias',
+  })
+  @IsOptional()
+  @IsBoolean()
+  incluirProductividad?: boolean;
 }
 
 export class DetailAgenciaDto {

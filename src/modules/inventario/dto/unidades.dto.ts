@@ -1,7 +1,9 @@
 import { IsString, IsOptional, IsNumber, IsInt, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
-export class ListUnidadesDto {
+/** Orden permitido: codigo, nombre, simbolo, tipo, factorBase, estado, fecha. */
+export class ListUnidadesDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'VOLUMEN', description: 'Filtrar por tipo: VOLUMEN, MASA, UNITARIO' })
   @IsOptional()
   @IsString()
@@ -12,10 +14,6 @@ export class ListUnidadesDto {
   @IsInt()
   estado?: number;
 
-  @ApiPropertyOptional({ description: 'Buscar por nombre, código o símbolo' })
-  @IsOptional()
-  @IsString()
-  search?: string;
 }
 
 export class CreateUnidadDto {

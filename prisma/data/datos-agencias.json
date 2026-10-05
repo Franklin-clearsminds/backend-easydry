@@ -1,0 +1,3930 @@
+{
+  "generatedAt": "2026-09-28T18:13:56.837Z",
+  "reglas": {
+    "marcasComoClientes": true,
+    "pulidorEnLavados": "solo_pulidor_fijo",
+    "cedulaConflicto": "usar_nombre_servicios_especiales",
+    "duplicado0959378001": "AUTOMEKANO AEROPUERTO",
+    "prospectoConBahiasSinPersonal": true,
+    "email": "{nombre}.{rol}@easydry.com",
+    "regiones": "Sierra|Costa",
+    "serviciosHuerfanos": "crear_en_catalogo",
+    "personalSucio": "cargar_todos"
+  },
+  "clientes": [
+    "ALVAREZ BARBA",
+    "AMBACAR",
+    "AUTOMEKANO",
+    "CASABACA",
+    "CHANGAN",
+    "COMERCIAL HIDROBO",
+    "ISUZU",
+    "MARESA",
+    "MERCEDES BENZ",
+    "PEUGEOT",
+    "PROAUTO GRANADOS",
+    "SUZUKI",
+    "TEOJAMA",
+    "TOYOCOSTA",
+    "ORGU FORD",
+    "ASSA",
+    "IOKARS",
+    "OIKORSA"
+  ],
+  "pulidoresExcel": [
+    {
+      "nombre": "BAIDAL MALDONADO JEAN CALOS",
+      "cedula": "0958637837",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "CEPEDA CEPEDA MAGNO STIVEN",
+      "cedula": "0957501943",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "CHUNZHO GARCIA ANTHONY WILLIAMS",
+      "cedula": "1315204063",
+      "ciudad": "MANTA",
+      "region": "Costa"
+    },
+    {
+      "nombre": "CORNIEL TOVAR RONALD JOSE",
+      "cedula": "1761974805",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "ELIZALDE MARTINEZ WILLIAM ANDREI",
+      "cedula": "0953567195",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "FOLLECO MENDEZ PAUL GERMAN",
+      "cedula": "1004002570",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "FRANCO MARIDUEÑA CARLOS ANGELO",
+      "cedula": "0955967260",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "FRANCO MARIDUEÑA CARLOS KENNY",
+      "cedula": "0955967377",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "FRANCO VERA WELLINTON JACKSON",
+      "cedula": "0930428909",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "GOMEZ PAEZ JHON EDWIN",
+      "cedula": "1758628141",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "GRANDA ELIZALDE CHRISTIAN ARIEL",
+      "cedula": "1752691442",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "GUERRERO PINARGOTE EDISON ANDRES",
+      "cedula": "1309322590",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "LEMA IMACAÑA JULIO CESAR",
+      "cedula": "1723785547",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "MIELES PINCAY ANTHONY JOSUE",
+      "cedula": "0952114031",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "MINDA CAMPOS JHON PAULO",
+      "cedula": "1726025867",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "MORA ILLESCAS ANDRES ISMAEL",
+      "cedula": "0150938876",
+      "ciudad": "CUENCA",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "MOREIRA CHAVEZ JESUS MARCELO",
+      "cedula": "1720650371",
+      "ciudad": "SANTO DOMINGO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "PINCAY AZAÑA JEAN PIERRE",
+      "cedula": "0931185094",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "QUIJIJE CASTRO WILSON JOSE",
+      "cedula": "0929937688",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "REYES MENDOZA RAUL JOSUE",
+      "cedula": "0955823240",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "ROSERO MORAN KELVIN DANIEL",
+      "cedula": "0401829114",
+      "ciudad": "IBARRA",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "SANCHEZ ORDOÑEZ CARLOS EFRAIN",
+      "cedula": "1713017984",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "SILVA VULGARIN JOHNNY JONATHAN",
+      "cedula": "0955212428",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    },
+    {
+      "nombre": "TIPAN ORDOÑEZ ANTHONY FABRICIO",
+      "cedula": "1755816699",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "TONATO TASIGUANO EDWIN ALEJANDRO",
+      "cedula": "1722784087",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "TUMIPAMBA CHILUISA MOISES EDUARDO",
+      "cedula": "1718385535",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "VERA GALENO XAVIER ALEXANDER",
+      "cedula": "1761722956",
+      "ciudad": "QUITO",
+      "region": "Sierra"
+    },
+    {
+      "nombre": "VALDEZ SANCHEZ ANDY JORDAN",
+      "cedula": "0956426951",
+      "ciudad": "GUAYAQUIL",
+      "region": "Costa"
+    }
+  ],
+  "pulidorCedulas": [
+    "0958637837",
+    "0957501943",
+    "1315204063",
+    "1761974805",
+    "0953567195",
+    "1004002570",
+    "0955967260",
+    "0955967377",
+    "0930428909",
+    "1758628141",
+    "1752691442",
+    "1309322590",
+    "1723785547",
+    "0952114031",
+    "1726025867",
+    "0150938876",
+    "1720650371",
+    "0931185094",
+    "0929937688",
+    "0955823240",
+    "0401829114",
+    "1713017984",
+    "0955212428",
+    "1755816699",
+    "1722784087",
+    "1718385535",
+    "1761722956",
+    "0956426951"
+  ],
+  "personalGestion": [],
+  "agencias": [
+    {
+      "marca": "ALVAREZ BARBA",
+      "agenciaRaw": "LABRADOR",
+      "nombre": "ALVAREZ BARBA LABRADOR",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO EXPRESS"
+      ],
+      "operarios": [
+        {
+          "nombre": "GUERRERO PINARGOTE EDISON ANDRES",
+          "cedula": "1309322590",
+          "nota": "",
+          "row": 2,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMERICAS",
+      "nombre": "AMBACAR AMERICAS",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO EXPRESS",
+        "LAVADO DELUXE",
+        "LAVADO B&P",
+        "LAVADO COMPLETO",
+        "LAVADO PREMIUM"
+      ],
+      "operarios": [
+        {
+          "nombre": "BURBANO HERRERA IVAN ADOLFO",
+          "cedula": "1310438757",
+          "nota": "",
+          "row": 4,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ESPINEL VERA JOSHUA BENJAMIN",
+          "cedula": "0916265416",
+          "nota": "",
+          "row": 5,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ESPINOZA ARIAS EDISON JOSUE",
+          "cedula": "0941829202",
+          "nota": "",
+          "row": 6,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MENDOZA VERGARA DARIO XAVIER",
+          "cedula": "0930285978",
+          "nota": "",
+          "row": 7,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ROSAS MATAMOROS MARLON ANDRES",
+          "cedula": "0750587677",
+          "nota": "",
+          "row": 8,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMBACAR EL COCA",
+      "nombre": "AMBACAR EL COCA",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "BRAVO ALCIVAR OCTAVIO JORKAEL",
+          "cedula": "2101046775",
+          "nota": "",
+          "row": 9,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMBACAR GT",
+      "nombre": "AMBACAR GT",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "FARIÑO VILLALVA JESUS ABEL",
+          "cedula": "0932547003",
+          "nota": "",
+          "row": 10,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MANSILLA NARANJO ABRAHAN ISMAEL",
+          "cedula": "0956790687",
+          "nota": "",
+          "row": 11,
+          "esPulidor": false
+        },
+        {
+          "nombre": "QUIÑONEZ BAQUE MOISES PEDRO",
+          "cedula": "0932528409",
+          "nota": "",
+          "row": 12,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMBACAR PORTOVIEJO",
+      "nombre": "AMBACAR PORTOVIEJO",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "MACIAS MACIAS WILMER ISAAC",
+          "cedula": "1350063085",
+          "nota": "",
+          "row": 13,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMBACAR MANTA",
+      "nombre": "AMBACAR MANTA",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "REVELO ROJAS JOAO ENRIQUE",
+          "cedula": "1315252153",
+          "nota": "",
+          "row": 14,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMBACAR QUITO SUR",
+      "nombre": "AMBACAR QUITO SUR",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "ACERO GUZMAN ERICK ALEJANDRO",
+          "cedula": "1729219814",
+          "nota": "",
+          "row": 15,
+          "esPulidor": false
+        },
+        {
+          "nombre": "LUCAS CALDERON ERNESTO VICENTE",
+          "cedula": "1716774029",
+          "nota": "",
+          "row": 16,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMBACAR SALINAS",
+      "nombre": "AMBACAR SALINAS",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "LINDAO LAINEZ JOSE FRANCISCO",
+          "cedula": "2450208174",
+          "nota": "",
+          "row": 17,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AMBACAR",
+      "agenciaRaw": "AMBACAR SANTO DOMINGO",
+      "nombre": "AMBACAR SANTO DOMINGO",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "COQUINCHE BOLAÑOS BERLIN JEFFERSON",
+          "cedula": "2200344717",
+          "nota": "",
+          "row": 18,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MATUTE TIGASI CHRISTOPHER JOEL",
+          "cedula": "2350632119",
+          "nota": "",
+          "row": 19,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AUTOMEKANO",
+      "agenciaRaw": "AUTOMEKANO AEROPUERTO",
+      "nombre": "AUTOMEKANO AEROPUERTO",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO EXPRESS",
+        "LAVADO COMPLETO",
+        "LAVADO PREMIUM"
+      ],
+      "operarios": [
+        {
+          "nombre": "CORNEJO FERNANDEZ ANTHONY JOSUE",
+          "cedula": "1208846053",
+          "nota": "",
+          "row": 21,
+          "esPulidor": false
+        },
+        {
+          "nombre": "QUIJIJE CASTRO WILSON JOSE",
+          "cedula": "0929937688",
+          "nota": "",
+          "row": 22,
+          "esPulidor": true
+        },
+        {
+          "nombre": "ZAMBRANO RIOS DIAGO LEONARDO",
+          "cedula": "0959378001",
+          "nota": "",
+          "row": 23,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "AUTOMEKANO",
+      "agenciaRaw": "AUTOMEKANO CEIBOS",
+      "nombre": "AUTOMEKANO CEIBOS",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO DE MOTOR",
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "ZAMBRANO MORA ANTHONY JOSUE",
+          "cedula": "0951035617",
+          "nota": "",
+          "row": 24,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "CASABACA",
+      "agenciaRaw": "CASABACA LOS CHILLOS",
+      "nombre": "CASABACA LOS CHILLOS",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO SEMIDELUXE",
+        "LAVADO DELUXE",
+        "LAVADO B&P"
+      ],
+      "operarios": [
+        {
+          "nombre": "MIGUEL LOPPEZ",
+          "cedula": "1720845435",
+          "nota": "NO ESTA EN NOMINA",
+          "row": 32,
+          "esPulidor": false
+        },
+        {
+          "nombre": "VILLALBA LOACHAMIN KEVIN ALEXANDER",
+          "cedula": "1723154298",
+          "nota": "",
+          "row": 33,
+          "esPulidor": false
+        },
+        {
+          "nombre": "VIVERO CARABALI ALAN ANTHONY",
+          "cedula": "1754002564",
+          "nota": "",
+          "row": 34,
+          "esPulidor": false
+        }
+      ],
+      "notas": [
+        "NO ESTA EN NOMINA"
+      ]
+    },
+    {
+      "marca": "CASABACA",
+      "agenciaRaw": "CASABACA PANANORTE",
+      "nombre": "CASABACA PANANORTE",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "ARION MEDINA ROBERTO JOSE",
+          "cedula": "6105864877",
+          "nota": "",
+          "row": 35,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ENRIQUEZ QUINTERO JESUS DAVID",
+          "cedula": "6105903113",
+          "nota": "",
+          "row": 36,
+          "esPulidor": false
+        },
+        {
+          "nombre": "YANDUN CUASTUMAL LUIS CARLOS",
+          "cedula": "1762743308",
+          "nota": "",
+          "row": 37,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CEVALLOS QUINTERO JOSE JAMIN",
+          "cedula": "1317734489",
+          "nota": "",
+          "row": 38,
+          "esPulidor": false
+        },
+        {
+          "nombre": "LOOR CAZARES JUNER JAHIR",
+          "cedula": "2100425160",
+          "nota": "",
+          "row": 39,
+          "esPulidor": false
+        },
+        {
+          "nombre": "VACA CORTEZ EDGAR MAURICIO",
+          "cedula": "2300447550",
+          "nota": "",
+          "row": 40,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "CHANGAN",
+      "agenciaRaw": "CHANGAN CUENCA",
+      "nombre": "CHANGAN CUENCA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO SEMIDELUXE"
+      ],
+      "operarios": [
+        {
+          "nombre": "ESMERALDA JARAMILLO JONNATHAN ANDRES",
+          "cedula": "0106005846",
+          "nota": "",
+          "row": 42,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "CHANGAN",
+      "agenciaRaw": "CHANGAN GRANADOS",
+      "nombre": "CHANGAN GRANADOS",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO COMPLETO",
+        "LAVADO PREMIUM",
+        "LAVADO DE MOTOR",
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "CAMPOS COLINA ROSWER JOSE",
+          "cedula": "1762272258",
+          "nota": "",
+          "row": 43,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ESPINOSA ESPINOSA DIEGO ARMANDO",
+          "cedula": "1716865496",
+          "nota": "",
+          "row": 44,
+          "esPulidor": false
+        },
+        {
+          "nombre": "FOLLECO MENDEZ PAUL GERMAN",
+          "cedula": "1004002570",
+          "nota": "",
+          "row": 45,
+          "esPulidor": true
+        },
+        {
+          "nombre": "LEMA IMACAÑA JULIO CESAR",
+          "cedula": "1723785547",
+          "nota": "",
+          "row": 46,
+          "esPulidor": true
+        },
+        {
+          "nombre": "MONTALUIZA GUZMAN PABLO SEGUNDO",
+          "cedula": "1719107250",
+          "nota": "",
+          "row": 47,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MORA JEUFF JOFFER ISMHAEL",
+          "cedula": "6105750555",
+          "nota": "",
+          "row": 48,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "CHANGAN",
+      "agenciaRaw": "CHANGAN URDENOR",
+      "nombre": "CHANGAN URDENOR",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "SALINAS SUAREZ JONATHAN BLADIMIR",
+          "cedula": "0922917760",
+          "nota": "",
+          "row": 49,
+          "esPulidor": false
+        },
+        {
+          "nombre": "SANCHEZ INDIO TOMMY RICARDO",
+          "cedula": "0953283355",
+          "nota": "",
+          "row": 50,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "COMERCIAL HIDROBO",
+      "agenciaRaw": "COMERCIAL HIDROBO CAYAMBE",
+      "nombre": "COMERCIAL HIDROBO CAYAMBE",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO SEMIDELUXE"
+      ],
+      "operarios": [],
+      "notas": [
+        "EN CONTRATACION"
+      ]
+    },
+    {
+      "marca": "COMERCIAL HIDROBO",
+      "agenciaRaw": "COMERCIAL HIDROBO TOYOTA IBARRA",
+      "nombre": "COMERCIAL HIDROBO TOYOTA IBARRA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO EXPRESS",
+        "LAVADO B&P",
+        "LAVADO PREMIUM"
+      ],
+      "operarios": [
+        {
+          "nombre": "BASTIDAS HUERA EDISON ARMANDO",
+          "cedula": "0402171813",
+          "nota": "",
+          "row": 54,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CUASALUZAN PASCAL ERICK JONIEL",
+          "cedula": "1004076632",
+          "nota": "",
+          "row": 55,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ROSERO MORAN KELVIN DANIEL",
+          "cedula": "0401829114",
+          "nota": "",
+          "row": 57,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "COMERCIAL HIDROBO",
+      "agenciaRaw": "COMERCIAL HIDROBO MAZDA",
+      "nombre": "COMERCIAL HIDROBO MAZDA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO COMPLETO"
+      ],
+      "operarios": [
+        {
+          "nombre": "IMBAQUINGO NARVAEZ CRISTIAN XAVIER",
+          "cedula": "1005061237",
+          "nota": "",
+          "row": 56,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "COMERCIAL HIDROBO",
+      "agenciaRaw": "COMERCIAL HIDROBO NISSAN - RENAULT",
+      "nombre": "COMERCIAL HIDROBO NISSAN - RENAULT",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "ROSERO POZO SANDRO WILLAM",
+          "cedula": "0400941696",
+          "nota": "",
+          "row": 58,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "COMERCIAL HIDROBO",
+      "agenciaRaw": "COMERCIAL HIDROBO CHERY",
+      "nombre": "COMERCIAL HIDROBO CHERY",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "SARANGO VILLA DARWIN DAVID",
+          "cedula": "2150365415",
+          "nota": "",
+          "row": 59,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "ISUZU",
+      "agenciaRaw": "ISUZU AMERICAS",
+      "nombre": "ISUZU AMERICAS",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO EXPRESS",
+        "LAVADO COMPLETO",
+        "LAVADO PREMIUM",
+        "LAVADO DE MOTOR",
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "MORAN CEVALLOS EFREN ARMANDO",
+          "cedula": "0914553680",
+          "nota": "",
+          "row": 60,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CHERREZ CHACON ELIAS ALEXANDER",
+          "cedula": "0956804710",
+          "nota": "",
+          "row": 61,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MOROCHO LUPERCIO RONALD STEVEN",
+          "cedula": "0150590669",
+          "nota": "",
+          "row": 62,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA AMERICAS",
+      "nombre": "MARESA AMERICAS",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO DELUXE",
+        "LAVADO Y ENCERADO PREPAGADO",
+        "LAVADO COMPLETO"
+      ],
+      "operarios": [
+        {
+          "nombre": "AVILA CONTRERAS CARLOS PAUL",
+          "cedula": "0943969543",
+          "nota": "",
+          "row": 71,
+          "esPulidor": false
+        },
+        {
+          "nombre": "PINCAY CHAVEZ ORLEY INOCENCIO",
+          "cedula": "0955334024",
+          "nota": "",
+          "row": 72,
+          "esPulidor": false
+        }
+      ],
+      "notas": [
+        "MEDIO TIEMPO EN LA TARDE"
+      ]
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA BUGAMBILLAS",
+      "nombre": "MARESA BUGAMBILLAS",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO PREMIUM",
+        "LAVADO DE MOTOR",
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "CLAVIJO GUERRERO JOHAN DAVID",
+          "cedula": "1727241091",
+          "nota": "",
+          "row": 74,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ESCOBAR VILELA ROBERT ROSENDO",
+          "cedula": "1317997292",
+          "nota": "",
+          "row": 75,
+          "esPulidor": false
+        },
+        {
+          "nombre": "PILAMUNGA CHANGO CARLOS DANIEL",
+          "cedula": "1754703104",
+          "nota": "",
+          "row": 76,
+          "esPulidor": false
+        },
+        {
+          "nombre": "VERA GALENO XAVIER ALEXANDER",
+          "cedula": "1761722956",
+          "nota": "",
+          "row": 77,
+          "esPulidor": true
+        },
+        {
+          "nombre": "CASTRILLON CORONEL JONATHAN ANDRES",
+          "cedula": "1718614595",
+          "nota": "",
+          "row": 78,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA CARLOS JULIO",
+      "nombre": "MARESA CARLOS JULIO",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO B&P"
+      ],
+      "operarios": [
+        {
+          "nombre": "GUAMAN PIGUAVE LUIS ALBERTO",
+          "cedula": "0952062404",
+          "nota": "",
+          "row": 79,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ISURIETA HUAYAMAVE MAURICIO UBALDO",
+          "cedula": "0919591784",
+          "nota": "",
+          "row": 80,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MANCHENO PAREJA JANDRY JULIAN",
+          "cedula": "0953028016",
+          "nota": "",
+          "row": 81,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MONCAYO MANTUANO JUSTIN ELIAS",
+          "cedula": "0950917831",
+          "nota": "",
+          "row": 82,
+          "esPulidor": false
+        },
+        {
+          "nombre": "SANCHEZ AVILA GERMAN DANIEL",
+          "cedula": "0954259149",
+          "nota": "",
+          "row": 83,
+          "esPulidor": false
+        },
+        {
+          "nombre": "SILVA VULGARIN JOHNNY JONATHAN",
+          "cedula": "0955212428",
+          "nota": "",
+          "row": 84,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA CHERRY CUENCA",
+      "nombre": "MARESA CHERRY CUENCA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "VALVERDE DAMIAN JOSTIN ALEXANDER",
+          "cedula": "0107940629",
+          "nota": "",
+          "row": 85,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA COLISIONES",
+      "nombre": "MARESA COLISIONES",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "CAICEDO LUGO JHOSTIN ALDAIR",
+          "cedula": "0850447087",
+          "nota": "",
+          "row": 86,
+          "esPulidor": false
+        },
+        {
+          "nombre": "TONATO TASIGUANO EDWIN ALEJANDRO",
+          "cedula": "1722784087",
+          "nota": "",
+          "row": 87,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA CUMBAYA",
+      "nombre": "MARESA CUMBAYA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "ACOSTA VILLALBA JOHAN NICOLAS",
+          "cedula": "1754055604",
+          "nota": "",
+          "row": 88,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CARRILLO AIMACAÑA ERICK SEBASTIAN",
+          "cedula": "1725247439",
+          "nota": "",
+          "row": 89,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CHAMBA ENRIQUEZ MARCO STALIN",
+          "cedula": "1721993150",
+          "nota": "",
+          "row": 90,
+          "esPulidor": false
+        },
+        {
+          "nombre": "LOPEZ ROSERO ANTHONY SEBASTIAN",
+          "cedula": "1752261097",
+          "nota": "PERMISO MEDICO 3 MESES",
+          "row": 91,
+          "esPulidor": false
+        }
+      ],
+      "notas": [
+        "PERMISO MEDICO 3 MESES"
+      ]
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA EL DORADO",
+      "nombre": "MARESA EL DORADO",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "ALVARADO RUGEL LUIS ALEXANDER",
+          "cedula": "0951838465",
+          "nota": "",
+          "row": 92,
+          "esPulidor": false
+        },
+        {
+          "nombre": "JIMENEZ BAJAÑA JOHAN SAUL",
+          "cedula": "0940461064",
+          "nota": "",
+          "row": 93,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA FCO DE ORELLANA",
+      "nombre": "MARESA FCO DE ORELLANA",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "ANTON BRIONES JONATHAN FRANCISCO",
+          "cedula": "0931177075",
+          "nota": "",
+          "row": 94,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA GRANADOS",
+      "nombre": "MARESA GRANADOS",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "CEDEÑO GUAMAN JUAN IGNACIO",
+          "cedula": "2350918674",
+          "nota": "",
+          "row": 95,
+          "esPulidor": false
+        },
+        {
+          "nombre": "TITO ORBE DANNY ANDRES",
+          "cedula": "1719445536",
+          "nota": "",
+          "row": 96,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA JTM",
+      "nombre": "MARESA JTM",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "FRANCO MARIDUEÑA CARLOS ANGELO",
+          "cedula": "0955967260",
+          "nota": "",
+          "row": 97,
+          "esPulidor": true
+        },
+        {
+          "nombre": "GUILLEN LINO FRABRICIO JAVIER",
+          "cedula": "0957264906",
+          "nota": "",
+          "row": 98,
+          "esPulidor": false
+        },
+        {
+          "nombre": "LLAGUNO RODRIGUEZ DADDY ROGER",
+          "cedula": "0950200931",
+          "nota": "",
+          "row": 99,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MALDONADO BOHORQUEZ JOHN BRYAN",
+          "cedula": "0931813828",
+          "nota": "",
+          "row": 100,
+          "esPulidor": false
+        },
+        {
+          "nombre": "RODRIGUEZ CHICAIZA ISRAEL ISAIAS",
+          "cedula": "0958855256",
+          "nota": "",
+          "row": 101,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA LOS CHILLOS",
+      "nombre": "MARESA LOS CHILLOS",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "COLLAGUAZO CARRERA JAIR ABRAHAM",
+          "cedula": "1728770890",
+          "nota": "",
+          "row": 102,
+          "esPulidor": false
+        },
+        {
+          "nombre": "JAQUE RAMIREZ SANTIAGO JOEL",
+          "cedula": "1751083831",
+          "nota": "",
+          "row": 103,
+          "esPulidor": false
+        },
+        {
+          "nombre": "SIMBA CHULCA BRYAN ESTEBAN",
+          "cedula": "1723037220",
+          "nota": "",
+          "row": 104,
+          "esPulidor": false
+        },
+        {
+          "nombre": "TIPAN ORDOÑEZ ANTHONY FABRICIO",
+          "cedula": "1755816699",
+          "nota": "",
+          "row": 105,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA MANTA",
+      "nombre": "MARESA MANTA",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "CHUNZHO GARCIA ANTHONY WILLIAMS",
+          "cedula": "1315204063",
+          "nota": "",
+          "row": 106,
+          "esPulidor": true
+        },
+        {
+          "nombre": "ZAMBRANO ZAMBRANO ANGEL ENRIQUE",
+          "cedula": "1316496536",
+          "nota": "",
+          "row": 107,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA MARIANA DE JESUS",
+      "nombre": "MARESA MARIANA DE JESUS",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "ALCIVAR SANTACRUZ ANTHONY DAVID",
+          "cedula": "1729121895",
+          "nota": "",
+          "row": 108,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CARCELEN CARCELEN MARCO VINICIO",
+          "cedula": "1718082538",
+          "nota": "",
+          "row": 109,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CARRIZO JUANYER ARMANDO",
+          "cedula": "1762074555",
+          "nota": "",
+          "row": 110,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CASTILLO TENORIO CESAR JAIR",
+          "cedula": "0805027539",
+          "nota": "",
+          "row": 111,
+          "esPulidor": false
+        },
+        {
+          "nombre": "GOMEZ PAEZ JHON EDWIN",
+          "cedula": "1758628141",
+          "nota": "",
+          "row": 112,
+          "esPulidor": true
+        },
+        {
+          "nombre": "QUILA MADRID KLEVER ANTHONY",
+          "cedula": "1750271015",
+          "nota": "",
+          "row": 113,
+          "esPulidor": false
+        },
+        {
+          "nombre": "TACO MACAS WILLIAM FERNANDO",
+          "cedula": "1709400384",
+          "nota": "",
+          "row": 114,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA MARISCAL SUCRE",
+      "nombre": "MARESA MARISCAL SUCRE",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "MOPOSITA ANDRADE BRYAN DAMIAN",
+          "cedula": "2300895634",
+          "nota": "",
+          "row": 115,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MARESA",
+      "agenciaRaw": "MARESA MAZDA CUENCA",
+      "nombre": "MARESA MAZDA CUENCA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "LOJANO JADAN MATEO DAMIAN",
+          "cedula": "0150908440",
+          "nota": "",
+          "row": 116,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "MERCEDES BENZ",
+      "agenciaRaw": "MERCEDES BENZ JTM",
+      "nombre": "MERCEDES BENZ JTM",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO SEMIDELUXE"
+      ],
+      "operarios": [
+        {
+          "nombre": "COBOS LOPEZ DANILO DANIEL",
+          "cedula": "0959401209",
+          "nota": "",
+          "row": 118,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "PEUGEOT",
+      "agenciaRaw": "PEUGEOT EL DORADO",
+      "nombre": "PEUGEOT EL DORADO",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO SEMIDELUXE",
+        "LAVADO B&P"
+      ],
+      "operarios": [
+        {
+          "nombre": "BAIDAL MALDONADO JEAN CALOS",
+          "cedula": "0958637837",
+          "nota": "MEDIO TIEMPO",
+          "row": 120,
+          "esPulidor": true
+        },
+        {
+          "nombre": "GONZALEZ ACUÑA JOSE ANTONIO",
+          "cedula": "0924933351",
+          "nota": "",
+          "row": 121,
+          "esPulidor": false
+        }
+      ],
+      "notas": [
+        "MEDIO TIEMPO"
+      ]
+    },
+    {
+      "marca": "PEUGEOT",
+      "agenciaRaw": "PEUGEOT ELOY ALFARO",
+      "nombre": "PEUGEOT ELOY ALFARO",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO MCLAREN",
+        "LAVADO PREMIUM",
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "CORNIEL TOVAR RONALD JOSE",
+          "cedula": "1761974805",
+          "nota": "",
+          "row": 122,
+          "esPulidor": true
+        },
+        {
+          "nombre": "ESPINOSA CABEZAS JUSTIN DAVID",
+          "cedula": "1754143103",
+          "nota": "",
+          "row": 123,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ESPINOSA MENDEZ BRYAN ALEXANDER",
+          "cedula": "1751182377",
+          "nota": "",
+          "row": 124,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "PEUGEOT",
+      "agenciaRaw": "PEUGEOT JTM",
+      "nombre": "PEUGEOT JTM",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "GUZMAN ZAMORA CARLOS ALBERTO",
+          "cedula": "0951146372",
+          "nota": "",
+          "row": 125,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MIELES PINCAY ANTHONY JOSUE",
+          "cedula": "0952114031",
+          "nota": "",
+          "row": 126,
+          "esPulidor": true
+        },
+        {
+          "nombre": "NARANJO MARTINEZ ELKIN ADRIAN",
+          "cedula": "0944261072",
+          "nota": "",
+          "row": 127,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "PROAUTO GRANADOS",
+      "agenciaRaw": "PROAUTO GRANADOS",
+      "nombre": "PROAUTO GRANADOS",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO COMPLETO",
+        "LAVADO PREMIUM",
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "GRANDA ELIZALDE CHRISTIAN ARIEL",
+          "cedula": "1752691442",
+          "nota": "",
+          "row": 131,
+          "esPulidor": true
+        },
+        {
+          "nombre": "GRANDA ELIZALDE CHRISTIAN ARIEL",
+          "cedula": "1752691442",
+          "nota": "",
+          "row": 132,
+          "esPulidor": true
+        },
+        {
+          "nombre": "GRANDA ELIZALDE CHRISTIAN ARIEL",
+          "cedula": "1752691442",
+          "nota": "",
+          "row": 133,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI AMBATO",
+      "nombre": "SUZUKI AMBATO",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO EXPRESS"
+      ],
+      "operarios": [
+        {
+          "nombre": "VILLARREAL BONILLA BRYAN ENRIQUE",
+          "cedula": "1804703658",
+          "nota": "",
+          "row": 135,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI CARLOS JULIO",
+      "nombre": "SUZUKI CARLOS JULIO",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO B&P",
+        "LAVADO COMPLETO",
+        "LAVADO PREMIUM"
+      ],
+      "operarios": [
+        {
+          "nombre": "MANCHENO PAREJA CRISTOPHER JOSE",
+          "cedula": "0953028107",
+          "nota": "",
+          "row": 136,
+          "esPulidor": false
+        },
+        {
+          "nombre": "PINARGOTE MERA ANTONIO LEONARDO",
+          "cedula": "2450351735",
+          "nota": "",
+          "row": 137,
+          "esPulidor": false
+        },
+        {
+          "nombre": "SANCHEZ FERNANDEZ TYRONE ADRIAN",
+          "cedula": "0943273987",
+          "nota": "",
+          "row": 138,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI CUENCA",
+      "nombre": "SUZUKI CUENCA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO DE MOTOR"
+      ],
+      "operarios": [
+        {
+          "nombre": "MORALES GUAMBAÑA JOSE DAVID",
+          "cedula": "0151259280",
+          "nota": "",
+          "row": 139,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI GRANADOS",
+      "nombre": "SUZUKI GRANADOS",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "GOMEZ RODRIGUEZ JOSE ALEJANDRO",
+          "cedula": "1754753026",
+          "nota": "",
+          "row": 140,
+          "esPulidor": false
+        },
+        {
+          "nombre": "VILLACIS GONZALEZ JORGE ANIBAL",
+          "cedula": "1711864494",
+          "nota": "",
+          "row": 141,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI JTM",
+      "nombre": "SUZUKI JTM",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "FUENTES RODRIGUEZ HECTOR BOANERGES",
+          "cedula": "1204396723",
+          "nota": "",
+          "row": 142,
+          "esPulidor": false
+        },
+        {
+          "nombre": "LLAGUNO RODRIGUEZ TITO XAVIER",
+          "cedula": "0930221163",
+          "nota": "",
+          "row": 143,
+          "esPulidor": false
+        },
+        {
+          "nombre": "PEÑARANGA ROMERO JORGE ANDRE",
+          "cedula": "0929534337",
+          "nota": "",
+          "row": 144,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI LABRADOR",
+      "nombre": "SUZUKI LABRADOR",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "CONGO SANTACRUZ MICHAEL ANDRES",
+          "cedula": "1729244739",
+          "nota": "",
+          "row": 145,
+          "esPulidor": false
+        },
+        {
+          "nombre": "DELGADO ALVARADO JORGE EDUARDO",
+          "cedula": "0912477510",
+          "nota": "",
+          "row": 146,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI LOS CHILLOS",
+      "nombre": "SUZUKI LOS CHILLOS",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "MIRANDA MADRID FERNANDO GUSTAVO",
+          "cedula": "1314528454",
+          "nota": "",
+          "row": 147,
+          "esPulidor": false
+        },
+        {
+          "nombre": "PAGUAY CAJAS CRISTHIAN PAUL",
+          "cedula": "1724943608",
+          "nota": "",
+          "row": 148,
+          "esPulidor": false
+        },
+        {
+          "nombre": "TORRES CORDOVA ANTHONY PAUL",
+          "cedula": "1721327813",
+          "nota": "",
+          "row": 149,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI MANTA",
+      "nombre": "SUZUKI MANTA",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "SANTANA MUENTES JEFFERSON MANUEL",
+          "cedula": "1352207672",
+          "nota": "",
+          "row": 150,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SUZUKI SUR",
+      "nombre": "SUZUKI SUR",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "ONOFRE GUTIERREZ LUIS GUILLERMO",
+          "cedula": "0202287736",
+          "nota": "",
+          "row": 151,
+          "esPulidor": false
+        },
+        {
+          "nombre": "SANCHEZ HERRERA JEAN PIERRE",
+          "cedula": "1725852006",
+          "nota": "",
+          "row": 152,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "SUZUKI",
+      "agenciaRaw": "SZK CUMBAYA",
+      "nombre": "SUZUKI SZK CUMBAYA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "FLORES MARQUEZ VALMORE JESUS",
+          "cedula": "1761532561",
+          "nota": "",
+          "row": 153,
+          "esPulidor": false
+        },
+        {
+          "nombre": "LOPEZ VERA DAVID FERNANDO",
+          "cedula": "1719704049",
+          "nota": "",
+          "row": 154,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL MANTA",
+      "nombre": "TEOJAMA COMERCIAL MANTA",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO SEMIDELUXE"
+      ],
+      "operarios": [
+        {
+          "nombre": "BAQUE BAQUE PEDRO ANTONIO",
+          "cedula": "1313243980",
+          "nota": "",
+          "row": 156,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL AMBATO",
+      "nombre": "TEOJAMA COMERCIAL AMBATO",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO B&P"
+      ],
+      "operarios": [
+        {
+          "nombre": "BENAVIDES ZARAGOZA DIEGO ARMANDO",
+          "cedula": "0156418573",
+          "nota": "",
+          "row": 157,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL CALDERON",
+      "nombre": "TEOJAMA COMERCIAL CALDERON",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [
+        "LAVADO COMPLETO"
+      ],
+      "operarios": [
+        {
+          "nombre": "BRANCHI FUSELLA ALEJANDRO LUIS JUAN",
+          "cedula": "1759287764",
+          "nota": "",
+          "row": 158,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL JTM",
+      "nombre": "TEOJAMA COMERCIAL JTM",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO PREMIUM"
+      ],
+      "operarios": [
+        {
+          "nombre": "COLOMA CORONEL JONNY ELIAS",
+          "cedula": "0911596856",
+          "nota": "",
+          "row": 159,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL CUENCA",
+      "nombre": "TEOJAMA COMERCIAL CUENCA",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "DE LA ROSA ENRIQUEZ FELIX DANIEL",
+          "cedula": "0704762400",
+          "nota": "",
+          "row": 160,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL LABRADOR",
+      "nombre": "TEOJAMA COMERCIAL LABRADOR",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "HUIRACOCHA CUASTUMAL DIEGO ARMANDO",
+          "cedula": "1724016504",
+          "nota": "",
+          "row": 161,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MORA JEUFF JOFFER ABRAHAN",
+          "cedula": "6105888355",
+          "nota": "",
+          "row": 162,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL GUAMANI",
+      "nombre": "TEOJAMA COMERCIAL GUAMANI",
+      "bahias": 1,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "SANCHEZ ORDOÑEZ CARLOS EFRAIN",
+          "cedula": "1713017984",
+          "nota": "",
+          "row": 163,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TEOJAMA",
+      "agenciaRaw": "TEOJAMA COMERCIAL 5TO. GUAYAS",
+      "nombre": "TEOJAMA COMERCIAL 5TO. GUAYAS",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "TOBAR ORTIZ MARCELO HANIBAL",
+          "cedula": "0911642619",
+          "nota": "",
+          "row": 164,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TOYOCOSTA",
+      "agenciaRaw": "TOYOCOSTA CARLOS JULIO",
+      "nombre": "TOYOCOSTA CARLOS JULIO",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [
+        "LAVADO SEMIDELUXE",
+        "LAVADO B&P",
+        "LAVADO COMPLETO",
+        "LAVADO PREMIUM",
+        "LAVADO PARA AUTOS CON CERAMICO"
+      ],
+      "operarios": [
+        {
+          "nombre": "ARAUJO RUIZ PEDRO MANUEL",
+          "cedula": "0930921085",
+          "nota": "",
+          "row": 166,
+          "esPulidor": false
+        },
+        {
+          "nombre": "ARIAS CARRANZA CARLOS JULIO",
+          "cedula": "0957613854",
+          "nota": "",
+          "row": 167,
+          "esPulidor": false
+        },
+        {
+          "nombre": "AVILES MUÑOZ DEDILSON ANTONIO",
+          "cedula": "0958013252",
+          "nota": "",
+          "row": 168,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CHAMORRO ARMIJOS DENILSON PAUL",
+          "cedula": "0950159640",
+          "nota": "",
+          "row": 169,
+          "esPulidor": false
+        },
+        {
+          "nombre": "GUERRERO PANCHANA AXEL JACOB",
+          "cedula": "0951873611",
+          "nota": "",
+          "row": 170,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TOYOCOSTA",
+      "agenciaRaw": "TOYOCOSTA DAULE",
+      "nombre": "TOYOCOSTA DAULE",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADA SEMIDELUX MAS MOTOR",
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "MORAN SUAREZ SIDNEY DAVID",
+          "cedula": "0930228770",
+          "nota": "",
+          "row": 171,
+          "esPulidor": false
+        },
+        {
+          "nombre": "REYES MENDOZA RAUL JOSUE",
+          "cedula": "0955823240",
+          "nota": "",
+          "row": 172,
+          "esPulidor": true
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TOYOCOSTA",
+      "agenciaRaw": "TOYOCOSTA MANTA",
+      "nombre": "TOYOCOSTA MANTA",
+      "bahias": 1,
+      "region": "Costa",
+      "servicios": [
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "VILLAFUERTE GARCIA JORGE LUIS",
+          "cedula": "1313833988",
+          "nota": "",
+          "row": 173,
+          "esPulidor": false
+        }
+      ],
+      "notas": []
+    },
+    {
+      "marca": "TOYOCOSTA",
+      "agenciaRaw": "TOYOCOSTA ORELLANA",
+      "nombre": "TOYOCOSTA ORELLANA",
+      "bahias": 3,
+      "region": "Costa",
+      "servicios": [
+        "LAVADA DE COLECCIÓN"
+      ],
+      "operarios": [
+        {
+          "nombre": "ALCIVAR MANTUANO STICK ALAN",
+          "cedula": "0958816472",
+          "nota": "",
+          "row": 174,
+          "esPulidor": false
+        },
+        {
+          "nombre": "CASTRO MORAN MICHAEL DANIEL",
+          "cedula": "0944089085",
+          "nota": "",
+          "row": 175,
+          "esPulidor": false
+        },
+        {
+          "nombre": "DELGADO MIDEROS DYLAN ELIAN",
+          "cedula": "0959322561",
+          "nota": "",
+          "row": 176,
+          "esPulidor": false
+        },
+        {
+          "nombre": "LINO SANCHEZ ROBERTO ALEX",
+          "cedula": "0951454941",
+          "nota": "",
+          "row": 177,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MENDOZA PIGUAVE JUAN SEBASTIAN",
+          "cedula": "0950471045",
+          "nota": "",
+          "row": 179,
+          "esPulidor": false
+        }
+      ],
+      "notas": [
+        "EN CONTRATACION"
+      ]
+    },
+    {
+      "marca": "TOYOCOSTA",
+      "agenciaRaw": "TOYOCOSTA SAMBORONDON",
+      "nombre": "TOYOCOSTA SAMBORONDON",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [
+        {
+          "nombre": "ESPINOZA PORRO MICHAEL ANDRES",
+          "cedula": "0950841189",
+          "nota": "",
+          "row": 180,
+          "esPulidor": false
+        },
+        {
+          "nombre": "JIMENEZ BAJAÑA MARLON AMBROSIO",
+          "cedula": "0922006580",
+          "nota": "",
+          "row": 181,
+          "esPulidor": false
+        },
+        {
+          "nombre": "MACIAS ROMERO VICTOR STEVEN",
+          "cedula": "0940196074",
+          "nota": "",
+          "row": 182,
+          "esPulidor": false
+        },
+        {
+          "nombre": "PEÑA GUTIERREZ JORGE ALEXANDER",
+          "cedula": "0951989037",
+          "nota": "",
+          "row": 183,
+          "esPulidor": false
+        }
+      ],
+      "notas": [
+        "EN CONTRATACION"
+      ]
+    },
+    {
+      "marca": "ORGU FORD",
+      "agenciaRaw": "ORGU FORD ORELLANA",
+      "nombre": "ORGU FORD ORELLANA",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "ORGU FORD",
+      "agenciaRaw": "ORGU FORD CJA",
+      "nombre": "ORGU FORD CJA",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "ORGU FORD",
+      "agenciaRaw": "ORGU FORD SAMBORONDON",
+      "nombre": "ORGU FORD SAMBORONDON",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "ORGU FORD",
+      "agenciaRaw": "ORGU MANTA",
+      "nombre": "ORGU FORD ORGU MANTA",
+      "bahias": 2,
+      "region": "Costa",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "ASSA",
+      "agenciaRaw": "ASSA CUMBAYA",
+      "nombre": "ASSA CUMBAYA",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "ASSA",
+      "agenciaRaw": "ASSA LOS CHILLOS",
+      "nombre": "ASSA LOS CHILLOS",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "ASSA",
+      "agenciaRaw": "ASSA AMBATO",
+      "nombre": "ASSA AMBATO",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "IOKARS",
+      "agenciaRaw": "CJA",
+      "nombre": "IOKARS CJA",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    },
+    {
+      "marca": "OIKORSA",
+      "agenciaRaw": "CJA",
+      "nombre": "OIKORSA CJA",
+      "bahias": 2,
+      "region": "Sierra",
+      "servicios": [],
+      "operarios": [],
+      "notas": []
+    }
+  ],
+  "catalogo": [
+    {
+      "nombre": "LAVADO EXPRESS",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 25,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+          "codigoSKU": "RENOV.PROD.SUPER.",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO SEMIDELUXE",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 25,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+          "codigoSKU": "RENOV.PROD.SUPER.",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 100,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO DELUXE",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 35,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 30,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+          "codigoSKU": "RENOV.PROD.SUPER.",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 120,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO B&P",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 45,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+          "codigoSKU": "RENOV.PROD.SUPER.",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 120,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO COMPLETO",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 45,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 30,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+          "codigoSKU": "RENOV.PROD.SUPER.",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 120,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "CERAMIC RAIN REPELLANT 500ML",
+          "codigoSKU": "MCL8251",
+          "cantidad": 2,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO PREMIUM",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 60,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 30,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 100,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN CERAMIC HYDROSEAL  500ML",
+          "codigoSKU": "MCL6974",
+          "cantidad": 50,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADA DE COLECCIÓN",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 45,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 30,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+          "codigoSKU": "RENOV.PROD.SUPER.",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 120,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO DE MOTOR CON CÁPSULA",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 20,
+      "receta": [
+        {
+          "insumoNombre": "MCLAREN ENGINE DEGREASER AEROSOL 500ML",
+          "codigoSKU": "MCL8398",
+          "cantidad": 1,
+          "unidad": "UND",
+          "nota": "(ESTE PRODUCTO ES EN UNIDAD)"
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO PULIDOR EXPRES",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 30,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": "(SOLO DESCARGA DE PRODUCTO)"
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO PULIDOR DELUXE",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 30,
+      "receta": [
+        {
+          "insumoNombre": "DESENGRASANTE D.J.",
+          "codigoSKU": "DESG-DJ",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": "(SOLO DESCARGA DE PRODUCTO)"
+        },
+        {
+          "insumoNombre": "ACONDICIONADOR DJ",
+          "codigoSKU": "ACOND-DJ",
+          "cantidad": 100,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+          "codigoSKU": "RENOV.PROD.SUPER.",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "MICROPULIDO",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 120,
+      "receta": [
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO 3 EN 1 MENZERNA",
+          "codigoSKU": "22748.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "PULIDO (COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 180,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO 3 EN 1 MENZERNA",
+          "codigoSKU": "22748.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "PULIDO (STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 180,
+      "receta": [
+        {
+          "insumoNombre": "PAD HEAVY CUT ROJO 150MM",
+          "codigoSKU": "26900.224.010",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO 3 EN 1 MENZERNA",
+          "codigoSKU": "22748.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "PREMIUM PLUS",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 90,
+      "receta": [
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "POWER LOCK ULTIMATE PROTECTION 250ML",
+          "codigoSKU": "22070.281.001",
+          "cantidad": 20,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERAMICO 3 AÑOS (SRV-COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 180,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ZR53 NASIOL 50ml PRESENT. ORIGINAL- CERAMICO 3 AÑOS",
+          "codigoSKU": "ZR53-50ml",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERAMICO 3 AÑOS (SRV-STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 180,
+      "receta": [
+        {
+          "insumoNombre": "PAD HEAVY CUT ROJO 150MM",
+          "codigoSKU": "26900.224.010",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ZR53 NASIOL 50ml PRESENT. ORIGINAL- CERAMICO 3 AÑOS",
+          "codigoSKU": "ZR53-50ml",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERAMICO 5 AÑOS (SRV-COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "NL272 NASIOL 50ml PRESENT. ORIGINAL",
+          "codigoSKU": "NL272-50ml",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERAMICO 5 AÑOS (SRV-STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PAD HEAVY CUT ROJO 150MM",
+          "codigoSKU": "26900.224.010",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "NL272 NASIOL 50ml PRESENT. ORIGINAL",
+          "codigoSKU": "NL272-50ml",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "COMBO RELUCIENTE (COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ZR53 NASIOL 50ml PRESENT. ORIGINAL- CERAMICO 3 AÑOS",
+          "codigoSKU": "ZR53-50ml",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO CERAMIC GLASS TREATMENT 50ML",
+          "codigoSKU": "MCLPRO98484.01",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "EASYDRY DESCONTAMINADOR LLUVIA ACIDA 100ML",
+          "codigoSKU": "EASY LLUV-ACID",
+          "cantidad": 33.333,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "COMBO RELUCIENTE (STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PAD HEAVY CUT ROJO 150MM",
+          "codigoSKU": "26900.224.010",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ZR53 NASIOL 50ml PRESENT. ORIGINAL- CERAMICO 3 AÑOS",
+          "codigoSKU": "ZR53-50ml",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO CERAMIC GLASS TREATMENT 50ML",
+          "codigoSKU": "MCLPRO98484.01",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "EASYDRY DESCONTAMINADOR LLUVIA ACIDA 100ML",
+          "codigoSKU": "EASY LLUV-ACID",
+          "cantidad": 33.333,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "PULIDO DE FAROS (COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 30,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 10,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "PULIDO DE FAROS (STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 30,
+      "receta": [
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 10,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "DESCONTAMINACIÓN DE VIDRIOS (1 PIEZA)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 15,
+      "receta": [
+        {
+          "insumoNombre": "EASYDRY DESCONTAMINADOR LLUVIA ACIDA 100ML",
+          "codigoSKU": "EASY LLUV-ACID",
+          "cantidad": 8,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "DESCONTAMINACIÓN DE VIDRIOS (TODOS)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 40,
+      "receta": [
+        {
+          "insumoNombre": "EASYDRY DESCONTAMINADOR LLUVIA ACIDA 100ML",
+          "codigoSKU": "EASY LLUV-ACID",
+          "cantidad": 33.333,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERÁMICO DE VIDRIOS (1 PIEZA)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 30,
+      "receta": [
+        {
+          "insumoNombre": "EASYDRY DESCONTAMINADOR LLUVIA ACIDA 100ML",
+          "codigoSKU": "EASY LLUV-ACID",
+          "cantidad": 8,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO CERAMIC GLASS TREATMENT 50ML",
+          "codigoSKU": "MCLPRO98484.01",
+          "cantidad": 8,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERÁMICO DE VIDRIOS (TODOS)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 60,
+      "receta": [
+        {
+          "insumoNombre": "EASYDRY DESCONTAMINADOR LLUVIA ACIDA 100ML",
+          "codigoSKU": "EASY LLUV-ACID",
+          "cantidad": 33.333,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO CERAMIC GLASS TREATMENT 50ML",
+          "codigoSKU": "MCLPRO98484.01",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERÁMICO 3 AÑOS (CJ- COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ZR53 NASIOL 50ml PRESENT. ORIGINAL- CERAMICO 3 AÑOS",
+          "codigoSKU": "ZR53-50ml",
+          "cantidad": 50,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERÁMICO 3 AÑOS (CJ- STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PAD HEAVY CUT ROJO 150MM",
+          "codigoSKU": "26900.224.010",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "ZR53 NASIOL 50ml PRESENT. ORIGINAL- CERAMICO 3 AÑOS",
+          "codigoSKU": "ZR53-50ml",
+          "cantidad": 50,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERAMICO 5 AÑOS (CJ-COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "NL272 NASIOL 50ml PRESENT. ORIGINAL",
+          "codigoSKU": "NL272-50ml",
+          "cantidad": 50,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERAMICO 5 AÑOS (CJ-STANDAD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 240,
+      "receta": [
+        {
+          "insumoNombre": "PAD HEAVY CUT ROJO 150MM",
+          "codigoSKU": "26900.224.010",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "FINAL FINISH 3000 250ML",
+          "codigoSKU": "22029.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "NL272 NASIOL 50ml PRESENT. ORIGINAL",
+          "codigoSKU": "NL272-50ml",
+          "cantidad": 16.667,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO DE TAPICERÍA (COMPLEJA)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 120,
+      "receta": [
+        {
+          "insumoNombre": "FABRIC INTERIOR CLEANER 500ML",
+          "codigoSKU": "MCL3058",
+          "cantidad": 1,
+          "unidad": "UND",
+          "nota": "(ESTE PRODUCTO ES EN UNIDAD)"
+        },
+        {
+          "insumoNombre": "MCLAREN PRO FABRIC NEUTRALIZER 5 LTS",
+          "codigoSKU": "MCLPRO98569",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO DE TAPICERÍA (STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 120,
+      "receta": [
+        {
+          "insumoNombre": "FABRIC INTERIOR CLEANER 500ML",
+          "codigoSKU": "MCL3058",
+          "cantidad": 0.5,
+          "unidad": "UND",
+          "nota": "(ESTE PRODUCTO ES EN UNIDAD)"
+        },
+        {
+          "insumoNombre": "MCLAREN PRO FABRIC NEUTRALIZER 5 LTS",
+          "codigoSKU": "MCLPRO98569",
+          "cantidad": 250,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+          "codigoSKU": "MCLPRO98637",
+          "cantidad": 5,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LIMPIEZA DE TAPICERIA POR PIEZA",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 25,
+      "receta": [
+        {
+          "insumoNombre": "FABRIC INTERIOR CLEANER 500ML",
+          "codigoSKU": "MCL3058",
+          "cantidad": 0.25,
+          "unidad": "UND",
+          "nota": "(ESTE PRODUCTO ES EN UNIDAD)"
+        }
+      ]
+    },
+    {
+      "nombre": "CERÁMICO DE 1 AÑO(COMPLEJO)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 180,
+      "receta": [
+        {
+          "insumoNombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+          "codigoSKU": "26914.099.001",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 35,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO 3 EN 1 MENZERNA",
+          "codigoSKU": "22748.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN CERAMIC DURA COATING",
+          "codigoSKU": "MCL6981",
+          "cantidad": 50,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "CERÁMICO DE 1 AÑO(STANDARD)",
+      "categoria": "ESPECIAL",
+      "tiempoEstimadoMin": 180,
+      "receta": [
+        {
+          "insumoNombre": "PAD MEDIUM CUT AMARILLA 150MM",
+          "codigoSKU": "26900.224.011",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+          "codigoSKU": "22202.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PAD SOFT CUT VERDE 150MM",
+          "codigoSKU": "26900.224.012",
+          "cantidad": 0.05,
+          "unidad": "UND",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "PULIMENTO 3 EN 1 MENZERNA",
+          "codigoSKU": "22748.281.001",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "TYRE DRESSING GLOSS 500ML",
+          "codigoSKU": "MCL2983",
+          "cantidad": 25,
+          "unidad": "ML",
+          "nota": ""
+        },
+        {
+          "insumoNombre": "MCLAREN CERAMIC DURA COATING",
+          "codigoSKU": "MCL6981",
+          "cantidad": 50,
+          "unidad": "ML",
+          "nota": ""
+        }
+      ]
+    },
+    {
+      "nombre": "LAVADO MCLAREN",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 30,
+      "receta": []
+    },
+    {
+      "nombre": "LAVADO PARA AUTOS CON CERAMICO",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 30,
+      "receta": []
+    },
+    {
+      "nombre": "LAVADA SEMIDELUX MAS MOTOR",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 30,
+      "receta": []
+    },
+    {
+      "nombre": "LAVADO Y ENCERADO PREPAGADO",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 45,
+      "receta": []
+    },
+    {
+      "nombre": "LAVADO DE MOTOR",
+      "categoria": "GENERAL",
+      "tiempoEstimadoMin": 20,
+      "receta": []
+    }
+  ],
+  "insumos": [
+    {
+      "codigoSKU": "DESG-DJ",
+      "nombre": "DESENGRASANTE D.J.",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "RENOV.PROD.SUPER.",
+      "nombre": "RENOVADOR DE NEUMATICOS SUPER EASYDRY PRODUCCION CNC S/C",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "ACOND-DJ",
+      "nombre": "ACONDICIONADOR DJ",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCLPRO98637",
+      "nombre": "MCLAREN PRO GEL PLASTIC RENOVATOR 1  LTS",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCL8251",
+      "nombre": "CERAMIC RAIN REPELLANT 500ML",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCL2983",
+      "nombre": "TYRE DRESSING GLOSS 500ML",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCL6974",
+      "nombre": "MCLAREN CERAMIC HYDROSEAL  500ML",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCL8398",
+      "nombre": "MCLAREN ENGINE DEGREASER AEROSOL 500ML",
+      "unidad": "UND",
+      "categoria": "CONSUMIBLE"
+    },
+    {
+      "codigoSKU": "26900.224.011",
+      "nombre": "PAD MEDIUM CUT AMARILLA 150MM",
+      "unidad": "UND",
+      "categoria": "CONSUMIBLE"
+    },
+    {
+      "codigoSKU": "22202.281.001",
+      "nombre": "PULIMENTO HEAVY CUT 400 MENZERNA",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "26900.224.012",
+      "nombre": "PAD SOFT CUT VERDE 150MM",
+      "unidad": "UND",
+      "categoria": "CONSUMIBLE"
+    },
+    {
+      "codigoSKU": "22748.281.001",
+      "nombre": "PULIMENTO 3 EN 1 MENZERNA",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "26914.099.001",
+      "nombre": "PREMIUM ORBITAL WOOL (HIBRIDA) 140MM",
+      "unidad": "UND",
+      "categoria": "CONSUMIBLE"
+    },
+    {
+      "codigoSKU": "26900.224.010",
+      "nombre": "PAD HEAVY CUT ROJO 150MM",
+      "unidad": "UND",
+      "categoria": "CONSUMIBLE"
+    },
+    {
+      "codigoSKU": "22070.281.001",
+      "nombre": "POWER LOCK ULTIMATE PROTECTION 250ML",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "22029.281.001",
+      "nombre": "FINAL FINISH 3000 250ML",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "ZR53-50ml",
+      "nombre": "ZR53 NASIOL 50ml PRESENT. ORIGINAL- CERAMICO 3 AÑOS",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "NL272-50ml",
+      "nombre": "NL272 NASIOL 50ml PRESENT. ORIGINAL",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCLPRO98484.01",
+      "nombre": "MCLAREN PRO CERAMIC GLASS TREATMENT 50ML",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "EASY LLUV-ACID",
+      "nombre": "EASYDRY DESCONTAMINADOR LLUVIA ACIDA 100ML",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCL3058",
+      "nombre": "FABRIC INTERIOR CLEANER 500ML",
+      "unidad": "UND",
+      "categoria": "CONSUMIBLE"
+    },
+    {
+      "codigoSKU": "MCLPRO98569",
+      "nombre": "MCLAREN PRO FABRIC NEUTRALIZER 5 LTS",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    },
+    {
+      "codigoSKU": "MCL6981",
+      "nombre": "MCLAREN CERAMIC DURA COATING",
+      "unidad": "ML",
+      "categoria": "QUIMICOS_LAVADO"
+    }
+  ]
+}

@@ -1,13 +1,13 @@
 # EasyDry® — Backend API Gateway & Offline Sync Engine
 
 > **Plataforma Integral de Gestión y Control Operativo para Centros de Lavado Automotriz Ecológico.**  
-> Backend empresarial desarrollado con **NestJS 10**, **TypeScript**, **Prisma ORM**, **PostgreSQL** y arquitectura **100% POST** con soporte para **Sincronización Offline Industrial**.
+> Backend empresarial desarrollado con **NestJS 12**, **TypeScript**, **Prisma ORM 6**, **PostgreSQL** y arquitectura **100% POST** con soporte para **Sincronización Offline Industrial** y **Notificaciones en Tiempo Real (WebSocket)**.
 
 ---
 
 ## 🚀 Tecnologías y Arquitectura
 
-* **Framework:** [NestJS 10](https://nestjs.com/) (Modular, Inyección de Dependencias, Decoradores tipados).
+* **Framework:** [NestJS 12](https://nestjs.com/) (Modular, Inyección de Dependencias, Decoradores tipados).
 * **ORM:** [Prisma v6](https://www.prisma.io/) con cliente generado para PostgreSQL.
 * **Base de Datos:** PostgreSQL (`easydry_db`) con relaciones relacionales y auditoría JSON.
 * **Seguridad y Cifrado:**
@@ -21,6 +21,7 @@
   * **Deltas Seguros:** Ventana de solapamiento de 5 segundos (`safeSince`) y scoping por agencia/rol.
   * **Subida Multimedia Desacoplada:** Tickets prefirmados para fotos sin sobrecargar payloads JSON.
   * **Resolución de Conflictos:** "Gana la Operación en Campo" (el trabajo físico prevalece sobre cancelaciones administrativas).
+* **Notificaciones en Tiempo Real:** Gateway WebSocket (`@nestjs/websockets` + `socket.io`) con autenticación por JWT en el handshake, respaldado por persistencia en PostgreSQL (`Notification`). Cubre 8 eventos operativos (limpiezas pendientes/atrasadas de maquinaria, mantenimientos vencidos, etc.), con envío "fire-and-forget" que nunca bloquea ni revienta la operación principal si falla.
 
 ---
 
@@ -29,20 +30,27 @@
 ```text
 backend-easydry/
 ├── prisma/
-│   └── schema.prisma            # Modelos de BD (Usuarios, Roles, Servicios, Bahías, Insumos, DLQ, SyncDevice)
+│   ├── schema.prisma            # Modelos de BD (Usuarios, Roles, Servicios, Bahías, Insumos, Notification, Reto, DLQ, SyncDevice)
+│   └── migrations/              # Migraciones SQL versionadas (una carpeta por cambio de esquema)
 ├── src/
 │   ├── modules/
 │   │   ├── auth/                # Login, Refresh, Estrategia JWT, Guards y Decoradores
 │   │   ├── sync/                # Motor de Sincronización Offline (Push, Pull, Bootstrap, Media, DLQ)
-│   │   ├── operaciones/         # Servicios de lavado, bahías, recetas y consumo automático
-│   │   ├── inventario/          # Insumos, stock por agencia, transferencias y alertas
-│   │   ├── catalogos/           # Servicios ofertados, categorías, recetas estándar
-│   │   ├── sedes/               # Gestión de Regiones y Agencias
-│   │   ├── maquinaria/          # Registro de máquinas, mantenimientos preventivos y correctivos
-│   │   └── usuarios/            # CRUD de usuarios y asignación de roles
-│   ├── config/                  # Validaciones de variables de entorno
-│   ├── app.module.ts            # Módulo raíz que orquesta los submódulos
-│   └── main.ts                  # Bootstrap con Swagger, CORS y Global Validation Pipes
+│   │   ├── operaciones/         # Servicios de lavado (OT), bahías, recetas, consumo automático y evidencias
+│   │   ├── inventario/          # Insumos (con categoría validada), presentaciones, stock por agencia y alertas
+│   │   ├── catalogos/           # Servicios ofertados (GENERAL/ESPECIAL), categorías, recetas estándar
+│   │   ├── agencias/            # Gestión de Regiones, Agencias, usuarios y alcance (GLOBAL/REGION/AGENCIA)
+│   │   ├── maquinaria/          # Maquinaria, limpieza (con evidencia fotográfica), mantenimientos e incidentes
+│   │   ├── analytics/           # Dashboards, consumo de químicos y ranking de lavadores (cantidad + tiempo promedio)
+│   │   ├── notifications/       # Persistencia + Gateway WebSocket de notificaciones (8 eventos operativos)
+│   │   ├── retos/                # Retos comerciales/operativos: creación, listado y cierre con ganador
+│   │   ├── schedule/             # Cron jobs: recordatorios y escalamiento de limpieza, mantenimientos vencidos
+│   │   ├── aprobaciones/         # Flujo de aprobación gerencial de servicios finalizados
+│   │   └── roles/                # Catálogo de roles y capacidades (RBAC)
+│   ├── common/                   # Decoradores de permisos, guards, utilidades de alcance y paginación compartida
+│   ├── config/                   # Validaciones de variables de entorno
+│   ├── app.module.ts             # Módulo raíz que orquesta los submódulos
+│   └── main.ts                   # Bootstrap con Swagger, CORS, Global Validation Pipes y WebSocket Gateway
 ├── .env                         # Variables de entorno activas (ignorado por git)
 ├── .env.example                 # Plantilla de variables de entorno requeridas
 ├── .gitignore                   # Exclusión de node_modules, dist, .env y temporales
@@ -85,10 +93,11 @@ backend-easydry/
 ## 🛠️ Instalación y Puesta en Marcha
 
 ### 1. Instalar dependencias
+
+> ⚠️ **Usa siempre `pnpm`.** Este monorepo usa `pnpm-workspace.yaml`; ejecutar `npm install` sobre un `node_modules` generado por pnpm corrompe el árbol de dependencias (confunde las carpetas `.pnpm` con el algoritmo de resolución de npm). Si esto ocurre, borra `node_modules` y reinstala con `pnpm install`.
+
 ```bash
 pnpm install
-# o con npm:
-npm install
 ```
 
 ### 2. Gestión de Base de Datos y Migraciones con Prisma
@@ -126,6 +135,8 @@ Cuando agregues o modifiques modelos en `prisma/schema.prisma`:
 # Genera el archivo SQL en prisma/migrations/<timestamp>_<nombre>/ y lo aplica localmente
 npx prisma migrate dev --name <nombre_descriptivo_del_cambio>
 ```
+
+> ⚠️ **Si tu base de datos local tiene drift de esquema** (columnas o tablas creadas manualmente o con `db push` antes de existir su migración), `migrate dev` detectará la diferencia y **propondrá resetear toda la base de datos**, borrando los datos. Si ves esa advertencia, **no confirmes el reset**: en su lugar escribe el archivo `migration.sql` a mano dentro de `prisma/migrations/<timestamp>_<nombre>/` (copiando la sintaxis de una migración reciente) y aplícalo con `pnpm run prisma:deploy`, que solo ejecuta migraciones pendientes sin comparar ni resetear el esquema.
 
 #### D. Comandos útiles de auditoría y base de datos
 | Comando | Descripción |
@@ -165,13 +176,28 @@ Todos los endpoints requieren autenticación con `Bearer Token`:
 
 ---
 
+## 🔔 Notificaciones en Tiempo Real (`/notifications`)
+
+Sistema de notificaciones respaldado en PostgreSQL (tabla `Notification`) y empujado al cliente por WebSocket:
+
+| Método / Canal | Endpoint / Evento | Descripción |
+|---|---|---|
+| `POST` | `/api/v1/notifications/list` | Historial paginado de notificaciones propias del usuario autenticado, más recientes primero. |
+| `POST` | `/api/v1/notifications/resumen` | Cantidad de notificaciones sin leer (badge de la campanita). |
+| `POST` | `/api/v1/notifications/marcar-leida` | Marca una notificación puntual como leída. |
+| `POST` | `/api/v1/notifications/marcar-todas-leidas` | Marca todas las notificaciones propias como leídas. |
+| `WebSocket` | `ws://localhost:3000` (namespace raíz) | El cliente se conecta enviando el JWT en `handshake.auth.token`; el servidor valida la sesión igual que el `JwtStrategy` HTTP y empuja el evento `notification:new` al socket del usuario destinatario en tiempo real. |
+
+Eventos cubiertos: limpieza de maquinaria pendiente del día, limpieza atrasada (con escalamiento único a quien audita la agencia), mantenimiento de maquinaria vencido, y otros hitos operativos del flujo de servicios. El envío es *fire-and-forget*: si falla (ej. el socket ya no está conectado), solo se registra una advertencia en el log — nunca interrumpe la operación que la originó.
+
+---
+
 ## 🧪 Pruebas Automatizadas
 
-El proyecto cuenta con suites de validación que prueban el flujo completo (autenticación, scoping RBAC, stock y sincronización offline endurecida):
+Suite de pruebas unitarias/integración con [Vitest](https://vitest.dev/), usando un cliente Prisma mockeado por módulo (patrón `armar()`): cubre autenticación, scoping RBAC por rol/alcance, reglas de negocio de operaciones (OT), stock, maquinaria/limpieza, notificaciones, analítica y retos.
 
 ```bash
-# Ejecutar prueba integral de sincronización offline (Idempotencia, DLQ, Conflictos y Presigned Media):
-powershell -ExecutionPolicy Bypass -File "../scratch/test_hardened_sync.ps1"
+pnpm test
 ```
 
 ---

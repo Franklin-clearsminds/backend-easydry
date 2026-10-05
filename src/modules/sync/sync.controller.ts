@@ -1,17 +1,18 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Headers } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Headers } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { SyncService } from './sync.service.js';
 import { SyncPushDto, ReplayDlqDto, QueryPendingMediaDto } from './dto/sync-push.dto.js';
 import { SyncPullQueryDto } from './dto/sync-pull.dto.js';
 import { RegisterPushTokenDto } from './dto/sync-device.dto.js';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
+import { Permiso, Publico } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Sincronización Offline Móvil')
 @Controller('sync')
 export class SyncController {
   constructor(private readonly syncService: SyncService) {}
 
+  @Publico()
   @Post('ping')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -25,14 +26,14 @@ export class SyncController {
     return this.syncService.ping();
   }
 
+  @Permiso('sync.usar')
   @Post(['push', 'operations'])
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Envío de cambios offline del móvil al backend (Idempotente)' })
   @ApiResponse({ status: 200, description: 'Lote o evento procesado con éxito' })
   async pushMutations(
-    @Body() body: any,
+    @Body() body: SyncPushDto,
     @CurrentUser('id') userId: string,
     @Headers('x-operation-id') headerOpId?: string,
     @Headers('idempotency-key') headerIdempotencyKey?: string,
@@ -40,9 +41,9 @@ export class SyncController {
     return this.syncService.processPush(body, userId, headerOpId || headerIdempotencyKey);
   }
 
+  @Permiso('sync.usar')
   @Post(['pull', 'delta'])
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Descarga incremental de cambios del servidor con parámetros en body (POST Seguro)' })
   @ApiResponse({ status: 200, description: 'Lista de servicios modificados' })
@@ -50,9 +51,9 @@ export class SyncController {
     return this.syncService.processPull(query, userId);
   }
 
+  @Permiso('sync.usar')
   @Post('bootstrap')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Carga inicial de catálogos, bahías e insumos para inicializar app móvil' })
   @ApiResponse({ status: 200, description: 'Datos maestros para inicialización offline de la app' })
@@ -60,33 +61,65 @@ export class SyncController {
     return this.syncService.getBootstrapData(userId);
   }
 
+  @Permiso('sync.usar')
   @Post(['media/presigned-url', 'media/ticket'])
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Genera ticket/URL prefirmada para subida binaria desacoplada de fotos (S3/Cloud)' })
   @ApiResponse({ status: 200, description: 'Ticket con URL de subida directa sin saturar JSON' })
   async getMediaTicket(
-    @Body() body: { clientUuid: string; type: 'FOTO_INGRESO' | 'FOTO_SALIDA'; fileName?: string },
+    @Body()
+    body: {
+      clientUuid: string;
+      type: string;
+      fileName?: string;
+      agenciaId?: string;
+      servicioId?: string;
+      category?: string;
+      maquinariaId?: string;
+      incidenteId?: string;
+      contentType?: string;
+    },
+    @CurrentUser('id') userId: string,
   ) {
-    return this.syncService.generateMediaUploadTicket(body);
+    if (body.type === 'FOTO_PERFIL' || body.category === 'PERFIL_USUARIO') {
+      body.clientUuid = userId;
+    }
+    return this.syncService.generateMediaUploadTicket({
+      ...body,
+      userId: body.type === 'FOTO_PERFIL' || body.category === 'PERFIL_USUARIO' ? userId : undefined,
+    } as any);
   }
 
+  @Permiso('sync.usar')
   @Post('media/confirm')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Confirma la subida de foto y la asocia a la orden de trabajo' })
   @ApiResponse({ status: 200, description: 'Foto vinculada con éxito' })
   async confirmMediaUpload(
-    @Body() body: { clientUuid: string; type: 'FOTO_INGRESO' | 'FOTO_SALIDA'; fileUrl: string },
+    @Body() body: {
+      clientUuid: string;
+      type: string;
+      fileUrl: string;
+      category?: string;
+      maquinariaId?: string;
+      incidenteId?: string;
+      servicioId?: string;
+      specialAction?: 'START' | 'PAUSE' | 'RESUME' | 'FINISH';
+      specialOperatorId?: string;
+      pauseReason?: string;
+      resumeNotes?: string;
+      capturedAt?: string;
+    },
+    @CurrentUser() user: any,
   ) {
-    return this.syncService.confirmMediaUpload(body);
+    return this.syncService.confirmMediaUpload(body, user);
   }
 
+  @Permiso('sync.usar')
   @Post('media/pending')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Reconciliador de evidencias multimedia pendientes o huérfanas',
@@ -99,29 +132,29 @@ export class SyncController {
     return this.syncService.getPendingMedia(dto.clientUuids);
   }
 
+  @Permiso('sync.usar')
   @Post('dlq/list')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Listar mutaciones aisladas en la Dead-Letter Queue (Poison Pills)' })
   @ApiResponse({ status: 200, description: 'Lista de fallos de sincronización para soporte técnico' })
-  async listDlq(@Body() body: { resuelto?: boolean }) {
-    return this.syncService.listDeadLetterQueue(body?.resuelto);
+  async listDlq(@Body() body: { resuelto?: boolean }, @CurrentUser() user: any) {
+    return this.syncService.listDeadLetterQueue(body?.resuelto, user);
   }
 
+  @Permiso('sync.dlq.gestionar')
   @Post('dlq/resolve')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Marcar mutación de DLQ como resuelta' })
   @ApiResponse({ status: 200, description: 'Registro actualizado' })
-  async resolveDlq(@Body() body: { id: string; resuelto?: boolean }) {
-    return this.syncService.resolveDeadLetterItem(body.id, body.resuelto !== false);
+  async resolveDlq(@Body() body: { id: string; resuelto?: boolean }, @CurrentUser() user: any) {
+    return this.syncService.resolveDeadLetterItem(body.id, body.resuelto !== false, user);
   }
 
+  @Permiso('sync.dlq.gestionar')
   @Post('dlq/replay')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Re-ejecutar y reinyectar una mutación aislada en la DLQ al pipeline transaccional',
@@ -131,13 +164,13 @@ export class SyncController {
   })
   @ApiResponse({ status: 200, description: 'Mutación reinyectada y aplicada exitosamente' })
   @ApiResponse({ status: 400, description: 'Fallo al reaplicar la mutación' })
-  async replayDlq(@Body() dto: ReplayDlqDto, @CurrentUser('id') userId: string) {
-    return this.syncService.replayDeadLetterItem(dto.dlqId, dto.payloadCorregido, userId);
+  async replayDlq(@Body() dto: ReplayDlqDto, @CurrentUser() user: any) {
+    return this.syncService.replayDeadLetterItem(dto.dlqId, dto.payloadCorregido, user?.id, user);
   }
 
+  @Permiso('sync.usar')
   @Post('devices/register-push-token')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Registra el token Expo Push del dispositivo para recibir alertas críticas' })
   @ApiResponse({ status: 200, description: 'Push token registrado exitosamente' })

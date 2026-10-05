@@ -1,4 +1,7 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray, IsInt, IsBoolean, Min, ArrayMinSize } from 'class-validator';
+import { PaginacionDto } from './trazabilidad.dto.js';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateMaquinariaDto {
@@ -41,6 +44,11 @@ export class CreateMaquinariaDto {
   @IsOptional()
   @IsString()
   fotoUrl?: string;
+
+  @ApiPropertyOptional({ description: 'URL S3 de la imagen de ficha técnica' })
+  @IsOptional()
+  @IsString()
+  fichaTecnicaUrl?: string;
 
   @ApiPropertyOptional({ example: 120 })
   @IsOptional()
@@ -99,23 +107,39 @@ export class UpdateMaquinariaDto {
   @IsString()
   fotoUrl?: string;
 
+  @ApiPropertyOptional({ description: 'URL S3 de la imagen de ficha técnica' })
+  @IsOptional()
+  @IsString()
+  fichaTecnicaUrl?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   horasUso?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Días de adelanto permitidos para ejecutar un mantenimiento' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  ventanaAdelantoDias?: number;
+
+  @ApiPropertyOptional({ description: 'Solo informativo: cambiar agencia o bahía se hace con /maquinaria/transferir' })
   @IsOptional()
   @IsString()
   agenciaId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Solo informativo: cambiar agencia o bahía se hace con /maquinaria/transferir' })
   @IsOptional()
   @IsString()
   bahiaId?: string;
 }
 
-export class ListMaquinariaDto {
+/**
+ * Sin page/pageSize: `{ success, total, data }` con hasta 100 equipos. Con alguno: página estándar (`items`, `data`, `total`,
+ * …). Orden: codigo, nombre, tipo, estado, agencia, bahia, fecha.
+ */
+export class ListMaquinariaDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ description: 'Filtro por agencia' })
   @IsOptional()
   @IsString()
@@ -136,13 +160,54 @@ export class ListMaquinariaDto {
   @IsString()
   estadoOperativo?: string;
 
-  @ApiPropertyOptional({ description: 'Búsqueda por texto en código, nombre, marca o modelo' })
+  @ApiPropertyOptional({ description: 'Filtro por región (de la agencia donde está el equipo)' })
   @IsOptional()
   @IsString()
-  search?: string;
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtro por cliente/marca (de la agencia donde está el equipo)' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  // Filtros por NOMBRE (exacto, sin distinguir mayúsculas) para las pantallas que trabajan con los nombres del filter-bar.
+  @ApiPropertyOptional({ description: 'Nombre exacto de la agencia' })
+  @IsOptional()
+  @IsString()
+  agenciaNombre?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre exacto de la bahía' })
+  @IsOptional()
+  @IsString()
+  bahiaNombre?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre exacto de la región de la agencia' })
+  @IsOptional()
+  @IsString()
+  regionNombre?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre exacto del cliente/marca de la agencia' })
+  @IsOptional()
+  @IsString()
+  clienteNombre?: string;
+
+  @ApiPropertyOptional({ description: 'true = solo activas, false = solo desactivadas' })
+  @IsOptional()
+  @IsBoolean()
+  activa?: boolean;
+
+  @ApiPropertyOptional({ description: 'Máquinas asignadas a este pulidor / líder operador' })
+  @IsOptional()
+  @IsString()
+  operadorAsignadoId?: string;
 }
 
 export class ReportarIncidenteDto {
+  @ApiPropertyOptional({ description: 'UUID generado por el cliente; también nombra la carpeta de evidencias en S3' })
+  @IsOptional()
+  @IsString()
+  clientUuid?: string;
+
   @ApiProperty({ description: 'ID de la máquina afectada' })
   @IsString()
   @IsNotEmpty()
@@ -167,6 +232,16 @@ export class ReportarIncidenteDto {
   @IsOptional()
   @IsString()
   fotoEvidenciaUrl?: string;
+
+  @ApiPropertyOptional({ description: 'URLs de fotos/videos del daño' })
+  @IsOptional()
+  @IsArray()
+  evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
+
+  @ApiPropertyOptional({ description: 'ID del taller destino (nacional o regional)' })
+  @IsOptional()
+  @IsString()
+  destinoTallerId?: string;
 }
 
 export class ResolverIncidenteDto {
@@ -182,11 +257,81 @@ export class ResolverIncidenteDto {
 
   @ApiPropertyOptional({ example: 'RESUELTO', enum: ['RESUELTO', 'CANCELADO'] })
   @IsOptional()
-  @IsString()
+  @IsIn(['RESUELTO', 'CANCELADO'])
   estado?: string;
+
+  @ApiPropertyOptional({ description: 'Repuestos utilizados en la reparación' })
+  @IsOptional()
+  @IsString()
+  repuestosUtilizados?: string;
+
+  @ApiPropertyOptional({ description: 'Costo de la reparación. Obligatorio cuando estado es RESUELTO (se valida en el servicio).' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  costoTotal?: number;
+
+  @ApiPropertyOptional({ description: 'Fotos, videos y PDFs de la reparación' })
+  @IsOptional()
+  @IsArray()
+  evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
 }
 
-export class ListIncidentesDto {
+export class ListIncidentesDto extends PaginacionDto {
+  @ApiPropertyOptional({ description: 'Solo incidencias sin asignar (No atendidas)' })
+  @IsOptional()
+  @IsBoolean()
+  soloNoAtendidas?: boolean;
+
+  @ApiPropertyOptional({ description: 'Texto: título, descripción, máquina (código o nombre), reportante o técnico' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Técnico asignado' })
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
+
+  @ApiPropertyOptional({ description: 'Región de la máquina' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Cliente / marca de la agencia de la máquina' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ description: 'Desde (inclusive), por fecha de reporte. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Hasta (inclusive), por fecha de reporte. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaHasta?: string;
+
+  @ApiPropertyOptional({
+    description: 'Orden explícito: fecha, solucion, estado, gravedad, titulo, maquina, agencia, reportadoPor, tecnico. '
+      + 'Sin orden explícito: no atendidas primero, luego en proceso y luego cerradas, cada grupo con lo más reciente primero.',
+  })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ description: 'Devuelve el conteo por grupo (sin atender / en proceso / cerradas) con los mismos filtros menos el de estado' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
+
   @ApiPropertyOptional({ description: 'Filtro por máquina' })
   @IsOptional()
   @IsString()
@@ -233,13 +378,122 @@ export class RegistrarMantenimientoDto {
   @IsNumber()
   costoTotal?: number;
 
+  @ApiPropertyOptional({ description: 'Fecha programada del mantenimiento (por defecto, ahora)' })
+  @IsOptional()
+  @IsString()
+  fechaProgramada?: string;
+
   @ApiPropertyOptional({ description: 'Fecha sugerida para el próximo mantenimiento' })
   @IsOptional()
   @IsString()
   proximoMantenimiento?: string;
+
+  @ApiPropertyOptional({ description: 'Cada cuántos días se debe repetir. 0 = única vez' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  frecuenciaDias?: number;
+
+  @ApiPropertyOptional({ description: 'Fotos, videos y PDFs. Opcional al agendar.' })
+  @IsOptional()
+  @IsArray()
+  evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
+
+  @ApiPropertyOptional({ description: 'ID del técnico asignado (si no es el usuario actual)' })
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
 }
 
-export class ListMantenimientosDto {
+export class EjecutarMantenimientoDto {
+  @ApiProperty({ description: 'ID del mantenimiento a ejecutar' })
+  @IsString()
+  @IsNotEmpty()
+  mantenimientoId: string;
+
+  @ApiPropertyOptional({ description: 'Informe del trabajo realizado' })
+  @IsOptional()
+  @IsString()
+  observaciones?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fechaFin?: string;
+
+  @ApiProperty({ description: 'Costo del mantenimiento. Obligatorio (se valida en el servicio).' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  costoTotal?: number;
+
+  @ApiProperty({ description: 'Evidencias del trabajo. Debe incluir al menos una imagen.' })
+  @IsArray()
+  @ArrayMinSize(1)
+  evidencias: Array<{ tipo: string; url: string; descripcion?: string }>;
+}
+
+export class ListMantenimientosDto extends PaginacionDto {
+  @ApiPropertyOptional({ description: 'Solo mantenimientos vencidos sin ejecutar (No atendidos)' })
+  @IsOptional()
+  @IsBoolean()
+  soloNoAtendidos?: boolean;
+
+  @ApiPropertyOptional({ description: 'Texto: observaciones, máquina (código o nombre) o técnico' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Región de la máquina' })
+  @IsOptional()
+  @IsString()
+  regionId?: string;
+
+  @ApiPropertyOptional({ description: 'Cliente / marca de la agencia de la máquina' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ description: 'Desde (inclusive), por fecha programada. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Hasta (inclusive), por fecha programada. ISO 8601 o AAAA-MM-DD.' })
+  @IsOptional()
+  @IsString()
+  fechaHasta?: string;
+
+  @ApiPropertyOptional({
+    description: 'Orden explícito: fecha (programada), ejecucion, estado, tipo, maquina, agencia, tecnico. '
+      + 'Sin orden explícito: vencidos primero, luego pendientes y luego ejecutados, cada grupo con lo más reciente primero.',
+  })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ description: 'Devuelve el conteo por grupo (vencidos / pendientes / ejecutados) con los mismos filtros menos el de estado' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
+
+  @ApiPropertyOptional({ description: 'Filtro por estado (PENDIENTE, EN_PROCESO, FINALIZADO)' })
+  @IsOptional()
+  @IsString()
+  estado?: string;
+
+  @ApiPropertyOptional({ description: 'Filtro por agencia actual de la máquina' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
   @ApiPropertyOptional({ description: 'Filtro por máquina' })
   @IsOptional()
   @IsString()
@@ -254,4 +508,62 @@ export class ListMantenimientosDto {
   @IsOptional()
   @IsString()
   tipo?: string;
+}
+
+export class AsignarIncidenteDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  incidenteId: string;
+
+  @ApiPropertyOptional({ description: 'Técnico destino. Si se omite, se auto-asigna el usuario actual (Ejecutar yo).' })
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
+
+  @ApiPropertyOptional({ description: 'Taller nacional o regional de destino' })
+  @IsOptional()
+  @IsString()
+  destinoTallerId?: string;
+}
+
+export class AsignarMantenimientoDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  mantenimientoId: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tecnicoId?: string;
+}
+
+export class TransferirMaquinariaDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  maquinariaId: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  destinoAgenciaId: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinoBahiaId?: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  motivo: string;
+}
+
+export class ListMovimientosMaquinariaDto extends PaginacionDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  maquinariaId?: string;
 }

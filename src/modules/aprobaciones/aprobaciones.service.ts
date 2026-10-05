@@ -1,13 +1,39 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SolicitarAprobacionDto, DecidirAprobacionDto, ListAprobacionesDto } from './dto/aprobaciones.dto.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import { DecisionesService } from '../../common/permisos/decisiones.service.js';
+import { resolverAlcance } from '../../common/permisos/alcance.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 @Injectable()
 export class AprobacionesService {
   private readonly logger = new Logger(AprobacionesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly decisiones: DecisionesService;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    decisiones?: DecisionesService,
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {
+    this.decisiones = decisiones ?? new DecisionesService(prisma);
+  }
+
+  /** Aprobador designado de la agencia (APROBADOR/GERENTE activos); si no hay, respaldo en ADMIN/SUPER_ADMIN. */
+  private async resolverAprobadores(agenciaId: string): Promise<string[]> {
+    const titulares = await this.prisma.user.findMany({
+      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR', 'GERENTE'] }, estado: 1 } },
+      select: { id: true },
+    });
+    if (titulares.length) return titulares.map((u) => u.id);
+    const respaldo = await this.prisma.user.findMany({
+      where: { estado: 1, role: { namerol: { in: ['ADMIN', 'SUPER_ADMIN'] }, estado: 1 } },
+      select: { id: true },
+    });
+    return respaldo.map((u) => u.id);
+  }
 
   async list(dto: ListAprobacionesDto, user: any) {
     const page = dto.page ? Number(dto.page) : 1;
@@ -16,38 +42,29 @@ export class AprobacionesService {
 
     const where: any = {};
 
-    // Scoping por rol:
-    const userRole = (user?.role?.namerol || user?.roleDetails?.namerol || user?.role || '').toUpperCase();
-    const isSuperAdminOrAdmin = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
-    const isSupervisor = userRole === 'SUPERVISOR' || userRole === 'GERENTE_REGIONAL' || userRole.includes('SUPERVISOR') || userRole.includes('REGIONAL');
-    const isAprobador = userRole === 'APROBADOR' || userRole === 'LIDER_AGENCIA' || userRole === 'LIDER' || userRole === 'GERENTE';
-
-    if (isSuperAdminOrAdmin) {
-      if (dto.agenciaId && dto.agenciaId !== 'Todas' && dto.agenciaId !== 'TODAS') {
-        where.agenciaId = dto.agenciaId;
-      }
-    } else if (isSupervisor) {
-      if (user?.regionId) {
-        where.agencia = { regionId: user.regionId };
-      }
-      if (dto.agenciaId && dto.agenciaId !== 'Todas' && dto.agenciaId !== 'TODAS') {
-        where.agenciaId = dto.agenciaId;
-      }
-    } else if (isAprobador) {
-      if (user?.agenciaId) {
-        where.agenciaId = user.agenciaId;
-      }
-    } else if (dto.agenciaId && dto.agenciaId !== 'Todas' && dto.agenciaId !== 'TODAS') {
-      where.agenciaId = dto.agenciaId;
+    // Alcance único: país, región o agencia. Además, cada usuario ve las solicitudes que hizo él. Sin dato de ámbito no ve más que las suyas.
+    const alcance = resolverAlcance(user);
+    const pide = dto.agenciaId && dto.agenciaId !== 'Todas' && dto.agenciaId !== 'TODAS' ? dto.agenciaId : undefined;
+    const propias = { solicitanteId: String(user?.id) };
+    if (alcance.tipo === 'GLOBAL') {
+      if (pide) where.agenciaId = pide;
+    } else if (alcance.tipo === 'REGION') {
+      where.OR = [{ agencia: { regionId: alcance.regionId }, ...(pide ? { agenciaId: pide } : {}) }, propias];
+    } else if (alcance.tipo === 'AGENCIA') {
+      where.OR = [{ agenciaId: alcance.agenciaId }, propias];
+    } else {
+      Object.assign(where, propias);
     }
 
     if (dto.estado) where.estado = dto.estado;
     if (dto.tipo) where.tipo = dto.tipo;
 
     if (dto.search) {
-      where.OR = [
-        { titulo: { contains: dto.search, mode: 'insensitive' } },
-        { descripcion: { contains: dto.search, mode: 'insensitive' } },
+      where.AND = [
+        { OR: [
+          { titulo: { contains: dto.search, mode: 'insensitive' } },
+          { descripcion: { contains: dto.search, mode: 'insensitive' } },
+        ] },
       ];
     }
 
@@ -72,14 +89,26 @@ export class AprobacionesService {
     return buildDataGridResponse(items, total, page, pageSize);
   }
 
-  async solicitar(dto: SolicitarAprobacionDto, userId: string) {
+  async solicitar(dto: SolicitarAprobacionDto, user: any) {
+    const userId = String(user.id);
+    const alcance = resolverAlcance(user);
+    let agenciaId: string | undefined = dto.agenciaId || undefined;
+    if (alcance.tipo === 'AGENCIA') {
+      // Un usuario de agencia solo solicita para la suya.
+      agenciaId = alcance.agenciaId;
+    } else if (agenciaId && alcance.tipo === 'REGION') {
+      const agencia = await this.prisma.agencia.findUnique({ where: { id: agenciaId }, select: { regionId: true } });
+      if (!agencia || agencia.regionId !== alcance.regionId) throw new ForbiddenException('Esa agencia no pertenece a tu región.');
+    } else if (alcance.tipo !== 'GLOBAL' && alcance.tipo !== 'REGION') {
+      throw new ForbiddenException('Tu usuario no tiene una agencia asignada para hacer solicitudes.');
+    }
     const solicitud = await this.prisma.solicitudAprobacion.create({
       data: {
         tipo: dto.tipo,
         titulo: dto.titulo,
         descripcion: dto.descripcion,
         montoUSD: dto.montoUSD !== undefined ? dto.montoUSD : undefined,
-        agenciaId: dto.agenciaId || undefined,
+        agenciaId,
         entidadRefId: dto.entidadRefId || undefined,
         solicitanteId: userId,
         estado: 'PENDIENTE',
@@ -90,30 +119,60 @@ export class AprobacionesService {
       },
     });
 
+    if (agenciaId && this.notifications) {
+      void this.resolverAprobadores(agenciaId).then((ids) => {
+        if (ids.length) {
+          void this.notifications!.notificarUsuarios(
+            ids,
+            'Nueva solicitud de aprobación',
+            solicitud.titulo,
+            { solicitudId: solicitud.id },
+            { tipo: 'APROBACION_PENDIENTE', entidadTipo: 'SOLICITUD_APROBACION', entidadId: solicitud.id },
+          );
+        }
+      });
+    }
+
     return {
       success: true,
       data: solicitud,
     };
   }
 
-  async aprobar(dto: DecidirAprobacionDto, userId: string) {
+  /** Carga la solicitud y valida que pueda decidirla quien lo intenta (regla de aprobador designado y respaldo). */
+  private async prepararDecision(dto: DecidirAprobacionDto, actor: any) {
     const solicitud = await this.prisma.solicitudAprobacion.findUnique({
       where: { id: dto.solicitudId },
+      include: { agencia: { select: { id: true, regionId: true } } },
     });
-
     if (!solicitud) {
       throw new NotFoundException(`Solicitud ${dto.solicitudId} no encontrada`);
     }
-
     if (solicitud.estado !== 'PENDIENTE') {
       throw new BadRequestException(`La solicitud ya se encuentra en estado ${solicitud.estado}`);
     }
+    if (solicitud.solicitanteId === String(actor.id)) {
+      throw new ForbiddenException('No puedes decidir una solicitud que hiciste tú.');
+    }
+    let regla;
+    if (solicitud.agencia) {
+      regla = await this.decisiones.reglaParaDecidir(actor, { id: solicitud.agencia.id, regionId: solicitud.agencia.regionId });
+    } else if (['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor))) {
+      regla = 'ADMIN' as const;
+    } else {
+      throw new ForbiddenException('Esta solicitud no pertenece a una agencia: solo un administrador puede decidirla.');
+    }
+    return { solicitud, regla };
+  }
+
+  async aprobar(dto: DecidirAprobacionDto, actor: any) {
+    const { solicitud, regla } = await this.prepararDecision(dto, actor);
 
     const updated = await this.prisma.solicitudAprobacion.update({
       where: { id: dto.solicitudId },
       data: {
         estado: 'APROBADO',
-        aprobadorId: userId,
+        aprobadorId: String(actor.id),
         fechaDecision: new Date(),
         descripcion: dto.notas ? `${solicitud.descripcion || ''} [Aprobado: ${dto.notas}]` : solicitud.descripcion,
       },
@@ -123,37 +182,50 @@ export class AprobacionesService {
       },
     });
 
+    await this.decisiones.registrar({
+      entidad: 'SOLICITUD',
+      entidadId: solicitud.id,
+      accion: 'APROBAR',
+      user: actor,
+      regla,
+      motivo: dto.notas,
+      agenciaId: solicitud.agenciaId,
+      detalle: { tipo: solicitud.tipo },
+    });
+
     return {
       success: true,
       data: updated,
     };
   }
 
-  async rechazar(dto: DecidirAprobacionDto, userId: string) {
-    const solicitud = await this.prisma.solicitudAprobacion.findUnique({
-      where: { id: dto.solicitudId },
-    });
-
-    if (!solicitud) {
-      throw new NotFoundException(`Solicitud ${dto.solicitudId} no encontrada`);
-    }
-
-    if (solicitud.estado !== 'PENDIENTE') {
-      throw new BadRequestException(`La solicitud ya se encuentra en estado ${solicitud.estado}`);
-    }
+  async rechazar(dto: DecidirAprobacionDto, actor: any) {
+    const motivo = this.decisiones.exigirMotivo(dto.motivoRechazo || dto.notas, 'rechazar una solicitud');
+    const { solicitud, regla } = await this.prepararDecision(dto, actor);
 
     const updated = await this.prisma.solicitudAprobacion.update({
       where: { id: dto.solicitudId },
       data: {
         estado: 'RECHAZADO',
-        aprobadorId: userId,
+        aprobadorId: String(actor.id),
         fechaDecision: new Date(),
-        motivoRechazo: dto.motivoRechazo || dto.notas || 'Rechazado sin motivo detallado',
+        motivoRechazo: motivo,
       },
       include: {
         solicitante: { select: { id: true, name: true } },
         aprobador: { select: { id: true, name: true } },
       },
+    });
+
+    await this.decisiones.registrar({
+      entidad: 'SOLICITUD',
+      entidadId: solicitud.id,
+      accion: 'RECHAZAR',
+      user: actor,
+      regla,
+      motivo,
+      agenciaId: solicitud.agenciaId,
+      detalle: { tipo: solicitud.tipo },
     });
 
     return {

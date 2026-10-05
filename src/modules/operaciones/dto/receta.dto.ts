@@ -16,9 +16,10 @@ export class AsignarRecetaItemDto {
   @IsPositive()
   cantidadUsada: number;
 
-  @ApiProperty({ description: 'ID de la UnidadMedida en que se expresa la cantidad (ej: ID de ML, L, KG, U)' })
+  @ApiPropertyOptional({ description: 'ID de la UnidadMedida en que se expresa la cantidad (ej: ID de ML, L, KG, U)' })
+  @IsOptional()
   @IsString()
-  unidadConsumoId: string;
+  unidadConsumoId?: string;
 
   @ApiPropertyOptional({
     default: false,
@@ -42,7 +43,6 @@ export class AsignarRecetaDto {
 
   @ApiProperty({ type: [AsignarRecetaItemDto], description: 'Lista completa de insumos de la receta' })
   @IsArray()
-  @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Type(() => AsignarRecetaItemDto)
   items: AsignarRecetaItemDto[];

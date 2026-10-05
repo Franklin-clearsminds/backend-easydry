@@ -1,5 +1,19 @@
-import { IsString, IsOptional, IsNumber, IsInt, Min, IsPositive } from 'class-validator';
+import { OpcionesDto } from '../../../common/utils/opciones.js';
+import { IsString, IsOptional, IsNumber, IsInt, IsIn, Min, IsPositive } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
+import { NIVELES_STOCK_FILTRO } from '../stock-nivel.js';
+
+export const CATEGORIAS_INSUMO = [
+  'QUIMICOS_LAVADO',
+  'CERAS_SELLADORES',
+  'PULIMENTOS',
+  'DESENGRASANTES',
+  'TEXTILES',
+  'EPP',
+  'ACCESORIOS',
+] as const;
+export type CategoriaInsumo = (typeof CATEGORIAS_INSUMO)[number];
 
 export class CreateInsumoDto {
   @ApiProperty({ example: 'INS-LAV-001', description: 'Código SKU único del insumo' })
@@ -12,11 +26,12 @@ export class CreateInsumoDto {
 
   @ApiProperty({
     example: 'QUIMICOS_LAVADO',
+    enum: CATEGORIAS_INSUMO,
     description:
       'Categoría: QUIMICOS_LAVADO | CERAS_SELLADORES | PULIMENTOS | DESENGRASANTES | TEXTILES | EPP | ACCESORIOS',
   })
-  @IsString()
-  categoria: string;
+  @IsIn(CATEGORIAS_INSUMO)
+  categoria: CategoriaInsumo;
 
   @ApiPropertyOptional({ example: 'Shampoo concentrado biodegradable de alta espuma' })
   @IsOptional()
@@ -39,20 +54,26 @@ export class CreateInsumoDto {
   @IsPositive()
   contenidoNeto?: number;
 
-  @ApiPropertyOptional({ example: 10.0, description: 'Stock mínimo en bodega central para alerta' })
-  @IsOptional()
+  @ApiProperty({ example: 10.0, description: 'Stock mínimo en bodega central para alerta (obligatorio)' })
   @IsNumber()
-  stockMinimoBodega?: number;
+  @Min(0.001)
+  stockMinimoBodega: number;
 
-  @ApiPropertyOptional({ example: 2.0, description: 'Stock mínimo en agencia para alerta' })
-  @IsOptional()
+  @ApiProperty({ example: 2.0, description: 'Stock mínimo en agencia para alerta (obligatorio)' })
   @IsNumber()
-  stockMinimoAgencia?: number;
+  @Min(0.001)
+  stockMinimoAgencia: number;
 
-  @ApiPropertyOptional({ example: 50.0, description: 'Stock óptimo en bodega central' })
+  @ApiProperty({ example: 50.0, description: 'Stock óptimo en bodega central (obligatorio)' })
+  @IsNumber()
+  @Min(0.001)
+  stockOptimoBodega: number;
+
+  @ApiPropertyOptional({ example: 5.0, description: 'Stock óptimo en agencia para reabastecimiento (opcional/recomendado)' })
   @IsOptional()
   @IsNumber()
-  stockOptimoBodega?: number;
+  @Min(0.001)
+  stockOptimoAgencia?: number;
 
   @ApiPropertyOptional({ example: 45.5, description: 'Costo unitario en USD' })
   @IsOptional()
@@ -80,10 +101,10 @@ export class UpdateInsumoDto {
   @IsString()
   nombre?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: CATEGORIAS_INSUMO })
   @IsOptional()
-  @IsString()
-  categoria?: string;
+  @IsIn(CATEGORIAS_INSUMO)
+  categoria?: CategoriaInsumo;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -124,6 +145,11 @@ export class UpdateInsumoDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
+  stockOptimoAgencia?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
   costoUnitarioUSD?: number;
 
   @ApiPropertyOptional()
@@ -143,7 +169,12 @@ export class UpdateInsumoDto {
   estado?: number;
 }
 
-export class ListInsumosDto {
+/**
+ * Sin page/pageSize: arreglo con hasta 100 insumos (con stocks, recetas y presentaciones, como siempre).
+ * Con page o pageSize: página liviana (sin stocks por ubicación, recetas ni presentaciones). Orden permitido: sku, nombre,
+ * tipo, contenido, stockMinimoBodega, stockOptimoBodega, stockMinimoAgencia, stockOptimoAgencia, estado, fecha, stock, alerta.
+ */
+export class ListInsumosDto extends PaginacionOpcionalDto {
   @ApiPropertyOptional({ example: 'QUIMICOS_LAVADO' })
   @IsOptional()
   @IsString()
@@ -153,11 +184,6 @@ export class ListInsumosDto {
   @IsOptional()
   @IsInt()
   estado?: number;
-
-  @ApiPropertyOptional({ description: 'Buscar por nombre o SKU' })
-  @IsOptional()
-  @IsString()
-  search?: string;
 
 
   @ApiPropertyOptional({ description: 'ID del tipo de producto para filtrar' })
@@ -170,13 +196,36 @@ export class ListInsumosDto {
   @IsString()
   agenciaId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Bodega cuyo stock físico se expone en stockActual (StockUbicacion). Si no se envía: bodega del usuario o Central.',
+  })
+  @IsOptional()
+  @IsString()
+  bodegaId?: string;
+
   @ApiPropertyOptional({ description: 'Filtrar estrictamente a insumos requeridos por servicios' })
   @IsOptional()
   soloDeServicios?: boolean;
+
+  @ApiPropertyOptional({ enum: NIVELES_STOCK_FILTRO, description: 'Nivel de stock (solo modo paginado): agotado, bajo_minimo, moderado, optimo o alerta_total (agotado o bajo mínimo)' })
+  @IsOptional()
+  @IsIn(NIVELES_STOCK_FILTRO)
+  nivelStock?: (typeof NIVELES_STOCK_FILTRO)[number];
 }
 
 export class DetailInsumoDto {
   @ApiProperty()
   @IsString()
   id: string;
+}
+
+/** Insumos para un desplegable con buscador (mismo alcance por sede que `insumos/list`). Solo activos salvo que se pida otro estado. */
+export class InsumosOpcionesDto extends OpcionesDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() tipoProductoId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() categoria?: string;
+  @ApiPropertyOptional({ description: 'Sede cuyos insumos se ofrecen (un rol de sede siempre queda en la suya)' })
+  @IsOptional() @IsString() agenciaId?: string;
+  @ApiPropertyOptional() @IsOptional() soloDeServicios?: boolean;
+  @ApiPropertyOptional({ description: '1 activos (por defecto), 0 inactivos' })
+  @IsOptional() @IsInt() estado?: number;
 }

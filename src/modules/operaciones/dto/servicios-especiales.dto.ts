@@ -1,5 +1,6 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsInt, Min, Max, IsIn, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class QueryServicioEspecialDto {
   @ApiPropertyOptional({ description: 'ID de agencia' })
@@ -37,13 +38,48 @@ export class QueryServicioEspecialDto {
   @IsOptional()
   search?: string;
 
-  @ApiPropertyOptional({ default: 1 })
+  @ApiPropertyOptional({ example: 1, description: 'Página (1 = primera)' })
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ default: 50 })
+  @ApiPropertyOptional({ example: 25, description: 'Filas por página (máximo 100; un valor mayor se recorta). Sin valor: hasta 100 (clientes antiguos).' })
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(200)
   pageSize?: number;
+
+  @ApiPropertyOptional({
+    example: 'fecha',
+    description: 'Columna: fecha, ot, placa, servicio, agencia, region, operador, estado, tiempoPausa, tiempoEfectivo. Por defecto: más reciente primero.',
+  })
+  @IsOptional()
+  @IsString()
+  sortField?: string;
+
+  @ApiPropertyOptional({ example: 'desc', enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ example: '2026-09-01T05:00:00.000Z', description: 'Desde (inclusive), por fecha de creación. ISO 8601.' })
+  @IsOptional()
+  @IsString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ example: '2026-09-30T04:59:59.999Z', description: 'Hasta (inclusive), por fecha de creación. ISO 8601.' })
+  @IsOptional()
+  @IsString()
+  fechaHasta?: string;
+
+  @ApiPropertyOptional({ description: 'Incluye el conteo por estado con los mismos filtros (menos el de estado)' })
+  @IsOptional()
+  @IsBoolean()
+  incluirResumen?: boolean;
 }
 
 export class CreateServicioEspecialDto {
@@ -52,15 +88,28 @@ export class CreateServicioEspecialDto {
   @IsOptional()
   clientUuid?: string;
 
-  @ApiPropertyOptional({ description: 'Código único ej: SE-2026-001 (se autogenera si se omite)' })
+  @ApiPropertyOptional({ description: 'Código único ej: SE-2026-001 o número de OT ingresado' })
   @IsString()
   @IsOptional()
   codigoSE?: string;
+
+  @ApiPropertyOptional({ description: 'Número de Orden de Trabajo (OT) digitalizado por el usuario', example: 'OT-9840' })
+  @IsString()
+  @IsOptional()
+  ordenTrabajoOT?: string;
 
   @ApiProperty({ description: 'Tipo de servicio especial', example: 'Pulido y Recubrimiento Cerámico' })
   @IsString()
   @IsNotEmpty()
   tipoServicio: string;
+
+  @ApiPropertyOptional({
+    description: 'ID del servicio ESPECIAL del catálogo elegido (de ahí se toma y congela el precio). Si no se envía, se intenta resolver por el nombre de tipoServicio.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  servicioCatalogoId?: number;
 
   @ApiProperty({
     description: 'Información del vehículo y cliente',
@@ -68,6 +117,11 @@ export class CreateServicioEspecialDto {
   })
   @IsNotEmpty()
   vehiculoInfo: Record<string, any>;
+
+  @ApiPropertyOptional({ description: 'Color del vehículo' })
+  @IsString()
+  @IsOptional()
+  color?: string;
 
   @ApiPropertyOptional({ description: 'ID de la agencia (opcional para servicios móviles zonales)' })
   @IsString()
@@ -106,6 +160,41 @@ export class CreateServicioEspecialDto {
   @ApiPropertyOptional({ description: 'Evidencias fotográficas' })
   @IsOptional()
   evidencias?: any;
+
+  @ApiPropertyOptional({ description: 'ID de la bahía (opcional para servicios en bahía)' })
+  @IsString()
+  @IsOptional()
+  bahiaId?: string;
+
+  @ApiPropertyOptional({ description: 'Hora de ingreso (HH:mm)' })
+  @IsString()
+  @IsOptional()
+  horaIngreso?: string;
+
+  @ApiPropertyOptional({ description: 'Hora estimada de salida (HH:mm)' })
+  @IsString()
+  @IsOptional()
+  horaEstimada?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre del cliente o concesionario' })
+  @IsString()
+  @IsOptional()
+  cliente?: string;
+
+  @ApiPropertyOptional({ description: 'Placa directa' })
+  @IsString()
+  @IsOptional()
+  placa?: string;
+
+  @ApiPropertyOptional({ description: 'Marca directa' })
+  @IsString()
+  @IsOptional()
+  marca?: string;
+
+  @ApiPropertyOptional({ description: 'Modelo directo' })
+  @IsString()
+  @IsOptional()
+  modelo?: string;
 
   @ApiPropertyOptional({ description: 'Observaciones o requerimientos específicos del cliente' })
   @IsString()
@@ -157,3 +246,60 @@ export class CompletarServicioEspecialDto {
   @IsOptional()
   observaciones?: string;
 }
+
+export class PausarServicioEspecialDto {
+  @ApiProperty({ description: 'ID o clientUuid del servicio especial' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'Motivo de la pausa del servicio', example: 'Lluvia en bahía exterior' })
+  @IsString()
+  @IsNotEmpty()
+  motivo: string;
+
+  @ApiProperty({ description: 'URL o evidencia en vídeo del estado del vehículo al pausar' })
+  @IsString()
+  @IsNotEmpty()
+  videoPausaUrl: string;
+}
+
+export class ReasignarServicioEspecialDto {
+  @ApiProperty({ description: 'ID, OT o clientUuid del servicio especial' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiPropertyOptional({ description: 'ID del pulidor. Vacío o 0 deja el servicio sin asignar' })
+  @IsOptional()
+  operadorId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Receta del servicio para validar el kit del pulidor' })
+  @IsOptional()
+  recetaInsumos?: any;
+
+  @ApiPropertyOptional({ description: 'Nombre del servicio especial' })
+  @IsString()
+  @IsOptional()
+  tipoServicio?: string;
+}
+
+export class ReanudarServicioEspecialDto {
+  @ApiProperty({ description: 'ID o clientUuid del servicio especial' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: 'URL o evidencia en vídeo del estado del vehículo al reanudar' })
+  @IsString()
+  @IsNotEmpty()
+  videoReanudarUrl: string;
+
+  @ApiPropertyOptional({ description: 'Observaciones al reanudar el trabajo' })
+  @IsString()
+  @IsOptional()
+  observaciones?: string;
+}
+
+
+

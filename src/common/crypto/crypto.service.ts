@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { secretoObligatorio } from '../config/secretos.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 
 @Injectable()
@@ -9,7 +10,7 @@ export class CryptoService {
   private readonly key: Buffer;
 
   constructor(private configService: ConfigService) {
-    const rawKey = this.configService.get<string>('ENCRYPTION_KEY') || 'EasyDrySecretKey2026*OfflineSync32B';
+    const rawKey = secretoObligatorio(this.configService.get<string>('ENCRYPTION_KEY'), 'ENCRYPTION_KEY', 'EasyDrySecretKey2026*OfflineSync32B');
     // Asegurar clave exacta de 32 bytes (256 bits) usando SHA-256
     this.key = createHash('sha256').update(rawKey).digest();
   }

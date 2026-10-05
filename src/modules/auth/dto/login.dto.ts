@@ -7,7 +7,7 @@ export class LoginDto {
   @IsNotEmpty({ message: 'El correo electrónico es requerido' })
   email: string;
 
-  @ApiProperty({ example: 'Admin123*', description: 'Contraseña de acceso' })
+  @ApiProperty({ example: '********', description: 'Contraseña de acceso' })
   @IsString()
   @IsNotEmpty({ message: 'La contraseña es requerida' })
   @MinLength(6, { message: 'La contraseña debe tener al menos 6 caracteres' })

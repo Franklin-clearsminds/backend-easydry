@@ -14,9 +14,34 @@ export function serializeServicioLavado(s: any): any {
   const bahiaCodigo = s.bahia?.codigo || s.bahiaCodigo || '';
   const agenciaNombre = s.bahia?.agencia?.nombre || s.agenciaNombre || s.sucursalNombre || '';
   const servicioNombre = s.catalogo?.nombre || s.servicioNombre || 'Lavado General';
-  const ordenTrabajoOT = s.ordenTrabajoOT || (s.id ? `OT-${s.id.substring(0, 6).toUpperCase()}` : 'OT-9800');
-  const numeroOrden = s.numeroOrden || ordenTrabajoOT;
+  let ordenTrabajoOT = s.ordenTrabajoOT;
+  if (!ordenTrabajoOT && (s.fotoIngresoUrl || s.fotoSalidaUrl)) {
+    const match = (s.fotoIngresoUrl || s.fotoSalidaUrl).match(/\/servicios\/(?:generales|especiales)\/([^/]+)\//i);
+    if (match && match[1] && match[1] !== 'sin-orden') {
+      ordenTrabajoOT = match[1].toUpperCase();
+    }
+  }
+  if (!ordenTrabajoOT) {
+    ordenTrabajoOT = s.id ? `OT-${s.id.substring(0, 6).toUpperCase()}` : '';
+  }
   const marca = s.marca || (s.modelo ? s.modelo.split(' ')[0] : 'General');
+  const isVideoUrl = (value: unknown): value is string => {
+    if (typeof value !== 'string') return false;
+    const clean = value.split('?')[0].toLowerCase();
+    return /\.(mp4|mov|m4v|webm)$/.test(clean) || clean.includes('/videos/');
+  };
+  const safeMediaUrl = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim() ? value : null;
+  const rawFotoIngreso = safeMediaUrl(s.fotoIngresoUrl);
+  const rawFotoSalida = safeMediaUrl(s.fotoSalidaUrl);
+  const fotoIngresoUrl = isVideoUrl(rawFotoIngreso) ? null : rawFotoIngreso;
+  const fotoSalidaUrl = isVideoUrl(rawFotoSalida) ? null : rawFotoSalida;
+  const videoInicialUrl = safeMediaUrl(s.videoInicialUrl)
+    || safeMediaUrl(s.videoInicial)
+    || (isVideoUrl(rawFotoIngreso) ? rawFotoIngreso : null);
+  const videoFinalUrl = safeMediaUrl(s.videoFinalUrl)
+    || safeMediaUrl(s.videoFinal)
+    || (isVideoUrl(rawFotoSalida) ? rawFotoSalida : null);
 
   const fechaIngresoStr = s.horaIngreso
     ? (s.horaIngreso instanceof Date ? s.horaIngreso.toISOString() : String(s.horaIngreso))
@@ -34,11 +59,29 @@ export function serializeServicioLavado(s: any): any {
     ? (s.deletedAt instanceof Date ? s.deletedAt.toISOString() : String(s.deletedAt))
     : null;
 
+  // Cálculo de duración del servicio general
+  let duracionMinutos: number | null = null;
+  let duracionFormateada = '';
+  if (fechaIngresoStr) {
+    const tIngreso = new Date(fechaIngresoStr).getTime();
+    if (fechaSalidaStr) {
+      const tSalida = new Date(fechaSalidaStr).getTime();
+      duracionMinutos = Math.max(0, Math.round((tSalida - tIngreso) / 60000));
+      const horas = Math.floor(duracionMinutos / 60);
+      const mins = duracionMinutos % 60;
+      duracionFormateada = horas > 0 ? `${horas}h ${mins}min` : `${mins} min`;
+    } else if (String(s.estado || '').toUpperCase() === 'EN_PROCESO' || String(s.estado || '').toUpperCase() === 'INICIADO') {
+      duracionMinutos = Math.max(0, Math.round((Date.now() - tIngreso) / 60000));
+      const horas = Math.floor(duracionMinutos / 60);
+      const mins = duracionMinutos % 60;
+      duracionFormateada = horas > 0 ? `${horas}h ${mins}min` : `${mins} min`;
+    }
+  }
+
   return {
     id: s.id,
     clientUuid: s.clientUuid || s.id,
     ordenTrabajoOT,
-    numeroOrden,
     placa: s.placa || '',
     marca,
     modelo: s.modelo || '',
@@ -58,18 +101,24 @@ export function serializeServicioLavado(s: any): any {
     servicioNombre,
     servicio: servicioNombre,
     categoriaServicio: s.catalogo?.categoria || s.categoriaServicio || 'GENERAL',
+    tiempoEstimadoMin: Number(s.catalogo?.tiempoEstimadoMin ?? s.tiempoEstimadoMin ?? 30),
+    precio: s.precio != null ? Number(s.precio) : null,
 
     // Tiempos y Fechas
     fecha: fechaIngresoStr.split('T')[0],
     horaIngreso: fechaIngresoStr,
     horaSalida: fechaSalidaStr,
+    duracionMinutos,
+    duracionFormateada,
 
     // Multimedia
-    fotoIngresoUrl: s.fotoIngresoUrl || null,
-    fotoSalidaUrl: s.fotoSalidaUrl || null,
-    foto: s.fotoSalidaUrl || s.fotoIngresoUrl || null,
-    video: s.videoUrl || null,
-    videoUrl: s.videoUrl || null,
+    fotoIngresoUrl,
+    fotoSalidaUrl,
+    foto: fotoSalidaUrl || fotoIngresoUrl,
+    video: videoFinalUrl || videoInicialUrl,
+    videoUrl: videoFinalUrl || videoInicialUrl,
+    videoInicialUrl,
+    videoFinalUrl,
 
     // Observaciones y Notas
     observaciones: s.observaciones || null,
@@ -80,6 +129,13 @@ export function serializeServicioLavado(s: any): any {
     aprobadoPor: s.aprobadoPor || null,
     fechaAprobacion: fechaAprobacionStr,
     motivoRechazo: s.motivoRechazo || null,
+    // Quién decidió y con qué regla (TITULAR = aprobador de la agencia, RESPALDO = agencia sin aprobador), y la anulación
+    decididoPorId: s.decididoPorId || null,
+    reglaDecision: s.reglaDecision || null,
+    anuladoPorId: s.anuladoPorId || null,
+    anuladoEn: s.anuladoEn ? (s.anuladoEn instanceof Date ? s.anuladoEn.toISOString() : String(s.anuladoEn)) : null,
+    motivoAnulacion: s.motivoAnulacion || null,
+    agenciaId: s.bahia?.agencia?.id || s.bahia?.agenciaId || s.agenciaId || null,
 
     // Control de Concurrencia y Sincronización
     version: s.version || 1,

@@ -32,7 +32,9 @@ tsconfig.build.tsbuildinfo
 
 # 5. Archivos Multimedia y Uploads en Desarrollo
 uploads/
-storage/
+# Ignorar solo almacenamiento generado en la raíz. El módulo Nest
+# src/modules/storage contiene código fuente y debe versionarse.
+/storage/
 temp/
 tmp/
 

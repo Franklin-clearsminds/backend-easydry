@@ -1,7 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString } from 'class-validator';
+import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
-export class QueryRolesDto {
+/** Sin page/pageSize: arreglo (hasta 100). Con alguno: página. Orden: namerol, estado, usuarios, fecha. */
+export class QueryRolesDto extends PaginacionOpcionalDto {
   @ApiProperty({ example: 'ADMIN', description: 'Filtro por nombre de rol', required: false })
   @IsOptional()
   @IsString()
@@ -11,11 +13,6 @@ export class QueryRolesDto {
   @IsOptional()
   @IsIn([0, 1], { message: 'El estado debe ser 1 o 0' })
   estado?: number;
-
-  @ApiProperty({ example: 'SUPER', description: 'Búsqueda por texto libre', required: false })
-  @IsOptional()
-  @IsString()
-  search?: string;
 }
 
 export class DetailRoleDto {

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsNumber } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsNumber, IsIn } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateBodegaDto {
@@ -12,10 +12,22 @@ export class CreateBodegaDto {
   @IsString()
   codigo?: string;
 
-  @ApiProperty({ example: 'uuid-region', description: 'ID de la región a la cual pertenece la bodega (OBLIGATORIO)' })
+  @ApiPropertyOptional({
+    example: 'REGIONAL',
+    description: 'CENTRAL = única nacional (despacha a todo el país). REGIONAL = solo agencias de su región.',
+    enum: ['CENTRAL', 'REGIONAL'],
+  })
+  @IsOptional()
+  @IsIn(['CENTRAL', 'REGIONAL'])
+  tipo?: 'CENTRAL' | 'REGIONAL';
+
+  @ApiPropertyOptional({
+    example: 'uuid-region',
+    description: 'ID de región (obligatorio para REGIONAL; omitir o null para CENTRAL)',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'Cada bodega debe estar estrictamente vinculada a una región' })
-  regionId: string;
+  regionId?: string;
 
   @ApiPropertyOptional({ example: 'Manta', description: 'Ciudad donde se ubica la bodega' })
   @IsOptional()
@@ -58,6 +70,11 @@ export class UpdateBodegaDto {
   @IsOptional()
   @IsString()
   regionId?: string;
+
+  @ApiPropertyOptional({ example: 'REGIONAL', enum: ['CENTRAL', 'REGIONAL'] })
+  @IsOptional()
+  @IsIn(['CENTRAL', 'REGIONAL'])
+  tipo?: 'CENTRAL' | 'REGIONAL';
 
   @ApiPropertyOptional({ example: 'Manta' })
   @IsOptional()
