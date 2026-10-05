@@ -3345,7 +3345,47 @@ export class InventarioService {
       }
     }
 
+    if (this.notifications && movimiento.usuarioDespachaId) {
+      void this.notificarConfirmacionDespacho(movimiento, nuevoEstado, origenAgenciaId, origenBodegaId, motivoRechazo);
+    }
+
     return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado };
+  }
+
+  /** Avisa a quien despachó, admin/super admin, coordinador de bodega (nacional), asistente de bodega
+   * y supervisor (de la región de origen) que el despacho fue recibido o rechazado. Nunca bloquea el flujo. */
+  private async notificarConfirmacionDespacho(
+    movimiento: { id: string; numeroGuia: string; usuarioDespachaId: string | null },
+    nuevoEstado: 'RECIBIDO' | 'RECHAZADO',
+    origenAgenciaId: string | null,
+    origenBodegaId: string | null,
+    motivoRechazo: string,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    let regionOrigenId: string | null = null;
+    if (origenAgenciaId) {
+      const ag = await this.prisma.agencia.findUnique({ where: { id: origenAgenciaId }, select: { regionId: true } });
+      regionOrigenId = ag?.regionId || null;
+    } else if (origenBodegaId) {
+      const bod = await this.prisma.bodega.findUnique({ where: { id: origenBodegaId }, select: { regionId: true } });
+      regionOrigenId = bod?.regionId || null;
+    }
+    const porRol = await this.notifications.resolverDestinatariosPorRol({
+      global: ['ADMIN', 'SUPER_ADMIN', 'COORD_BODEGA'],
+      regionales: ['ASISTENTE_BODEGA', 'SUPERVISOR'],
+      regionId: regionOrigenId,
+    });
+    const ids = [...new Set([movimiento.usuarioDespachaId, ...porRol].filter(Boolean))] as string[];
+    const verbo = nuevoEstado === 'RECIBIDO' ? 'recibido' : 'rechazado';
+    void this.notifications.notificarUsuarios(
+      ids,
+      `Despacho ${verbo}`,
+      nuevoEstado === 'RECHAZADO'
+        ? `Guía ${movimiento.numeroGuia} fue rechazada: ${motivoRechazo}`
+        : `Guía ${movimiento.numeroGuia} fue recibida.`,
+      { type: 'DESPACHO_CONFIRMADO', movimientoId: movimiento.id },
+      { tipo: 'DESPACHO_CONFIRMADO', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: movimiento.id },
+    );
   }
 
   async rechazarDespacho(

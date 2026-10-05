@@ -136,4 +136,49 @@ describe('NotificationsService', () => {
       expect(r).toEqual({ success: true, pendientes: 3 });
     });
   });
+
+  describe('resolverDestinatariosPorRol', () => {
+    it('incluye los roles globales sin importar la región', async () => {
+      const { service, prisma } = build();
+      prisma.user.findMany.mockResolvedValue([{ id: 'a1' }, { id: 'a2' }]);
+      const ids = await service.resolverDestinatariosPorRol({ global: ['ADMIN', 'SUPER_ADMIN'] });
+      expect(ids).toEqual(['a1', 'a2']);
+      expect(prisma.user.findMany.mock.calls[0][0].where.OR).toEqual([{ role: { namerol: { in: ['ADMIN', 'SUPER_ADMIN'] } } }]);
+    });
+
+    it('los roles regionales solo aplican si se da un regionId', async () => {
+      const { service, prisma } = build();
+      await service.resolverDestinatariosPorRol({ regionales: ['SUPERVISOR'] });
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+
+    it('con regionId, acota los roles regionales a esa región', async () => {
+      const { service, prisma } = build();
+      await service.resolverDestinatariosPorRol({ global: ['ADMIN'], regionales: ['SUPERVISOR'], regionId: 'r1' });
+      expect(prisma.user.findMany.mock.calls[0][0].where.OR).toEqual([
+        { role: { namerol: { in: ['ADMIN'] } } },
+        { role: { namerol: { in: ['SUPERVISOR'] } }, regionId: { in: ['r1'] } },
+      ]);
+    });
+
+    it('con un arreglo de regiones, acota a todas ellas', async () => {
+      const { service, prisma } = build();
+      await service.resolverDestinatariosPorRol({ regionales: ['COORD_COMERCIAL'], regionId: ['r1', 'r2'] });
+      expect(prisma.user.findMany.mock.calls[0][0].where.OR).toEqual([
+        { role: { namerol: { in: ['COORD_COMERCIAL'] } }, regionId: { in: ['r1', 'r2'] } },
+      ]);
+    });
+
+    it('con regionId "TODAS", no acota por región (nacional)', async () => {
+      const { service, prisma } = build();
+      await service.resolverDestinatariosPorRol({ regionales: ['SUPERVISOR'], regionId: 'TODAS' });
+      expect(prisma.user.findMany.mock.calls[0][0].where.OR).toEqual([{ role: { namerol: { in: ['SUPERVISOR'] } } }]);
+    });
+
+    it('solo busca usuarios activos', async () => {
+      const { service, prisma } = build();
+      await service.resolverDestinatariosPorRol({ global: ['ADMIN'] });
+      expect(prisma.user.findMany.mock.calls[0][0].where.estado).toBe(1);
+    });
+  });
 });

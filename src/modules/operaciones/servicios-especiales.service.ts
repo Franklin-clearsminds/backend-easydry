@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Optional, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { Alcance, resolverAlcance } from '../../common/permisos/alcance.js';
 import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
@@ -41,7 +42,11 @@ const ORDEN_ESPECIALES = columnasSimples({
 export class ServiciosEspecialesService {
   private readonly decisiones: DecisionesService;
 
-  constructor(private prisma: PrismaService, decisiones?: DecisionesService) {
+  constructor(
+    private prisma: PrismaService,
+    decisiones?: DecisionesService,
+    @Optional() private notifications?: NotificationsService,
+  ) {
     this.decisiones = decisiones ?? new DecisionesService(prisma);
   }
 
@@ -505,6 +510,17 @@ export class ServiciosEspecialesService {
       },
     });
 
+    // El pulidor asignado se entera de su nueva OT (salvo que se la haya autoasignado él mismo).
+    if (operadorIdFinal && operadorIdFinal !== (creatorId || currentUser?.id)) {
+      void this.notifications?.notificarUsuarios(
+        [operadorIdFinal],
+        'Nuevo servicio especial asignado',
+        `${dto.tipoServicio.trim()} · placa ${placa} (OT ${codigoSE})`,
+        { type: 'SERVICIO_ESPECIAL_ASIGNADO', servicioEspecialId: created.id },
+        { tipo: 'SERVICIO_ESPECIAL_ASIGNADO', entidadTipo: 'SERVICIO_ESPECIAL', entidadId: created.id },
+      );
+    }
+
     return this._formatItem(created);
   }
 
@@ -567,6 +583,16 @@ export class ServiciosEspecialesService {
         region: true,
       },
     });
+
+    if (operadorIdFinal && operadorIdFinal !== currentUser?.id) {
+      void this.notifications?.notificarUsuarios(
+        [operadorIdFinal],
+        'Servicio especial reasignado a ti',
+        `${updated.tipoServicio} · placa ${updated.placa} (OT ${updated.ordenTrabajoOT || updated.id})`,
+        { type: 'SERVICIO_ESPECIAL_ASIGNADO', servicioEspecialId: updated.id },
+        { tipo: 'SERVICIO_ESPECIAL_ASIGNADO', entidadTipo: 'SERVICIO_ESPECIAL', entidadId: updated.id },
+      );
+    }
 
     return this._formatItem(updated);
   }
@@ -1157,7 +1183,28 @@ export class ServiciosEspecialesService {
       console.warn(`[ServiciosEspeciales] No se pudo descontar el kit del servicio ${item.codigoSE || item.id}: ${error?.message || error}`);
     }
 
+    void this.notificarCierreServicioEspecial(updated, 'completado');
+
     return this._formatItem(updated);
+  }
+
+  /** Avisa el cierre (completado o cancelado) de un servicio especial: admin/super admin, coordinador
+   * de servicios especiales y el supervisor de la región del servicio. Nunca bloquea el flujo. */
+  private async notificarCierreServicioEspecial(item: { id: string; tipoServicio: string; placa: string; ordenTrabajoOT?: string | null; regionId?: string | null }, estado: 'completado' | 'cancelado'): Promise<void> {
+    if (!this.notifications) return;
+    const ids = await this.notifications.resolverDestinatariosPorRol({
+      global: ['ADMIN', 'SUPER_ADMIN', 'COORD_SERVICIOS_ESPECIALES'],
+      regionales: ['SUPERVISOR'],
+      regionId: item.regionId,
+    });
+    if (!ids.length) return;
+    void this.notifications.notificarUsuarios(
+      ids,
+      `Servicio especial ${estado}`,
+      `${item.tipoServicio} · placa ${item.placa} (OT ${item.ordenTrabajoOT || item.id})`,
+      { type: 'SERVICIO_ESPECIAL_CERRADO', servicioEspecialId: item.id },
+      { tipo: 'SERVICIO_ESPECIAL_CERRADO', entidadTipo: 'SERVICIO_ESPECIAL', entidadId: item.id },
+    );
   }
 
   /**
@@ -1330,6 +1377,7 @@ export class ServiciosEspecialesService {
         agenciaId: item.agenciaId,
         detalle: { estadoAnterior: item.estado },
       });
+      void this.notificarCierreServicioEspecial(updated, 'cancelado');
     }
 
     return this._formatItem(updated);

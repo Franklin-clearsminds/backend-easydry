@@ -117,6 +117,29 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * IDs de usuarios activos con alguno de los roles dados: los de `global` sin importar su región (ej.
+   * ADMIN, SUPER_ADMIN, JEFE_COMERCIAL, COORD_BODEGA), los de `regionales` solo si su región está en
+   * `regionId`/`regionId[]` (ej. SUPERVISOR, COORD_MANTENIMIENTO). Sin región, los roles regionales no
+   * aplican (nunca se interpreta como "todas las regiones" para evitar notificar de más por un dato
+   * faltante) — para eso usa explícitamente `regionId: 'TODAS'`.
+   */
+  async resolverDestinatariosPorRol(params: { global?: string[]; regionales?: string[]; regionId?: string | string[] | null }): Promise<string[]> {
+    const or: Record<string, unknown>[] = [];
+    if (params.global?.length) or.push({ role: { namerol: { in: params.global } } });
+    if (params.regionales?.length && params.regionId) {
+      if (params.regionId === 'TODAS') {
+        or.push({ role: { namerol: { in: params.regionales } } });
+      } else {
+        const regionIds = Array.isArray(params.regionId) ? params.regionId : [params.regionId];
+        if (regionIds.length) or.push({ role: { namerol: { in: params.regionales } }, regionId: { in: regionIds } });
+      }
+    }
+    if (!or.length) return [];
+    const usuarios = await this.prisma.user.findMany({ where: { estado: 1, OR: or }, select: { id: true } });
+    return usuarios.map((u) => u.id);
+  }
+
   /** Avisa solo al coordinador de mantenimiento de la región de la máquina. */
   async notificarCoordinadorRegion(params: {
     regionId?: string | null;

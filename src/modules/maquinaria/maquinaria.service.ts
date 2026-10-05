@@ -806,6 +806,25 @@ export class MaquinariaService {
       return u;
     });
 
+    if (!dto.activa && updated.agencia?.id) {
+      const lideres = await this.prisma.user.findMany({
+        where: { estado: 1, agenciaId: updated.agencia.id, role: { namerol: 'LIDER' } },
+        select: { id: true },
+      });
+      const porRol = await this.notifications.resolverDestinatariosPorRol({
+        global: ['ADMIN', 'SUPER_ADMIN'],
+        regionales: ['COORD_MANTENIMIENTO', 'SUPERVISOR'],
+        regionId: updated.agencia.regionId,
+      });
+      void this.notifications.notificarUsuarios(
+        [...lideres.map((l) => l.id), ...porRol],
+        `Máquina dada de baja: ${updated.codigo}`,
+        `${updated.nombre} de la agencia "${updated.agencia.nombre}" quedó dada de baja. Motivo: ${motivo}`,
+        { type: 'MAQUINA_DADA_DE_BAJA', maquinariaId: updated.id },
+        { tipo: 'MAQUINA_DADA_DE_BAJA', entidadTipo: 'MAQUINARIA', entidadId: updated.id },
+      );
+    }
+
     return { success: true, data: updated };
   }
 
