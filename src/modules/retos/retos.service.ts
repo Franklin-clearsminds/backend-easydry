@@ -1,5 +1,6 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { CerrarRetoDto, CreateRetoDto, ListRetosDto } from './dto/retos.dto.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
@@ -10,7 +11,10 @@ const ADMIN_ROLES = new Set(['SUPER_ADMIN', 'ADMIN']);
 
 @Injectable()
 export class RetosService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {}
 
   async list(dto: ListRetosDto, user: any) {
     const role = this.roleCode(user);
@@ -120,7 +124,7 @@ export class RetosService {
     if (existing.estado === 'FINALIZADO') {
       throw new BadRequestException('Este reto ya fue cerrado.');
     }
-    return this.prisma.reto.update({
+    const cerrado = await this.prisma.reto.update({
       where: { id: dto.id },
       data: {
         estado: 'FINALIZADO',
@@ -130,6 +134,33 @@ export class RetosService {
         cerradoEn: new Date(),
       },
     });
+    void this.notificarCierreReto(cerrado);
+    return cerrado;
+  }
+
+  /** Avisa el cierre de un reto: admin/super admin, jefe comercial (nacional) y el coordinador
+   * comercial + supervisor de las regiones del reto (o de todo el país si no tenía región). */
+  private async notificarCierreReto(reto: { id: string; titulo: string; ganadorNombre: string | null; regiones: string[] }): Promise<void> {
+    if (!this.notifications) return;
+    const nacional = reto.regiones.length === 0 || reto.regiones.some((r) => r.trim().toLowerCase() === 'todas');
+    let regionIds: string[] | 'TODAS' = 'TODAS';
+    if (!nacional) {
+      const regiones = await this.prisma.region.findMany({ where: { nombre: { in: reto.regiones } }, select: { id: true } });
+      regionIds = regiones.map((r) => r.id);
+    }
+    const ids = await this.notifications.resolverDestinatariosPorRol({
+      global: ['ADMIN', 'SUPER_ADMIN', 'JEFE_COMERCIAL'],
+      regionales: ['COORD_COMERCIAL', 'SUPERVISOR'],
+      regionId: regionIds,
+    });
+    if (!ids.length) return;
+    void this.notifications.notificarUsuarios(
+      ids,
+      'Reto cerrado',
+      reto.ganadorNombre ? `"${reto.titulo}" cerró. Ganador: ${reto.ganadorNombre}.` : `"${reto.titulo}" cerró.`,
+      { type: 'RETO_CERRADO', retoId: reto.id },
+      { tipo: 'RETO_CERRADO', entidadTipo: 'RETO', entidadId: reto.id },
+    );
   }
 
   private roleCode(user: any): string {

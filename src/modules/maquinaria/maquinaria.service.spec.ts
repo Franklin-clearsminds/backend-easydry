@@ -67,6 +67,7 @@ function build(prismaOver: Record<string, unknown> = {}) {
     // sin plantilla de checklist para el tipo: la orden se cierra como siempre
     checklistRespuesta: { findMany: vi.fn().mockResolvedValue([]), createMany: vi.fn() },
     checklistPlantilla: { findFirst: vi.fn().mockResolvedValue(null) },
+    user: { findMany: vi.fn().mockResolvedValue([]) },
     $transaction: vi.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
     ...prismaOver,
   };
@@ -82,6 +83,7 @@ function build(prismaOver: Record<string, unknown> = {}) {
   const notifications = {
     notificarCoordinadorRegion: vi.fn().mockResolvedValue(undefined),
     notificarUsuarios: vi.fn().mockResolvedValue(undefined),
+    resolverDestinatariosPorRol: vi.fn().mockResolvedValue([]),
   };
   const service = new MaquinariaService(prisma as never, storage as never, notifications as never);
   return { service, prisma, tx, storage, notifications };
@@ -299,6 +301,33 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       expect(data).toMatchObject({ activa: false, estadoOperativo: 'DE_BAJA', desactivadoPorId: 'adm-1', motivoDesactivacion: 'Irreparable' });
       const evento = tx.maquinariaEvento.create.mock.calls[0][0].data;
       expect(evento).toMatchObject({ tipo: 'MAQUINA_DESACTIVADA', actorId: 'adm-1', maquinariaId: 'm1' });
+    });
+
+    it('al dar de baja, avisa al líder de la agencia + coordinador de mantenimiento/supervisor de su región + admin/super admin', async () => {
+      const { service, prisma, notifications } = build();
+      prisma.user.findMany.mockResolvedValue([{ id: 'lider-1' }]);
+      notifications.resolverDestinatariosPorRol.mockResolvedValue(['coord-mant-1', 'sup-costa-1', 'adm-1']);
+
+      await service.setActiva({ maquinariaId: 'm1', activa: false, motivo: 'Irreparable' } as never, admin);
+
+      expect(prisma.user.findMany).toHaveBeenCalledWith({
+        where: { estado: 1, agenciaId: 'ag-1', role: { namerol: 'LIDER' } },
+        select: { id: true },
+      });
+      expect(notifications.resolverDestinatariosPorRol).toHaveBeenCalledWith({
+        global: ['ADMIN', 'SUPER_ADMIN'],
+        regionales: ['COORD_MANTENIMIENTO', 'SUPERVISOR'],
+        regionId: 'costa',
+      });
+      const [ids] = notifications.notificarUsuarios.mock.calls[0];
+      expect(ids).toEqual(expect.arrayContaining(['lider-1', 'coord-mant-1', 'sup-costa-1', 'adm-1']));
+    });
+
+    it('al reactivar una máquina no se notifica (no se perdió ningún equipo)', async () => {
+      const { service, notifications, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue({ ...maquina(), activa: false });
+      await service.setActiva({ maquinariaId: 'm1', activa: true } as never, admin);
+      expect(notifications.notificarUsuarios).not.toHaveBeenCalled();
     });
   });
 

@@ -996,9 +996,39 @@ export class OperacionesService {
         agenciaId: servicio.bahia.agencia.id,
         detalle: { estadoAnterior: servicio.estado, insumosRepuestos: consumioInsumos && reponerInsumos },
       });
+      await this.notificarDecisionServicio(servicio, servicio.bahia.agencia, 'ANULADO');
     }
 
     return serializeServicioLavado(deleted);
+  }
+
+  /**
+   * Avisa que se decidió un servicio general (aprobar, rechazar o anular): al operador que lo ejecutó,
+   * al líder de esa agencia, al supervisor de su región y a admin/super admin. Nunca bloquea el flujo.
+   */
+  private async notificarDecisionServicio(
+    servicio: { id: string; placa: string; ordenTrabajoOT?: string | null; operadorId?: string | null },
+    agencia: { id: string; regionId?: string | null },
+    decision: 'APROBADO' | 'RECHAZADO' | 'ANULADO',
+  ): Promise<void> {
+    if (!this.notifications) return;
+    const [lideres, porRol] = await Promise.all([
+      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: 'LIDER' } }, select: { id: true } }),
+      this.notifications.resolverDestinatariosPorRol({
+        global: ['ADMIN', 'SUPER_ADMIN'],
+        regionales: ['SUPERVISOR'],
+        regionId: agencia.regionId,
+      }),
+    ]);
+    const ids = [servicio.operadorId, ...lideres.map((l) => l.id), ...porRol].filter(Boolean) as string[];
+    const verbo = decision === 'APROBADO' ? 'aprobado' : decision === 'RECHAZADO' ? 'rechazado' : 'anulado';
+    void this.notifications.notificarUsuarios(
+      ids,
+      `Servicio ${verbo}`,
+      `El servicio de la placa ${servicio.placa} (OT ${servicio.ordenTrabajoOT || servicio.id}) fue ${verbo}.`,
+      { type: 'SERVICIO_DECIDIDO', servicioId: servicio.id },
+      { tipo: 'SERVICIO_DECIDIDO', entidadTipo: 'SERVICIO_LAVADO', entidadId: servicio.id },
+    );
   }
 
   // ============================================================
@@ -1751,6 +1781,8 @@ export class OperacionesService {
       agenciaId: agencia.id,
     });
 
+    await this.notificarDecisionServicio(servicio, agencia, 'APROBADO');
+
     return serializeServicioLavado(updated);
   }
 
@@ -1805,6 +1837,8 @@ export class OperacionesService {
       agenciaId: agencia.id,
     });
 
+    await this.notificarDecisionServicio(servicio, agencia, 'RECHAZADO');
+
     return serializeServicioLavado(updated);
   }
 
@@ -1849,7 +1883,7 @@ export class OperacionesService {
       });
     }
 
-    const pendientes = await this.prisma.servicioLavado.findMany({ where: whereParaAprobar, select: { id: true } });
+    const pendientes = await this.prisma.servicioLavado.findMany({ where: whereParaAprobar, select: { id: true, placa: true, ordenTrabajoOT: true, operadorId: true } });
     const ids = pendientes.map((s) => s.id);
     const batchResult = ids.length
       ? await this.prisma.servicioLavado.updateMany({
@@ -1876,6 +1910,26 @@ export class OperacionesService {
         motivo: 'Aprobación masiva de cierre diario',
         agenciaId: agencia.id,
       });
+
+      if (this.notifications) {
+        const [lideres, porRol] = await Promise.all([
+          this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: 'LIDER' } }, select: { id: true } }),
+          this.notifications.resolverDestinatariosPorRol({
+            global: ['ADMIN', 'SUPER_ADMIN'],
+            regionales: ['SUPERVISOR'],
+            regionId: agencia.regionId,
+          }),
+        ]);
+        const operadorIds = [...new Set(pendientes.map((s) => s.operadorId).filter(Boolean))] as string[];
+        const destinatarios = [...operadorIds, ...lideres.map((l) => l.id), ...porRol];
+        void this.notifications.notificarUsuarios(
+          destinatarios,
+          'Servicios aprobados (cierre de día)',
+          `Se aprobaron ${batchResult.count} servicios de la agencia "${agencia.nombre}" en el cierre de día.`,
+          { type: 'SERVICIO_DECIDIDO', agenciaId: agencia.id },
+          { tipo: 'SERVICIO_DECIDIDO', entidadTipo: 'AGENCIA', entidadId: agencia.id },
+        );
+      }
     }
 
     return {

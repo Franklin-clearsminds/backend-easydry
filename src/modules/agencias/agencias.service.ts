@@ -1,11 +1,13 @@
 import {
   Injectable,
+  Optional,
   NotFoundException,
   ConflictException,
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import {
   CreateAgenciaDto,
   UpdateAgenciaDto,
@@ -75,7 +77,24 @@ import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { generarPasswordTemporal } from '../../common/utils/password-temporal.js';
 @Injectable()
 export class AgenciasService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {}
+
+  /** Avisa al propio usuario afectado (rol, estado o agencia/región cambiados) y a admin/super admin. Nunca bloquea el flujo. */
+  private async notificarCambioUsuario(usuarioId: string, titulo: string, mensaje: string): Promise<void> {
+    if (!this.notifications) return;
+    const admins = await this.notifications.resolverDestinatariosPorRol({ global: ['ADMIN', 'SUPER_ADMIN'] });
+    const ids = [...new Set([usuarioId, ...admins])];
+    void this.notifications.notificarUsuarios(
+      ids,
+      titulo,
+      mensaje,
+      { type: 'USUARIO_ACTUALIZADO', usuarioId },
+      { tipo: 'USUARIO_ACTUALIZADO', entidadTipo: 'USUARIO', entidadId: usuarioId },
+    );
+  }
 
   // =========================================================================
   // ALCANCE (regla única: país, región, agencia o lo propio) y datos de contacto
@@ -2069,6 +2088,12 @@ export class AgenciasService {
       },
     });
 
+    void this.notificarCambioUsuario(
+      updatedUser.id,
+      'Tu asignación cambió',
+      `Ahora estás asignado a ${updatedUser.agencia?.nombre || 'sin agencia'}${updatedUser.region?.nombre ? ` (región ${updatedUser.region.nombre})` : ''}.`,
+    );
+
     return {
       message: `Usuario ${updatedUser.name} ${updatedUser.lastname} asignado correctamente`,
       user: updatedUser,
@@ -2092,6 +2117,12 @@ export class AgenciasService {
         region: true,
       },
     });
+
+    void this.notificarCambioUsuario(
+      updatedUser.id,
+      nuevoEstado === 1 ? 'Tu cuenta fue activada' : 'Tu cuenta fue desactivada',
+      nuevoEstado === 1 ? 'Ya puedes volver a acceder a la plataforma.' : 'Ya no tienes acceso a la plataforma. Contacta a tu administrador si crees que es un error.',
+    );
 
     return {
       message: `Usuario ${updatedUser.name} ${updatedUser.lastname} ${nuevoEstado === 1 ? 'activado' : 'desactivado'} correctamente`,
@@ -2361,6 +2392,15 @@ export class AgenciasService {
     const rolUser = (updatedUser.role?.namerol || '').toUpperCase();
     if (sIdsUser.length > 0 && (rolUser.includes('PULIDOR') || !updatedUser.agenciaId)) {
       await this.sincronizarStockPulidorPorServicios(updatedUser.id, sIdsUser, dto.id);
+    }
+
+    const rolCambio = roleIdToSet !== undefined && roleIdToSet !== user.roleId;
+    const estadoCambio = dto.estado !== undefined && dto.estado !== user.estado;
+    if (rolCambio || estadoCambio) {
+      const partes: string[] = [];
+      if (rolCambio) partes.push(`tu rol ahora es "${updatedUser.role?.namerol}"`);
+      if (estadoCambio) partes.push(dto.estado === 1 ? 'tu cuenta fue activada' : 'tu cuenta fue desactivada');
+      void this.notificarCambioUsuario(updatedUser.id, 'Tu cuenta fue actualizada', `${partes.join(' y ')}. Vuelve a iniciar sesión para que los cambios surtan efecto.`);
     }
 
     return {
