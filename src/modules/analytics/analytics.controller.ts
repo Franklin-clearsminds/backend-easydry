@@ -52,6 +52,17 @@ export class AnalyticsController {
     return this.analyticsService.getRankingLavadores(dto, user);
   }
 
+  @Permiso('productividad.ver')
+  @Post('ranking-pulidores')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Ranking de pulidores fijos y móviles: cantidad de servicios y dinero' })
+  async getRankingPulidores(
+    @Body() dto: RankingLavadoresDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.analyticsService.getRankingPulidores(dto, user);
+  }
+
   @Permiso('maquinaria.ver')
   @Post('dashboard-taller')
   @HttpCode(HttpStatus.OK)

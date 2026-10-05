@@ -5,6 +5,7 @@ import {
   DashboardDedicadoDto,
   ConsumoQuimicosAnalyticsDto,
   RankingLavadoresDto,
+  RangoPeriodo,
 } from './dto/analytics.dto.js';
 import { ServiceStatus } from '@prisma/client';
 import { SIN_RESULTADOS, resolverAlcance } from '../../common/permisos/alcance.js';
@@ -35,6 +36,47 @@ export class AnalyticsService {
   }
 
   /**
+   * Resuelve el periodo del filtro de fecha GLOBAL (compartido por todos los dashboards) a un rango [desde, hasta].
+   * `RANGO` usa fechaDesde/fechaHasta; los demás son relativos a hoy. `fecha` (legacy) equivale a un día exacto.
+   */
+  private resolverPeriodo(dto: { rango?: RangoPeriodo; fecha?: string; fechaDesde?: string; fechaHasta?: string }): { desde: Date; hasta: Date; rango: RangoPeriodo; etiqueta: string } {
+    const ahora = new Date();
+    const finDeHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 23, 59, 59, 999);
+    const inicioDeHoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 0, 0, 0, 0);
+    const rango: RangoPeriodo = dto.rango ?? (dto.fecha || dto.fechaDesde ? 'RANGO' : 'HOY');
+
+    switch (rango) {
+      case 'SEMANA': {
+        const d = new Date(ahora);
+        d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // lunes
+        return { desde: new Date(d.getFullYear(), d.getMonth(), d.getDate()), hasta: finDeHoy, rango, etiqueta: 'Esta semana' };
+      }
+      case 'MES':
+        return { desde: new Date(ahora.getFullYear(), ahora.getMonth(), 1), hasta: finDeHoy, rango, etiqueta: 'Este mes' };
+      case 'TRIMESTRE': {
+        const q = Math.floor(ahora.getMonth() / 3);
+        return { desde: new Date(ahora.getFullYear(), q * 3, 1), hasta: finDeHoy, rango, etiqueta: 'Este trimestre' };
+      }
+      case 'SEMESTRE': {
+        const s = ahora.getMonth() < 6 ? 0 : 6;
+        return { desde: new Date(ahora.getFullYear(), s, 1), hasta: finDeHoy, rango, etiqueta: 'Este semestre' };
+      }
+      case 'ANIO':
+        return { desde: new Date(ahora.getFullYear(), 0, 1), hasta: finDeHoy, rango, etiqueta: 'Este año' };
+      case 'RANGO': {
+        const desde = dto.fechaDesde ? new Date(dto.fechaDesde) : (dto.fecha ? new Date(dto.fecha) : new Date(ahora.getFullYear(), ahora.getMonth(), 1));
+        const hasta = dto.fechaHasta ? new Date(dto.fechaHasta) : (dto.fecha ? new Date(dto.fecha) : ahora);
+        if ((dto.fechaDesde?.length ?? 10) <= 10) desde.setHours(0, 0, 0, 0);
+        if (dto.fechaHasta || dto.fecha) hasta.setHours(23, 59, 59, 999);
+        const etiqueta = `${desde.toISOString().split('T')[0]} → ${hasta.toISOString().split('T')[0]}`;
+        return { desde, hasta, rango, etiqueta };
+      }
+      default:
+        return { desde: inicioDeHoy, hasta: finDeHoy, rango: 'HOY', etiqueta: 'Hoy' };
+    }
+  }
+
+  /**
    * Región efectiva del filtro, si aplica: la del usuario con alcance REGION, o la que pidió un usuario GLOBAL.
    * Permite acotar tablas sin relación directa a agencia (movimientos de inventario, stock de bodega).
    */
@@ -49,10 +91,11 @@ export class AnalyticsService {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
 
-    const baseDate = dto.fecha ? new Date(dto.fecha) : new Date();
-    const startOfDay = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 0, 0, 0, 0);
-    const endOfDay = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 23, 59, 59, 999);
-    const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
+    const periodo = this.resolverPeriodo(dto);
+    const startOfDay = periodo.desde;
+    const endOfDay = periodo.hasta;
+    // Las ventanas "de tendencia" siguen el periodo elegido (no un fijo de 30 días).
+    const hace30Dias = periodo.desde;
 
     const roleName = rolDeUsuario(user);
 
@@ -67,7 +110,19 @@ export class AnalyticsService {
     }
 
     const isSupervisorView = roleName === 'SUPERVISOR';
-    return this.getEjecutivoMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, isSupervisorView);
+    const baseMetrics = await this.getEjecutivoMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, isSupervisorView, dto);
+    
+    if (roleName === 'SUPER_ADMIN') {
+      const globalMetrics = await this.getAdminEstrategicos(startOfDay, endOfDay, hace30Dias);
+      return { 
+        isSuperAdminView: true, 
+        ...baseMetrics, 
+        ...globalMetrics, 
+        kpis: { ...baseMetrics.kpis, ...globalMetrics.kpis } 
+      };
+    }
+    
+    return baseMetrics;
   }
 
   // ═══ ADMIN ═══════════════════════════════════════════════════════════
@@ -124,6 +179,13 @@ export class AnalyticsService {
       distribucionDecisiones: decisionesAgrupadas.map(d => ({ nombre: d.accion, total: d._count.id })).sort((a, b) => b.total - a.total),
       distribucionCategorias: serviciosPorCategoria.map(s => ({ nombre: s.categoria, total: s._count.id })).sort((a, b) => b.total - a.total),
       topAgenciasProductivas: estrategicos.topAgenciasProductivas,
+      mixGenerales: estrategicos.mixGenerales,
+      mixEspeciales: estrategicos.mixEspeciales,
+      topColores: estrategicos.topColores,
+      topMarcasModelos: estrategicos.topMarcasModelos,
+      distribucionBahias: estrategicos.distribucionBahias,
+      topAgenciasGanancia: estrategicos.topAgenciasGanancia,
+      topAgenciasReparaciones: estrategicos.topAgenciasReparaciones,
     };
   }
 
@@ -137,55 +199,108 @@ export class AnalyticsService {
     const finalizados: ServiceStatus[] = [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO];
 
     const [
-      ingresoHoyAgg, ingresoMesAgg, ingresoMesAnteriorAgg,
-      completadosHoy, completadosMes, serviciosConTiempoHoy,
-      serviciosBucketsMes, bahias, costoReparacionesAgg, stocks, movEnTransito,
+      ingresoPeriodoAgg, ingresoMesAgg, ingresoMesAnteriorAgg,
+      completadosPeriodo, completadosMes, serviciosPeriodo,
+      incidentesPeriodo, stocks, movEnTransito,
     ] = await Promise.all([
       this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, estado: { in: finalizados } } }),
       this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: { horaIngreso: { gte: inicioMes, lte: endOfDay }, estado: { in: finalizados } } }),
       this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: { horaIngreso: { gte: inicioMesAnterior, lt: inicioMes }, estado: { in: finalizados } } }),
       this.prisma.servicioLavado.count({ where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, estado: { in: finalizados } } }),
       this.prisma.servicioLavado.count({ where: { horaIngreso: { gte: inicioMes, lte: endOfDay }, estado: { in: finalizados } } }),
+      // Servicios del periodo con los atributos de vehículo, categoría, costos y bahía→agencia para los desgloses.
       this.prisma.servicioLavado.findMany({
-        where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, estado: { in: finalizados }, horaSalida: { not: null } },
-        select: { horaIngreso: true, horaInicio: true, horaSalida: true },
+        where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, estado: { in: finalizados } },
+        select: {
+          precio: true, marca: true, modelo: true, color: true, horaInicio: true, horaSalida: true,
+          catalogo: { select: { nombre: true, categoria: true } },
+          bahia: { select: { nombre: true, agencia: { select: { nombre: true, region: true } } } },
+          consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true } } } },
+        },
       }),
-      this.prisma.servicioLavado.groupBy({ by: ['bahiaId'], _count: { id: true }, where: { horaIngreso: { gte: inicioMes, lte: endOfDay } } }),
-      this.prisma.bahia.findMany({ select: { id: true, agencia: { select: { nombre: true } } } }),
-      this.prisma.incidenteTecnico.aggregate({ _sum: { costoTotal: true }, where: { createdAt: { gte: hace30Dias } } }),
+      this.prisma.incidenteTecnico.findMany({
+        where: { createdAt: { gte: hace30Dias } },
+        select: { costoTotal: true, maquinaria: { select: { agencia: { select: { nombre: true } } } } },
+      }),
       this.prisma.stockUbicacion.findMany({ select: { cantidadActual: true, insumo: { select: { costoUnitarioUSD: true } } } }),
       this.prisma.movimientoInventario.findMany({ where: { estadoDespacho: 'EN_TRANSITO' }, select: { detalles: { select: { cantidadEnviada: true, costoUnitarioUSD: true } } } }),
     ]);
 
-    const ingresoHoy = Number(ingresoHoyAgg._sum.precio || 0);
+    const ingresoHoy = Number(ingresoPeriodoAgg._sum.precio || 0);
     const ingresoMes = Number(ingresoMesAgg._sum.precio || 0);
     const ingresoMesAnterior = Number(ingresoMesAnteriorAgg._sum.precio || 0);
     const variacionMesPct = ingresoMesAnterior > 0
       ? Number((((ingresoMes - ingresoMesAnterior) / ingresoMesAnterior) * 100).toFixed(1))
       : null;
 
-    let tiempoTotalMin = 0;
-    for (const s of serviciosConTiempoHoy) {
-      const inicio = s.horaInicio || s.horaIngreso;
-      if (s.horaSalida && inicio) tiempoTotalMin += Math.max(0, (new Date(s.horaSalida).getTime() - new Date(inicio).getTime()) / 60000);
-    }
-    const tiempoPromedioServicioMin = serviciosConTiempoHoy.length > 0 ? Math.round(tiempoTotalMin / serviciosConTiempoHoy.length) : 0;
+    let tiempoTotalMin = 0, serviciosConTiempo = 0;
+    const mixGenerales: Record<string, number> = {};
+    const mixEspeciales: Record<string, number> = {};
+    const colores: Record<string, number> = {};
+    const marcasModelos: Record<string, number> = {};
+    const bahias: Record<string, { nombre: string; total: number; tiempoTotalMin: number; finalizados: number }> = {};
+    const agenciaStats: Record<string, { ingresos: number; costoInsumos: number; cantidad: number }> = {};
 
-    const agenciaPorBahia = new Map(bahias.map((b) => [b.id, b.agencia?.nombre || 'Sin agencia']));
-    const serviciosPorAgencia: Record<string, number> = {};
-    for (const g of serviciosBucketsMes) {
-      const nombre = agenciaPorBahia.get(g.bahiaId) || 'Sin agencia';
-      serviciosPorAgencia[nombre] = (serviciosPorAgencia[nombre] || 0) + g._count.id;
+    for (const s of serviciosPeriodo) {
+      const categoria = s.catalogo?.categoria === 'ESPECIAL' ? 'especial' : 'general';
+      const nombreServicio = s.catalogo?.nombre || 'Servicio';
+      if (categoria === 'especial') mixEspeciales[nombreServicio] = (mixEspeciales[nombreServicio] || 0) + 1;
+      else mixGenerales[nombreServicio] = (mixGenerales[nombreServicio] || 0) + 1;
+
+      if (s.color) colores[s.color] = (colores[s.color] || 0) + 1;
+      const marcaModelo = [s.marca, s.modelo].filter(Boolean).join(' ').trim();
+      if (marcaModelo) marcasModelos[marcaModelo] = (marcasModelos[marcaModelo] || 0) + 1;
+
+      let duracionMin = 0;
+      if (s.horaSalida) {
+        const inicio = s.horaInicio || null;
+        if (inicio) { duracionMin = Math.max(0, (new Date(s.horaSalida).getTime() - new Date(inicio).getTime()) / 60000); tiempoTotalMin += duracionMin; serviciosConTiempo++; }
+      }
+
+      let costoInsumos = 0;
+      for (const c of s.consumos || []) costoInsumos += Number(c.cantidadUsada || 0) * Number(c.insumo?.costoUnitarioUSD || 0);
+
+      const agencia = s.bahia?.agencia?.nombre || 'Sin agencia';
+      const reg = (agenciaStats[agencia] ??= { ingresos: 0, costoInsumos: 0, cantidad: 0 });
+      reg.ingresos += Number(s.precio || 0); reg.costoInsumos += costoInsumos; reg.cantidad += 1;
+
+      if (s.bahia?.nombre) {
+        const b = (bahias[s.bahia.nombre] ??= { nombre: `${s.bahia.nombre} · ${agencia}`, total: 0, tiempoTotalMin: 0, finalizados: 0 });
+        b.total += 1;
+        if (s.horaSalida && duracionMin > 0) { b.finalizados += 1; b.tiempoTotalMin += duracionMin; }
+      }
     }
-    const topAgenciasProductivas = Object.keys(serviciosPorAgencia)
-      .map((nombre) => ({ nombre, cantidad: serviciosPorAgencia[nombre] }))
-      .sort((a, b) => b.cantidad - a.cantidad)
-      .slice(0, 3);
+
+    const tiempoPromedioServicioMin = serviciosConTiempo > 0 ? Math.round(tiempoTotalMin / serviciosConTiempo) : 0;
+    const topAgenciasProductivas = Object.keys(agenciaStats)
+      .map((n) => ({ nombre: n, cantidad: agenciaStats[n].cantidad }))
+      .sort((a, b) => b.cantidad - a.cantidad).slice(0, 5);
+    // Ganancia neta = ingresos por servicios − costo de insumos consumidos (por agencia).
+    const topAgenciasGanancia = Object.keys(agenciaStats)
+      .map((n) => ({ nombre: n, ganancia: Number((agenciaStats[n].ingresos - agenciaStats[n].costoInsumos).toFixed(2)) }))
+      .sort((a, b) => b.ganancia - a.ganancia).slice(0, 5);
+    // Bahías: cantidad + tiempo promedio en una sola serie, con su agencia de origen.
+    const distribucionBahias = Object.values(bahias)
+      .map((b) => ({ nombre: b.nombre, cantidad: b.total, tiempoPromedioMin: b.finalizados > 0 ? Math.round(b.tiempoTotalMin / b.finalizados) : 0 }))
+      .sort((a, b) => b.cantidad - a.cantidad).slice(0, 8);
+
+    const reparacionesPorAgencia: Record<string, number> = {};
+    for (const inc of incidentesPeriodo) {
+      const agencia = inc.maquinaria?.agencia?.nombre || 'Sin agencia';
+      reparacionesPorAgencia[agencia] = (reparacionesPorAgencia[agencia] || 0) + Number(inc.costoTotal || 0);
+    }
+    const costoReparacionesTotal = Object.values(reparacionesPorAgencia).reduce((a, b) => a + b, 0);
+    const topAgenciasReparaciones = Object.keys(reparacionesPorAgencia)
+      .map((n) => ({ nombre: n, costo: Number(reparacionesPorAgencia[n].toFixed(2)) }))
+      .sort((a, b) => b.costo - a.costo).slice(0, 5);
 
     let valorInventarioUSD = 0;
     for (const s of stocks) valorInventarioUSD += Number(s.cantidadActual || 0) * Number(s.insumo?.costoUnitarioUSD || 0);
     let valorEnTransitoUSD = 0;
     for (const m of movEnTransito) for (const d of m.detalles) valorEnTransitoUSD += Number(d.cantidadEnviada || 0) * Number(d.costoUnitarioUSD || 0);
+
+    const topN = (rec: Record<string, number>, n: number) =>
+      Object.keys(rec).map((nombre) => ({ nombre, cantidad: rec[nombre] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, n);
 
     return {
       kpis: {
@@ -193,15 +308,22 @@ export class AnalyticsService {
         ingresoMes: Number(ingresoMes.toFixed(2)),
         ingresoMesAnterior: Number(ingresoMesAnterior.toFixed(2)),
         variacionMesPct,
-        ticketPromedioHoy: completadosHoy > 0 ? Number((ingresoHoy / completadosHoy).toFixed(2)) : 0,
-        serviciosCompletadosHoy: completadosHoy,
+        ticketPromedioHoy: completadosPeriodo > 0 ? Number((ingresoHoy / completadosPeriodo).toFixed(2)) : 0,
+        serviciosCompletadosHoy: completadosPeriodo,
         serviciosCompletadosMes: completadosMes,
         tiempoPromedioServicioMin,
-        costoReparaciones30d: Number(Number(costoReparacionesAgg._sum.costoTotal || 0).toFixed(2)),
+        costoReparaciones30d: Number(costoReparacionesTotal.toFixed(2)),
         valorInventarioUSD: Number(valorInventarioUSD.toFixed(2)),
         valorEnTransitoUSD: Number(valorEnTransitoUSD.toFixed(2)),
       },
       topAgenciasProductivas,
+      mixGenerales: topN(mixGenerales, 5),
+      mixEspeciales: topN(mixEspeciales, 5),
+      topColores: topN(colores, 5),
+      topMarcasModelos: topN(marcasModelos, 5),
+      distribucionBahias,
+      topAgenciasGanancia,
+      topAgenciasReparaciones,
     };
   }
 
@@ -342,25 +464,46 @@ export class AnalyticsService {
   }
 
   // ═══ EJECUTIVO GENERAL (Supervisor, Líder Operador, Super Admin) ═════
-  private async getEjecutivoMetrics(filtro: any, hayFiltro: boolean, startOfDay: Date, endOfDay: Date, hace30Dias: Date, isSupervisorView: boolean) {
+  private async getEjecutivoMetrics(filtro: any, hayFiltro: boolean, startOfDay: Date, endOfDay: Date, hace30Dias: Date, isSupervisorView: boolean, dto: DashboardAnalyticsDto = {}) {
     const servicioWhere: any = { horaIngreso: { gte: startOfDay, lte: endOfDay } };
     if (hayFiltro) servicioWhere.bahia = { agencia: filtro };
+    const alcanceMaq = hayFiltro ? { agencia: filtro } : {};
 
-    const [serviciosHoy, totalLavadosHoy, incidentesAbiertos, alertasPendientes, maquinariasStats, todosIncidentes30Dias] = await Promise.all([
+    const [serviciosHoy, totalLavadosHoy, incidentesAbiertos, alertasPendientes, maquinariasStats, todosIncidentes30Dias, incidentesActivosList, mantenimientosVencidos] = await Promise.all([
       this.prisma.servicioLavado.findMany({
         where: servicioWhere,
         select: {
           id: true, estado: true, horaIngreso: true, horaInicio: true, horaSalida: true, marca: true,
           catalogo: { select: { nombre: true, categoria: true, tiempoEstimadoMin: true } },
-          bahia: { select: { id: true, nombre: true } },
+          bahia: { select: { id: true, nombre: true, agencia: { select: { nombre: true } } } },
           consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true } } } },
         },
       }),
       this.prisma.servicioLavado.count({ where: servicioWhere }),
       this.prisma.incidenteTecnico.count({ where: { estado: { notIn: ['RESUELTO', 'CANCELADO'] }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) } }),
-      this.prisma.alertaStock.findMany({ where: { estado: { notIn: ['RESUELTO', 'DESPACHADO'] }, ...(hayFiltro ? { agencia: filtro } : {}) }, orderBy: { createdAt: 'desc' }, take: 10, include: { agencia: { select: { nombre: true } }, pulidor: { select: { name: true, lastname: true } } } }),
-      this.prisma.maquinaria.groupBy({ by: ['estadoOperativo'], _count: { id: true }, where: hayFiltro ? { agencia: filtro } : {} }),
+      this.prisma.alertaStock.findMany({
+        where: {
+          estado: { notIn: ['RESUELTO', 'DESPACHADO'] },
+          ...(hayFiltro ? { agencia: filtro } : {}),
+          ...(dto.pulidorId ? { pulidorId: dto.pulidorId } : {}),
+        },
+        orderBy: { createdAt: 'desc' }, take: 10,
+        include: { agencia: { select: { nombre: true, region: true } }, pulidor: { select: { name: true, lastname: true } }, insumo: { select: { nombre: true } } },
+      }),
+      this.prisma.maquinaria.groupBy({ by: ['estadoOperativo'], _count: { id: true }, where: alcanceMaq }),
       this.prisma.incidenteTecnico.findMany({ where: { createdAt: { gte: hace30Dias }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) }, include: { maquinaria: { select: { codigo: true, nombre: true, tipo: true, agencia: { select: { nombre: true } } } } } }),
+      // Alertas operativas de mantenimiento: incidentes abiertos.
+      this.prisma.incidenteTecnico.findMany({
+        where: { estado: { in: ['ABIERTO', 'EN_PROCESO'] }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
+        orderBy: { createdAt: 'desc' }, take: 15,
+        select: { id: true, titulo: true, gravedad: true, createdAt: true, maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } } },
+      }),
+      // Alertas operativas de mantenimiento: preventivos vencidos (programados y aún pendientes).
+      this.prisma.mantenimientoMaquinaria.findMany({
+        where: { estado: 'PENDIENTE', fechaProgramada: { lt: new Date() }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
+        orderBy: { fechaProgramada: 'asc' }, take: 15,
+        select: { id: true, tipo: true, fechaProgramada: true, maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } } },
+      }),
     ]);
 
     const estadosCount: Record<string, number> = { EN_ESPERA: 0, EN_PROCESO: 0, FINALIZADO: 0, CANCELADO: 0 };
@@ -393,7 +536,11 @@ export class AnalyticsService {
       }
       for (const c of s.consumos || []) costoTotalQuimicosUSD += Number(c.cantidadUsada || 0) * Number(c.insumo?.costoUnitarioUSD || 0);
       if (s.bahia) {
-        if (!bahiasStats[s.bahia.id]) bahiasStats[s.bahia.id] = { id: s.bahia.id, nombre: s.bahia.nombre, total: 0, tiempoTotalMin: 0, finalizados: 0 };
+        if (!bahiasStats[s.bahia.id]) {
+          // El nombre incluye la agencia de origen para saber de dónde proviene cada bahía.
+          const origen = s.bahia.agencia?.nombre ? ` · ${s.bahia.agencia.nombre}` : '';
+          bahiasStats[s.bahia.id] = { id: s.bahia.id, nombre: `${s.bahia.nombre}${origen}`, total: 0, tiempoTotalMin: 0, finalizados: 0 };
+        }
         bahiasStats[s.bahia.id].total++;
         if (s.estado === ServiceStatus.FINALIZADO && s.horaSalida) { bahiasStats[s.bahia.id].finalizados++; bahiasStats[s.bahia.id].tiempoTotalMin += duracionMin; }
       }
@@ -402,6 +549,11 @@ export class AnalyticsService {
     const tiempoPromedioMin = serviciosFinalizadosConTiempo > 0 ? Math.round(tiempoTotalMinutos / serviciosFinalizadosConTiempo) : 0;
     const distribucionBahias = Object.values(bahiasStats).map(b => ({ nombre: b.nombre, total: b.total })).sort((a, b) => b.total - a.total).slice(0, 7);
     const tiemposBahias = Object.values(bahiasStats).filter(b => b.finalizados > 0).map(b => ({ nombre: b.nombre, promedio: Math.round(b.tiempoTotalMin / b.finalizados) })).sort((a, b) => a.promedio - b.promedio).slice(0, 7);
+    // Serie unificada: cantidad de lavados + tiempo promedio por bahía (con su agencia de origen).
+    const bahias = Object.values(bahiasStats)
+      .map(b => ({ nombre: b.nombre, cantidad: b.total, tiempoPromedioMin: b.finalizados > 0 ? Math.round(b.tiempoTotalMin / b.finalizados) : 0 }))
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .slice(0, 8);
     const bahiaMasActiva = distribucionBahias[0] || { nombre: 'Sin actividad', total: 0 };
     const flujoArr = Object.keys(flujoHorario).sort().map(hora => ({ hora, cantidad: flujoHorario[hora] }));
 
@@ -434,6 +586,7 @@ export class AnalyticsService {
         alertasCriticas: alertasPendientes.filter(a => a.nivel === 'CRITICO').length,
       },
       flujoHorario: flujoArr,
+      bahias,
       distribucionBahias,
       tiemposBahias,
       topMaquinasDañadas,
@@ -441,6 +594,42 @@ export class AnalyticsService {
       mixServicios: Object.keys(mixServicios).map(k => ({ nombre: k, cantidad: mixServicios[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
       topMarcas: Object.keys(topMarcas).map(k => ({ nombre: k, cantidad: topMarcas[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 5),
       incidentesPorTipo: Object.keys(incidentesPorTipo).map(k => ({ nombre: k, cantidad: incidentesPorTipo[k] })),
+      // Alertas operativas unificadas: stock + mantenimiento (incidentes abiertos y preventivos vencidos).
+      alertasOperativas: [
+        ...alertasPendientes.map(a => ({
+          grupo: 'stock' as const,
+          severidad: (a.nivel === 'CRITICO' || a.nivel === 'AGOTADO') ? 'critica' : (a.nivel === 'BAJO' ? 'advertencia' : 'info'),
+          titulo: `Stock ${a.nivel}`,
+          detalle: a.insumo?.nombre || 'Insumo',
+          origen: a.agencia?.nombre || (a.pulidor ? `${a.pulidor.name} ${a.pulidor.lastname}` : null),
+          region: a.agencia?.region || null,
+          nivel: a.nivel as string,
+          estado: a.estado as string,
+          fecha: a.createdAt,
+        })),
+        ...incidentesActivosList.map(i => ({
+          grupo: 'mantenimiento' as const,
+          severidad: (i.gravedad === 'CRITICA' || i.gravedad === 'ALTA') ? 'critica' : (i.gravedad === 'MEDIA' ? 'advertencia' : 'info'),
+          titulo: `Incidente ${i.gravedad}`,
+          detalle: i.titulo,
+          origen: i.maquinaria ? `${i.maquinaria.codigo} · ${i.maquinaria.nombre}` : null,
+          region: i.maquinaria?.agencia?.region || null,
+          nivel: 'INCIDENTE',
+          estado: 'ABIERTO',
+          fecha: i.createdAt,
+        })),
+        ...mantenimientosVencidos.map(m => ({
+          grupo: 'mantenimiento' as const,
+          severidad: 'advertencia' as const,
+          titulo: 'Mantenimiento vencido',
+          detalle: `${m.maquinaria?.nombre ?? 'Máquina'} (${m.tipo})`,
+          origen: m.maquinaria ? `${m.maquinaria.codigo} · ${m.maquinaria.nombre}` : null,
+          region: m.maquinaria?.agencia?.region || null,
+          nivel: 'VENCIDO',
+          estado: 'PENDIENTE',
+          fecha: m.fechaProgramada,
+        })),
+      ],
       alertasRecientes: alertasPendientes.map(a => ({ id: a.id, mensaje: a.mensaje, nivel: a.nivel, createdAt: a.createdAt, agencia: a.agencia?.nombre, pulidor: a.pulidor ? `${a.pulidor.name} ${a.pulidor.lastname}` : null })),
       distribucionEstados: estadosCount,
       maquinariasPorEstado: maquinariasStats.reduce((acc, curr) => { acc[curr.estadoOperativo] = curr._count.id; return acc; }, {} as Record<string, number>),
@@ -477,13 +666,23 @@ export class AnalyticsService {
       const agenciaKey = c.servicio?.bahia?.agencia?.nombre || 'Agencia General';
       consumoPorAgencia[agenciaKey] = (consumoPorAgencia[agenciaKey] || 0) + cant;
       consumoPorCategoria[c.insumo.categoria || 'Sin Categoría'] = (consumoPorCategoria[c.insumo.categoria || 'Sin Categoría'] || 0) + cant;
-      if (!acumuladoPorInsumo[c.insumoId]) acumuladoPorInsumo[c.insumoId] = { insumoId: c.insumoId, codigoSKU: c.insumoSKU || c.insumo.codigoSKU, nombre: c.insumoNombre || c.insumo.nombre, categoria: c.insumo.categoria, simboloUnidad: c.unidadSimbolo || c.insumo.unidadMedida?.simbolo || 'u', cantidadTotal: 0, costoUnitario: costoUnit, costoTotalUSD: 0, vecesConsumido: 0 };
+      if (!acumuladoPorInsumo[c.insumoId]) acumuladoPorInsumo[c.insumoId] = { insumoId: c.insumoId, codigoSKU: c.insumoSKU || c.insumo.codigoSKU, nombre: c.insumoNombre || c.insumo.nombre, categoria: c.insumo.categoria, simboloUnidad: c.unidadSimbolo || c.insumo.unidadMedida?.simbolo || 'u', cantidadTotal: 0, costoUnitario: costoUnit, costoTotalUSD: 0, vecesConsumido: 0, agencias: {} };
       acumuladoPorInsumo[c.insumoId].cantidadTotal += cant;
       acumuladoPorInsumo[c.insumoId].costoTotalUSD += costoSubtotal;
       acumuladoPorInsumo[c.insumoId].vecesConsumido++;
+      acumuladoPorInsumo[c.insumoId].agencias[agenciaKey] = (acumuladoPorInsumo[c.insumoId].agencias[agenciaKey] || 0) + cant;
     }
 
-    const listaOrdenada = Object.values(acumuladoPorInsumo).map(item => ({ ...item, cantidadTotal: Number(item.cantidadTotal.toFixed(3)), costoTotalUSD: Number(item.costoTotalUSD.toFixed(2)) })).sort((a, b) => b.costoTotalUSD - a.costoTotalUSD);
+    const listaOrdenada = Object.values(acumuladoPorInsumo).map(item => {
+      const topAgencia = Object.keys(item.agencias).sort((a, b) => item.agencias[b] - item.agencias[a])[0];
+      const sufijoAgencia = topAgencia && topAgencia !== 'Agencia General' ? ` (${topAgencia})` : '';
+      return { 
+        ...item, 
+        nombre: `${item.nombre}${sufijoAgencia}`,
+        cantidadTotal: Number(item.cantidadTotal.toFixed(3)), 
+        costoTotalUSD: Number(item.costoTotalUSD.toFixed(2)) 
+      };
+    }).sort((a, b) => b.costoTotalUSD - a.costoTotalUSD);
 
     // Serie temporal de costo, agrupada según lo pidió el cliente (para graficar la evolución del consumo).
     const agrupacion = dto.agrupacion ?? 'DIA';
@@ -531,8 +730,47 @@ export class AnalyticsService {
       acumulado[s.operadorId].cantidadServicios++;
       if (s.horaSalida) { acumulado[s.operadorId].tiempoTotalMin += Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime()) / 60000)); acumulado[s.operadorId].serviciosConTiempo++; }
     }
-    const ranking = Object.values(acumulado).map(a => ({ operadorId: a.operadorId, nombre: a.nombre, cantidadServicios: a.cantidadServicios, tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0 })).sort((a, b) => b.cantidadServicios - a.cantidadServicios).slice(0, 10);
+    const ranking = Object.values(acumulado).map(a => ({ operadorId: a.operadorId, nombre: a.nombre, cantidadServicios: a.cantidadServicios, tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0 })).sort((a, b) => b.cantidadServicios - a.cantidadServicios || a.tiempoPromedioMin - b.tiempoPromedioMin).slice(0, 10);
     return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, ranking };
+  }
+
+  async getRankingPulidores(dto: RankingLavadoresDto, user: any) {
+    const filtro = this.filtroAgencia(user, dto);
+    const hayFiltro = Object.keys(filtro).length > 0;
+    const ahora = new Date();
+    const fechaDesde = dto.fechaDesde ? new Date(dto.fechaDesde) : new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+    let fechaHasta = ahora;
+    if (dto.fechaHasta) { fechaHasta = new Date(dto.fechaHasta); if (dto.fechaHasta.length <= 10) fechaHasta.setUTCHours(23, 59, 59, 999); }
+    const where: any = { estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] }, horaIngreso: { gte: fechaDesde, lte: fechaHasta } };
+    if (hayFiltro) where.bahia = { agencia: filtro };
+
+    const servicios = await this.prisma.servicioLavado.findMany({ 
+      where, 
+      select: { 
+        operadorId: true, 
+        precio: true,
+        operador: { select: { id: true, name: true, lastname: true, agenciaId: true, role: { select: { namerol: true } } } } 
+      } 
+    });
+
+    const acumulado: Record<string, any> = {};
+    for (const s of servicios) {
+      if (!s.operadorId || !s.operador || s.operador.role.namerol !== 'PULIDOR') continue;
+      if (!acumulado[s.operadorId]) acumulado[s.operadorId] = { 
+        operadorId: s.operadorId, 
+        nombre: `${s.operador.name} ${s.operador.lastname}`, 
+        esFijo: s.operador.agenciaId !== null,
+        cantidadServicios: 0, 
+        dineroTotal: 0 
+      };
+      acumulado[s.operadorId].cantidadServicios++;
+      if (s.precio) { acumulado[s.operadorId].dineroTotal += Number(s.precio); }
+    }
+    
+    const rankingFijos = Object.values(acumulado).filter(a => a.esFijo).map(a => ({ ...a, dineroTotal: Number(a.dineroTotal.toFixed(2)) })).sort((a, b) => b.cantidadServicios - a.cantidadServicios || b.dineroTotal - a.dineroTotal).slice(0, 10);
+    const rankingMoviles = Object.values(acumulado).filter(a => !a.esFijo).map(a => ({ ...a, dineroTotal: Number(a.dineroTotal.toFixed(2)) })).sort((a, b) => b.cantidadServicios - a.cantidadServicios || b.dineroTotal - a.dineroTotal).slice(0, 10);
+    
+    return { success: true, rankingFijos, rankingMoviles };
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -544,8 +782,8 @@ export class AnalyticsService {
     const hayFiltro = Object.keys(filtro).length > 0;
     const maqWhere = hayFiltro ? { agencia: filtro } : {};
     const incWhere: any = { ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
-    const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
-    const hoy = new Date(); const startOfDay = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
+    const { desde: startOfDay } = this.resolverPeriodo(dto);
+    const hace30Dias = startOfDay;
 
     const [maquinarias, incidentesActivos, incidentes30Dias, mantenimientos30Dias, proxMantenimientos] = await Promise.all([
       // Estado actual del parque de maquinaria
@@ -648,7 +886,7 @@ export class AnalyticsService {
   async getDashboardBodega(dto: DashboardDedicadoDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
-    const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
+    const hace30Dias = this.resolverPeriodo(dto).desde;
 
     // El alcance del usuario se resuelve a ids de agencia (y de bodega si hay región) y se aplica a las
     // tres consultas: sin esto, movimientos y stock mostraban datos de agencias fuera del alcance.
@@ -765,10 +1003,8 @@ export class AnalyticsService {
   async getDashboardEspeciales(dto: DashboardDedicadoDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
-    const hace30Dias = new Date(); hace30Dias.setDate(hace30Dias.getDate() - 30);
-    const hoy = new Date();
-    const startOfDay = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 0, 0, 0);
-    const endOfDay = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59, 999);
+    const { desde: startOfDay, hasta: endOfDay } = this.resolverPeriodo(dto);
+    const hace30Dias = startOfDay;
 
     const seWhere: any = { deletedAt: null, ...(hayFiltro ? { agencia: filtro } : {}) };
 
@@ -783,7 +1019,7 @@ export class AnalyticsService {
           estado: true, tipoServicio: true, tiempoEfectivoSeg: true,
           calificacionCalidad: true, precio: true, prioridad: true,
           createdAt: true, fechaFin: true,
-          operador: { select: { name: true, lastname: true } },
+          operador: { select: { id: true, name: true, lastname: true, agenciaId: true } },
         },
       }),
       this.prisma.servicioEspecial.findMany({
@@ -804,6 +1040,8 @@ export class AnalyticsService {
     const prioridadCount: Record<string, number> = {};
     const calificaciones: number[] = [];
     const operadoresCount: Record<string, number> = {};
+    const pulidoresFijos: Record<string, { nombre: string; servicios: number; ingresos: number }> = {};
+    const pulidoresMoviles: Record<string, { nombre: string; servicios: number; ingresos: number }> = {};
     let tiempoEfectivoTotal = 0; let serviciosConTiempo = 0;
     let ingresoTotal30d = 0;
     const flujoDiario: Record<string, number> = {};
@@ -821,6 +1059,11 @@ export class AnalyticsService {
       if (s.operador) {
         const k = `${s.operador.name} ${s.operador.lastname}`;
         operadoresCount[k] = (operadoresCount[k] || 0) + 1;
+        // Fijo = pulidor con agencia asignada; móvil = sin agencia (opera en su región).
+        const bucket = s.operador.agenciaId ? pulidoresFijos : pulidoresMoviles;
+        const reg = (bucket[s.operador.id] ??= { nombre: k, servicios: 0, ingresos: 0 });
+        reg.servicios += 1;
+        if (s.estado === 'Completado') reg.ingresos += Number(s.precio || 0);
       }
       const k = s.createdAt.toISOString().split('T')[0];
       if (flujoDiario[k] !== undefined) flujoDiario[k]++;
@@ -830,6 +1073,12 @@ export class AnalyticsService {
     const tiempoPromedioMin = serviciosConTiempo > 0 ? Math.round((tiempoEfectivoTotal / serviciosConTiempo) / 60) : 0;
 
     const topOperadores = Object.keys(operadoresCount).map(k => ({ nombre: k, servicios: operadoresCount[k] })).sort((a, b) => b.servicios - a.servicios).slice(0, 5);
+    const aRanking = (rec: Record<string, { nombre: string; servicios: number; ingresos: number }>) =>
+      Object.values(rec)
+        .map((p) => ({ nombre: p.nombre, servicios: p.servicios, ingresos: Number(p.ingresos.toFixed(2)) }))
+        .sort((a, b) => b.servicios - a.servicios)
+        .slice(0, 10);
+    const pulidores = { fijos: aRanking(pulidoresFijos), moviles: aRanking(pulidoresMoviles) };
 
     return {
       success: true,
@@ -848,6 +1097,7 @@ export class AnalyticsService {
       prioridad: Object.keys(prioridadCount).map(k => ({ nombre: k, cantidad: prioridadCount[k] })),
       estadosHoy: Object.keys(estadosHoy).filter(k => estadosHoy[k] > 0).map(k => ({ nombre: k, cantidad: estadosHoy[k] })),
       topOperadores,
+      pulidores,
       colaActiva: serviciosPendientes.map(s => ({ placa: s.placa, cliente: s.clienteNombre, tipo: s.tipoServicio, estado: s.estado, prioridad: s.prioridad, fecha: s.fechaProgramada })),
     };
   }

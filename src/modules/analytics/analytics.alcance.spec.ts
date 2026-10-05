@@ -90,9 +90,12 @@ describe('dashboard admin — KPIs estratégicos', () => {
       .mockResolvedValueOnce({ _sum: { precio: 6000 } }) // mes
       .mockResolvedValueOnce({ _sum: { precio: 5000 } }); // mes anterior
     prisma.servicioLavado.count.mockResolvedValue(10);
-    prisma.servicioLavado.groupBy.mockResolvedValue([{ bahiaId: 'b1', _count: { id: 7 } }]);
-    prisma.bahia.findMany.mockResolvedValue([{ id: 'b1', agencia: { nombre: 'Quito Norte' } }]);
-    prisma.incidenteTecnico.aggregate.mockResolvedValue({ _sum: { costoTotal: 300 } });
+    // Servicios del periodo (alimentan top agencias, mix, color/marca y ganancia neta).
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { precio: 30, marca: 'Toyota', modelo: 'Corolla', color: 'Rojo', horaInicio: null, horaSalida: null, catalogo: { nombre: 'Lavado Express', categoria: 'GENERAL' }, bahia: { nombre: 'Bahía 01', agencia: { nombre: 'Quito Norte', region: 'Sierra' } }, consumos: [{ cantidadUsada: 2, insumo: { costoUnitarioUSD: 1 } }] },
+      { precio: 50, marca: 'Toyota', modelo: 'Hilux', color: 'Rojo', horaInicio: null, horaSalida: null, catalogo: { nombre: 'Cerámico', categoria: 'ESPECIAL' }, bahia: { nombre: 'Bahía 02', agencia: { nombre: 'Quito Norte', region: 'Sierra' } }, consumos: [{ cantidadUsada: 1, insumo: { costoUnitarioUSD: 5 } }] },
+    ]);
+    prisma.incidenteTecnico.findMany.mockResolvedValue([{ costoTotal: 300, maquinaria: { agencia: { nombre: 'Quito Norte' } } }]);
     prisma.stockUbicacion.findMany.mockResolvedValue([{ cantidadActual: 10, insumo: { costoUnitarioUSD: 2 } }]);
     prisma.movimientoInventario.findMany.mockResolvedValue([{ detalles: [{ cantidadEnviada: 5, costoUnitarioUSD: 3 }] }]);
 
@@ -105,7 +108,13 @@ describe('dashboard admin — KPIs estratégicos', () => {
     expect(res.kpis.costoReparaciones30d).toBe(300);
     expect(res.kpis.valorInventarioUSD).toBe(20); // 10 × $2
     expect(res.kpis.valorEnTransitoUSD).toBe(15); // 5 × $3
-    expect(res.topAgenciasProductivas).toEqual([{ nombre: 'Quito Norte', cantidad: 7 }]);
+    expect(res.topAgenciasProductivas).toEqual([{ nombre: 'Quito Norte', cantidad: 2 }]);
+    expect(res.topColores).toEqual([{ nombre: 'Rojo', cantidad: 2 }]);
+    expect(res.mixGenerales).toEqual([{ nombre: 'Lavado Express', cantidad: 1 }]);
+    expect(res.mixEspeciales).toEqual([{ nombre: 'Cerámico', cantidad: 1 }]);
+    // Ganancia neta Quito Norte = (30+50) − (2×1 + 1×5) = 80 − 7 = 73
+    expect(res.topAgenciasGanancia).toEqual([{ nombre: 'Quito Norte', ganancia: 73 }]);
+    expect(res.topAgenciasReparaciones).toEqual([{ nombre: 'Quito Norte', costo: 300 }]);
   });
 });
 
