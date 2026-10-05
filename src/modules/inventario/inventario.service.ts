@@ -2610,8 +2610,7 @@ export class InventarioService {
           },
           data: {
             estado: 'RESUELTO',
-            atendidaEn: new Date(),
-            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockAg}`,
+            fechaAtencion: new Date(),
           },
         }).catch(() => {});
       }
@@ -2711,8 +2710,7 @@ export class InventarioService {
           },
           data: {
             estado: 'RESUELTO',
-            atendidaEn: new Date(),
-            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockP}`,
+            fechaAtencion: new Date(),
           },
         }).catch(() => {});
       }
@@ -3955,7 +3953,7 @@ export class InventarioService {
         const alertaExistente = await this.prisma.alertaStock.findFirst({
           where: {
             insumoId,
-            estado: 'PENDIENTE',
+            estado: { not: 'RESUELTO' },
             ...(params.pulidorId
               ? { pulidorId: params.pulidorId }
               : { agenciaId: params.agenciaId || null, pulidorId: null }),
@@ -6048,7 +6046,21 @@ export class InventarioService {
         });
 
         const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
-        if (stockPosterior <= 0 && finalUsuarioId) {
+        
+        // Evitar duplicados revisando si ya existe una alerta activa para este insumo y agencia
+        let alertaExistente = null;
+        if (finalUsuarioId && stockPosterior <= stockMinimo) {
+          alertaExistente = await tx.alertaStock.findFirst({
+            where: {
+              insumoId: insumo.id,
+              agenciaId: targetAgenciaId,
+              estado: { not: 'RESUELTO' },
+            },
+            select: { id: true }
+          });
+        }
+
+        if (stockPosterior <= 0 && finalUsuarioId && !alertaExistente) {
           alertasGeneradas.push(`¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
           await tx.alertaStock.create({
             data: {
@@ -6060,7 +6072,7 @@ export class InventarioService {
               stockReportado: stockPosterior,
             },
           });
-        } else if (stockPosterior <= stockMinimo && finalUsuarioId) {
+        } else if (stockPosterior <= stockMinimo && finalUsuarioId && !alertaExistente) {
           alertasGeneradas.push(`Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
           await tx.alertaStock.create({
             data: {
