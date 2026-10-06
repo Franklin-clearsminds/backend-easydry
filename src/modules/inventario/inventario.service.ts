@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
@@ -7,6 +8,7 @@ import {
   UnauthorizedException,
   Optional,
 } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto } from './dto/envases.dto.js';
@@ -237,6 +239,8 @@ import { resolverAlcance } from '../../common/permisos/alcance.js';
 import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 @Injectable()
 export class InventarioService {
+  private readonly logger = new Logger(InventarioService.name);
+
   constructor(
     private prisma: PrismaService,
     @Optional() private notifications?: NotificationsService,
@@ -254,7 +258,7 @@ export class InventarioService {
     }
     if (params.tipo === 'DESPACHO_AGENCIA' && params.destinoAgenciaId) {
       const lideres = await this.prisma.user.findMany({
-        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: 'LIDER' } },
+        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
         select: { id: true },
       });
       return lideres.map((u) => u.id);
@@ -1336,33 +1340,35 @@ export class InventarioService {
     if (usuarioId) {
       const usuario = await this.prisma.user.findUnique({
         where: { id: usuarioId },
-        include: { role: true, region: true, agencia: { select: { regionId: true, region: true } } },
+        include: {
+          role: true,
+          region: true,
+          bodega: { select: { regionId: true } },
+          agencia: { select: { regionId: true, region: true } },
+        },
       });
       if (usuario) {
         const rol = rolDeUsuario(usuario);
         const alc = resolverAlcance(usuario);
-        // Región-alcance (SUPERVISOR, COORD_COMERCIAL, ASISTENTE_BODEGA…): solo su región. El LIDER (alcance AGENCIA)
-        // también se acota a su región, aunque no a toda la red, para poder elegir a qué agencia de su zona despachar.
-        let regionId: string | undefined;
-        let regionNombre: string | undefined;
         if (alc.tipo === 'REGION') {
-          regionId = alc.regionId;
-          regionNombre = usuario.region?.nombre;
+          whereAgencia.regionId = alc.regionId;
         } else if (rol === 'LIDER' && usuario.agencia?.regionId) {
-          regionId = usuario.agencia.regionId;
-          regionNombre = usuario.agencia.region ?? undefined;
+          // El líder puede consultar agencias de su región para seleccionar destinos de despacho.
+          whereAgencia.regionId = usuario.agencia.regionId;
+        } else if (alc.tipo === 'AGENCIA') {
+          whereAgencia.id = alc.agenciaId;
+        } else if (alc.tipo !== 'GLOBAL') {
+          whereAgencia.id = { in: [] };
         }
-        if (regionId || regionNombre) {
-          whereAgencia.OR = [
-            ...(regionId ? [{ regionId }] : []),
-            ...(regionNombre ? [{ region: { contains: regionNombre, mode: 'insensitive' as const } }] : []),
-          ];
-        }
+      } else {
+        whereAgencia.id = { in: [] };
       }
     }
 
-    if (dto.agenciaId) whereAgencia.id = dto.agenciaId;
-    if (dto.region && !whereAgencia.OR) whereAgencia.region = dto.region;
+    const filtrosCliente: Record<string, unknown>[] = [];
+    if (dto.agenciaId) filtrosCliente.push({ id: dto.agenciaId });
+    if (dto.region) filtrosCliente.push({ region: dto.region });
+    if (filtrosCliente.length) whereAgencia.AND = filtrosCliente;
 
     const [agencias, insumos, stocksUbicacion] = await Promise.all([
       this.prisma.agencia.findMany({
@@ -2112,21 +2118,43 @@ export class InventarioService {
     if (usuarioId) {
       const usuario = await this.prisma.user.findUnique({
         where: { id: usuarioId },
-        include: { role: true, region: true },
+        include: { role: true, region: true, bodega: { select: { regionId: true } } },
       });
-      const userRole = (usuario?.role?.namerol || '').toUpperCase();
-      const isPulidor = userRole.includes('PULIDOR');
-      const isAsistente = userRole.includes('ASISTENTE') && userRole.includes('BODEGA');
-
-      if (isPulidor) {
+      if (!usuario) {
+        wherePulidor.id = { in: [] };
+      } else if (rolDeUsuario(usuario) === 'PULIDOR') {
         wherePulidor.id = usuarioId;
-      } else if (isAsistente && usuario?.regionId) {
-        wherePulidor.regionId = usuario.regionId;
+      } else {
+        const alcance = resolverAlcance(usuario);
+        switch (alcance.tipo) {
+          case 'GLOBAL':
+            break;
+          case 'REGION':
+            wherePulidor.OR = [
+              { regionId: alcance.regionId },
+              { agencia: { regionId: alcance.regionId } },
+            ];
+            break;
+          case 'AGENCIA':
+            wherePulidor.agenciaId = alcance.agenciaId;
+            break;
+          case 'PROPIO':
+            wherePulidor.id = alcance.userId;
+            break;
+          default:
+            wherePulidor.id = { in: [] };
+        }
       }
     }
 
-    if (dto.pulidorId) wherePulidor.id = dto.pulidorId;
-    if (dto.regionId) wherePulidor.regionId = dto.regionId;
+    const filtrosCliente: Record<string, unknown>[] = [];
+    if (dto.pulidorId) filtrosCliente.push({ id: dto.pulidorId });
+    if (dto.regionId) {
+      filtrosCliente.push({
+        OR: [{ regionId: dto.regionId }, { agencia: { regionId: dto.regionId } }],
+      });
+    }
+    if (filtrosCliente.length) wherePulidor.AND = filtrosCliente;
 
     const [pulidores, insumos, stocksUbicacion, recetasEspeciales] = await Promise.all([
       this.prisma.user.findMany({
@@ -2553,6 +2581,30 @@ export class InventarioService {
     }
   }
 
+  /**
+   * Al recibir un despacho que deja el stock por encima del mínimo, resuelve las alertas abiertas de ese insumo en ese
+   * destino (también las ya marcadas como DESPACHADO, que esperaban justo esta recepción). Pasar del stock máximo no
+   * importa: es referencial. Un fallo aquí no debe deshacer la recepción, pero se registra.
+   */
+  private async resolverAlertasReabastecidas(where: Prisma.AlertaStockWhereInput, guia: string, stockActual: number) {
+    try {
+      const abiertas = await this.prisma.alertaStock.findMany({
+        where: { ...where, estado: { in: ['PENDIENTE', 'EN_PROCESO', 'DESPACHADO'] } },
+        select: { id: true, mensaje: true },
+      });
+      const nota = `Reabastecido mediante despacho guía ${guia}. Stock actual: ${stockActual}`;
+      const ahora = new Date();
+      for (const a of abiertas) {
+        await this.prisma.alertaStock.update({
+          where: { id: a.id },
+          data: { estado: 'RESUELTO', fechaAtencion: ahora, mensaje: a.mensaje ? `${a.mensaje} | ${nota}` : nota },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`No se pudieron resolver las alertas del despacho ${guia}: ${(err as Error).message}`);
+    }
+  }
+
   private async sumarStockDestino(params: {
     insumoId: string;
     cantidad: number;
@@ -2598,22 +2650,11 @@ export class InventarioService {
         },
       });
 
-      // Auto-resolver alertas pendientes si el stock supera el mínimo
+      // Auto-resolver las alertas de la agencia (no las del kit de un pulidor fijo de esa sede) si supera el mínimo
       const ins = await this.prisma.insumo.findUnique({ where: { id: insumoId }, select: { stockMinimoAgencia: true } });
       const nuevoStockAg = ant + cantidad;
       if (nuevoStockAg > Number(ins?.stockMinimoAgencia ?? 2)) {
-        await this.prisma.alertaStock.updateMany({
-          where: {
-            insumoId,
-            agenciaId: params.destinoAgenciaId,
-            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
-          },
-          data: {
-            estado: 'RESUELTO',
-            atendidaEn: new Date(),
-            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockAg}`,
-          },
-        }).catch(() => {});
+        await this.resolverAlertasReabastecidas({ insumoId, agenciaId: params.destinoAgenciaId, pulidorId: null }, guia, nuevoStockAg);
       }
       return;
     }
@@ -2703,18 +2744,7 @@ export class InventarioService {
       const insP = await this.prisma.insumo.findUnique({ where: { id: insumoId }, select: { stockMinimoAgencia: true } });
       const nuevoStockP = ant + cantidad;
       if (nuevoStockP > Number(insP?.stockMinimoAgencia ?? 1)) {
-        await this.prisma.alertaStock.updateMany({
-          where: {
-            insumoId,
-            usuarioEmisorId: params.destinoPulidorId,
-            estado: { in: ['PENDIENTE', 'EN_PROCESO'] },
-          },
-          data: {
-            estado: 'RESUELTO',
-            atendidaEn: new Date(),
-            observacionResolucion: `Reabastecido mediante despacho guía ${guia}. Stock actual: ${nuevoStockP}`,
-          },
-        }).catch(() => {});
+        await this.resolverAlertasReabastecidas({ insumoId, pulidorId: params.destinoPulidorId }, guia, nuevoStockP);
       }
     }
   }

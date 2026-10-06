@@ -3,6 +3,17 @@ import { ServiciosEspecialesService } from './servicios-especiales.service.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 
 const admin = { id: 'admin-1', name: 'Admin', lastname: 'EasyDry', role: { namerol: 'ADMIN' }, roleDetails: { namerol: 'ADMIN', capacidades: [], ambito: 'GLOBAL' } };
+const coordinador = {
+  id: 'coord-esp-1',
+  name: 'Coordinador',
+  lastname: 'Especiales',
+  role: { namerol: 'COORD_SERVICIOS_ESPECIALES' },
+  roleDetails: {
+    namerol: 'COORD_SERVICIOS_ESPECIALES',
+    capacidades: [],
+    ambito: 'GLOBAL',
+  },
+};
 
 function armar() {
   const prisma: any = {
@@ -15,6 +26,7 @@ function armar() {
     agencia: { findUnique: vi.fn().mockResolvedValue({ id: 'a1', regionId: 'r1' }) },
     user: {
       findUnique: vi.fn().mockResolvedValue({ estado: 1, regionId: 'r1', agencia: null, role: { namerol: 'PULIDOR' } }),
+      findMany: vi.fn().mockResolvedValue([{ id: 'pul-1', regionId: 'r1', agencia: null }]),
       findFirst: vi.fn().mockResolvedValue(null), // sin pulidor fijo
     },
     stockUbicacion: { findMany: vi.fn().mockResolvedValue([{ insumoId: 'ins1', cantidadActual: 50, insumo: { id: 'ins1', nombre: 'Cera' } }]) },
@@ -42,7 +54,7 @@ const dtoBase = (extra: Record<string, unknown> = {}) => ({
 describe('ServiciosEspecialesService — notificación de asignación', () => {
   it('create(): avisa al pulidor asignado cuando no es quien crea la OT', async () => {
     const { notifications, service } = armar();
-    await service.create(dtoBase(), admin.id, admin);
+    await service.create(dtoBase(), coordinador.id, coordinador);
     expect(notifications.notificarUsuarios).toHaveBeenCalledWith(
       ['pul-1'],
       expect.stringContaining('Nuevo servicio especial'),
@@ -54,21 +66,31 @@ describe('ServiciosEspecialesService — notificación de asignación', () => {
 
   it('create(): no se notifica a sí mismo si el pulidor se autoasigna', async () => {
     const { notifications, service } = armar();
-    const pulidor = { id: 'pul-1', name: 'Pedro', lastname: 'P', role: { namerol: 'PULIDOR' }, roleDetails: { namerol: 'PULIDOR', capacidades: [], ambito: 'AGENCIA' }, agenciaId: 'a1' };
-    await service.create(dtoBase({ operadorId: undefined }), 'pul-1', pulidor);
+    await service.create(
+      dtoBase({ operadorId: 'pul-1' }),
+      'pul-1',
+      { ...coordinador, id: 'pul-1' },
+    );
     expect(notifications.notificarUsuarios).not.toHaveBeenCalled();
   });
 
   it('reasignar(): avisa al nuevo pulidor asignado', async () => {
     const { prisma, notifications, service } = armar();
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'pul-nuevo', regionId: 'r1', agencia: null },
+      { id: 'pul-secundario', regionId: 'r1', agencia: null },
+    ]);
     prisma.servicioEspecial.findFirst.mockResolvedValue({
       id: 'se1', version: 1, estado: 'Pendiente', agenciaId: 'a1', regionId: 'r1', operadorId: 'pul-viejo',
       recetaInsumos: [{ insumoId: 'ins1', cantidad: 0 }], tipoServicio: 'Pulido', placa: 'XYZ-999',
       agencia: { id: 'a1', regionId: 'r1' },
     });
-    await service.reasignar({ id: 'se1', operadorId: 'pul-nuevo' } as any, admin);
+    await service.reasignar(
+      { id: 'se1', operadoresIds: ['pul-nuevo', 'pul-secundario'] } as any,
+      admin,
+    );
     expect(notifications.notificarUsuarios).toHaveBeenCalledWith(
-      ['pul-nuevo'],
+      ['pul-nuevo', 'pul-secundario'],
       expect.stringContaining('reasignado'),
       expect.any(String),
       expect.any(Object),

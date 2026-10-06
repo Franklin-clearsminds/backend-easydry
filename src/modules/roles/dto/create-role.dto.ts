@@ -25,7 +25,7 @@ export class CreateRoleDto {
   @IsIn([0, 1], { message: 'El estado debe ser 1 (Activo) o 0 (Inactivo)' })
   estado?: number;
 
-  @ApiProperty({ example: ['dashboard', 'agencias'], description: 'Módulos de navegación a los que accede (códigos de modulos_sistema)', type: [String], default: [] })
+  @ApiProperty({ description: 'Obsoleto: se ignora. Las pantallas del rol salen de sus permisos (capacidades).', type: [String], required: false, deprecated: true })
   @IsOptional()
   @Transform(aLista)
   @IsArray({ message: 'El campo permisos debe ser una lista de cadenas' })

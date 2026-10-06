@@ -359,6 +359,12 @@ export class MaquinariaService {
   // Evidencias (foto o video de 13 a 30 s, más un documento)
   // ==============================================================
 
+  private exigirPermisoParaEvidencias(inputs: EvidenciaInputDto[], puedeSubirEvidencias: boolean): void {
+    if (!puedeSubirEvidencias && inputs.length > 0) {
+      throw new ForbiddenException('Tu rol no puede adjuntar evidencias a incidencias o mantenimientos.');
+    }
+  }
+
   private async verificarEvidencias(
     maquina: Pick<MaquinaCtx, 'codigo'>,
     inputs: EvidenciaInputDto[] | undefined,
@@ -808,7 +814,7 @@ export class MaquinariaService {
 
     if (!dto.activa && updated.agencia?.id) {
       const lideres = await this.prisma.user.findMany({
-        where: { estado: 1, agenciaId: updated.agencia.id, role: { namerol: 'LIDER' } },
+        where: { estado: 1, agenciaId: updated.agencia.id, role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
         select: { id: true },
       });
       const porRol = await this.notifications.resolverDestinatariosPorRol({
@@ -944,7 +950,7 @@ export class MaquinariaService {
     return { ...inc, agenciaMostrada: inc.maquinaria?.agencia?.nombre ?? null, esPulidorMovil: false };
   }
 
-  async reportarIncidente(dto: ReportarIncidenteDto, actor: Actor) {
+  async reportarIncidente(dto: ReportarIncidenteDto, actor: Actor, puedeSubirEvidencias = true) {
     if (dto.clientUuid) {
       const previo = await this.prisma.incidenteTecnico.findUnique({
         where: { clientUuid: dto.clientUuid },
@@ -971,8 +977,9 @@ export class MaquinariaService {
     if (dto.fotoEvidenciaUrl && !inputs.some((e) => e.url === dto.fotoEvidenciaUrl)) {
       inputs.unshift({ url: dto.fotoEvidenciaUrl });
     }
-    // Al reportar solo se exige evidencia (foto/video): el informe en PDF se pide al resolver.
-    const evidencias = await this.verificarEvidencias(maquina, inputs, { requiereMultimedia: true });
+    this.exigirPermisoParaEvidencias(inputs, puedeSubirEvidencias);
+    // Solo se exige evidencia al rol que tiene habilitada su subida; el PDF se pide al resolver.
+    const evidencias = await this.verificarEvidencias(maquina, inputs, { requiereMultimedia: puedeSubirEvidencias });
 
     if (dto.destinoTallerId) {
       const taller = await this.prisma.agencia.findUnique({ where: { id: dto.destinoTallerId } });
@@ -1076,7 +1083,7 @@ export class MaquinariaService {
     return { success: true, data: this.ubicacionIncidente(updated) };
   }
 
-  async resolverIncidente(dto: ResolverIncidenteDto, actor: Actor) {
+  async resolverIncidente(dto: ResolverIncidenteDto, actor: Actor, puedeSubirEvidencias = true) {
     const inc = await this.cargarIncidente(dto.incidenteId);
     const maquina = inc.maquinaria as unknown as MaquinaCtx;
     if (inc.estado === 'RESUELTO' || inc.estado === 'CANCELADO') {
@@ -1097,9 +1104,10 @@ export class MaquinariaService {
     }
 
     const nuevoEstado = dto.estado || 'RESUELTO';
-    // Al resolver (repararla de verdad) se exige foto/video Y el informe en PDF, y el costo de la
-    // reparación (no al cancelar: ahí no hubo reparación que costear).
-    const evidencias = nuevoEstado === 'RESUELTO'
+    this.exigirPermisoParaEvidencias(dto.evidencias || [], puedeSubirEvidencias);
+    // Al resolver (repararla de verdad), los roles habilitados deben adjuntar foto/video y PDF.
+    // Si el permiso de evidencias está desactivado, se conserva la resolución sin adjuntos.
+    const evidencias = nuevoEstado === 'RESUELTO' && puedeSubirEvidencias
       ? await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true, requiereDocumento: true })
       : await this.verificarEvidencias(maquina, dto.evidencias, {});
     if (nuevoEstado === 'RESUELTO' && dto.costoTotal == null) {
@@ -1389,7 +1397,7 @@ export class MaquinariaService {
     return { success: true, data: updated };
   }
 
-  async ejecutarMantenimiento(dto: EjecutarMantenimientoDto, actor: Actor) {
+  async ejecutarMantenimiento(dto: EjecutarMantenimientoDto, actor: Actor, puedeSubirEvidencias = true) {
     const existing = await this.cargarMantenimiento(dto.mantenimientoId);
     const maquina = existing.maquinaria as unknown as MaquinaCtx;
     if (existing.estado === 'FINALIZADO') throw new BadRequestException('El mantenimiento ya fue ejecutado.');
@@ -1412,8 +1420,12 @@ export class MaquinariaService {
     // No se cierra la orden mientras falten pasos obligatorios del checklist de su tipo.
     await this.checklist.exigirCompleto(existing.id, existing.tipo);
 
-    // Al cerrar el mantenimiento se exige foto/video Y el informe en PDF, y el costo del trabajo.
-    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true, requiereDocumento: true });
+    // Los roles habilitados deben adjuntar foto/video y PDF; el costo siempre es obligatorio.
+    this.exigirPermisoParaEvidencias(dto.evidencias || [], puedeSubirEvidencias);
+    const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, {
+      requiereMultimedia: puedeSubirEvidencias,
+      requiereDocumento: puedeSubirEvidencias,
+    });
     if (dto.costoTotal == null) {
       throw new BadRequestException('El costo del mantenimiento es obligatorio para ejecutarlo.');
     }

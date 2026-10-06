@@ -46,7 +46,7 @@ describe('OperacionesService — notificación de decisión de servicio', () => 
     await service.aprobarServicio('s1', 'ok', usuario('ADMIN'));
 
     expect(prisma.user.findMany).toHaveBeenCalledWith({
-      where: { estado: 1, agenciaId: 'a1', role: { namerol: 'LIDER' } },
+      where: { estado: 1, agenciaId: 'a1', role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
       select: { id: true },
     });
     expect(notifications.resolverDestinatariosPorRol).toHaveBeenCalledWith({

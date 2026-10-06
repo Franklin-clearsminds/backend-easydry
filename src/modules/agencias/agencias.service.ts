@@ -2261,6 +2261,20 @@ export class AgenciasService {
     const currentRoleName = rolEfectivo?.namerol || user.role?.namerol || dto.rolNombre || '';
     const userRoleCode = currentRoleName.toUpperCase();
     const ambitoRolUpdate = rolEfectivo?.ambito || '';
+    const supervisorGestionaBackup =
+      rolDeUsuario(actor) === 'SUPERVISOR' &&
+      tienePermiso(actor, 'backup.gestionar');
+    if (
+      supervisorGestionaBackup &&
+      (user.role?.namerol?.toUpperCase() !== 'BACKUP' ||
+        userRoleCode !== 'BACKUP' ||
+        !actor.regionId ||
+        user.regionId !== actor.regionId)
+    ) {
+      throw new ForbiddenException(
+        'El Supervisor solo puede gestionar usuarios Backup de su propia región.',
+      );
+    }
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
@@ -2307,6 +2321,42 @@ export class AgenciasService {
         throw new BadRequestException('El Asistente de Bodega solo puede asignarse a bodegas de tipo REGIONAL.');
       }
       regionIdToSet = bod.regionId || regionIdToSet || user.regionId;
+    } else if (userRoleCode === 'BACKUP') {
+      agenciaIdToSet = agenciaIdToSet === undefined ? user.agenciaId : agenciaIdToSet;
+      regionIdToSet = regionIdToSet === undefined ? user.regionId : regionIdToSet;
+      bodegaIdToSet = null;
+      if (ambitoRolUpdate === 'REGION') {
+        agenciaIdToSet = null;
+      } else if (ambitoRolUpdate !== 'AGENCIA') {
+        throw new BadRequestException('El rol Backup debe tener ámbito de agencia o región.');
+      }
+      if (user.regionId && regionIdToSet && regionIdToSet !== user.regionId) {
+        throw new BadRequestException('La región de un usuario Backup no se puede cambiar desde su asignación.');
+      }
+      regionIdToSet = user.regionId || regionIdToSet;
+      if (agenciaIdToSet) {
+        const agenciaBackup = await this.prisma.agencia.findUnique({
+          where: { id: agenciaIdToSet },
+          select: { regionId: true },
+        });
+        if (!agenciaBackup || !agenciaBackup.regionId) {
+          throw new BadRequestException('La agencia asignada al Backup debe pertenecer a una región.');
+        }
+        if (regionIdToSet && agenciaBackup.regionId !== regionIdToSet) {
+          throw new BadRequestException(
+            'La agencia asignada al Backup debe pertenecer a su región.',
+          );
+        }
+        regionIdToSet = agenciaBackup.regionId;
+      }
+      if (!regionIdToSet) {
+        throw new BadRequestException('El usuario Backup debe tener una región asignada.');
+      }
+      if (supervisorGestionaBackup && regionIdToSet !== actor.regionId) {
+        throw new ForbiddenException(
+          'El Supervisor solo puede asignar agencias dentro de su propia región.',
+        );
+      }
     } else if (ambitoRolUpdate === 'REGION') {
       // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
       agenciaIdToSet = null;
@@ -2421,10 +2471,6 @@ export class AgenciasService {
   }
 
   async createUsuario(dto: CreateUsuarioDto, actor?: any) {
-    // La contraseña de acceso solo la asigna el Administrador o el Super Administrador.
-    if (actor && !this.esAdmin(actor)) {
-      throw new ForbiddenException('Solo el Administrador o el Super Administrador pueden registrar usuarios con contraseña.');
-    }
     const emailNorm = dto.email.toLowerCase().trim();
     const existing = await this.prisma.user.findUnique({ where: { email: emailNorm } });
     if (existing) {
@@ -2532,6 +2578,23 @@ export class AgenciasService {
     });
     const userRoleCode = (rolAsignado?.namerol || dto.rolNombre || '').toUpperCase();
     const ambitoRolCreate = rolAsignado?.ambito || '';
+    const supervisorPuedeCrearBackup =
+      rolDeUsuario(actor) === 'SUPERVISOR' &&
+      tienePermiso(actor, 'backup.gestionar') &&
+      userRoleCode === 'BACKUP';
+    if (actor && !this.esAdmin(actor) && !supervisorPuedeCrearBackup) {
+      throw new ForbiddenException(
+        'Solo Admin, Super Admin o un Supervisor regional pueden crear usuarios Backup de su región.',
+      );
+    }
+    if (
+      supervisorPuedeCrearBackup &&
+      (!actor.regionId || regionIdToSet !== actor.regionId)
+    ) {
+      throw new ForbiddenException(
+        'El Supervisor solo puede crear usuarios Backup para su propia región.',
+      );
+    }
     if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
       agenciaIdToSet = null;
       regionIdToSet = null;
@@ -2576,6 +2639,44 @@ export class AgenciasService {
         throw new BadRequestException('El Líder Operador debe tener una agencia asignada.');
       }
       bodegaIdToSet = null;
+    } else if (userRoleCode === 'BACKUP') {
+      bodegaIdToSet = null;
+      if (!regionIdToSet) {
+        throw new BadRequestException('El usuario Backup debe tener una región asignada.');
+      }
+      if (ambitoRolCreate === 'REGION') {
+        agenciaIdToSet = null;
+      } else if (ambitoRolCreate !== 'AGENCIA') {
+        throw new BadRequestException('El rol Backup debe tener ámbito de agencia o región.');
+      }
+      if (dto.regionId) {
+        const regionSolicitada = await this.prisma.region.findFirst({
+          where: {
+            OR: [
+              { id: dto.regionId },
+              { nombre: { equals: dto.regionId, mode: 'insensitive' } },
+              { codigo: { equals: dto.regionId, mode: 'insensitive' } },
+            ],
+          },
+          select: { id: true },
+        });
+        if (regionSolicitada && regionSolicitada.id !== regionIdToSet) {
+          throw new BadRequestException(
+            'La región del Backup debe coincidir con la región de su agencia asignada.',
+          );
+        }
+      }
+      if (agenciaIdToSet) {
+        const agenciaBackup = await this.prisma.agencia.findUnique({
+          where: { id: agenciaIdToSet },
+          select: { regionId: true },
+        });
+        if (!agenciaBackup || agenciaBackup.regionId !== regionIdToSet) {
+          throw new BadRequestException(
+            'La agencia asignada al Backup debe pertenecer a su región.',
+          );
+        }
+      }
     } else if (ambitoRolCreate === 'REGION') {
       // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
       agenciaIdToSet = null;

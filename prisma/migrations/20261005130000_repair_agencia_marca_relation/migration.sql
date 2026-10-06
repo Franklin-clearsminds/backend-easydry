@@ -1,0 +1,3 @@
+-- Reconciliation only: this migration is recorded as applied in the database, but its original SQL is unavailable.
+-- The current Agencia.clienteId -> Cliente.id foreign key was verified in the database.
+-- The legacy Agencia.marcaId -> Marca.id foreign key is intentionally left unchanged.

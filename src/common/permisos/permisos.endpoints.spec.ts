@@ -65,4 +65,9 @@ describe('todos los endpoints declaran su permiso (falla cerrado)', () => {
       'StorageController.getPresignedUrl', 'StorageController.getUploadTicket', 'StorageController.uploadFile',
     ]);
   });
+
+  it('protege por separado la subida de evidencias de maquinaria y limpieza', () => {
+    expect(Reflect.getMetadata(PERMISO_KEY, MaquinariaController.prototype.agregarEvidencia)).toEqual(['maquinaria.evidencias']);
+    expect(Reflect.getMetadata(PERMISO_KEY, MaquinariaController.prototype.registrarLimpieza)).toEqual(['limpiezas.evidencias']);
+  });
 });

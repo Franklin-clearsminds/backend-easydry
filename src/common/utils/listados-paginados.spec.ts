@@ -70,7 +70,8 @@ const casos = [
     dto: QueryRolesDto,
     construir: () => {
       const prisma = { role: tabla([{ id: 'ro1', namerol: 'ADMIN', _count: { users: 2 } }], 40) };
-      return { prisma, tabla: prisma.role, llamar: (d: any) => new RolesService(prisma as never).findAll(d) };
+      const notifications = { notificarCambioPermisosRol: vi.fn() };
+      return { prisma, tabla: prisma.role, llamar: (d: any) => new RolesService(prisma as never, notifications as never).findAll(d) };
     },
     heredado: [{ namerol: 'asc' }],
     columna: 'usuarios',
@@ -176,7 +177,8 @@ describe('particularidades', () => {
 
   it('roles: nunca lista SUPER_ADMIN y conserva los campos calculados', async () => {
     const prisma = { role: tabla([{ id: 'ro1', namerol: 'ADMIN', _count: { users: 2 } }], 1) };
-    const r: any = await new RolesService(prisma as never).findAll({ page: 1, estado: 1 } as any);
+    const notifications = { notificarCambioPermisosRol: vi.fn() };
+    const r: any = await new RolesService(prisma as never, notifications as never).findAll({ page: 1, estado: 1 } as any);
     expect(JSON.stringify(prisma.role.findMany.mock.calls[0][0].where)).toContain('"namerol":{"not":"SUPER_ADMIN"}');
     expect(r.items[0]).toMatchObject({ namerol: 'ADMIN', usuariosCount: 2 });
   });

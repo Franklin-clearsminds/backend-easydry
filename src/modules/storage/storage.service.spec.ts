@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { PrismaService } from '../prisma/prisma.service.js';
 import { StorageService } from './storage.service.js';
 
 function createService(overrides?: Record<string, string>) {
@@ -17,6 +18,29 @@ function createService(overrides?: Record<string, string>) {
 }
 
 describe('StorageService', () => {
+  it('permite subir evidencias especiales solo al pulidor responsable', async () => {
+    const prisma = {
+      servicioEspecial: {
+        findFirst: vi.fn().mockResolvedValue({ operadorId: 'pulidor-1' }),
+      },
+    };
+    const storage = new StorageService(
+      {
+        get: (key: string) => ({
+          AWS_REGION: 'us-east-1',
+          AWS_S3_BUCKET_NAME: 'easydry-storage-test',
+          AWS_ACCESS_KEY_ID: 'test-access-key',
+          AWS_SECRET_ACCESS_KEY: 'test-secret-key',
+        })[key] ?? null,
+      } as unknown as ConfigService,
+      prisma as unknown as PrismaService,
+    );
+    const pulidor = (id: string) => ({ id, roleDetails: { namerol: 'PULIDOR' } });
+
+    await expect(storage.asegurarPuedeSubirEvidenciaEspecial('OT-1', pulidor('pulidor-1'))).resolves.toBeUndefined();
+    await expect(storage.asegurarPuedeSubirEvidenciaEspecial('OT-1', pulidor('pulidor-2'))).rejects.toThrow(/primer pulidor asignado/);
+  });
+
   it.each([
     ['VIDEO_INICIAL', 'SERVICIOS_GENERALES', 'servicios/generales/ot-1/videos/inicial/', 'video/mp4'],
     ['VIDEO_FINAL', 'SERVICIOS_ESPECIALES', 'servicios/especiales/ot-1/videos/final/', 'video/mp4'],
@@ -125,7 +149,7 @@ describe('StorageService', () => {
 
   it('conserva contenedor MOV y MIME real en videos seleccionados desde iOS', async () => {
     const result = await createService().buildS3Key({
-      agenciaId: 'AGENCIA 01',
+      agenciaId: '7f82a941-0000-4000-8000-000000000001',
       servicioId: 'OT-2026-100',
       clientUuid: 'uuid-local',
       type: 'VIDEO_INICIAL',
@@ -133,7 +157,7 @@ describe('StorageService', () => {
       fileName: 'captura.mov',
     });
 
-    expect(result.key).toContain('agencias/agencia-01/servicios/especiales/ot-2026-100/videos/inicial/');
+    expect(result.key).toContain('agencias/7f82a941-0000-4000-8000-000000000001/servicios/especiales/ot-2026-100/videos/inicial/');
     expect(result.key).toMatch(/\.mov$/);
     expect(result.contentType).toBe('video/quicktime');
   });

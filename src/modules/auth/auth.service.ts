@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { StorageService } from '../storage/storage.service.js';
+import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 
 @Injectable()
 export class AuthService {
@@ -16,6 +17,22 @@ export class AuthService {
     private configService: ConfigService,
     private storageService: StorageService,
   ) {}
+
+  /**
+   * Qué puede hacer el rol en la app móvil: si puede entrar (permiso `sync.usar`) y qué pantallas ve ahí. Una pantalla
+   * aparece en el celular solo si el módulo está marcado para la app Y el rol tiene su permiso (`modulosDeRol`).
+   */
+  private async infoApp(role: { namerol?: string | null; capacidades?: string[] | null } | null | undefined) {
+    const puedeUsarApp = role?.namerol === 'SUPER_ADMIN' || !!role?.capacidades?.includes('sync.usar');
+    const pantallas = modulosDeRol(role);
+    if (!puedeUsarApp || !pantallas.length) return { puedeUsarApp, pantallasApp: [] as string[] };
+    const enApp = await this.prisma.moduloSistema.findMany({
+      where: { codigo: { in: pantallas }, disponibleEnApp: true, estado: 1 },
+      select: { codigo: true },
+    });
+    const marcadas = new Set(enApp.map((m) => m.codigo));
+    return { puedeUsarApp, pantallasApp: pantallas.filter((p) => marcadas.has(p)) };
+  }
 
   private generateTokens(user: { id: string; email: string; roleId: string }) {
     const accessSecret = secretoObligatorio(this.configService.get<string>('JWT_SECRET'), 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync');
@@ -114,9 +131,10 @@ export class AuthService {
         role: user.role?.namerol,
         roleCode: user.role?.namerol,
         rolNombre: user.role?.namerol,
-        /** Códigos de módulos permitidos (desde Role.permisos en BD) */
-        permisos: user.role?.permisos ?? [],
-        modulos: user.role?.permisos ?? [],
+        /** Pantallas que ve el rol: salen de sus permisos (Role.capacidades) */
+        permisos: modulosDeRol(user.role),
+        modulos: modulosDeRol(user.role),
+        ...(await this.infoApp(user.role)),
         /** Acciones granulares del rol (desde Role.acciones en BD) */
         acciones: user.role?.acciones ?? null,
         /** Permisos que el backend exige (Role.capacidades) y sobre qué datos actúa el rol (Role.ambito) */
@@ -212,8 +230,9 @@ export class AuthService {
         role: user.role?.namerol,
         roleCode: user.role?.namerol,
         rolNombre: user.role?.namerol,
-        permisos: user.role?.permisos ?? [],
-        modulos: user.role?.permisos ?? [],
+        permisos: modulosDeRol(user.role),
+        modulos: modulosDeRol(user.role),
+        ...(await this.infoApp(user.role)),
         acciones: user.role?.acciones ?? null,
         /** Permisos que el backend exige (Role.capacidades) y sobre qué datos actúa el rol (Role.ambito) */
         capacidades: user.role?.capacidades ?? [],
@@ -291,8 +310,9 @@ export class AuthService {
       bodegaNombre: user.bodega?.nombre,
       bodega: user.bodega,
       agencia: user.agencia,
-      permisos: role?.permisos ?? [],
-      modulos: role?.permisos ?? [],
+      permisos: modulosDeRol(role),
+      modulos: modulosDeRol(role),
+      ...(await this.infoApp(role)),
       acciones: role?.acciones ?? null,
       capacidades: role?.capacidades ?? [],
       ambito: role?.ambito ?? 'AGENCIA',

@@ -48,6 +48,16 @@ export class CreateServicioDto {
   @IsString()
   operadorId?: string;
 
+  @ApiPropertyOptional({
+    example: ['lavador-uuid-01', 'lavador-uuid-02'],
+    description: 'Lavadores activos asignados a la bahía que comparten la responsabilidad de esta OT.',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  operadorIds?: string[];
+
   @ApiProperty({ example: 1 })
   @IsInt()
   servicioCatalogoId: number;
