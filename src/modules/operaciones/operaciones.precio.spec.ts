@@ -17,7 +17,15 @@ function armar(opts: { precioCatalogo?: number; override?: number | null } = {})
       }),
     },
     user: {
-      findUnique: vi.fn().mockResolvedValue({ id: 'u1', agenciaId: 'a1', estado: 1 }),
+      findUnique: vi.fn().mockImplementation(async ({ where }: any) => ({ id: where.id, agenciaId: 'a1', estado: 1 })),
+      findMany: vi.fn().mockImplementation(async ({ where }: any) =>
+        (where.id.in as string[]).map((id) => ({ id, agenciaId: 'a1', estado: 1 })),
+      ),
+    },
+    bahiaOperador: {
+      findMany: vi.fn().mockImplementation(async ({ where }: any) =>
+        where.operadorId.in.map((operadorId: string) => ({ operadorId })),
+      ),
     },
     catalogoServicio: {
       findUnique: vi.fn().mockResolvedValue({
@@ -69,6 +77,31 @@ const dto = (extra: Record<string, unknown> = {}) => ({
 }) as any;
 
 describe('OperacionesService.create — precio congelado', () => {
+  it('asigna a la OT todos los lavadores activos seleccionados y vinculados a la bahía', async () => {
+    const { prisma, service } = armar();
+
+    await service.create(dto({ operadorIds: ['lav-1', 'lav-2', 'lav-3'] }), 'u1');
+
+    expect(prisma.bahiaOperador.findMany).toHaveBeenCalledWith({
+      where: {
+        bahiaId: 'b1',
+        operadorId: { in: ['lav-1', 'lav-2', 'lav-3'] },
+        activo: true,
+      },
+      select: { operadorId: true },
+    });
+    expect(prisma.servicioLavado.create.mock.calls[0][0].data).toMatchObject({
+      operadorId: 'lav-1',
+      operadoresAsignados: {
+        create: [
+          { operadorId: 'lav-1' },
+          { operadorId: 'lav-2' },
+          { operadorId: 'lav-3' },
+        ],
+      },
+    });
+  });
+
   it('usa el precio global del catálogo cuando la agencia no tiene override', async () => {
     const { prisma, service } = armar({ precioCatalogo: 12.5 });
     await service.create(dto(), 'u1');

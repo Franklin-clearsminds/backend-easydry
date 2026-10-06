@@ -10,6 +10,9 @@ function armar(existente: any) {
       update: vi.fn().mockImplementation(async (a: any) => ({ ...existente, ...a.data })),
     },
     region: { findMany: vi.fn().mockResolvedValue([{ id: 'r-costa' }, { id: 'r-sierra' }]) },
+    agencia: { findMany: vi.fn().mockResolvedValue([{ id: 'a1', nombre: 'Agencia Juan', regionId: 'r-costa' }]) },
+    servicioLavado: { findMany: vi.fn().mockResolvedValue([]) },
+    servicioEspecial: { findMany: vi.fn().mockResolvedValue([]) },
   };
   const notifications = {
     notificarUsuarios: vi.fn().mockResolvedValue(undefined),
@@ -20,13 +23,18 @@ function armar(existente: any) {
 }
 
 const reto = (extra: Record<string, unknown> = {}) => ({
-  id: 'r1', creadoPorId: 'admin-1', estado: 'ACTIVO', titulo: 'Reto de Octubre', regiones: [], ...extra,
+  id: 'r1', creadoPorId: 'admin-1', estado: 'ACTIVO', titulo: 'Reto de Octubre', regiones: [], marcas: [], sucursalesIds: [],
+  bahiasIds: [], tipoReto: 'AGENCIA', tipoServicios: 'GENERALES', metrica: 'SERVICIOS', modoGanador: 'RANKING',
+  cantidadGanadores: 1, meta: null, fechaInicio: new Date('2026-10-01'), fechaFin: new Date('2026-10-31'), ...extra,
 });
 
 describe('RetosService.cerrar — notificación', () => {
   it('reto sin regiones (nacional): resuelve destinatarios con regionId "TODAS"', async () => {
-    const { notifications, service } = armar(reto({ regiones: [] }));
-    await service.cerrar({ id: 'r1', ganadorNombre: 'Juan' } as any, admin);
+    const { prisma, notifications, service } = armar(reto({ regiones: [] }));
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { placa: 'A', precio: 0, horaSalida: new Date('2026-10-05T15:00:00Z'), operadorId: 'l1', bahiaId: 'b1', bahia: { agenciaId: 'a1' }, operadoresAsignados: [] },
+    ]);
+    await service.cerrar({ id: 'r1' } as any, admin);
     expect(notifications.resolverDestinatariosPorRol).toHaveBeenCalledWith({
       global: ['ADMIN', 'SUPER_ADMIN', 'JEFE_COMERCIAL'],
       regionales: ['COORD_COMERCIAL', 'SUPERVISOR'],
@@ -34,7 +42,7 @@ describe('RetosService.cerrar — notificación', () => {
     });
     const [ids, , body] = notifications.notificarUsuarios.mock.calls[0];
     expect(ids).toEqual(['admin-1', 'jefe-com-1']);
-    expect(body).toContain('Juan');
+    expect(body).toContain('Ganador: Agencia Juan');
   });
 
   it('reto con "Todas" en regiones: también se trata como nacional', async () => {

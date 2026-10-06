@@ -4,6 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { secretoObligatorio } from '../../common/config/secretos.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 
 export interface JwtPayload {
   sub: string;
@@ -64,7 +65,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       nombre: `${user.name} ${user.lastname}`.trim(),
       roleId: user.roleId,
       role: user.role,
-      permisos: user.role.permisos,
+      permisos: modulosDeRol(user.role),
       roleDetails: user.role,
       agenciaId: user.agenciaId,
       agenciasIds: user.agenciasIds,

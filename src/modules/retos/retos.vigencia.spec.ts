@@ -3,6 +3,7 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { RetosService } from './retos.service.js';
 import { ListRetosDto } from './dto/retos.dto.js';
+import { hoyEcuador } from './retos.reglas.js';
 
 const construir = () => {
   const prisma = { reto: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) } };
@@ -18,15 +19,12 @@ describe('RetosService.list — vigencia', () => {
     expect(prisma.reto.findMany.mock.calls[0][0].where).toEqual({ estado: 'ACTIVO' });
   });
 
-  it('VENCIDOS: los que ya pasaron su fecha de fin, sea cual sea su estado', async () => {
+  it('VENCIDOS: los que ya pasaron su fecha de fin (hoy en Ecuador), sea cual sea su estado', async () => {
     const { prisma, service } = construir();
     await service.list({ page: 1, vigencia: 'VENCIDOS' } as any, admin);
     const where = prisma.reto.findMany.mock.calls[0][0].where;
     expect(where).not.toHaveProperty('estado');
-    expect(where.fechaFin.lt).toBeInstanceOf(Date);
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    expect(where.fechaFin.lt.getTime()).toBe(hoy.getTime());
+    expect(where.fechaFin.lt.getTime()).toBe(hoyEcuador().getTime());
   });
 
   it('TODOS: sin filtro de estado ni de fecha', async () => {

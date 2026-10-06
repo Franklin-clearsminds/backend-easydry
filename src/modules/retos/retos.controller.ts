@@ -1,7 +1,7 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { CerrarRetoDto, CreateRetoDto, DeleteRetoDto, ListRetosDto } from './dto/retos.dto.js';
+import { CerrarRetoDto, CreateRetoDto, DeleteRetoDto, ListRetosDto, PersonasRetoDto, RankingRetoDto } from './dto/retos.dto.js';
 import { RetosService } from './retos.service.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
@@ -17,6 +17,30 @@ export class RetosController {
   @ApiOperation({ summary: 'Listar retos almacenados en PostgreSQL' })
   list(@Body() dto: ListRetosDto, @CurrentUser() user: any) {
     return this.retosService.list(dto, user);
+  }
+
+  @Permiso('retos.ver')
+  @Post('ranking')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Consultar vehículos atendidos para un reto' })
+  ranking(@Body() dto: RankingRetoDto, @CurrentUser() user: any) {
+    return this.retosService.ranking(dto.id, user);
+  }
+
+  @Permiso('retos.crear')
+  @Post('pulidores')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Listar pulidores disponibles para retos' })
+  pulidores(@CurrentUser() user: any) {
+    return this.retosService.pulidores(user);
+  }
+
+  @Permiso('retos.crear')
+  @Post('personas')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Lavadores o pulidores que se pueden elegir como participantes (los del alcance de quien crea)' })
+  personas(@Body() dto: PersonasRetoDto, @CurrentUser() user: any) {
+    return this.retosService.personas(dto.tipo, user);
   }
 
   @Permiso('retos.crear')

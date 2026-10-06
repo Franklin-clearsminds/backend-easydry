@@ -6,9 +6,20 @@
 export function serializeServicioLavado(s: any): any {
   if (!s) return null;
 
-  const operadorNombre = s.operador
-    ? `${s.operador.name || ''} ${s.operador.lastname || ''}`.trim()
-    : s.operadorNombre || '';
+  const operadoresAsignados = Array.isArray(s.operadoresAsignados)
+    ? s.operadoresAsignados
+        .map((asignacion: any) => asignacion.operador)
+        .filter(Boolean)
+        .map((operador: any) => ({
+          id: String(operador.id),
+          nombre: `${operador.name || ''} ${operador.lastname || ''}`.trim(),
+        }))
+    : [];
+  const operadorNombre = operadoresAsignados.length
+    ? operadoresAsignados.map((operador: any) => operador.nombre).join(', ')
+    : s.operador
+      ? `${s.operador.name || ''} ${s.operador.lastname || ''}`.trim()
+      : s.operadorNombre || '';
 
   const bahiaNombre = s.bahia?.nombre || s.bahiaNombre || '';
   const bahiaCodigo = s.bahia?.codigo || s.bahiaCodigo || '';
@@ -98,6 +109,7 @@ export function serializeServicioLavado(s: any): any {
     bahia: bahiaNombre,
     operadorNombre,
     empleado: operadorNombre,
+    operadoresAsignados,
     servicioNombre,
     servicio: servicioNombre,
     categoriaServicio: s.catalogo?.categoria || s.categoriaServicio || 'GENERAL',

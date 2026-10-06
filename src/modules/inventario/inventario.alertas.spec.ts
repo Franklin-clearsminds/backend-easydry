@@ -213,3 +213,59 @@ describe('DTO de alertas y stock bajo', () => {
     expect((await validate(plainToInstance(ListAlertasDto, { grupoNivel: 'otro' }))).length).toBeGreaterThan(0);
   });
 });
+
+describe('alertas resueltas al recibir un despacho', () => {
+  function recepcion(stockPrevio: number, alertas: any[] = [{ id: 'al1', mensaje: 'Me falta shampoo' }]) {
+    const prisma: any = {
+      stockUbicacion: {
+        findFirst: vi.fn().mockResolvedValue({ id: 's1', cantidadActual: stockPrevio }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      kardexMovimiento: { create: vi.fn().mockResolvedValue({}) },
+      insumo: { findUnique: vi.fn().mockResolvedValue({ stockMinimoAgencia: 2 }) },
+      alertaStock: { findMany: vi.fn().mockResolvedValue(alertas), update: vi.fn().mockResolvedValue({}) },
+      user: { findUnique: vi.fn().mockResolvedValue({ agenciaId: null }) },
+    };
+    const service = new InventarioService(prisma as never);
+    const sumar = (destino: Record<string, string>, cantidad: number) =>
+      (service as any).sumarStockDestino({ insumoId: 'i1', cantidad, guia: 'G-1', usuarioId: 'u1', ...destino });
+    return { prisma, sumar };
+  }
+
+  it('la agencia: resuelve sus alertas abiertas (también DESPACHADO) con fecha y nota, sin tocar las del kit de un pulidor', async () => {
+    const { prisma, sumar } = recepcion(1);
+    await sumar({ destinoAgenciaId: 'a1' }, 5);
+    expect(prisma.alertaStock.findMany.mock.calls[0][0].where).toEqual({
+      insumoId: 'i1',
+      agenciaId: 'a1',
+      pulidorId: null,
+      estado: { in: ['PENDIENTE', 'EN_PROCESO', 'DESPACHADO'] },
+    });
+    const { where, data } = prisma.alertaStock.update.mock.calls[0][0];
+    expect(where).toEqual({ id: 'al1' });
+    expect(data.estado).toBe('RESUELTO');
+    expect(data.fechaAtencion).toBeInstanceOf(Date);
+    expect(data.mensaje).toBe('Me falta shampoo | Reabastecido mediante despacho guía G-1. Stock actual: 6');
+  });
+
+  it('el pulidor: busca por su kit (pulidorId), no por quién emitió la alerta', async () => {
+    const { prisma, sumar } = recepcion(0, [{ id: 'al2', mensaje: null }]);
+    await sumar({ destinoPulidorId: 'p1' }, 3);
+    expect(prisma.alertaStock.findMany.mock.calls[0][0].where).toMatchObject({ insumoId: 'i1', pulidorId: 'p1' });
+    expect(prisma.alertaStock.update.mock.calls[0][0].data.mensaje).toBe('Reabastecido mediante despacho guía G-1. Stock actual: 3');
+  });
+
+  it('si el stock sigue en el mínimo o por debajo, la alerta queda abierta', async () => {
+    const { prisma, sumar } = recepcion(0);
+    await sumar({ destinoAgenciaId: 'a1' }, 2);
+    expect(prisma.alertaStock.findMany).not.toHaveBeenCalled();
+    expect(prisma.alertaStock.update).not.toHaveBeenCalled();
+  });
+
+  it('un fallo al resolver alertas no rompe la recepción', async () => {
+    const { prisma, sumar } = recepcion(1);
+    prisma.alertaStock.findMany.mockRejectedValue(new Error('db caída'));
+    await expect(sumar({ destinoAgenciaId: 'a1' }, 5)).resolves.toBeUndefined();
+    expect(prisma.stockUbicacion.update).toHaveBeenCalled();
+  });
+});

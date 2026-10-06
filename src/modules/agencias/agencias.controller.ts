@@ -401,18 +401,18 @@ export class AgenciasController {
     return this.agenciasService.toggleEstadoUsuario(dto);
   }
 
-  @Permiso('usuarios.gestionar')
+  @Permiso('usuarios.gestionar', 'backup.gestionar')
   @Post('usuarios/update')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Actualizar datos y estado de usuario (SUPER_ADMIN, ADMIN)' })
+  @ApiOperation({ summary: 'Actualizar datos de usuario; Supervisor regional solo puede modificar Backups de su región' })
   async updateUsuario(@Body() dto: UpdateUsuarioDto, @CurrentUser() user: any) {
     return this.agenciasService.updateUsuario(dto, user);
   }
 
-  @Permiso('usuarios.gestionar')
+  @Permiso('usuarios.gestionar', 'backup.gestionar')
   @Post('usuarios/create')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Crear nuevo usuario con credenciales y contraseña (SUPER_ADMIN, ADMIN)' })
+  @ApiOperation({ summary: 'Crear usuarios; Supervisor regional solo puede crear Backups de su región' })
   async createUsuario(@Body() dto: CreateUsuarioDto, @CurrentUser() user: any) {
     return this.agenciasService.createUsuario(dto, user);
   }

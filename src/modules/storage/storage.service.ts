@@ -1,6 +1,21 @@
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DeleteObjectsCommand, GetBucketLocationCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectsCommand,
+  GetBucketLocationCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
@@ -15,6 +30,7 @@ import {
 } from './media-inspect.js';
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
 /** Resultado de verificar un archivo ya subido a S3. */
 export interface InspectedEvidence {
   key: string;
@@ -93,9 +109,27 @@ export interface UploadTicketResponse {
 }
 
 const ALLOWED_TYPES = new Set<MediaEvidenceType>([
-  'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
-  'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR', 'FOTO_MAQUINA', 'FOTO_LIMPIEZA', 'FICHA_TECNICA',
-  'DOCUMENTO', 'FOTO_INCIDENTE', 'VIDEO_INCIDENTE', 'DOCUMENTO_INCIDENTE', 'PDF_CIERRE', 'IMAGEN_PRODUCTO', 'FOTO_AJUSTE_INVENTARIO', 'FOTO_INGRESO_INVENTARIO', 'FOTO_PERFIL',
+  'FOTO_INGRESO',
+  'FOTO_SALIDA',
+  'FOTO_DANO_PREVIO',
+  'FOTO_PROCESO',
+  'VIDEO_INSPECCION',
+  'VIDEO_INICIAL',
+  'VIDEO_FINAL',
+  'VIDEO_PAUSA',
+  'VIDEO_REANUDAR',
+  'FOTO_MAQUINA',
+  'FOTO_LIMPIEZA',
+  'FICHA_TECNICA',
+  'DOCUMENTO',
+  'FOTO_INCIDENTE',
+  'VIDEO_INCIDENTE',
+  'DOCUMENTO_INCIDENTE',
+  'PDF_CIERRE',
+  'IMAGEN_PRODUCTO',
+  'FOTO_AJUSTE_INVENTARIO',
+  'FOTO_INGRESO_INVENTARIO',
+  'FOTO_PERFIL',
 ]);
 
 @Injectable()
@@ -112,29 +146,77 @@ export class StorageService implements OnModuleInit {
     private readonly prisma?: PrismaService,
   ) {
     this.region = this.configService.get<string>('AWS_REGION')?.trim() || '';
-    this.bucketName = this.configService.get<string>('AWS_S3_BUCKET_NAME')?.trim() || '';
+    this.bucketName =
+      this.configService.get<string>('AWS_S3_BUCKET_NAME')?.trim() || '';
     if (!this.region || !this.bucketName) {
-      throw new Error('AWS_REGION y AWS_S3_BUCKET_NAME son obligatorios. EasyDry no admite almacenamiento local.');
+      throw new Error(
+        'AWS_REGION y AWS_S3_BUCKET_NAME son obligatorios. EasyDry no admite almacenamiento local.',
+      );
     }
-    this.publicUrlPrefix = this.configService.get<string>('AWS_S3_PUBLIC_URL_PREFIX')
-      || `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
-    const accessKeyId = (this.configService.get<string>('AWS_ACCESS_KEY_ID') ?? '').trim();
-    const secretAccessKey = (this.configService.get<string>('AWS_SECRET_ACCESS_KEY') ?? '').trim();
+    this.publicUrlPrefix =
+      this.configService.get<string>('AWS_S3_PUBLIC_URL_PREFIX') ||
+      `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
+    const accessKeyId = (
+      this.configService.get<string>('AWS_ACCESS_KEY_ID') ?? ''
+    ).trim();
+    const secretAccessKey = (
+      this.configService.get<string>('AWS_SECRET_ACCESS_KEY') ?? ''
+    ).trim();
     if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
-      throw new Error('AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY deben configurarse juntos.');
+      throw new Error(
+        'AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY deben configurarse juntos.',
+      );
     }
 
-    const endpoint = this.configService.get<string>('AWS_ENDPOINT')?.trim()
-      || this.configService.get<string>('AWS_S3_ENDPOINT')?.trim();
-    this.s3Client = this.createS3Client(this.region, accessKeyId, secretAccessKey, endpoint);
+    const endpoint =
+      this.configService.get<string>('AWS_ENDPOINT')?.trim() ||
+      this.configService.get<string>('AWS_S3_ENDPOINT')?.trim();
+    this.s3Client = this.createS3Client(
+      this.region,
+      accessKeyId,
+      secretAccessKey,
+      endpoint,
+    );
+  }
+
+  async asegurarPuedeSubirEvidenciaEspecial(
+    serviceId: string | undefined,
+    actor: any,
+  ): Promise<void> {
+    if (rolDeUsuario(actor) !== 'PULIDOR') return;
+    if (!serviceId || !this.prisma) {
+      throw new ForbiddenException(
+        'Solo el pulidor responsable puede subir evidencias de esta orden.',
+      );
+    }
+    const servicio = await this.prisma.servicioEspecial.findFirst({
+      where: {
+        OR: [
+          { id: serviceId },
+          { clientUuid: serviceId },
+          { codigoSE: { equals: serviceId, mode: 'insensitive' } },
+          { ordenTrabajoOT: { equals: serviceId, mode: 'insensitive' } },
+        ],
+      },
+      select: { operadorId: true },
+    });
+    if (!servicio || servicio.operadorId !== actor.id) {
+      throw new ForbiddenException(
+        'Solo el primer pulidor asignado puede subir evidencias de esta orden.',
+      );
+    }
   }
 
   private createS3Client(
     region: string,
-    accessKeyId = (this.configService.get<string>('AWS_ACCESS_KEY_ID') ?? '').trim(),
-    secretAccessKey = (this.configService.get<string>('AWS_SECRET_ACCESS_KEY') ?? '').trim(),
-    endpoint = this.configService.get<string>('AWS_ENDPOINT')?.trim()
-      || this.configService.get<string>('AWS_S3_ENDPOINT')?.trim(),
+    accessKeyId = (
+      this.configService.get<string>('AWS_ACCESS_KEY_ID') ?? ''
+    ).trim(),
+    secretAccessKey = (
+      this.configService.get<string>('AWS_SECRET_ACCESS_KEY') ?? ''
+    ).trim(),
+    endpoint = this.configService.get<string>('AWS_ENDPOINT')?.trim() ||
+      this.configService.get<string>('AWS_S3_ENDPOINT')?.trim(),
   ): S3Client {
     return new S3Client({
       region,
@@ -157,13 +239,14 @@ export class StorageService implements OnModuleInit {
         BucketRegion?: string;
       };
     };
-    const headers = err?.$response?.headers || err?.cause?.$response?.headers || {};
+    const headers =
+      err?.$response?.headers || err?.cause?.$response?.headers || {};
     const region = (
-      headers['x-amz-bucket-region']
-      || headers['X-Amz-Bucket-Region']
-      || err?.BucketRegion
-      || err?.cause?.BucketRegion
-      || ''
+      headers['x-amz-bucket-region'] ||
+      headers['X-Amz-Bucket-Region'] ||
+      err?.BucketRegion ||
+      err?.cause?.BucketRegion ||
+      ''
     ).trim();
     return region || null;
   }
@@ -171,7 +254,9 @@ export class StorageService implements OnModuleInit {
   private applyBucketRegion(actualRegion: string): void {
     const region = actualRegion.trim() || 'us-east-1';
     if (region === this.region) return;
-    this.logger.warn(`El bucket ${this.bucketName} está en ${region}, no en ${this.region}. Recreando el cliente S3.`);
+    this.logger.warn(
+      `El bucket ${this.bucketName} está en ${region}, no en ${this.region}. Recreando el cliente S3.`,
+    );
     this.region = region;
     this.publicUrlPrefix = `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
     this.s3Client.destroy();
@@ -181,7 +266,9 @@ export class StorageService implements OnModuleInit {
   private async ensureBucketRegion(): Promise<void> {
     if (this.regionResolved) return;
     try {
-      const loc = await this.s3Client.send(new GetBucketLocationCommand({ Bucket: this.bucketName }));
+      const loc = await this.s3Client.send(
+        new GetBucketLocationCommand({ Bucket: this.bucketName }),
+      );
       this.applyBucketRegion(loc.LocationConstraint || 'us-east-1');
       this.regionResolved = true;
     } catch (error) {
@@ -196,7 +283,9 @@ export class StorageService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.ensureBucketRegion();
     try {
-      await this.s3Client.send(new HeadBucketCommand({ Bucket: this.bucketName }));
+      await this.s3Client.send(
+        new HeadBucketCommand({ Bucket: this.bucketName }),
+      );
       this.logger.log(`S3 verificado: ${this.bucketName} (${this.region})`);
       return;
     } catch (error) {
@@ -206,12 +295,15 @@ export class StorageService implements OnModuleInit {
           `El bucket ${this.bucketName} está en ${redirectedRegion}, no en ${this.region}. Recreando el cliente S3.`,
         );
         this.region = redirectedRegion;
-        this.publicUrlPrefix = this.configService.get<string>('AWS_S3_PUBLIC_URL_PREFIX')
-          || `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
+        this.publicUrlPrefix =
+          this.configService.get<string>('AWS_S3_PUBLIC_URL_PREFIX') ||
+          `https://${this.bucketName}.s3.${this.region}.amazonaws.com`;
         this.s3Client.destroy();
         this.s3Client = this.createS3Client(this.region);
         try {
-          await this.s3Client.send(new HeadBucketCommand({ Bucket: this.bucketName }));
+          await this.s3Client.send(
+            new HeadBucketCommand({ Bucket: this.bucketName }),
+          );
           this.logger.log(`S3 verificado: ${this.bucketName} (${this.region})`);
           return;
         } catch (retryError) {
@@ -230,10 +322,14 @@ export class StorageService implements OnModuleInit {
     }
   }
 
-  public async buildS3Key(dto: GenerateUploadTicketDto): Promise<{ key: string; contentType: string }> {
+  public async buildS3Key(
+    dto: GenerateUploadTicketDto,
+  ): Promise<{ key: string; contentType: string }> {
     const type = String(dto.type || '').toUpperCase() as MediaEvidenceType;
     if (!ALLOWED_TYPES.has(type)) {
-      throw new BadRequestException(`Tipo de evidencia no soportado: ${dto.type}`);
+      throw new BadRequestException(
+        `Tipo de evidencia no soportado: ${dto.type}`,
+      );
     }
 
     const category = dto.category || this.defaultCategory(type);
@@ -244,19 +340,36 @@ export class StorageService implements OnModuleInit {
     // Intentamos resolver el nombre real desde BD para usar como slug de carpeta S3.
     const agencia = await this.resolveAgenciaSlug(dto.agenciaId);
 
-    const serviceId = this.safeSegment(dto.servicioId || dto.clientUuid, 'sin-orden');
-    const incidenteId = this.safeSegment(dto.incidenteId || dto.clientUuid, 'sin-incidente');
+    const serviceId = this.safeSegment(
+      dto.servicioId || dto.clientUuid,
+      'sin-orden',
+    );
+    const incidenteId = this.safeSegment(
+      dto.incidenteId || dto.clientUuid,
+      'sin-incidente',
+    );
     const uuid = crypto.randomUUID().slice(0, 8);
     const timestamp = Date.now();
     const isVideo = type.startsWith('VIDEO_');
-    const isDocument = type === 'DOCUMENTO' || type === 'DOCUMENTO_INCIDENTE' || type === 'PDF_CIERRE';
-    const requestedExtension = String(dto.fileName || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
-    const videoExtension = requestedExtension === 'mov' || requestedExtension === 'm4v'
-      ? requestedExtension
-      : 'mp4';
-    const imageExt = requestedExtension === 'png' || requestedExtension === 'webp' || requestedExtension === 'jpeg'
-      ? (requestedExtension === 'jpeg' ? 'jpg' : requestedExtension)
-      : 'jpg';
+    const isDocument =
+      type === 'DOCUMENTO' ||
+      type === 'DOCUMENTO_INCIDENTE' ||
+      type === 'PDF_CIERRE';
+    const requestedExtension = String(dto.fileName || '')
+      .toLowerCase()
+      .match(/\.([a-z0-9]+)$/)?.[1];
+    const videoExtension =
+      requestedExtension === 'mov' || requestedExtension === 'm4v'
+        ? requestedExtension
+        : 'mp4';
+    const imageExt =
+      requestedExtension === 'png' ||
+      requestedExtension === 'webp' ||
+      requestedExtension === 'jpeg'
+        ? requestedExtension === 'jpeg'
+          ? 'jpg'
+          : requestedExtension
+        : 'jpg';
     const ext = isVideo ? videoExtension : isDocument ? 'pdf' : imageExt;
     const contentType = isVideo
       ? videoExtension === 'mov'
@@ -280,16 +393,27 @@ export class StorageService implements OnModuleInit {
         key: `usuarios/${userId}/perfil/avatar.jpg`,
         contentType: 'image/jpeg',
       };
-    } else if (type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO') {
-      const insumoSlug = this.safeSegment(dto.insumoNombre || dto.insumoId, 'insumo');
-      const agenciaSeg = agencia || this.safeSegment(dto.agenciaId || dto.servicioId, 'bodega');
-      const folder = type === 'FOTO_INGRESO_INVENTARIO' ? 'ingresos' : 'reajustes';
+    } else if (
+      type === 'FOTO_AJUSTE_INVENTARIO' ||
+      type === 'FOTO_INGRESO_INVENTARIO'
+    ) {
+      const insumoSlug = this.safeSegment(
+        dto.insumoNombre || dto.insumoId,
+        'insumo',
+      );
+      const agenciaSeg =
+        agencia || this.safeSegment(dto.agenciaId || dto.servicioId, 'bodega');
+      const folder =
+        type === 'FOTO_INGRESO_INVENTARIO' ? 'ingresos' : 'reajustes';
       key = `agencias/${agenciaSeg}/inventario/${folder}/${insumoSlug}/${filename}`;
     } else if (category === 'CATALOGO_INSUMOS' || type === 'IMAGEN_PRODUCTO') {
       let rawInsumoName = dto.insumoNombre || '';
       const candidateId = dto.insumoId || dto.clientUuid || '';
 
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidateId);
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          candidateId,
+        );
       if (!rawInsumoName && isUuid && this.prisma) {
         try {
           const insumoDb = await this.prisma.insumo.findUnique({
@@ -311,42 +435,61 @@ export class StorageService implements OnModuleInit {
       const insumoSlug = this.safeSegment(rawInsumoName, 'insumo');
       const finalImageFilename = `${insumoSlug}.${ext}`;
       key = `catalogo/insumos/${insumoSlug}/${finalImageFilename}`;
-    } else if (category === 'SERVICIOS_GENERALES' || category === 'SERVICIOS_ESPECIALES') {
-      const serviceKind = category === 'SERVICIOS_GENERALES' ? 'generales' : 'especiales';
-      const folder = type === 'VIDEO_INICIAL'
-        ? 'videos/inicial'
-        : type === 'VIDEO_FINAL'
-          ? 'videos/final'
-          : type === 'VIDEO_PAUSA'
-            ? 'videos/pausas'
-            : type === 'VIDEO_REANUDAR'
-              ? 'videos/reanudaciones'
-              : isVideo ? 'videos' : isDocument ? 'documentos' : 'fotos';
+    } else if (
+      category === 'SERVICIOS_GENERALES' ||
+      category === 'SERVICIOS_ESPECIALES'
+    ) {
+      const serviceKind =
+        category === 'SERVICIOS_GENERALES' ? 'generales' : 'especiales';
+      const folder =
+        type === 'VIDEO_INICIAL'
+          ? 'videos/inicial'
+          : type === 'VIDEO_FINAL'
+            ? 'videos/final'
+            : type === 'VIDEO_PAUSA'
+              ? 'videos/pausas'
+              : type === 'VIDEO_REANUDAR'
+                ? 'videos/reanudaciones'
+                : isVideo
+                  ? 'videos'
+                  : isDocument
+                    ? 'documentos'
+                    : 'fotos';
       key = `agencias/${agencia}/servicios/${serviceKind}/${serviceId}/${folder}/${filename}`;
     } else if (
-      category === 'MAQUINARIA_IMAGEN'
-      || category === 'MAQUINARIA_FICHA'
-      || category === 'MAQUINARIA_INCIDENTE'
-      || category === 'MAQUINARIA_MANTENIMIENTO'
-      || category === 'MAQUINARIA_LIMPIEZA'
-      || type === 'FOTO_MAQUINA'
-      || type === 'FICHA_TECNICA'
-      || type === 'FOTO_LIMPIEZA'
+      category === 'MAQUINARIA_IMAGEN' ||
+      category === 'MAQUINARIA_FICHA' ||
+      category === 'MAQUINARIA_INCIDENTE' ||
+      category === 'MAQUINARIA_MANTENIMIENTO' ||
+      category === 'MAQUINARIA_LIMPIEZA' ||
+      type === 'FOTO_MAQUINA' ||
+      type === 'FICHA_TECNICA' ||
+      type === 'FOTO_LIMPIEZA'
     ) {
       // Estructura fuera de las agencias: la carpeta usa el código de la máquina, que no cambia
       // aunque la máquina se mueva. La agencia/bahía actual vive solo en la base de datos.
       const equipo = await this.resolveMaquinariaSlug(dto);
       const folder = isDocument ? 'documento' : 'multimedia';
-      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+      const stamp = new Date()
+        .toISOString()
+        .replace(/[-:]/g, '')
+        .replace(/\..*$/, '')
+        .replace('T', '-');
       const maquinariaFilename = `${stamp}_${type.toLowerCase()}_${uuid}.${ext}`;
       if (category === 'MAQUINARIA_IMAGEN' || type === 'FOTO_MAQUINA') {
         key = `maquinaria/${equipo}/perfil/foto/${maquinariaFilename}`;
       } else if (category === 'MAQUINARIA_FICHA' || type === 'FICHA_TECNICA') {
         key = `maquinaria/${equipo}/perfil/ficha-tecnica/${maquinariaFilename}`;
       } else if (category === 'MAQUINARIA_MANTENIMIENTO') {
-        const mantId = this.safeSegment(dto.mantenimientoId || dto.clientUuid, 'sin-id');
+        const mantId = this.safeSegment(
+          dto.mantenimientoId || dto.clientUuid,
+          'sin-id',
+        );
         key = `maquinaria/${equipo}/mantenimientos/${mantId}/${folder}/${maquinariaFilename}`;
-      } else if (category === 'MAQUINARIA_LIMPIEZA' || type === 'FOTO_LIMPIEZA') {
+      } else if (
+        category === 'MAQUINARIA_LIMPIEZA' ||
+        type === 'FOTO_LIMPIEZA'
+      ) {
         const diaUtc = new Date().toISOString().slice(0, 10);
         key = `maquinaria/${equipo}/limpiezas/${diaUtc}/${maquinariaFilename}`;
       } else {
@@ -368,35 +511,47 @@ export class StorageService implements OnModuleInit {
    *  2. Si es texto (nombre o código) → slugifica directamente
    *  3. Fallback → 'agencia-general'
    */
+  /**
+   * Segmento de la agencia en la ruta de S3: su ID (inmutable, sin tildes). El nombre vive en PostgreSQL.
+   * Si llega un código o nombre en vez del ID, se busca la agencia para obtener su ID.
+   */
   private async resolveAgenciaSlug(agenciaId?: string): Promise<string> {
     if (!agenciaId || !agenciaId.trim()) return 'agencia-general';
 
     const raw = agenciaId.trim();
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        raw,
+      );
+    if (isUuid) return raw.toLowerCase();
 
-    // Es un UUID → intentar resolver desde BD
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw);
-    if (isUuid && this.prisma) {
+    if (this.prisma) {
       try {
-        const agencia = await this.prisma.agencia.findUnique({
-          where: { id: raw },
-          select: { nombre: true, codigo: true },
+        const agencia = await this.prisma.agencia.findFirst({
+          where: { OR: [{ codigo: raw }, { nombre: raw }] },
+          select: { id: true },
         });
-        if (agencia?.nombre) {
-          return this.safeSegment(agencia.nombre, 'agencia-general');
-        }
+        if (agencia?.id) return agencia.id.toLowerCase();
       } catch {
-        // fallback al texto crudo
+        // sin resolver: se usa la carpeta general
       }
     }
-
-    // Es un nombre/código legible → slugificar directamente
-    return this.safeSegment(raw, 'agencia-general');
+    return 'agencia-general';
   }
 
   /** 'reporte' (lo sube quien reporta) o 'reparacion' (lo sube quien repara). */
-  private incidenteFase(dto: GenerateUploadTicketDto): 'reporte' | 'reparacion' {
-    const raw = String(dto.incidenteFase || '').trim().toLowerCase();
-    if (raw === 'resoluciones' || raw === 'resolucion' || raw === 'reparacion' || raw === 'solucion') {
+  private incidenteFase(
+    dto: GenerateUploadTicketDto,
+  ): 'reporte' | 'reparacion' {
+    const raw = String(dto.incidenteFase || '')
+      .trim()
+      .toLowerCase();
+    if (
+      raw === 'resoluciones' ||
+      raw === 'resolucion' ||
+      raw === 'reparacion' ||
+      raw === 'solucion'
+    ) {
       return 'reparacion';
     }
     return 'reporte';
@@ -406,12 +561,17 @@ export class StorageService implements OnModuleInit {
    * Carpeta estable del equipo, independiente de la agencia.
    * Prioridad: código → BD (si llega UUID) → nombre → id.
    */
-  private async resolveMaquinariaSlug(dto: GenerateUploadTicketDto): Promise<string> {
+  private async resolveMaquinariaSlug(
+    dto: GenerateUploadTicketDto,
+  ): Promise<string> {
     const codigo = String(dto.maquinariaCodigo || '').trim();
     if (codigo) return this.safeSegment(codigo, 'equipo');
 
     const candidateId = String(dto.maquinariaId || '').trim();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidateId);
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        candidateId,
+      );
     if (isUuid && this.prisma) {
       try {
         const maquina = await this.prisma.maquinaria.findUnique({
@@ -425,13 +585,17 @@ export class StorageService implements OnModuleInit {
       }
     }
 
-    const nombre = String(dto.maquinariaNombre || dto.insumoNombre || '').trim();
+    const nombre = String(
+      dto.maquinariaNombre || dto.insumoNombre || '',
+    ).trim();
     if (nombre) return this.safeSegment(nombre, 'equipo');
     if (candidateId) return this.safeSegment(candidateId, 'equipo');
     return 'equipo';
   }
 
-  public async generateUploadTicket(dto: GenerateUploadTicketDto): Promise<UploadTicketResponse> {
+  public async generateUploadTicket(
+    dto: GenerateUploadTicketDto,
+  ): Promise<UploadTicketResponse> {
     await this.ensureBucketRegion();
     const type = String(dto.type || '').toUpperCase();
     if (type === 'FOTO_PERFIL' || dto.category === 'PERFIL_USUARIO') {
@@ -451,7 +615,9 @@ export class StorageService implements OnModuleInit {
       Key: key,
       ContentType: contentType,
     });
-    const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+    const uploadUrl = await getSignedUrl(this.s3Client, command, {
+      expiresIn: expiresInSeconds,
+    });
     return this.ticketResponse(
       dto,
       key,
@@ -459,7 +625,7 @@ export class StorageService implements OnModuleInit {
       `${this.publicUrlPrefix.replace(/\/$/, '')}/${key}`,
       contentType,
       expiresInSeconds,
-      {}
+      {},
     );
   }
 
@@ -473,13 +639,19 @@ export class StorageService implements OnModuleInit {
       ...dto,
       contentType: contentType || dto.contentType,
     });
-    await this.s3Client.send(new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: built.key,
-      Body: body,
-      ContentType: contentType || built.contentType,
-    }));
-    if (String(contentType || built.contentType || '').toLowerCase().startsWith('image/')) {
+    await this.s3Client.send(
+      new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: built.key,
+        Body: body,
+        ContentType: contentType || built.contentType,
+      }),
+    );
+    if (
+      String(contentType || built.contentType || '')
+        .toLowerCase()
+        .startsWith('image/')
+    ) {
       void this.generarMiniaturaDesdeBuffer(built.key, body);
     }
     return {
@@ -514,21 +686,34 @@ export class StorageService implements OnModuleInit {
     }
   }
 
-  private async readRange(key: string, start: number, endInclusive: number): Promise<Uint8Array> {
-    const res = await this.s3Client.send(new GetObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-      Range: `bytes=${start}-${endInclusive}`,
-    }));
+  private async readRange(
+    key: string,
+    start: number,
+    endInclusive: number,
+  ): Promise<Uint8Array> {
+    const res = await this.s3Client.send(
+      new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Range: `bytes=${start}-${endInclusive}`,
+      }),
+    );
     return (await res.Body?.transformToByteArray()) ?? new Uint8Array();
   }
 
   /** Busca la caja moov recorriendo las cajas de primer nivel sin descargar el video completo. */
-  private async readVideoDurationSeconds(key: string, size: number): Promise<number | null> {
+  private async readVideoDurationSeconds(
+    key: string,
+    size: number,
+  ): Promise<number | null> {
     const MAX_MOOV_BYTES = 8 * 1024 * 1024;
     let offset = 0;
     for (let i = 0; i < 64 && offset + 8 <= size; i++) {
-      const head = await this.readRange(key, offset, Math.min(offset + 15, size - 1));
+      const head = await this.readRange(
+        key,
+        offset,
+        Math.min(offset + 15, size - 1),
+      );
       const box = readBoxHeader(head, 0, offset);
       if (!box) return null;
       const total = box.toEnd ? size - offset : box.size;
@@ -547,26 +732,42 @@ export class StorageService implements OnModuleInit {
    * Verifica en S3 que el archivo exista y sea realmente lo que dice ser: tipo real por magic bytes,
    * tamaño según el tipo y, en videos, duración de 13 a 30 s. Lanza BadRequestException si no cumple.
    */
-  public async inspectEvidence(rawUrl: string, expected?: { prefix: string }): Promise<InspectedEvidence> {
+  public async inspectEvidence(
+    rawUrl: string,
+    expected?: { prefix: string },
+  ): Promise<InspectedEvidence> {
     await this.ensureBucketRegion();
     const key = this.keyFromUrl(rawUrl);
-    if (!key) throw new BadRequestException('La URL de la evidencia no pertenece al almacenamiento de EasyDry.');
+    if (!key)
+      throw new BadRequestException(
+        'La URL de la evidencia no pertenece al almacenamiento de EasyDry.',
+      );
     if (expected && !key.startsWith(expected.prefix)) {
-      throw new BadRequestException('La evidencia no pertenece a la carpeta de esta máquina.');
+      throw new BadRequestException(
+        'La evidencia no pertenece a la carpeta de esta máquina.',
+      );
     }
 
     let size = 0;
     try {
-      const head = await this.s3Client.send(new HeadObjectCommand({ Bucket: this.bucketName, Key: key }));
+      const head = await this.s3Client.send(
+        new HeadObjectCommand({ Bucket: this.bucketName, Key: key }),
+      );
       size = Number(head.ContentLength || 0);
     } catch {
-      throw new BadRequestException('La evidencia no existe en el almacenamiento. Súbela de nuevo.');
+      throw new BadRequestException(
+        'La evidencia no existe en el almacenamiento. Súbela de nuevo.',
+      );
     }
     if (size <= 0) throw new BadRequestException('La evidencia está vacía.');
 
-    const detected = detectKind(await this.readRange(key, 0, Math.min(size, 32) - 1));
+    const detected = detectKind(
+      await this.readRange(key, 0, Math.min(size, 32) - 1),
+    );
     if (!detected) {
-      throw new BadRequestException('Formato no permitido. Usa JPG, PNG, WEBP, MP4/MOV o PDF.');
+      throw new BadRequestException(
+        'Formato no permitido. Usa JPG, PNG, WEBP, MP4/MOV o PDF.',
+      );
     }
     const maxBytes = EVIDENCE_RULES[detected.kind].maxBytes;
     if (size > maxBytes) {
@@ -583,10 +784,19 @@ export class StorageService implements OnModuleInit {
       durationSeconds = Math.round((seconds as number) * 100) / 100;
     }
 
-    return { key, kind: detected.kind, mimeType: detected.mime, sizeBytes: size, durationSeconds };
+    return {
+      key,
+      kind: detected.kind,
+      mimeType: detected.mime,
+      sizeBytes: size,
+      durationSeconds,
+    };
   }
 
-  public async getPresignedDownloadUrl(rawKey: string, expiresInSeconds = 3600): Promise<string> {
+  public async getPresignedDownloadUrl(
+    rawKey: string,
+    expiresInSeconds = 3600,
+  ): Promise<string> {
     await this.ensureBucketRegion();
     let key = String(rawKey || '').trim();
     if (key.includes('amazonaws.com/')) {
@@ -597,19 +807,28 @@ export class StorageService implements OnModuleInit {
       key = key.replace(/^uploads\//, '');
     }
     const normalizedKey = key.replace(/^[/\\]+/, '').replace(/\\/g, '/');
-    if (!normalizedKey) throw new BadRequestException('La clave del archivo es obligatoria.');
+    if (!normalizedKey)
+      throw new BadRequestException('La clave del archivo es obligatoria.');
 
     const isMp4 = normalizedKey.toLowerCase().endsWith('.mp4');
     const isWebm = normalizedKey.toLowerCase().endsWith('.webm');
-    const overrideContentType = isMp4 ? 'video/mp4' : (isWebm ? 'video/webm' : undefined);
+    const overrideContentType = isMp4
+      ? 'video/mp4'
+      : isWebm
+        ? 'video/webm'
+        : undefined;
 
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
       Key: normalizedKey,
-      ...(overrideContentType ? { ResponseContentType: overrideContentType } : {}),
+      ...(overrideContentType
+        ? { ResponseContentType: overrideContentType }
+        : {}),
     });
 
-    return getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+    return getSignedUrl(this.s3Client, command, {
+      expiresIn: expiresInSeconds,
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -622,37 +841,52 @@ export class StorageService implements OnModuleInit {
   private static readonly IMAGE_KEY = /\.(jpe?g|png|webp|heic|heif)$/i;
 
   public thumbnailKeyFor(key: string): string {
-    return `thumbs/${String(key).replace(/^[/\\]+/, '').replace(/\.[^./]+$/, '')}.jpg`;
+    return `thumbs/${String(key)
+      .replace(/^[/\\]+/, '')
+      .replace(/\.[^./]+$/, '')}.jpg`;
   }
 
-  private async escribirMiniatura(key: string, original: Buffer): Promise<void> {
+  private async escribirMiniatura(
+    key: string,
+    original: Buffer,
+  ): Promise<void> {
     const thumb = await sharp(original, { failOn: 'none' })
       .rotate()
       .resize({ width: StorageService.THUMB_WIDTH, withoutEnlargement: true })
       .jpeg({ quality: 72, mozjpeg: true })
       .toBuffer();
     await this.ensureBucketRegion();
-    await this.s3Client.send(new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: this.thumbnailKeyFor(key),
-      Body: thumb,
-      ContentType: 'image/jpeg',
-    }));
+    await this.s3Client.send(
+      new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: this.thumbnailKeyFor(key),
+        Body: thumb,
+        ContentType: 'image/jpeg',
+      }),
+    );
   }
 
   /** Genera la miniatura desde los bytes ya disponibles. Nunca lanza: una falla solo se registra. */
-  public async generarMiniaturaDesdeBuffer(key: string, original: Buffer): Promise<void> {
+  public async generarMiniaturaDesdeBuffer(
+    key: string,
+    original: Buffer,
+  ): Promise<void> {
     try {
-      if (!StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/')) return;
+      if (!StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/'))
+        return;
       await this.escribirMiniatura(key, original);
     } catch (error: unknown) {
-      this.logger.warn(`No se pudo generar la miniatura de ${key}: ${error instanceof Error ? error.message : error}`);
+      this.logger.warn(
+        `No se pudo generar la miniatura de ${key}: ${error instanceof Error ? error.message : error}`,
+      );
     }
   }
 
   /** Clave de la vista media (1600 px): `view/<clave-original>.jpg`. */
   public viewKeyFor(key: string): string {
-    return `view/${String(key).replace(/^[/\\]+/, '').replace(/\.[^./]+$/, '')}.jpg`;
+    return `view/${String(key)
+      .replace(/^[/\\]+/, '')
+      .replace(/\.[^./]+$/, '')}.jpg`;
   }
 
   private static readonly VIEW_SIDE = 1600;
@@ -661,22 +895,32 @@ export class StorageService implements OnModuleInit {
    * Vista media para el visor: la foto original de un celular o cámara puede pesar varios MB y tardar en
    * abrirse y moverse. Si el original ya es liviano no se genera y el visor usa el original.
    */
-  private async escribirVistaMedia(key: string, original: Buffer): Promise<void> {
+  private async escribirVistaMedia(
+    key: string,
+    original: Buffer,
+  ): Promise<void> {
     const meta = await sharp(original, { failOn: 'none' }).metadata();
     const lado = Math.max(meta.width || 0, meta.height || 0);
     if (lado <= StorageService.VIEW_SIDE && original.length < 700_000) return;
     const vista = await sharp(original, { failOn: 'none' })
       .rotate()
-      .resize({ width: StorageService.VIEW_SIDE, height: StorageService.VIEW_SIDE, fit: 'inside', withoutEnlargement: true })
+      .resize({
+        width: StorageService.VIEW_SIDE,
+        height: StorageService.VIEW_SIDE,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
       .jpeg({ quality: 80, mozjpeg: true })
       .toBuffer();
     await this.ensureBucketRegion();
-    await this.s3Client.send(new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: this.viewKeyFor(key),
-      Body: vista,
-      ContentType: 'image/jpeg',
-    }));
+    await this.s3Client.send(
+      new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: this.viewKeyFor(key),
+        Body: vista,
+        ContentType: 'image/jpeg',
+      }),
+    );
   }
 
   /**
@@ -686,16 +930,26 @@ export class StorageService implements OnModuleInit {
   public async generarVariantes(fileUrl: string): Promise<void> {
     try {
       const key = this.keyFromUrl(fileUrl);
-      if (!key || !StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/') || key.startsWith('view/')) return;
+      if (
+        !key ||
+        !StorageService.IMAGE_KEY.test(key) ||
+        key.startsWith('thumbs/') ||
+        key.startsWith('view/')
+      )
+        return;
       await this.ensureBucketRegion();
-      const object = await this.s3Client.send(new GetObjectCommand({ Bucket: this.bucketName, Key: key }));
+      const object = await this.s3Client.send(
+        new GetObjectCommand({ Bucket: this.bucketName, Key: key }),
+      );
       const bytes = await object.Body?.transformToByteArray();
       if (!bytes) return;
       const original = Buffer.from(bytes);
       await this.escribirMiniatura(key, original);
       await this.escribirVistaMedia(key, original);
     } catch (error: unknown) {
-      this.logger.warn(`No se pudieron generar las variantes de ${fileUrl}: ${error instanceof Error ? error.message : error}`);
+      this.logger.warn(
+        `No se pudieron generar las variantes de ${fileUrl}: ${error instanceof Error ? error.message : error}`,
+      );
     }
   }
 
@@ -705,20 +959,29 @@ export class StorageService implements OnModuleInit {
       const prefix = this.publicUrlPrefix.replace(/\/$/, '');
       const url = String(fileUrl || '').trim();
       if (!prefix || !url.startsWith(`${prefix}/`)) return;
-      const key = decodeURIComponent(url.slice(prefix.length + 1).split('?')[0]);
-      if (!StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/')) return;
+      const key = decodeURIComponent(
+        url.slice(prefix.length + 1).split('?')[0],
+      );
+      if (!StorageService.IMAGE_KEY.test(key) || key.startsWith('thumbs/'))
+        return;
 
       await this.ensureBucketRegion();
-      const object = await this.s3Client.send(new GetObjectCommand({ Bucket: this.bucketName, Key: key }));
+      const object = await this.s3Client.send(
+        new GetObjectCommand({ Bucket: this.bucketName, Key: key }),
+      );
       const bytes = await object.Body?.transformToByteArray();
       if (!bytes) return;
       await this.escribirMiniatura(key, Buffer.from(bytes));
     } catch (error: unknown) {
-      this.logger.warn(`No se pudo generar la miniatura de ${fileUrl}: ${error instanceof Error ? error.message : error}`);
+      this.logger.warn(
+        `No se pudo generar la miniatura de ${fileUrl}: ${error instanceof Error ? error.message : error}`,
+      );
     }
   }
 
-  public getBucketName(): string { return this.bucketName; }
+  public getBucketName(): string {
+    return this.bucketName;
+  }
 
   public isManagedPublicUrl(rawUrl: string): boolean {
     const url = String(rawUrl || '').trim();
@@ -733,26 +996,43 @@ export class StorageService implements OnModuleInit {
   public async deleteUserProfileImages(userId?: string): Promise<void> {
     const prefix = `usuarios/${this.profileUserId(userId)}/perfil/`;
     try {
-      const listed = await this.s3Client.send(new ListObjectsV2Command({
-        Bucket: this.bucketName,
-        Prefix: prefix,
-      }));
+      const listed = await this.s3Client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucketName,
+          Prefix: prefix,
+        }),
+      );
       const objects = (listed.Contents || [])
         .map((item) => item.Key)
         .filter((key): key is string => Boolean(key));
       if (!objects.length) return;
 
-      await this.s3Client.send(new DeleteObjectsCommand({
-        Bucket: this.bucketName,
-        Delete: { Objects: objects.map((Key) => ({ Key })), Quiet: true },
-      }));
-      this.logger.log(`Avatar anterior eliminado: ${prefix} (${objects.length})`);
+      await this.s3Client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucketName,
+          Delete: { Objects: objects.map((Key) => ({ Key })), Quiet: true },
+        }),
+      );
+      this.logger.log(
+        `Avatar anterior eliminado: ${prefix} (${objects.length})`,
+      );
     } catch (error) {
-      this.logger.warn(`No se pudieron eliminar avatares previos en ${prefix}`, error as Error);
+      this.logger.warn(
+        `No se pudieron eliminar avatares previos en ${prefix}`,
+        error as Error,
+      );
     }
   }
 
-  private ticketResponse(dto: GenerateUploadTicketDto, key: string, uploadUrl: string, publicUrl: string, contentType: string, expiresInSeconds: number, extraHeaders: Record<string, string> = {}): UploadTicketResponse {
+  private ticketResponse(
+    dto: GenerateUploadTicketDto,
+    key: string,
+    uploadUrl: string,
+    publicUrl: string,
+    contentType: string,
+    expiresInSeconds: number,
+    extraHeaders: Record<string, string> = {},
+  ): UploadTicketResponse {
     return {
       ticketId: `tkt_s3_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
       clientUuid: dto.clientUuid,
@@ -767,8 +1047,14 @@ export class StorageService implements OnModuleInit {
   }
 
   private profileUserId(value?: string): string {
-    const raw = String(value || '').trim().toLowerCase();
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    const raw = String(value || '')
+      .trim()
+      .toLowerCase();
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        raw,
+      )
+    ) {
       return raw;
     }
     return this.safeSegment(raw, 'usuario');
@@ -778,52 +1064,109 @@ export class StorageService implements OnModuleInit {
    * ¿La carpeta de agencia de una llave (`agencias/<segmento>/…`) está dentro del alcance del usuario? El segmento es el nombre de la
    * agencia. País: cualquiera; región: las agencias de su región; agencia: la suya.
    */
-  public async agenciaSegmentoEnAlcance(user: any, segmento: string): Promise<boolean> {
+  public async agenciaSegmentoEnAlcance(
+    user: any,
+    segmento: string,
+  ): Promise<boolean> {
     const alcance = resolverAlcance(user);
     if (alcance.tipo === 'GLOBAL') return true;
     if (!this.prisma) return false;
     const agencias = await this.prisma.agencia.findMany({
-      where: alcance.tipo === 'REGION' ? { regionId: alcance.regionId } : alcance.tipo === 'AGENCIA' ? { id: alcance.agenciaId } : { id: { in: [] } },
+      where:
+        alcance.tipo === 'REGION'
+          ? { regionId: alcance.regionId }
+          : alcance.tipo === 'AGENCIA'
+            ? { id: alcance.agenciaId }
+            : { id: { in: [] } },
       select: { id: true, nombre: true },
     });
     const buscado = String(segmento || '').toLowerCase();
-    return agencias.some((a) => a.id.toLowerCase() === buscado || this.safeSegment(a.nombre, 'agencia-general').toLowerCase() === buscado);
+    return agencias.some(
+      (a) =>
+        a.id.toLowerCase() === buscado ||
+        this.safeSegment(a.nombre, 'agencia-general').toLowerCase() === buscado,
+    );
   }
 
   private safeSegment(value: string | undefined, fallback: string): string {
-    const normalized = String(value || fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    const normalized = String(value || fallback)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
     return normalized || fallback;
   }
 
   private defaultCategory(type: MediaEvidenceType): StorageCategory {
     if (type === 'FOTO_PERFIL') return 'PERFIL_USUARIO';
-    if (type === 'IMAGEN_PRODUCTO' || type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO') return 'CATALOGO_INSUMOS';
-    if (type === 'VIDEO_PAUSA' || type === 'VIDEO_REANUDAR') return 'SERVICIOS_ESPECIALES';
+    if (
+      type === 'IMAGEN_PRODUCTO' ||
+      type === 'FOTO_AJUSTE_INVENTARIO' ||
+      type === 'FOTO_INGRESO_INVENTARIO'
+    )
+      return 'CATALOGO_INSUMOS';
+    if (type === 'VIDEO_PAUSA' || type === 'VIDEO_REANUDAR')
+      return 'SERVICIOS_ESPECIALES';
     if (type === 'FOTO_MAQUINA') return 'MAQUINARIA_IMAGEN';
     if (type === 'FOTO_LIMPIEZA') return 'MAQUINARIA_LIMPIEZA';
-    if (type === 'FICHA_TECNICA' || type === 'DOCUMENTO') return 'MAQUINARIA_FICHA';
-    if (type === 'FOTO_INCIDENTE' || type === 'VIDEO_INCIDENTE' || type === 'DOCUMENTO_INCIDENTE') return 'MAQUINARIA_INCIDENTE';
+    if (type === 'FICHA_TECNICA' || type === 'DOCUMENTO')
+      return 'MAQUINARIA_FICHA';
+    if (
+      type === 'FOTO_INCIDENTE' ||
+      type === 'VIDEO_INCIDENTE' ||
+      type === 'DOCUMENTO_INCIDENTE'
+    )
+      return 'MAQUINARIA_INCIDENTE';
     if (type === 'PDF_CIERRE') return 'DOCUMENTO';
     return 'SERVICIOS_GENERALES';
   }
 
-  private assertCategorySupportsType(category: StorageCategory, type: MediaEvidenceType): void {
+  private assertCategorySupportsType(
+    category: StorageCategory,
+    type: MediaEvidenceType,
+  ): void {
     if (category === 'PERFIL_USUARIO' && type === 'FOTO_PERFIL') return;
-    if (category === 'CATALOGO_INSUMOS' && (type === 'IMAGEN_PRODUCTO' || type === 'FOTO_AJUSTE_INVENTARIO' || type === 'FOTO_INGRESO_INVENTARIO')) return;
+    if (
+      category === 'CATALOGO_INSUMOS' &&
+      (type === 'IMAGEN_PRODUCTO' ||
+        type === 'FOTO_AJUSTE_INVENTARIO' ||
+        type === 'FOTO_INGRESO_INVENTARIO')
+    )
+      return;
     if (category === 'MAQUINARIA_IMAGEN' && type === 'FOTO_MAQUINA') return;
-    if (category === 'MAQUINARIA_MANTENIMIENTO' && (type === 'FOTO_INCIDENTE' || type === 'DOCUMENTO' || type === 'FICHA_TECNICA' || type === 'VIDEO_INCIDENTE')) return;
+    if (
+      category === 'MAQUINARIA_MANTENIMIENTO' &&
+      (type === 'FOTO_INCIDENTE' ||
+        type === 'DOCUMENTO' ||
+        type === 'FICHA_TECNICA' ||
+        type === 'VIDEO_INCIDENTE')
+    )
+      return;
     if (category === 'MAQUINARIA_LIMPIEZA' && type === 'FOTO_LIMPIEZA') return;
     const serviceTypes = new Set<MediaEvidenceType>([
-      'FOTO_INGRESO', 'FOTO_SALIDA', 'FOTO_DANO_PREVIO', 'FOTO_PROCESO',
-      'VIDEO_INSPECCION', 'VIDEO_INICIAL', 'VIDEO_FINAL', 'VIDEO_PAUSA', 'VIDEO_REANUDAR',
+      'FOTO_INGRESO',
+      'FOTO_SALIDA',
+      'FOTO_DANO_PREVIO',
+      'FOTO_PROCESO',
+      'VIDEO_INSPECCION',
+      'VIDEO_INICIAL',
+      'VIDEO_FINAL',
+      'VIDEO_PAUSA',
+      'VIDEO_REANUDAR',
     ]);
-    const valid = category === 'SERVICIOS_GENERALES' || category === 'SERVICIOS_ESPECIALES'
-      ? serviceTypes.has(type)
-      : category === 'MAQUINARIA_FICHA'
-        ? type === 'FICHA_TECNICA' || type === 'DOCUMENTO'
-        : category === 'MAQUINARIA_INCIDENTE'
-          ? type === 'FOTO_INCIDENTE' || type === 'VIDEO_INCIDENTE' || type === 'DOCUMENTO_INCIDENTE'
-          : category === 'DOCUMENTO' && type === 'PDF_CIERRE';
-    if (!valid) throw new BadRequestException(`El tipo ${type} no corresponde a la categoría ${category}.`);
+    const valid =
+      category === 'SERVICIOS_GENERALES' || category === 'SERVICIOS_ESPECIALES'
+        ? serviceTypes.has(type)
+        : category === 'MAQUINARIA_FICHA'
+          ? type === 'FICHA_TECNICA' || type === 'DOCUMENTO'
+          : category === 'MAQUINARIA_INCIDENTE'
+            ? type === 'FOTO_INCIDENTE' ||
+              type === 'VIDEO_INCIDENTE' ||
+              type === 'DOCUMENTO_INCIDENTE'
+            : category === 'DOCUMENTO' && type === 'PDF_CIERRE';
+    if (!valid)
+      throw new BadRequestException(
+        `El tipo ${type} no corresponde a la categoría ${category}.`,
+      );
   }
 }

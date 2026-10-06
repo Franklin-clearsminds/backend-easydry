@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RolesService } from './roles.service.js';
 import { ROLES_BASE } from '../../common/permisos/roles-base.js';
+import { modulosDeCapacidades } from '../../common/permisos/modulos-navegacion.js';
 
 const superAdmin = { id: 'sa', roleId: 'r-sa', roleDetails: { namerol: 'SUPER_ADMIN', capacidades: [], ambito: 'GLOBAL' } };
 const admin = (() => {
@@ -24,11 +25,12 @@ function armar(rol: any = null, usuarios = 0) {
     moduloSistema: { findMany: vi.fn().mockImplementation(async (a: any) => (a.where?.codigo?.in ?? []).filter((c: string) => c !== 'inexistente').map((codigo: string) => ({ codigo }))) },
   };
   if (rol) rol._count = { users: usuarios };
-  return { prisma, service: new RolesService(prisma as never) };
+  const notifications = { notificarCambioPermisosRol: vi.fn().mockResolvedValue(undefined) };
+  return { prisma, notifications, service: new RolesService(prisma as never, notifications as never) };
 }
 const oficial = (namerol: string) => {
   const r = ROLES_BASE.find((x) => x.namerol === namerol)!;
-  return { id: `r-${namerol}`, namerol, esSistema: true, permisos: r.modulos, capacidades: r.capacidades, ambito: r.ambito, estado: 1 };
+  return { id: `r-${namerol}`, namerol, esSistema: true, permisos: modulosDeCapacidades(r.capacidades, namerol), capacidades: r.capacidades, ambito: r.ambito, estado: 1 };
 };
 
 describe('RolesService — crear', () => {
@@ -43,10 +45,15 @@ describe('RolesService — crear', () => {
     expect(r.ambito).toBe('REGION');
   });
 
-  it('rechaza permisos que no existen, módulos desconocidos y ámbito inválido', async () => {
+  it('las pantallas del rol nuevo salen de sus permisos, no de lo que mande el cliente', async () => {
+    const { prisma, service } = armar();
+    await service.create({ namerol: 'ROL_X', capacidades: ['inventario.ver'], permisos: ['usuarios'] } as any, superAdmin);
+    expect(prisma.role.create.mock.calls[0][0].data.permisos).toEqual(['notificaciones', 'inventario', 'perfil']);
+  });
+
+  it('rechaza permisos que no existen y ámbito inválido', async () => {
     const { service } = armar();
     await expect(service.create({ namerol: 'ROL_X', capacidades: ['inventado.todo'] } as any, superAdmin)).rejects.toThrow(/Permisos desconocidos/);
-    await expect(service.create({ namerol: 'ROL_X', permisos: ['inexistente'] } as any, superAdmin)).rejects.toThrow(/Módulos desconocidos/);
     await expect(service.create({ namerol: 'ROL_X', ambito: 'MUNDIAL' } as any, superAdmin)).rejects.toThrow(/Ámbito inválido/);
   });
 
@@ -76,12 +83,46 @@ describe('RolesService — editar', () => {
   });
 
   it('un rol oficial puede cambiar de permisos pero no de nombre', async () => {
-    const { prisma, service } = armar(oficial('LIDER'));
+    const { prisma, service, notifications } = armar(oficial('LIDER'));
     await expect(service.update({ id: 'r-LIDER', namerol: 'OTRO_NOMBRE' } as any, superAdmin)).rejects.toThrow(/rol oficial/);
     await service.update({ id: 'r-LIDER', capacidades: ['servicios.ver'] } as any, superAdmin);
     const data = prisma.role.update.mock.calls[0][0].data;
     expect(data.capacidades).toEqual(['servicios.ver']);
     expect(data.acciones.registrarServicio).toBe(false);
+    expect(notifications.notificarCambioPermisosRol).toHaveBeenCalledWith({
+      roleId: 'r-LIDER',
+      roleName: 'LIDER',
+      actorName: undefined,
+    });
+  });
+
+  it('notifica solo cuando cambia la configuración efectiva de permisos', async () => {
+    const { notifications, service } = armar(oficial('LIDER'));
+    await service.update({ id: 'r-LIDER', capacidades: [...oficial('LIDER').capacidades] } as any, superAdmin);
+    expect(notifications.notificarCambioPermisosRol).not.toHaveBeenCalled();
+
+    const actor = { ...superAdmin, name: 'Administradora' };
+    const { notifications: avisos, service: otro } = armar(oficial('LIDER'));
+    await otro.update({ id: 'r-LIDER', capacidades: ['servicios.ver'] } as any, actor);
+    expect(avisos.notificarCambioPermisosRol).toHaveBeenCalledWith({
+      roleId: 'r-LIDER',
+      roleName: 'LIDER',
+      actorName: 'Administradora',
+    });
+  });
+
+  it('dar un permiso habilita su pantalla: coordinador de mantenimiento con inventario.ver ve Inventario', async () => {
+    const { prisma, service } = armar(oficial('COORD_MANTENIMIENTO'));
+    const capacidades = [...oficial('COORD_MANTENIMIENTO').capacidades, 'inventario.ver'];
+    const r = await service.update({ id: 'r-COORD_MANTENIMIENTO', capacidades } as any, superAdmin);
+    expect(prisma.role.update.mock.calls[0][0].data.permisos).toContain('inventario');
+    expect(r.permisos).toContain('inventario');
+  });
+
+  it('ignora la lista de pantallas que mande el cliente', async () => {
+    const { prisma, service } = armar(oficial('LIDER'));
+    await service.update({ id: 'r-LIDER', permisos: ['usuarios', 'reportes'] } as any, superAdmin);
+    expect(prisma.role.update.mock.calls[0][0].data.permisos).toBeUndefined();
   });
 
   it('el ámbito de un rol oficial no se puede cambiar: es una invariante, no una preferencia', async () => {
@@ -91,6 +132,21 @@ describe('RolesService — editar', () => {
     expect(prisma.role.update).not.toHaveBeenCalled();
     // Pedir el mismo ámbito que ya tiene no es "cambiarlo": no debe romper el resto del update.
     await expect(service.update({ id: 'r-TECNICO', ambito: 'REGION', capacidades: ['maquinaria.ver'] } as any, superAdmin)).resolves.toBeDefined();
+  });
+
+  it('el Super Admin puede cambiar el ámbito de BACKUP entre agencia y región', async () => {
+    const { prisma, service } = armar(oficial('BACKUP'));
+    await service.update({ id: 'r-BACKUP', ambito: 'REGION' } as any, superAdmin);
+    expect(prisma.role.update.mock.calls[0][0].data.ambito).toBe('REGION');
+  });
+
+  it('solo Super Admin puede cambiar el ámbito de BACKUP y no se permite GLOBAL ni PROPIO', async () => {
+    const backup = { ...oficial('BACKUP'), capacidades: ['servicios.ver'] };
+    const { prisma, service } = armar(backup);
+    await expect(service.update({ id: 'r-BACKUP', ambito: 'REGION' } as any, supervisor)).rejects.toThrow(/Solo el Super Administrador/);
+    await expect(service.update({ id: 'r-BACKUP', ambito: 'GLOBAL' } as any, superAdmin)).rejects.toThrow(/solo puede ser AGENCIA o REGION/);
+    await expect(service.update({ id: 'r-BACKUP', ambito: 'PROPIO' } as any, superAdmin)).rejects.toThrow(/solo puede ser AGENCIA o REGION/);
+    expect(prisma.role.update).not.toHaveBeenCalled();
   });
 
   it('un rol NO oficial sí puede cambiar de ámbito libremente (para SUPER_ADMIN)', async () => {

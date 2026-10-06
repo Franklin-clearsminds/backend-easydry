@@ -11,20 +11,33 @@ import { AMBITOS, CATALOGO_PERMISOS, ROL_SUPER_ADMIN, esAmbito, esCodigoPermiso 
 import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { ambitoDeUsuario, tienePermiso } from '../../common/permisos/capacidades.js';
 import { accionesLegacy } from '../../common/permisos/acciones-legacy.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
+import { MODULOS_NAVEGACION, PERMISOS_POR_MODULO, modulosDeCapacidades, modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 
 /** Qué tan amplio es un ámbito: un rol no puede darle a otro más alcance del que él mismo tiene. */
 const AMPLITUD: Record<string, number> = { GLOBAL: 3, REGION: 2, AGENCIA: 1, PROPIO: 0 };
 
 const NOMBRE_VALIDO = /^[A-Z][A-Z0-9_]{2,39}$/;
 
+function listasIguales(a: unknown, b: unknown): boolean {
+  if (!Array.isArray(a) || !Array.isArray(b)) return a === b;
+  return [...a].sort().join('\0') === [...b].sort().join('\0');
+}
+
 @Injectable()
 export class RolesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationsService,
+  ) {}
 
-  /** Catálogo de módulos de navegación (tabla modulos_sistema) y de permisos que exige el backend. */
+  /**
+   * Catálogo de pantallas (tabla modulos_sistema) y de permisos que exige el backend. Cada pantalla trae los permisos
+   * que la habilitan (`permisos`, vacío = la ve todo rol con algún permiso): el editor de roles ya no las marca aparte.
+   */
   async getAvailablePermissions() {
     const modulos = await this.prisma.moduloSistema.findMany({
-      where: { estado: 1 },
+      where: { estado: 1, codigo: { in: [...MODULOS_NAVEGACION] } },
       orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
     });
 
@@ -37,6 +50,8 @@ export class RolesService {
       rutaPrincipal: m.rutaPrincipal || undefined,
       grupo: m.grupo,
       orden: m.orden,
+      disponibleEnApp: m.disponibleEnApp,
+      permisos: [...(PERMISOS_POR_MODULO[m.codigo] ?? [])],
     }));
 
     return {
@@ -67,6 +82,7 @@ export class RolesService {
       grupo: m.grupo,
       orden: m.orden,
       estado: m.estado,
+      disponibleEnApp: m.disponibleEnApp,
     }));
   }
 
@@ -76,7 +92,7 @@ export class RolesService {
       namerol: role.namerol,
       descripcion: role.descripcion || '',
       estado: role.estado,
-      permisos: Array.isArray(role.permisos) ? role.permisos : [],
+      permisos: modulosDeRol(role),
       capacidades: Array.isArray(role.capacidades) ? role.capacidades : [],
       ambito: role.ambito ?? 'AGENCIA',
       esSistema: !!role.esSistema,
@@ -141,16 +157,6 @@ export class RolesService {
   // Validaciones compartidas
   // ---------------------------------------------------------------------------
 
-  private async validarModulos(codigos: string[]): Promise<string[]> {
-    const unicos = Array.from(new Set(codigos));
-    if (!unicos.length) return [];
-    const existentes = await this.prisma.moduloSistema.findMany({ where: { codigo: { in: unicos } }, select: { codigo: true } });
-    const validos = new Set(existentes.map((m) => m.codigo));
-    const desconocidos = unicos.filter((c) => !validos.has(c));
-    if (desconocidos.length) throw new BadRequestException(`Módulos desconocidos: ${desconocidos.join(', ')}`);
-    return unicos;
-  }
-
   private validarCapacidades(codigos: string[]): string[] {
     const unicos = Array.from(new Set(codigos));
     const desconocidos = unicos.filter((c) => !esCodigoPermiso(c));
@@ -212,14 +218,13 @@ export class RolesService {
     const ambito = createDto.ambito ?? 'AGENCIA';
     if (!esAmbito(ambito)) throw new BadRequestException('Ámbito inválido.');
     this.asegurarNoEscalar(actor, capacidades, ambito);
-    const permisos = await this.validarModulos(createDto.permisos ?? []);
 
     const newRole = await this.prisma.role.create({
       data: {
         namerol,
         descripcion: createDto.descripcion?.trim() || null,
         estado: createDto.estado !== undefined ? Number(createDto.estado) : 1,
-        permisos,
+        permisos: modulosDeCapacidades(capacidades, namerol),
         capacidades,
         ambito,
         acciones: accionesLegacy(capacidades, ambito) as unknown as Prisma.InputJsonValue,
@@ -231,7 +236,7 @@ export class RolesService {
   }
 
   async update(updateDto: UpdateRoleDto, actor: any) {
-    const { id, namerol, descripcion, estado, permisos, capacidades, ambito } = updateDto;
+    const { id, namerol, descripcion, estado, capacidades, ambito } = updateDto;
 
     const role = await this.prisma.role.findUnique({ where: { id } });
     if (!role) {
@@ -266,18 +271,26 @@ export class RolesService {
       dataToUpdate.estado = Number(estado);
     }
 
-    if (permisos !== undefined) {
-      dataToUpdate.permisos = await this.validarModulos(permisos);
-    }
-
     let capacidadesNuevas: string[] | undefined;
     if (capacidades !== undefined) {
       capacidadesNuevas = this.validarCapacidades(capacidades);
       dataToUpdate.capacidades = capacidadesNuevas;
+      // Las pantallas salen de los permisos; se guardan derivadas solo como referencia.
+      dataToUpdate.permisos = modulosDeCapacidades(capacidadesNuevas, role.namerol);
     }
     if (ambito !== undefined) {
       if (!esAmbito(ambito)) throw new BadRequestException('Ámbito inválido.');
-      if (role.esSistema && ambito !== role.ambito) {
+      if (role.namerol === 'BACKUP' && ambito !== 'AGENCIA' && ambito !== 'REGION') {
+        throw new BadRequestException('El ámbito de BACKUP solo puede ser AGENCIA o REGION.');
+      }
+      if (role.namerol === 'BACKUP' && ambito !== role.ambito && rolDeUsuario(actor) !== ROL_SUPER_ADMIN) {
+        throw new ForbiddenException('Solo el Super Administrador puede cambiar el ámbito del rol BACKUP.');
+      }
+      const esCambioDeAmbitoBackup =
+        role.namerol === 'BACKUP' &&
+        rolDeUsuario(actor) === ROL_SUPER_ADMIN &&
+        (ambito === 'AGENCIA' || ambito === 'REGION');
+      if (role.esSistema && ambito !== role.ambito && !esCambioDeAmbitoBackup) {
         throw new ForbiddenException('El ámbito de un rol oficial no se puede cambiar: el sistema depende de él (define qué región, agencia o registros propios puede ver y asignar cada usuario con ese rol).');
       }
       dataToUpdate.ambito = ambito;
@@ -298,6 +311,17 @@ export class RolesService {
       data: dataToUpdate,
       include: { _count: { select: { users: true } } },
     });
+
+    const cambioPermisos =
+      (dataToUpdate.capacidades !== undefined && !listasIguales(role.capacidades, dataToUpdate.capacidades)) ||
+      (dataToUpdate.ambito !== undefined && dataToUpdate.ambito !== role.ambito);
+    if (cambioPermisos) {
+      await this.notifications.notificarCambioPermisosRol({
+        roleId: updated.id,
+        roleName: updated.namerol,
+        actorName: actor?.nombre || actor?.name,
+      });
+    }
 
     return this.mapRoleResponse(updated);
   }
