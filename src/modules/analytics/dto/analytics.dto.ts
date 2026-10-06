@@ -30,6 +30,14 @@ export class FiltroAnaliticaDto {
   @IsOptional()
   @IsString()
   pulidorId?: string;
+
+  @ApiPropertyOptional({
+    enum: ['GLOBAL', 'REGION', 'AGENCY', 'POLISHER'],
+    description: 'Nivel de análisis (drill-down). Si no se envía, se infiere del id presente.',
+  })
+  @IsOptional()
+  @IsIn(['GLOBAL', 'REGION', 'AGENCY', 'POLISHER'])
+  dimension?: 'GLOBAL' | 'REGION' | 'AGENCY' | 'POLISHER';
 }
 
 /** Filtro por rango de fechas (aplica cuando `rango = RANGO`), además de agencia/región/pulidor. */

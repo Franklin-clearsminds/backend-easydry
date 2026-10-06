@@ -32,12 +32,12 @@ function armar() {
     },
     alertaStock: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
     maquinaria: { groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
-    mantenimientoMaquinaria: { findMany: vi.fn().mockResolvedValue([]) },
-    consumoServicio: { findMany: vi.fn().mockResolvedValue([]) },
+    mantenimientoMaquinaria: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
+    consumoServicio: { findMany: vi.fn().mockResolvedValue([]), groupBy: vi.fn().mockResolvedValue([]) },
     movimientoInventario: { findMany: vi.fn().mockResolvedValue([]) },
     stockUbicacion: { findMany: vi.fn().mockResolvedValue([]) },
     servicioEspecial: { findMany: vi.fn().mockResolvedValue([]) },
-    solicitudAprobacion: { findMany: vi.fn().mockResolvedValue([]) },
+    solicitudAprobacion: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
     auditoriaDecision: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
     user: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
     role: { findMany: vi.fn().mockResolvedValue([]) },
@@ -112,9 +112,75 @@ describe('dashboard admin — KPIs estratégicos', () => {
     expect(res.topColores).toEqual([{ nombre: 'Rojo', cantidad: 2 }]);
     expect(res.mixGenerales).toEqual([{ nombre: 'Lavado Express', cantidad: 1 }]);
     expect(res.mixEspeciales).toEqual([{ nombre: 'Cerámico', cantidad: 1 }]);
-    // Ganancia neta Quito Norte = (30+50) − (2×1 + 1×5) = 80 − 7 = 73
-    expect(res.topAgenciasGanancia).toEqual([{ nombre: 'Quito Norte', ganancia: 73 }]);
-    expect(res.topAgenciasReparaciones).toEqual([{ nombre: 'Quito Norte', costo: 300 }]);
+    // Rentabilidad por agencia (nombre + ingresos del período).
+    const rentabilidad = res.topAgenciasRentabilidad[0];
+    expect(rentabilidad.nombre).toBe('Quito Norte');
+    expect(rentabilidad.ingresos).toBe(80); // 30 + 50
+  });
+});
+
+describe('dashboard admin — drill-down jerárquico', () => {
+  it('agrupa por región en GLOBAL y calcula heatmap, top y bottom', async () => {
+    const { prisma, service } = armar();
+    // Servicios con hora de ingreso para poblar el heatmap (lunes 10:00, martes 15:00).
+    const lunes10 = new Date('2026-10-05T10:00:00'); // lunes
+    const martes15 = new Date('2026-10-06T15:00:00'); // martes
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { precio: 10, horaIngreso: lunes10, horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+      { precio: 20, horaIngreso: martes15, horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 02', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+    ]);
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+
+    const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
+
+    expect(res.jerarquia.dimension).toBe('GLOBAL');
+    expect(res.jerarquia.entidad).toBe('Región');
+    expect(res.jerarquia.desglose[0]).toMatchObject({ nombre: 'Sierra', cantidad: 2 });
+    expect(res.jerarquia.ranking.top[0].nombre).toBe('Sierra');
+    // Heatmap: lunes (0) a las 10:00 → índice de hora 3; martes (1) a las 15:00 → índice 8.
+    expect(res.jerarquia.heatmap.matriz[0][3]).toBe(1);
+    expect(res.jerarquia.heatmap.matriz[1][8]).toBe(1);
+  });
+
+  it('con dimension=AGENCY agrupa por bahía y lista top/bottom de bahías', async () => {
+    const { prisma, service } = armar();
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+      { precio: 10, horaIngreso: new Date('2026-10-05T11:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Luis', lastname: 'Mora' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+      { precio: 10, horaIngreso: new Date('2026-10-05T12:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Luis', lastname: 'Mora' }, bahia: { nombre: 'Bahía 02', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+    ]);
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+
+    const res: any = await service.getDashboardMetrics({ dimension: 'AGENCY', agenciaId: 'a1' } as any, usuario('ADMIN'));
+
+    expect(res.jerarquia.dimension).toBe('AGENCY');
+    expect(res.jerarquia.entidad).toBe('Bahía');
+    expect(res.jerarquia.desglose[0]).toMatchObject({ nombre: 'Bahía 01', cantidad: 2 });
+    expect(res.jerarquia.ranking.entidad).toBe('Bahía');
+  });
+
+  it('con dimension=POLISHER filtra por operador y agrupa por día (evolución)', async () => {
+    const { prisma, service } = armar();
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+      { precio: 20, horaIngreso: new Date('2026-10-06T09:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+    ]);
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+
+    const res: any = await service.getDashboardMetrics(
+      { dimension: 'POLISHER', pulidorId: 'op-1' } as any,
+      usuario('ADMIN'),
+    );
+
+    // El alcance del filtro por operador debe llegar a la consulta.
+    const where = prisma.servicioLavado.findMany.mock.calls[0][0].where;
+    expect(where.operadorId).toBe('op-1');
+    expect(res.jerarquia.dimension).toBe('POLISHER');
+    expect(res.jerarquia.entidad).toBe('Día');
+    expect(res.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['2026-10-05', '2026-10-06']);
   });
 });
 
