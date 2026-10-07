@@ -32,6 +32,22 @@ export class FiltroAnaliticaDto {
   pulidorId?: string;
 
   @ApiPropertyOptional({
+    enum: ['GENERAL', 'ESPECIAL'],
+    description: 'Tipo de servicio del catálogo: lavados generales o especiales. Es un modificador continuo, se combina con los demás filtros.',
+  })
+  @IsOptional()
+  @IsIn(['GENERAL', 'ESPECIAL'])
+  categoriaServicio?: 'GENERAL' | 'ESPECIAL';
+
+  @ApiPropertyOptional({
+    enum: ['REGION', 'AGENCY', 'POLISHER'],
+    description: 'Nivel de desglose explícito del gráfico de rendimiento (nivel país), independiente del filtro estructural.',
+  })
+  @IsOptional()
+  @IsIn(['REGION', 'AGENCY', 'POLISHER'])
+  desglose?: 'REGION' | 'AGENCY' | 'POLISHER';
+
+  @ApiPropertyOptional({
     enum: ['GLOBAL', 'REGION', 'AGENCY', 'POLISHER'],
     description: 'Nivel de análisis (drill-down). Si no se envía, se infiere del id presente.',
   })
