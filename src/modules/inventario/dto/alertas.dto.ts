@@ -64,6 +64,11 @@ export class ListAlertasDto extends PaginacionOpcionalDto {
   @IsString()
   agenciaId?: string;
 
+  @ApiPropertyOptional({ description: 'Filtrar por pulidor (alertas de su kit)' })
+  @IsOptional()
+  @IsString()
+  pulidorId?: string;
+
   @ApiPropertyOptional({ enum: ['CRITICO', 'BAJO'], description: 'Grupo de nivel: CRITICO incluye crítico y agotado; BAJO, bajo mínimo' })
   @IsOptional()
   @IsIn(['CRITICO', 'BAJO'])

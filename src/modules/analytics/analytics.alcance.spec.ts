@@ -95,7 +95,11 @@ describe('dashboard admin — KPIs estratégicos', () => {
       { precio: 30, marca: 'Toyota', modelo: 'Corolla', color: 'Rojo', horaInicio: null, horaSalida: null, catalogo: { nombre: 'Lavado Express', categoria: 'GENERAL' }, bahia: { nombre: 'Bahía 01', agencia: { nombre: 'Quito Norte', region: 'Sierra' } }, consumos: [{ cantidadUsada: 2, insumo: { costoUnitarioUSD: 1 } }] },
       { precio: 50, marca: 'Toyota', modelo: 'Hilux', color: 'Rojo', horaInicio: null, horaSalida: null, catalogo: { nombre: 'Cerámico', categoria: 'ESPECIAL' }, bahia: { nombre: 'Bahía 02', agencia: { nombre: 'Quito Norte', region: 'Sierra' } }, consumos: [{ cantidadUsada: 1, insumo: { costoUnitarioUSD: 5 } }] },
     ]);
-    prisma.incidenteTecnico.findMany.mockResolvedValue([{ costoTotal: 300, maquinaria: { agencia: { nombre: 'Quito Norte' } } }]);
+    prisma.incidenteTecnico.findMany.mockResolvedValue([
+      { costoTotal: 300, createdAt: new Date(), maquinaria: { agencia: { nombre: 'Quito Norte' } } },
+      // Fuera del periodo: no debe sumar al costo del rango consultado.
+      { costoTotal: 999, createdAt: new Date('2020-01-01T10:00:00'), maquinaria: { agencia: { nombre: 'Quito Norte' } } },
+    ]);
     prisma.stockUbicacion.findMany.mockResolvedValue([{ cantidadActual: 10, insumo: { costoUnitarioUSD: 2 } }]);
     prisma.movimientoInventario.findMany.mockResolvedValue([{ detalles: [{ cantidadEnviada: 5, costoUnitarioUSD: 3 }] }]);
 
@@ -182,6 +186,55 @@ describe('dashboard admin — drill-down jerárquico', () => {
     expect(res.jerarquia.entidad).toBe('Día');
     expect(res.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['2026-10-05', '2026-10-06']);
   });
+
+  it('lista las agencias operativas con menos actividad, incluidas las que no registraron servicios', async () => {
+    const { prisma, service } = armar();
+    prisma.agencia.findMany.mockResolvedValue([{ nombre: 'Quito Norte' }, { nombre: 'Ambato Centro' }]);
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+    ]);
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+
+    const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
+
+    expect(res.jerarquia.bajaActividad.entidad).toBe('Agencia');
+    expect(res.jerarquia.bajaActividad.items).toEqual([
+      { nombre: 'Ambato Centro', cantidad: 0, tiempoPromedioMin: 0 },
+      { nombre: 'Quito Norte', cantidad: 1, tiempoPromedioMin: 0 },
+    ]);
+    // Solo agencias activas y operativas: los talleres y las inactivas no cuentan como "dormidas".
+    expect(prisma.agencia.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ estado: 1, tipoUbicacion: 'OPERATIVA' }) }),
+    );
+  });
+
+  it('la lista de menor actividad respeta la región filtrada', async () => {
+    const { prisma, service } = armar();
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+
+    await service.getDashboardMetrics({ regionId: 'r2' } as any, usuario('SUPER_ADMIN'));
+
+    const whereOperativa = prisma.agencia.findMany.mock.calls.map((c: any) => c[0].where).find((w: any) => w?.tipoUbicacion);
+    expect(whereOperativa).toEqual({ estado: 1, tipoUbicacion: 'OPERATIVA', regionId: 'r2' });
+  });
+
+  it('a nivel de agencia, la menor actividad se calcula por bahía', async () => {
+    const { prisma, service } = armar();
+    prisma.bahia.findMany.mockResolvedValue([{ nombre: 'Bahía 01' }, { nombre: 'Bahía 09' }]);
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
+    ]);
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+
+    const res: any = await service.getDashboardMetrics({ dimension: 'AGENCY', agenciaId: 'a1' } as any, usuario('ADMIN'));
+
+    expect(res.jerarquia.bajaActividad.entidad).toBe('Bahía');
+    expect(res.jerarquia.bajaActividad.items.map((i: any) => [i.nombre, i.cantidad])).toEqual([['Bahía 09', 0], ['Bahía 01', 1]]);
+    expect(prisma.bahia.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { agenciaId: 'a1' } }));
+  });
 });
 
 describe('dashboard aprobador — control', () => {
@@ -206,6 +259,38 @@ describe('dashboard aprobador — control', () => {
     expect(res.isAprobadorView).toBe(true);
     expect(res.kpis.descuentosFueraDeRango).toBe(1);
     expect(res.kpis.anuladasHoy).toBe(2);
+  });
+});
+
+describe('salud de inventario — orden de ubicaciones', () => {
+  /** Posición de stock con umbrales propios; `actual` define el estado resultante. */
+  const posicion = (ubicacion: string, actual: number, minimo = 10, ideal = 40) => ({
+    tipoUbicacion: 'AGENCIA',
+    cantidadActual: actual,
+    cantidadMinima: minimo,
+    agencia: { nombre: ubicacion },
+    insumo: { nombre: 'Shampoo', categoria: 'QUIMICO', costoUnitarioUSD: 2, stockMinimoAgencia: minimo, stockOptimoAgencia: ideal },
+  });
+
+  it('prioriza las ubicaciones con mezcla de severidades y completa con las más agotadas', async () => {
+    const { prisma, service } = armar();
+    prisma.stockUbicacion.findMany.mockResolvedValue([
+      // 100% agotada y con MÁS problemas (4): antes copaba el primer lugar y el gráfico salía de un solo color.
+      posicion('Solo Agotada', 0), posicion('Solo Agotada', 0), posicion('Solo Agotada', 0), posicion('Solo Agotada', 0),
+      // Mezcla (2 críticos + 1 bajo ideal = 3 problemas): es la accionable y debe ir primero.
+      posicion('Con Mezcla', 4), posicion('Con Mezcla', 4), posicion('Con Mezcla', 20),
+      posicion('Otra Agotada', 0),
+    ]);
+
+    const res: any = await service.getDashboardBodega({} as any, usuario('COORD_BODEGA'));
+    const nombres = res.saludPorUbicacion.map((u: any) => u.nombre);
+
+    expect(nombres).toEqual(['Con Mezcla', 'Solo Agotada', 'Otra Agotada']);
+    expect(res.saludPorUbicacion[0]).toEqual({
+      nombre: 'Con Mezcla',
+      AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0, SOBRESTOCK: 0,
+      criticos: 3, problemas: 3,
+    });
   });
 });
 
@@ -289,5 +374,106 @@ describe('dashboards dedicados — alcance y filtros', () => {
       { destinoAgenciaId: { in: [] } },
     ]);
     expect(prisma.stockUbicacion.findMany.mock.calls[0][0].where.OR).toEqual([{ agenciaId: { in: [] } }]);
+  });
+
+  it('filtro por pulidor: acota las OT de Servicios Especiales al operador elegido', async () => {
+    const { prisma, service } = armar();
+    await service.getDashboardEspeciales({ pulidorId: 'op-1' } as any, usuario('COORD_SERVICIOS_ESPECIALES'));
+    // Todas las consultas de la OT llevan el operadorId del pulidor seleccionado.
+    for (const call of prisma.servicioEspecial.findMany.mock.calls) {
+      expect(call[0].where.operadorId).toBe('op-1');
+    }
+    expect(prisma.servicioEspecial.findMany).toHaveBeenCalled();
+  });
+
+  it('filtro por pulidor: la bodega se acota al kit del pulidor', async () => {
+    const { prisma, service } = armar();
+    await service.getDashboardBodega({ pulidorId: 'op-1' } as any, usuario('COORD_BODEGA'));
+    expect(prisma.alertaStock.findMany.mock.calls[0][0].where.pulidorId).toBe('op-1');
+    expect(prisma.movimientoInventario.findMany.mock.calls[0][0].where.destinoPulidorId).toBe('op-1');
+    expect(prisma.stockUbicacion.findMany.mock.calls[0][0].where.pulidorId).toBe('op-1');
+  });
+});
+
+describe('filtros globales — periodo', () => {
+  /** Rango explícito: se compara contra fechas locales, que es como las construye `resolverPeriodo`. */
+  it('los rankings acotan al periodo pedido (antes ignoraban los presets y devolvían el mes completo)', async () => {
+    const { prisma, service } = armar();
+
+    await service.getRankingLavadores({ rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31' } as any, usuario('ADMIN'));
+    const w = prisma.servicioLavado.findMany.mock.calls[0][0].where.horaIngreso;
+    expect(w.gte.getTime()).toBe(new Date(2026, 0, 1).getTime());
+    expect(w.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
+
+    await service.getRankingPulidores({ rango: 'RANGO', fechaDesde: '2026-02-10', fechaHasta: '2026-02-11' } as any, usuario('ADMIN'));
+    const w2 = prisma.servicioLavado.findMany.mock.calls[1][0].where.horaIngreso;
+    expect(w2.gte.getTime()).toBe(new Date(2026, 1, 10).getTime());
+    expect(w2.lte.getTime()).toBe(new Date(2026, 1, 11, 23, 59, 59, 999).getTime());
+  });
+
+  it('sin `rango` se conserva el mes en curso como respaldo', async () => {
+    const { prisma, service } = armar();
+    await service.getRankingLavadores({} as any, usuario('ADMIN'));
+    const w = prisma.servicioLavado.findMany.mock.calls[0][0].where.horaIngreso;
+    expect(w.gte.getDate()).toBe(1);
+    expect(w.gte.getMonth()).toBe(new Date().getMonth());
+  });
+
+  it('el consumo de químicos también respeta el preset del periodo', async () => {
+    const { prisma, service } = armar();
+    prisma.consumoServicio.findMany.mockResolvedValue([]);
+    await service.getConsumoQuimicos({ rango: 'RANGO', fechaDesde: '2026-03-01', fechaHasta: '2026-03-05' } as any, usuario('ADMIN'));
+    const w = prisma.consumoServicio.findMany.mock.calls[0][0].where.createdAt;
+    expect(w.gte.getTime()).toBe(new Date(2026, 2, 1).getTime());
+    expect(w.lte.getTime()).toBe(new Date(2026, 2, 5, 23, 59, 59, 999).getTime());
+  });
+});
+
+describe('dashboard taller — MTTR y periodo', () => {
+  /** Incidente resuelto con una duración exacta en horas. */
+  const incidente = (agencia: string, horas: number, gravedad = 'MEDIA') => {
+    const reporte = new Date('2026-10-01T08:00:00');
+    return {
+      id: `i-${agencia}-${horas}`, titulo: 'Falla', gravedad, estado: 'RESUELTO', costoTotal: 100,
+      fechaReporte: reporte, fechaSolucion: new Date(reporte.getTime() + horas * 3600000), createdAt: reporte,
+      maquinaria: { nombre: 'Hidro', codigo: 'MQ-01', tipo: 'HIDRO', agencia: { nombre: agencia } },
+    };
+  };
+
+  it('calcula el MTTR por agencia (dónde se resuelve lento) con su cantidad de incidentes', async () => {
+    const { prisma, service } = armar();
+    prisma.incidenteTecnico.findMany.mockResolvedValue([
+      incidente('Quito Norte', 10),
+      incidente('Quito Norte', 20),
+      incidente('Ambato', 48, 'ALTA'),
+    ]);
+    prisma.maquinaria.findMany.mockResolvedValue([]);
+
+    const res: any = await service.getDashboardTaller({} as any, usuario('ADMIN'));
+
+    // Ordenado de más lento a más rápido, con el respaldo de cuántos incidentes promedian.
+    expect(res.mttrPorAgencia).toEqual([
+      { nombre: 'Ambato', horas: 48, incidentes: 1 },
+      { nombre: 'Quito Norte', horas: 15, incidentes: 2 },
+    ]);
+    // El desglose por gravedad sigue existiendo y ahora informa sobre cuántos incidentes se calculó.
+    expect(res.mttrPorGravedad).toEqual([{ nombre: 'MEDIA', horas: 15, incidentes: 2 }, { nombre: 'ALTA', horas: 48, incidentes: 1 }]);
+  });
+
+  it('acota la ventana de 30 días al fin del periodo y respeta el filtro de región', async () => {
+    const { prisma, service } = armar();
+    prisma.incidenteTecnico.findMany.mockResolvedValue([]);
+    prisma.mantenimientoMaquinaria.findMany.mockResolvedValue([]);
+
+    await service.getDashboardTaller(
+      { rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31', regionId: 'r1' } as any,
+      usuario('SUPER_ADMIN'),
+    );
+
+    const incWhere = prisma.incidenteTecnico.findMany.mock.calls[0][0].where;
+    expect(incWhere.createdAt.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
+    expect(incWhere.maquinaria).toEqual({ agencia: { regionId: 'r1' } });
+    const mantWhere = prisma.mantenimientoMaquinaria.findMany.mock.calls[0][0].where;
+    expect(mantWhere.createdAt.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
   });
 });

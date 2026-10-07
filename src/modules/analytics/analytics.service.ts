@@ -5,6 +5,7 @@ import {
   DashboardDedicadoDto,
   ConsumoQuimicosAnalyticsDto,
   RankingLavadoresDto,
+  RangoAnaliticaDto,
   RangoPeriodo,
 } from './dto/analytics.dto.js';
 import { ServiceStatus } from '@prisma/client';
@@ -64,16 +65,42 @@ export class AnalyticsService {
       case 'ANIO':
         return { desde: new Date(ahora.getFullYear(), 0, 1), hasta: finDeHoy, rango, etiqueta: 'Este año' };
       case 'RANGO': {
-        const desde = dto.fechaDesde ? new Date(dto.fechaDesde) : (dto.fecha ? new Date(dto.fecha) : new Date(ahora.getFullYear(), ahora.getMonth(), 1));
-        const hasta = dto.fechaHasta ? new Date(dto.fechaHasta) : (dto.fecha ? new Date(dto.fecha) : ahora);
-        if ((dto.fechaDesde?.length ?? 10) <= 10) desde.setHours(0, 0, 0, 0);
+        const desde = dto.fechaDesde ? this.fechaLocal(dto.fechaDesde) : (dto.fecha ? this.fechaLocal(dto.fecha) : new Date(ahora.getFullYear(), ahora.getMonth(), 1));
+        const hasta = dto.fechaHasta ? this.fechaLocal(dto.fechaHasta) : (dto.fecha ? this.fechaLocal(dto.fecha) : ahora);
+        desde.setHours(0, 0, 0, 0);
         if (dto.fechaHasta || dto.fecha) hasta.setHours(23, 59, 59, 999);
-        const etiqueta = `${desde.toISOString().split('T')[0]} → ${hasta.toISOString().split('T')[0]}`;
+        const etiqueta = `${this.aFechaISO(desde)} → ${this.aFechaISO(hasta)}`;
         return { desde, hasta, rango, etiqueta };
       }
       default:
         return { desde: inicioDeHoy, hasta: finDeHoy, rango: 'HOY', etiqueta: 'Hoy' };
     }
+  }
+
+  /**
+   * Parsea `YYYY-MM-DD` como fecha LOCAL. `new Date('2026-01-01')` se interpreta en UTC, así que en
+   * zonas con desplazamiento negativo (Ecuador, UTC-5) el rango «1 a 31 de enero» terminaba consultando
+   * «31 de diciembre a 30 de enero». Con la hora explícita el parseo es local y el día no se desplaza.
+   */
+  private fechaLocal(valor: string): Date {
+    return /^\d{4}-\d{2}-\d{2}$/.test(valor) ? new Date(`${valor}T00:00:00`) : new Date(valor);
+  }
+
+  /** Fecha en `YYYY-MM-DD` según el calendario local (no usa UTC, que adelanta/atrasa el día). */
+  private aFechaISO(fecha: Date): string {
+    return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-${String(fecha.getDate()).padStart(2, '0')}`;
+  }
+
+  /**
+   * Periodo de los endpoints que reciben el filtro global con `rango`.
+   * Si el cliente no envía `rango` (consumidores antiguos) se conserva el comportamiento previo: el mes
+   * en curso, o el rango explícito de fechas. Antes estas consultas ignoraban los presets y devolvían
+   * siempre el mes completo aunque el usuario hubiera elegido Hoy, Semana o Año.
+   */
+  private periodoDeFiltro(dto: RangoAnaliticaDto): { desde: Date; hasta: Date } {
+    if (dto.rango) return this.resolverPeriodo(dto);
+    const rango: RangoPeriodo = dto.fechaDesde || dto.fechaHasta ? 'RANGO' : 'MES';
+    return this.resolverPeriodo({ ...dto, rango });
   }
 
   /**
@@ -96,7 +123,6 @@ export class AnalyticsService {
     const endOfDay = periodo.hasta;
     // Las ventanas "de tendencia" siguen el periodo elegido (no un fijo de 30 días).
     const hace30Dias = periodo.desde;
-
     const roleName = rolDeUsuario(user);
 
     if (roleName === 'ADMIN') {
@@ -263,6 +289,56 @@ export class AnalyticsService {
     const top = desgloseCompleto.slice(0, 5);
     const bottom = desgloseCompleto.length > 5 ? desgloseCompleto.slice(-5).reverse() : [];
 
+    // Entidades con menos actividad del nivel activo: incluye agencias y bahías ACTIVAS sin servicios en el
+    // periodo, para detectar sucursales o estaciones de trabajo que dejaron de operar.
+    let entidadBaja = 'Día';
+    let candidatasBaja = desgloseCompleto.map((d) => d.nombre);
+    let metricasBaja = new Map<string, { cantidad: number; tiempoPromedioMin: number }>(
+      desgloseCompleto.map((d) => [d.nombre, { cantidad: d.cantidad, tiempoPromedioMin: d.tiempoPromedioMin }]),
+    );
+    if (dimension === 'GLOBAL' || dimension === 'REGION') {
+      // En el nivel país/región el desglose agrupa por región: para saber qué AGENCIA opera menos se agrupa aparte.
+      entidadBaja = 'Agencia';
+      const porAgencia = new Map<string, { cantidad: number; totalMin: number; finalizados: number }>();
+      for (const s of servicios) {
+        const nombre = s.bahia?.agencia?.nombre || 'Sin agencia';
+        const reg = porAgencia.get(nombre) ?? { cantidad: 0, totalMin: 0, finalizados: 0 };
+        reg.cantidad += 1;
+        const inicio = s.horaInicio || s.horaIngreso;
+        if (s.horaSalida && inicio) {
+          reg.totalMin += Math.max(0, (new Date(s.horaSalida).getTime() - new Date(inicio).getTime()) / 60000);
+          reg.finalizados += 1;
+        }
+        porAgencia.set(nombre, reg);
+      }
+      metricasBaja = new Map(
+        [...porAgencia].map(([nombre, v]) => [
+          nombre,
+          { cantidad: v.cantidad, tiempoPromedioMin: v.finalizados > 0 ? Math.round(v.totalMin / v.finalizados) : 0 },
+        ]),
+      );
+      const agencias = await this.prisma.agencia.findMany({
+        where: { estado: 1, tipoUbicacion: 'OPERATIVA', ...(this.filtroAgencia(user, dto) as any) },
+        select: { nombre: true },
+      });
+      candidatasBaja = agencias.map((a) => a.nombre);
+    } else if (dimension === 'AGENCY') {
+      entidadBaja = 'Bahía';
+      const agenciaId = (this.filtroAgencia(user, dto) as { id?: string }).id;
+      if (agenciaId) {
+        const bahias = await this.prisma.bahia.findMany({ where: { agenciaId }, select: { nombre: true } });
+        if (bahias.length) candidatasBaja = bahias.map((b) => b.nombre);
+      }
+    }
+    const bajaActividad = candidatasBaja
+      .map((nombre) => ({
+        nombre,
+        cantidad: metricasBaja.get(nombre)?.cantidad ?? 0,
+        tiempoPromedioMin: metricasBaja.get(nombre)?.tiempoPromedioMin ?? 0,
+      }))
+      .sort((a, b) => a.cantidad - b.cantidad || String(a.nombre).localeCompare(String(b.nombre)))
+      .slice(0, 5);
+
     // Heatmap día de la semana × hora de ingreso (identifica horas pico). Rango operativo 07:00–21:00.
     const dias = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     const horas: string[] = [];
@@ -291,6 +367,7 @@ export class AnalyticsService {
       entidad,
       desglose,
       ranking: { entidad, top, bottom },
+      bajaActividad: { entidad: entidadBaja, items: bajaActividad },
       heatmap,
       kpis: {
         registros: servicios.length,
@@ -325,8 +402,8 @@ export class AnalyticsService {
       whereServiciosAnt.operadorId = pulidorId;
     }
 
-    const whereIncidentes = { createdAt: { gte: startOfDay, lte: endOfDay }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
-    const whereMantenimientos = { fechaEjecucion: { gte: startOfDay, lte: endOfDay }, estado: 'FINALIZADO', ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
+    const whereIncidentes = { createdAt: { gte: hace30Dias, lte: endOfDay }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
+    const whereMantenimientos = { fechaEjecucion: { gte: hace30Dias, lte: endOfDay }, estado: 'FINALIZADO', ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
 
     const [
       ingresoPeriodoAgg, ingresoMesAgg, ingresoMesAnteriorAgg,
@@ -349,11 +426,11 @@ export class AnalyticsService {
       }),
       this.prisma.incidenteTecnico.findMany({
         where: whereIncidentes,
-        select: { costoTotal: true, maquinaria: { select: { agencia: { select: { nombre: true } } } } },
+        select: { costoTotal: true, createdAt: true, maquinaria: { select: { agencia: { select: { nombre: true } } } } },
       }),
       this.prisma.mantenimientoMaquinaria.findMany({
         where: whereMantenimientos as any,
-        select: { costoTotal: true, maquinaria: { select: { agencia: { select: { nombre: true } } } } },
+        select: { costoTotal: true, fechaEjecucion: true, maquinaria: { select: { agencia: { select: { nombre: true } } } } },
       }),
       this.prisma.stockUbicacion.findMany({ select: { cantidadActual: true, insumo: { select: { costoUnitarioUSD: true } } } }),
       this.prisma.movimientoInventario.findMany({ where: { estadoDespacho: 'EN_TRANSITO' }, select: { detalles: { select: { cantidadEnviada: true, costoUnitarioUSD: true } } } }),
@@ -405,15 +482,19 @@ export class AnalyticsService {
     }
 
     for (const inc of incidentesPeriodo) {
-      const agencia = inc.maquinaria?.agencia?.nombre || 'Sin agencia';
-      const reg = (agenciaStats[agencia] ??= { ingresos: 0, costoInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
-      reg.costoIncidentes += Number(inc.costoTotal || 0);
+      if (inc.createdAt >= startOfDay && inc.createdAt <= endOfDay) {
+        const agencia = inc.maquinaria?.agencia?.nombre || 'Sin agencia';
+        const reg = (agenciaStats[agencia] ??= { ingresos: 0, costoInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
+        reg.costoIncidentes += Number(inc.costoTotal || 0);
+      }
     }
 
     for (const mant of mantenimientosPeriodo) {
-      const agencia = mant.maquinaria?.agencia?.nombre || 'Sin agencia';
-      const reg = (agenciaStats[agencia] ??= { ingresos: 0, costoInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
-      reg.costoMantenimientos += Number(mant.costoTotal || 0);
+      if (mant.fechaEjecucion && mant.fechaEjecucion >= startOfDay && mant.fechaEjecucion <= endOfDay) {
+        const agencia = mant.maquinaria?.agencia?.nombre || 'Sin agencia';
+        const reg = (agenciaStats[agencia] ??= { ingresos: 0, costoInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
+        reg.costoMantenimientos += Number(mant.costoTotal || 0);
+      }
     }
 
     const tiempoPromedioServicioMin = serviciosConTiempo > 0 ? Math.round(tiempoTotalMin / serviciosConTiempo) : 0;
@@ -437,7 +518,7 @@ export class AnalyticsService {
           gananciaNeta: Number(gananciaNeta.toFixed(2))
         };
       })
-      .sort((a, b) => b.gananciaNeta - a.gananciaNeta).slice(0, 8);
+      .sort((a, b) => b.ingresos - a.ingresos).slice(0, 8);
 
     // Resumen de Aprobaciones para el Dashboard Ejecutivo
     const solicitudesHoy = await this.prisma.solicitudAprobacion.findMany({
@@ -516,7 +597,7 @@ export class AnalyticsService {
     const whereBase = hayFiltro ? { agencia: filtro } : {};
 
     const [todasSolicitudes, solicitudesHoy, anuladasHoy] = await Promise.all([
-      this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: hace30Dias }, ...whereBase }, select: { tipo: true, estado: true, createdAt: true, montoUSD: true, entidadRefId: true, agencia: { select: { nombre: true } }, solicitante: { select: { name: true, lastname: true } } } }),
+      this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: hace30Dias, lte: endOfDay }, ...whereBase }, select: { tipo: true, estado: true, createdAt: true, montoUSD: true, entidadRefId: true, agencia: { select: { nombre: true } }, solicitante: { select: { name: true, lastname: true } } } }),
       this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: startOfDay, lte: endOfDay }, ...whereBase }, select: { tipo: true, estado: true, montoUSD: true } }),
       // Anulaciones (control antifraude) de servicios de su alcance registradas hoy.
       this.prisma.servicioLavado.count({ where: { anuladoEn: { gte: startOfDay, lte: endOfDay }, ...(hayFiltro ? { bahia: { agencia: filtro } } : {}) } }),
@@ -595,7 +676,7 @@ export class AnalyticsService {
     const base30 = hayFiltro ? { bahia: { agencia: filtro } } : {};
     const [servicios30Dias, serviciosHoy, solicitudesComerciales] = await Promise.all([
       this.prisma.servicioLavado.findMany({
-        where: { horaIngreso: { gte: hace30Dias }, ...base30 },
+        where: { horaIngreso: { gte: hace30Dias, lte: endOfDay }, ...base30 },
         select: {
           horaIngreso: true, horaInicio: true, horaSalida: true, estado: true, marca: true,
           catalogo: { select: { nombre: true, categoria: true, tiempoEstimadoMin: true } },
@@ -604,7 +685,7 @@ export class AnalyticsService {
       }),
       this.prisma.servicioLavado.count({ where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, ...base30 } }),
       this.prisma.solicitudAprobacion.findMany({
-        where: { tipo: { in: ['SERVICIO_ESPECIAL_PRECIO', 'DESCUENTO'] }, createdAt: { gte: hace30Dias }, ...(hayFiltro ? { agencia: filtro } : {}) },
+        where: { tipo: { in: ['SERVICIO_ESPECIAL_PRECIO', 'DESCUENTO'] }, createdAt: { gte: hace30Dias, lte: endOfDay }, ...(hayFiltro ? { agencia: filtro } : {}) },
         select: { tipo: true, estado: true, createdAt: true },
       }),
     ]);
@@ -694,7 +775,7 @@ export class AnalyticsService {
         include: { agencia: { select: { nombre: true, region: true } }, pulidor: { select: { name: true, lastname: true } }, insumo: { select: { nombre: true } } },
       }),
       this.prisma.maquinaria.groupBy({ by: ['estadoOperativo'], _count: { id: true }, where: alcanceMaq }),
-      this.prisma.incidenteTecnico.findMany({ where: { createdAt: { gte: hace30Dias }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) }, include: { maquinaria: { select: { codigo: true, nombre: true, tipo: true, agencia: { select: { nombre: true } } } } } }),
+      this.prisma.incidenteTecnico.findMany({ where: { createdAt: { gte: hace30Dias, lte: endOfDay }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) }, include: { maquinaria: { select: { codigo: true, nombre: true, tipo: true, agencia: { select: { nombre: true } } } } } }),
       // Alertas operativas de mantenimiento: incidentes abiertos.
       this.prisma.incidenteTecnico.findMany({
         where: { estado: { in: ['ABIERTO', 'EN_PROCESO'] }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
@@ -852,10 +933,7 @@ export class AnalyticsService {
   async getConsumoQuimicos(dto: ConsumoQuimicosAnalyticsDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
-    const ahora = new Date();
-    const fechaDesde = dto.fechaDesde ? new Date(dto.fechaDesde) : new Date(ahora.getFullYear(), ahora.getMonth(), 1);
-    let fechaHasta = ahora;
-    if (dto.fechaHasta) { fechaHasta = new Date(dto.fechaHasta); if (dto.fechaHasta.length <= 10) fechaHasta.setUTCHours(23, 59, 59, 999); }
+    const { desde: fechaDesde, hasta: fechaHasta } = this.periodoDeFiltro(dto);
     const where: any = { createdAt: { gte: fechaDesde, lte: fechaHasta } };
     if (hayFiltro) { const agencias = await this.prisma.agencia.findMany({ where: filtro as any, select: { id: true } }); where.agenciaId = { in: agencias.map(a => a.id) }; }
 
@@ -928,10 +1006,7 @@ export class AnalyticsService {
   async getRankingLavadores(dto: RankingLavadoresDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
-    const ahora = new Date();
-    const fechaDesde = dto.fechaDesde ? new Date(dto.fechaDesde) : new Date(ahora.getFullYear(), ahora.getMonth(), 1);
-    let fechaHasta = ahora;
-    if (dto.fechaHasta) { fechaHasta = new Date(dto.fechaHasta); if (dto.fechaHasta.length <= 10) fechaHasta.setUTCHours(23, 59, 59, 999); }
+    const { desde: fechaDesde, hasta: fechaHasta } = this.periodoDeFiltro(dto);
     const where: any = { estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] }, horaIngreso: { gte: fechaDesde, lte: fechaHasta } };
     if (hayFiltro) where.bahia = { agencia: filtro };
 
@@ -970,10 +1045,7 @@ export class AnalyticsService {
   async getRankingPulidores(dto: RankingLavadoresDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
-    const ahora = new Date();
-    const fechaDesde = dto.fechaDesde ? new Date(dto.fechaDesde) : new Date(ahora.getFullYear(), ahora.getMonth(), 1);
-    let fechaHasta = ahora;
-    if (dto.fechaHasta) { fechaHasta = new Date(dto.fechaHasta); if (dto.fechaHasta.length <= 10) fechaHasta.setUTCHours(23, 59, 59, 999); }
+    const { desde: fechaDesde, hasta: fechaHasta } = this.periodoDeFiltro(dto);
     const where: any = { estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] }, horaIngreso: { gte: fechaDesde, lte: fechaHasta } };
     if (hayFiltro) where.bahia = { agencia: filtro };
 
@@ -1021,8 +1093,12 @@ export class AnalyticsService {
     const hayFiltro = Object.keys(filtro).length > 0;
     const maqWhere = hayFiltro ? { agencia: filtro } : {};
     const incWhere: any = { ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) };
-    const { desde: startOfDay } = this.resolverPeriodo(dto);
-    const hace30Dias = startOfDay;
+    const { desde: startOfDay, hasta: endOfDay } = this.resolverPeriodo(dto);
+    const hace30Dias = new Date(startOfDay);
+    hace30Dias.setDate(hace30Dias.getDate() - 30);
+    // La ventana de 30 días se acota al periodo pedido: sin el tope superior, un rango pasado
+    // (p. ej. enero) seguía sumando incidentes y mantenimientos posteriores al rango.
+    const ventana30d = { gte: hace30Dias, lte: endOfDay };
 
     const [maquinarias, incidentesActivos, incidentes30Dias, mantenimientos30Dias, proxMantenimientos, mantenimientosVencidos] = await Promise.all([
       // Estado actual del parque de maquinaria
@@ -1034,7 +1110,7 @@ export class AnalyticsService {
       this.prisma.incidenteTecnico.count({ where: { estado: { in: ['ABIERTO', 'EN_PROCESO'] }, ...incWhere } }),
       // Incidentes de los últimos 30 días con datos de tiempo y costo
       this.prisma.incidenteTecnico.findMany({
-        where: { createdAt: { gte: hace30Dias }, ...incWhere },
+        where: { createdAt: ventana30d, ...incWhere },
         select: {
           id: true, titulo: true, gravedad: true, estado: true, costoTotal: true,
           fechaReporte: true, fechaSolucion: true, createdAt: true,
@@ -1043,7 +1119,7 @@ export class AnalyticsService {
       }),
       // Mantenimientos ejecutados en 30 días
       this.prisma.mantenimientoMaquinaria.findMany({
-        where: { createdAt: { gte: hace30Dias }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
+        where: { createdAt: ventana30d, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
         select: { tipo: true, estado: true, costoTotal: true, fechaEjecucion: true, proximoMantenimiento: true, maquinaria: { select: { nombre: true, tipo: true, agencia: { select: { nombre: true } } } } }
       }),
       // Próximos mantenimientos preventivos programados
@@ -1095,6 +1171,7 @@ export class AnalyticsService {
 
     const tiempoPromedioResolucionHoras = incidentesResueltos > 0 ? Number((tiempoTotalResolucionHoras / incidentesResueltos).toFixed(1)) : 0;
     const topMaquinasProblematicas = Object.values(maquinaMasProblematica).sort((a, b) => b.total - a.total).slice(0, 5);
+    const topMaquinasCostosas = Object.values(maquinaMasProblematica).filter(m => m.costoTotal > 0).sort((a, b) => b.costoTotal - a.costoTotal).slice(0, 5);
 
     // Mantenimientos preventivos vs correctivos (cantidad y costo) + costo por agencia (fallas + mantenimiento)
     const tipoMantenimiento: Record<string, number> = { PREVENTIVO: 0, CORRECTIVO: 0 };
@@ -1119,22 +1196,35 @@ export class AnalyticsService {
       .sort((a, b) => (b.reparaciones + b.mantenimiento) - (a.reparaciones + a.mantenimiento))
       .slice(0, 8);
 
-    // MTTR (tiempo medio de resolución) por gravedad
+    // MTTR (tiempo medio de resolución) por gravedad y por agencia. El gráfico por gravedad suele salir
+    // plano (todas las gravedades tardan parecido), así que el desglose por agencia indica DÓNDE se
+    // resuelve lento y con cuántos incidentes se calculó cada promedio.
     const mttrAcum: Record<string, { horas: number; n: number }> = {};
+    const mttrAgenciaAcum: Record<string, { horas: number; n: number }> = {};
     for (const inc of incidentes30Dias) {
       if (inc.estado === 'RESUELTO' && inc.fechaSolucion) {
         const h = (new Date(inc.fechaSolucion).getTime() - new Date(inc.fechaReporte).getTime()) / 3600000;
         const r = (mttrAcum[inc.gravedad] ??= { horas: 0, n: 0 });
         r.horas += h; r.n++;
+        const ag = inc.maquinaria?.agencia?.nombre || 'Sin agencia';
+        const ra = (mttrAgenciaAcum[ag] ??= { horas: 0, n: 0 });
+        ra.horas += h; ra.n++;
       }
     }
+    const promedioHoras = (r: { horas: number; n: number }) => Number((r.horas / r.n).toFixed(1));
     const mttrPorGravedad = ['BAJA', 'MEDIA', 'ALTA', 'CRITICA']
       .filter(g => mttrAcum[g])
-      .map(g => ({ nombre: g, horas: Number((mttrAcum[g].horas / mttrAcum[g].n).toFixed(1)) }));
+      .map(g => ({ nombre: g, horas: promedioHoras(mttrAcum[g]), incidentes: mttrAcum[g].n }));
+
+    const mttrPorAgencia = Object.keys(mttrAgenciaAcum)
+      .map(n => ({ nombre: n, horas: promedioHoras(mttrAgenciaAcum[n]), incidentes: mttrAgenciaAcum[n].n }))
+      .sort((a, b) => b.horas - a.horas)
+      .slice(0, 8);
 
     return {
       success: true,
       mttrPorGravedad,
+      mttrPorAgencia,
       costoPorAgencia,
       costoPorTipoMantenimiento: Object.keys(costoTipoMant).map(k => ({ nombre: k, costo: Number(costoTipoMant[k].toFixed(2)) })).filter(x => x.costo > 0),
       kpis: {
@@ -1153,6 +1243,7 @@ export class AnalyticsService {
       gravedadIncidentes: Object.keys(gravedadCount).filter(k => gravedadCount[k] > 0).map(k => ({ nombre: k, cantidad: gravedadCount[k] })),
       estadoIncidentes: Object.keys(estadoIncCount).filter(k => estadoIncCount[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: estadoIncCount[k] })),
       topMaquinasProblematicas,
+      topMaquinasCostosas,
       tipoMantenimiento: Object.keys(tipoMantenimiento).map(k => ({ nombre: k, cantidad: tipoMantenimiento[k] })),
       distribucionTipoMaquinaria: Object.keys(tipoMaq).map(k => ({ nombre: k, total: tipoMaq[k] })).sort((a, b) => b.total - a.total),
       proxMantenimientos: proxMantenimientos.map(m => ({ nombre: m.maquinaria.nombre, codigo: m.maquinaria.codigo, tipo: m.tipo, fechaProgramada: m.fechaProgramada })),
@@ -1166,7 +1257,9 @@ export class AnalyticsService {
   async getDashboardBodega(dto: DashboardDedicadoDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
-    const hace30Dias = this.resolverPeriodo(dto).desde;
+    const { desde: desdePeriodo, hasta: endOfDay } = this.resolverPeriodo(dto);
+    const hace30Dias = new Date(desdePeriodo);
+    hace30Dias.setDate(hace30Dias.getDate() - 30);
 
     // El alcance del usuario se resuelve a ids de agencia (y de bodega si hay región) y se aplica a las
     // tres consultas: sin esto, movimientos y stock mostraban datos de agencias fuera del alcance.
@@ -1179,7 +1272,7 @@ export class AnalyticsService {
       : [];
 
     const alertaWhere: any = { estado: { notIn: ['RESUELTO', 'DESPACHADO'] } };
-    const movWhere: any = { createdAt: { gte: hace30Dias } };
+    const movWhere: any = { createdAt: { gte: hace30Dias, lte: endOfDay } };
     let stockWhere: any = { cantidadActual: { gt: 0 } };
     if (agenciaIds) {
       alertaWhere.agenciaId = { in: agenciaIds };
@@ -1189,6 +1282,12 @@ export class AnalyticsService {
         ...(bodegaIds.length ? [{ origenBodegaId: { in: bodegaIds } }, { destinoBodegaId: { in: bodegaIds } }] : []),
       ];
       stockWhere = { ...stockWhere, OR: [{ agenciaId: { in: agenciaIds } }, ...(regionId ? [{ bodega: { regionId } }] : [])] };
+    }
+    // Filtro por pulidor: acota a su kit (stock del pulidor y despachos a su nombre).
+    if (dto.pulidorId) {
+      alertaWhere.pulidorId = dto.pulidorId;
+      movWhere.destinoPulidorId = dto.pulidorId;
+      stockWhere = { cantidadActual: { gt: 0 }, pulidorId: dto.pulidorId };
     }
 
     // Para la salud de stock se necesitan también las posiciones en 0 (agotadas): mismo alcance, sin filtro de cantidad.
@@ -1429,10 +1528,18 @@ export class AnalyticsService {
         costoReposicionUSD: r2(costoReposicion),
       },
       saludStock: ESTADOS.map((e) => ({ nombre: e, cantidad: global[e] })),
+      // Orden pensado para que el gráfico sea legible: primero las ubicaciones que COMBINAN agotado con
+      // crítico/bajo mínimo/bajo ideal (son las accionables), y después las más agotadas. Al ordenar solo por
+      // cantidad de problemas, las ubicaciones 100% agotadas copaban las primeras posiciones y el gráfico
+      // parecía de un solo color aunque la mezcla existiera.
       saludPorUbicacion: Object.keys(porUbicacion)
-        .map((nombre) => ({ nombre, ...porUbicacion[nombre], problemas: porUbicacion[nombre].AGOTADO + porUbicacion[nombre]['CRÍTICO'] + porUbicacion[nombre]['BAJO MÍNIMO'] + porUbicacion[nombre]['BAJO IDEAL'] }))
+        .map((nombre) => {
+          const v = porUbicacion[nombre];
+          const criticos = v['CRÍTICO'] + v['BAJO MÍNIMO'] + v['BAJO IDEAL'];
+          return { nombre, ...v, criticos, problemas: v.AGOTADO + criticos };
+        })
         .filter((u) => u.problemas > 0)
-        .sort((a, b) => b.problemas - a.problemas)
+        .sort((a, b) => Number(b.criticos > 0) - Number(a.criticos > 0) || b.criticos - a.criticos || b.problemas - a.problemas)
         .slice(0, 8),
       stockVsIdealCategoria: Object.keys(porCategoria)
         .map((nombre) => ({ nombre, actual: r2(porCategoria[nombre].actual), minimo: r2(porCategoria[nombre].minimo), ideal: r2(porCategoria[nombre].ideal) }))
@@ -1457,9 +1564,11 @@ export class AnalyticsService {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const { desde: startOfDay, hasta: endOfDay } = this.resolverPeriodo(dto);
-    const hace30Dias = startOfDay;
+    const hace30Dias = new Date(startOfDay);
+    hace30Dias.setDate(hace30Dias.getDate() - 30);
 
-    const seWhere: any = { deletedAt: null, ...(hayFiltro ? { agencia: filtro } : {}) };
+    // El filtro por pulidor acota las OT del pulidor seleccionado (dimensión POLISHER).
+    const seWhere: any = { deletedAt: null, ...(hayFiltro ? { agencia: filtro } : {}), ...(dto.pulidorId ? { operadorId: dto.pulidorId } : {}) };
 
     const [serviciosHoy, servicios30Dias, serviciosPendientes] = await Promise.all([
       this.prisma.servicioEspecial.findMany({
@@ -1467,7 +1576,7 @@ export class AnalyticsService {
         select: { estado: true, tipoServicio: true, tiempoEfectivoSeg: true, calificacionCalidad: true, precio: true, prioridad: true },
       }),
       this.prisma.servicioEspecial.findMany({
-        where: { ...seWhere, createdAt: { gte: hace30Dias } },
+        where: { ...seWhere, createdAt: { gte: hace30Dias, lte: endOfDay } },
         select: {
           estado: true, tipoServicio: true, tiempoEfectivoSeg: true,
           calificacionCalidad: true, precio: true, prioridad: true,

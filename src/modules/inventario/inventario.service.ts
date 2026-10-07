@@ -4169,6 +4169,7 @@ export class InventarioService {
       !sinEstadoNiNivel && dto.grupoNivel ? { nivel: { in: dto.grupoNivel === 'CRITICO' ? ['CRITICO', 'AGOTADO'] : ['BAJO'] } } : undefined,
       !sinEstadoNiNivel && dto.estado ? { estado: dto.estado } : undefined,
       !sinEstadoNiNivel && dto.soloActivas ? { estado: { not: 'RESUELTO' } } : undefined,
+      !sinEstadoNiNivel && dto.pulidorId ? { pulidorId: dto.pulidorId } : undefined,
     );
 
     if (!paginado) {
