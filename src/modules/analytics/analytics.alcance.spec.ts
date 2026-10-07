@@ -110,8 +110,8 @@ describe('dashboard admin — KPIs estratégicos', () => {
     expect(res.kpis.ticketPromedioHoy).toBe(50); // 500 / 10 servicios
     expect(res.kpis.variacionMesPct).toBe(20); // (6000 - 5000) / 5000
     expect(res.kpis.costoReparaciones30d).toBe(300);
-    expect(res.kpis.valorInventarioUSD).toBe(20); // 10 × $2
-    expect(res.kpis.valorEnTransitoUSD).toBe(15); // 5 × $3
+    expect(res.kpis.unidadesInventario).toBe(10); // existencias en unidades, no en USD
+    expect(res.kpis.unidadesEnTransito).toBe(5); // unidades despachadas sin recibir
     expect(res.topAgenciasProductivas).toEqual([{ nombre: 'Quito Norte', cantidad: 2 }]);
     expect(res.topColores).toEqual([{ nombre: 'Rojo', cantidad: 2 }]);
     expect(res.mixGenerales).toEqual([{ nombre: 'Lavado Express', cantidad: 1 }]);
@@ -120,6 +120,20 @@ describe('dashboard admin — KPIs estratégicos', () => {
     const rentabilidad = res.topAgenciasRentabilidad[0];
     expect(rentabilidad.nombre).toBe('Quito Norte');
     expect(rentabilidad.ingresos).toBe(80); // 30 + 50
+    // Los insumos se reportan en unidades y NO entran en el monto: su costo del catálogo es por envase
+    // y el consumo está en unidad base, así que inflaba la ganancia neta.
+    expect(rentabilidad.unidadesInsumos).toBe(3); // 2 + 1 consumidas
+    expect(rentabilidad.costoInsumos).toBeUndefined();
+    expect(rentabilidad.gananciaNeta).toBe(-220); // 80 ingresos − 300 reparaciones
+    // El panel comercial también reporta el consumo de insumos en unidades, no en USD.
+    prisma.servicioLavado.findMany.mockResolvedValue([
+      { precio: 30, horaIngreso: new Date(), horaInicio: null, horaSalida: null, estado: 'FINALIZADO', marca: 'Toyota', catalogo: { nombre: 'Lavado Express', categoria: 'GENERAL', tiempoEstimadoMin: 30 }, consumos: [{ cantidadUsada: 2 }] },
+      { precio: 50, horaIngreso: new Date(), horaInicio: null, horaSalida: null, estado: 'FINALIZADO', marca: 'Toyota', catalogo: { nombre: 'Cerámico', categoria: 'ESPECIAL', tiempoEstimadoMin: 60 }, consumos: [{ cantidadUsada: 1 }] },
+    ]);
+    const comercial: any = await service.getDashboardMetrics({} as any, usuario('COORD_COMERCIAL'));
+    expect(comercial.isComercialView).toBe(true);
+    expect(comercial.kpis.unidadesQuimicos).toBe(3); // 2 + 1 consumidas
+    expect(comercial.kpis.costoQuimicos30d).toBeUndefined();
   });
 });
 
@@ -237,6 +251,107 @@ describe('dashboard admin — drill-down jerárquico', () => {
   });
 });
 
+describe('filtros globales — tipo de servicio e incidentes', () => {
+  it('el tipo de servicio (generales/especiales) acota los lavados y sus agregados', async () => {
+    const { prisma, service } = armar();
+    await service.getDashboardMetrics({ categoriaServicio: 'ESPECIAL' } as any, usuario('SUPER_ADMIN'));
+
+    expect(prisma.servicioLavado.findMany).toHaveBeenCalled();
+    for (const call of prisma.servicioLavado.findMany.mock.calls) {
+      expect(call[0].where.catalogo).toEqual({ categoria: 'ESPECIAL' });
+    }
+    // También los agregados de ingresos (periodo, mes y mes anterior).
+    for (const call of prisma.servicioLavado.aggregate.mock.calls) {
+      expect(call[0].where.catalogo).toEqual({ categoria: 'ESPECIAL' });
+    }
+  });
+
+  it('sin tipo de servicio no se acota el catálogo, y el filtro se combina con agencia', async () => {
+    const sinFiltro = armar();
+    await sinFiltro.service.getDashboardMetrics({} as any, usuario('ADMIN'));
+    for (const call of sinFiltro.prisma.servicioLavado.findMany.mock.calls) {
+      expect(call[0].where.catalogo).toBeUndefined();
+    }
+
+    const combinado = armar();
+    await combinado.service.getDashboardMetrics({ categoriaServicio: 'GENERAL', regionId: 'r1' } as any, usuario('SUPER_ADMIN'));
+    const where = combinado.prisma.servicioLavado.findMany.mock.calls[0][0].where;
+    expect(where.catalogo).toEqual({ categoria: 'GENERAL' });
+    expect(JSON.stringify(where.bahia)).toContain('"regionId":"r1"');
+  });
+
+  it('los incidentes se acotan por agencia y por el pulidor seleccionado (vía reportante)', async () => {
+    const { prisma, service } = armar();
+    await service.getDashboardMetrics({ pulidorId: 'op-1', regionId: 'r1' } as any, usuario('SUPER_ADMIN'));
+
+    expect(prisma.incidenteTecnico.findMany).toHaveBeenCalled();
+    for (const call of prisma.incidenteTecnico.findMany.mock.calls) {
+      expect(call[0].where.reportadoPorId).toBe('op-1');
+      expect(JSON.stringify(call[0].where.maquinaria)).toContain('"regionId":"r1"');
+    }
+    expect(prisma.incidenteTecnico.count.mock.calls[0][0].where.reportadoPorId).toBe('op-1');
+  });
+
+  it('el taller también acota los incidentes por pulidor', async () => {
+    const { prisma, service } = armar();
+    await service.getDashboardTaller({ pulidorId: 'op-9' } as any, usuario('ADMIN'));
+    expect(prisma.incidenteTecnico.count.mock.calls[0][0].where.reportadoPorId).toBe('op-9');
+    expect(prisma.incidenteTecnico.findMany.mock.calls[0][0].where.reportadoPorId).toBe('op-9');
+  });
+
+  it('Super Admin: el tipo de servicio acota KPI, mezcla, rentabilidad y desglose jerárquico', async () => {
+    const { prisma, service } = armar();
+    await service.getDashboardMetrics({ categoriaServicio: 'ESPECIAL' } as any, usuario('SUPER_ADMIN'));
+    const esp = [{ categoria: 'ESPECIAL' }];
+
+    // KPI del período, mes y mes anterior (ejecutivo + estratégicos).
+    expect(prisma.servicioLavado.count.mock.calls.map((c: any) => c[0].where.catalogo)).toEqual(
+      prisma.servicioLavado.count.mock.calls.map(() => esp[0]),
+    );
+    expect(prisma.servicioLavado.aggregate.mock.calls.map((c: any) => c[0].where.catalogo)).toEqual(
+      prisma.servicioLavado.aggregate.mock.calls.map(() => esp[0]),
+    );
+    // Series de los gráficos: mezcla, marcas/colores y desglose jerárquico.
+    expect(prisma.servicioLavado.findMany.mock.calls.map((c: any) => c[0].where.catalogo)).toEqual(
+      prisma.servicioLavado.findMany.mock.calls.map(() => esp[0]),
+    );
+  });
+
+  it('los rankings de personal respetan el tipo de servicio', async () => {    const { prisma, service } = armar();
+    await service.getRankingLavadores({ categoriaServicio: 'ESPECIAL' } as any, usuario('ADMIN'));
+    expect(prisma.servicioLavado.findMany.mock.calls[0][0].where.catalogo).toEqual({ categoria: 'ESPECIAL' });
+    await service.getRankingPulidores({ categoriaServicio: 'GENERAL' } as any, usuario('ADMIN'));
+    expect(prisma.servicioLavado.findMany.mock.calls[1][0].where.catalogo).toEqual({ categoria: 'GENERAL' });
+  });
+
+  it('las alertas de mantenimiento exponen la agencia y el pulidor del incidente', async () => {
+    const { prisma, service } = armar();
+    prisma.incidenteTecnico.findMany.mockResolvedValue([
+      {
+        id: 'inc-1', titulo: 'Fuga de aceite', gravedad: 'ALTA', estado: 'ABIERTO', costoTotal: 10,
+        createdAt: new Date(), fechaReporte: new Date(), fechaSolucion: null,
+        reportadoPor: { name: 'Ana', lastname: 'Soto' },
+        maquinaria: { codigo: 'MQ-01', nombre: 'Hidro', tipo: 'HIDRO', agencia: { nombre: 'Quito Norte', region: 'Sierra' } },
+      },
+    ]);
+    prisma.alertaStock.findMany.mockResolvedValue([
+      {
+        id: 'al-1', nivel: 'CRITICO', estado: 'PENDIENTE', createdAt: new Date(),
+        agencia: { nombre: 'Ambato Centro', region: 'Sierra' }, pulidor: null, insumo: { nombre: 'Shampoo' },
+      },
+    ]);
+
+    const res: any = await service.getDashboardMetrics({} as any, usuario('SUPER_ADMIN'));
+
+    const mant = res.alertasOperativas.find((a: any) => a.grupo === 'mantenimiento');
+    expect(mant.agencia).toBe('Quito Norte');
+    expect(mant.pulidor).toBe('Ana Soto');
+    const stock = res.alertasOperativas.find((a: any) => a.grupo === 'stock');
+    expect(stock.agencia).toBe('Ambato Centro');
+    expect(stock.pulidor).toBeNull();
+  });
+});
+
 describe('dashboard aprobador — control', () => {
   it('cuenta anuladas del día y descuentos fuera de rango (>15% del precio enlazado)', async () => {
     const { prisma, service } = armar();
@@ -259,6 +374,51 @@ describe('dashboard aprobador — control', () => {
     expect(res.isAprobadorView).toBe(true);
     expect(res.kpis.descuentosFueraDeRango).toBe(1);
     expect(res.kpis.anuladasHoy).toBe(2);
+  });
+});
+
+describe('aprobaciones — serie de 7 días', () => {
+  it('se ancla al fin del período y agrupa por día local', async () => {
+    const { prisma, service } = armar();
+    // Solicitud creada a las 20:00 locales: con claves de día UTC caería en el 29.
+    prisma.solicitudAprobacion.findMany.mockResolvedValue([
+      { tipo: 'DESCUENTO', estado: 'APROBADO', montoUSD: 10, entidadRefId: null, createdAt: new Date(2026, 0, 28, 20, 0, 0) },
+    ]);
+
+    const res: any = await service.getDashboardMetrics(
+      { rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31' } as any, usuario('APROBADOR'),
+    );
+
+    // Antes la serie se anclaba a «hoy», así que un período pasado mostraba días fuera del filtro.
+    expect(Object.keys(res.flujoEstadosPorDia).sort()).toEqual([
+      '2026-01-25', '2026-01-26', '2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-01-31',
+    ]);
+    expect(res.flujoEstadosPorDia['2026-01-28'].APROBADO).toBe(1);
+    expect(res.flujoEstadosPorDia['2026-01-29'].APROBADO).toBe(0);
+  });
+});
+
+describe('fallas de maquinaria — desglose por gravedad', () => {  /** Incidente mínimo: la gravedad es lo único que alimenta este desglose. */
+  const incidente = (gravedad: string) => ({ gravedad, maquinaria: null, reportadoPor: null, costoTotal: 0 });
+
+  it('ordena de la más grave a la más leve y omite las severidades sin fallas', async () => {
+    const { prisma, service } = armar();
+    prisma.incidenteTecnico.findMany.mockResolvedValue([
+      incidente('BAJA'),
+      incidente('MEDIA'),
+      incidente('CRITICA'),
+      incidente('MEDIA'),
+    ]);
+
+    const res: any = await service.getDashboardMetrics({} as any, usuario('SUPERVISOR', { regionId: 'r1' }));
+
+    // Se alimenta la pestaña "Fallas por Gravedad": reemplaza al antiguo "Ubicación de Daños", que repetía
+    // el desglose por agencia del gráfico de incidentes.
+    expect(res.incidentesPorGravedad).toEqual([
+      { nombre: 'CRITICA', cantidad: 1 },
+      { nombre: 'MEDIA', cantidad: 2 },
+      { nombre: 'BAJA', cantidad: 1 },
+    ]);
   });
 });
 
@@ -291,6 +451,30 @@ describe('salud de inventario — orden de ubicaciones', () => {
       AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0, SOBRESTOCK: 0,
       criticos: 3, problemas: 3,
     });
+  });
+
+  it('la reposición y las existencias se reportan en UNIDADES, nunca en USD', async () => {
+    const { prisma, service } = armar();
+    // El costo del catálogo es por envase y las existencias están en unidad base (ml), así que el monto en
+    // USD salía inflado: por eso la sección completa se expresa en unidades.
+    const conUnidad = (actual: number) => ({
+      ...posicion('Agencia A', actual),
+      insumo: { nombre: 'Shampoo', categoria: 'QUIMICO', costoUnitarioUSD: 75, unidadMedida: { simbolo: 'ml' }, stockMinimoAgencia: 10, stockOptimoAgencia: 40 },
+    });
+    prisma.stockUbicacion.findMany.mockResolvedValue([conUnidad(4), conUnidad(30)]);
+
+    const res: any = await service.getDashboardBodega({} as any, usuario('COORD_BODEGA'));
+
+    expect(res.kpis.unidadesReponer).toBe(46); // (40-4) + (40-30)
+    expect(res.kpis.insumosConDeficit).toBe(1);
+    expect(res.kpis.ubicacionesConDeficit).toBe(2);
+    expect(res.kpis.costoReposicionUSD).toBeUndefined();
+    expect(res.topDeficit[0]).toEqual({ nombre: 'Shampoo', unidades: 46, unidad: 'ml', ubicaciones: 2 });
+    // Existencias del alcance y unidades sin recibir, también en unidades.
+    expect(res.kpis.unidadesStock).toBe(34);
+    expect(res.kpis.unidadesEnTransito).toBe(0);
+    expect(res.kpis.valorStockUSD).toBeUndefined();
+    expect(res.kpis.valorEnTransitoUSD).toBeUndefined();
   });
 });
 
@@ -386,6 +570,28 @@ describe('dashboards dedicados — alcance y filtros', () => {
     expect(prisma.servicioEspecial.findMany).toHaveBeenCalled();
   });
 
+  it('la serie de 7 días de Servicios Especiales se ancla al fin del período y agrupa por día local', async () => {
+    const { prisma, service } = armar();
+    // OT creada a las 20:00 locales: con claves de día UTC caería en el 29.
+    prisma.servicioEspecial.findMany.mockResolvedValue([
+      {
+        estado: 'Completado', tipoServicio: 'Lavado', prioridad: 'Media', precio: 10, tiempoEfectivoSeg: 600,
+        calificacionCalidad: 5, createdAt: new Date(2026, 0, 28, 20, 0, 0), fechaFin: null, operador: null,
+      },
+    ]);
+
+    const res: any = await service.getDashboardEspeciales(
+      { rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31' } as any, usuario('COORD_SERVICIOS_ESPECIALES'),
+    );
+
+    // Antes la serie se anclaba a «hoy», así que un período pasado mostraba días fuera del filtro.
+    expect(res.flujoSemanal.map((x: any) => x.hora)).toEqual([
+      '2026-01-25', '2026-01-26', '2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-01-31',
+    ]);
+    expect(res.flujoSemanal[3].cantidad).toBe(1);
+    expect(res.flujoSemanal[4].cantidad).toBe(0);
+  });
+
   it('filtro por pulidor: la bodega se acota al kit del pulidor', async () => {
     const { prisma, service } = armar();
     await service.getDashboardBodega({ pulidorId: 'op-1' } as any, usuario('COORD_BODEGA'));
@@ -460,7 +666,7 @@ describe('dashboard taller — MTTR y periodo', () => {
     expect(res.mttrPorGravedad).toEqual([{ nombre: 'MEDIA', horas: 15, incidentes: 2 }, { nombre: 'ALTA', horas: 48, incidentes: 1 }]);
   });
 
-  it('acota la ventana de 30 días al fin del periodo y respeta el filtro de región', async () => {
+  it('acota la ventana de incidentes al fin del período y respeta el filtro de región', async () => {
     const { prisma, service } = armar();
     prisma.incidenteTecnico.findMany.mockResolvedValue([]);
     prisma.mantenimientoMaquinaria.findMany.mockResolvedValue([]);
@@ -470,10 +676,52 @@ describe('dashboard taller — MTTR y periodo', () => {
       usuario('SUPER_ADMIN'),
     );
 
+    // La ventana sigue EXACTAMENTE el período: ni 30 días hacia atrás ni datos posteriores al rango.
     const incWhere = prisma.incidenteTecnico.findMany.mock.calls[0][0].where;
+    expect(incWhere.createdAt.gte.getTime()).toBe(new Date(2026, 0, 1).getTime());
     expect(incWhere.createdAt.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
     expect(incWhere.maquinaria).toEqual({ agencia: { regionId: 'r1' } });
     const mantWhere = prisma.mantenimientoMaquinaria.findMany.mock.calls[0][0].where;
+    expect(mantWhere.createdAt.gte.getTime()).toBe(new Date(2026, 0, 1).getTime());
     expect(mantWhere.createdAt.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
+  });
+
+  it('el desglose explícito decide la agrupación del gráfico de rendimiento', async () => {
+    const servicio = (agencia: string, operador: string) => ({
+      precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null,
+      operador: { name: operador, lastname: 'Soto' },
+      bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: agencia, region: 'Sierra', regionRel: { nombre: 'Sierra' } } },
+    });
+
+    const porAgencia = armar();
+    porAgencia.prisma.servicioLavado.findMany.mockResolvedValue([servicio('Quito Norte', 'Ana'), servicio('Ambato', 'Luis')]);
+    porAgencia.prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    porAgencia.prisma.servicioLavado.count.mockResolvedValue(0);
+    const resAgencia: any = await porAgencia.service.getDashboardMetrics({ desglose: 'AGENCY' } as any, usuario('SUPER_ADMIN'));
+    expect(resAgencia.jerarquia.agrupacion).toBe('AGENCY');
+    expect(resAgencia.jerarquia.entidad).toBe('Agencia');
+    expect(resAgencia.jerarquia.titulo).toBe('Rendimiento Operativo Nacional por Agencia');
+    expect(resAgencia.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['Ambato', 'Quito Norte']);
+    expect(resAgencia.jerarquia.ranking.entidad).toBe('Agencia');
+
+    // Desglose por pulidor: agrupa por operador, no por día.
+    const porPulidor = armar();
+    porPulidor.prisma.servicioLavado.findMany.mockResolvedValue([servicio('Quito Norte', 'Ana'), servicio('Ambato', 'Luis')]);
+    porPulidor.prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    porPulidor.prisma.servicioLavado.count.mockResolvedValue(0);
+    const resPulidor: any = await porPulidor.service.getDashboardMetrics({ desglose: 'POLISHER' } as any, usuario('SUPER_ADMIN'));
+    expect(resPulidor.jerarquia.entidad).toBe('Pulidor');
+    expect(resPulidor.jerarquia.titulo).toBe('Rendimiento Operativo por Pulidor');
+    expect(resPulidor.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['Ana Soto', 'Luis Soto']);
+    expect(resPulidor.jerarquia.bajaActividad.entidad).toBe('Pulidor');
+
+    // Sin desglose, el nivel país sigue agrupando por región (comportamiento previo intacto).
+    const sinDesglose = armar();
+    sinDesglose.prisma.servicioLavado.findMany.mockResolvedValue([servicio('Quito Norte', 'Ana'), servicio('Ambato', 'Luis')]);
+    sinDesglose.prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    sinDesglose.prisma.servicioLavado.count.mockResolvedValue(0);
+    const resRegion: any = await sinDesglose.service.getDashboardMetrics({} as any, usuario('SUPER_ADMIN'));
+    expect(resRegion.jerarquia.agrupacion).toBe('REGION');
+    expect(resRegion.jerarquia.desglose.map((d: any) => d.nombre)).toEqual(['Sierra']);
   });
 });

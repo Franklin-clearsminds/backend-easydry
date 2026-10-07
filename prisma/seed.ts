@@ -1,13 +1,16 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { ROLES_BASE } from '../src/common/permisos/roles-base.js';
 import { accionesLegacy } from '../src/common/permisos/acciones-legacy.js';
+import { modulosDeCapacidades } from '../src/common/permisos/modulos-navegacion.js';
 
 /**
  * Seed idempotente de EasyDry.
  *
- * Por defecto NO borra nada: crea lo que falta (módulos, los 14 roles oficiales con sus permisos, catálogos base de inventario
+ * Por defecto NO borra nada: crea lo que falta (módulos, los 15 roles oficiales con sus permisos, catálogos base de inventario
  * y las cuentas Super Admin y Admin) y deja intacto lo que ya existe.
  *
  * Variables de entorno:
@@ -29,23 +32,23 @@ function credencial(nombre: string, valorPorDefecto?: string): string {
 
 /** Catálogo oficial de módulos — fuente de verdad sembrada en BD */
 const MODULOS_DATA = [
-  { codigo: 'dashboard', nombre: 'Dashboard Principal', descripcion: 'Métricas clave, KPIs generales, gráficos de rendimiento y alertas de la red', icono: 'layout-dashboard', rutaPrincipal: '/dashboard', grupo: 'Panel Principal', orden: 10 },
-  { codigo: 'mapa-operativo', nombre: 'Mapa Operativo en Vivo', descripcion: 'Trazabilidad visual jerárquica: Agencias, Bahías, Operadores y Maquinaria en tiempo real', icono: 'sliders', rutaPrincipal: '/mapa-operativo', grupo: 'Panel Principal', orden: 20 },
-  { codigo: 'notificaciones', nombre: 'Centro de Notificaciones', descripcion: 'Alertas operativas, aprobaciones pendientes, inventario y avisos del sistema', icono: 'bell', rutaPrincipal: '/notificaciones', grupo: 'Panel Principal', orden: 30 },
-  { codigo: 'agencias', nombre: 'Control de Agencias', descripcion: 'Gestión y estado operativo de las agencias de la red', icono: 'building-2', rutaPrincipal: '/agencias', grupo: 'Operación & Agencias', orden: 40 },
-  { codigo: 'operadores', nombre: 'Gestión de Lavadores', descripcion: 'Directorio, métricas y estado del personal de lavado', icono: 'user-check', rutaPrincipal: '/operadores', grupo: 'Operación & Agencias', orden: 50 },
-  { codigo: 'asignaciones', nombre: 'Asignación de Bahías', descripcion: 'Matriz dinámica para asignar operadores a bahías con historial', icono: 'check-circle-2', rutaPrincipal: '/asignaciones', grupo: 'Operación & Agencias', orden: 60 },
-  { codigo: 'configuracion/servicios', nombre: 'Catálogo de Servicios', descripcion: 'Tarifario, tipos de lavado y políticas de evidencias (foto/video)', icono: 'file-text', rutaPrincipal: '/configuracion/servicios', grupo: 'Servicios de Lavado', orden: 70 },
-  { codigo: 'servicios', nombre: 'Servicios de Lavado (OT)', descripcion: 'Digitalización de Hoja de Control, ingreso de placas y registro de vehículos', icono: 'car', rutaPrincipal: '/servicios', grupo: 'Servicios de Lavado', orden: 80 },
-  { codigo: 'aprobaciones', nombre: 'Aprobaciones y Cierre Diario', descripcion: 'Auditoría gerencial de evidencias y aprobación de servicios para cierre de día', icono: 'shield-check', rutaPrincipal: '/aprobaciones', grupo: 'Servicios de Lavado', orden: 90 },
-  { codigo: 'productividad', nombre: 'Productividad & Reto EasyDry', descripcion: 'Comparativa de agencias y ranking mensual de operarios', icono: 'trophy', rutaPrincipal: '/productividad', grupo: 'Servicios de Lavado', orden: 100 },
-  { codigo: 'maquinaria', nombre: 'Maquinaria & Equipos', descripcion: 'Inventario de activos industriales y trazabilidad de transferencias', icono: 'hard-drive', rutaPrincipal: '/maquinaria', grupo: 'Gestión de Activos', orden: 110 },
-  { codigo: 'taller-tecnico', nombre: 'Taller Técnico e Incidentes', descripcion: 'Control de mantenimientos preventivos y reporte/resolución de incidencias', icono: 'wrench', rutaPrincipal: '/taller-tecnico', grupo: 'Gestión de Activos', orden: 120 },
-  { codigo: 'inventario', nombre: 'Inventario de Insumos & Bodega', descripcion: 'Control de stock central vs sucursales, tipos de producto, envases, transferencias y alertas', icono: 'boxes', rutaPrincipal: '/inventario', grupo: 'Gestión de Activos', orden: 130 },
-  { codigo: 'envios', nombre: 'Envíos & Confirmación', descripcion: 'Control logístico de envíos de suministros y confirmación de recepción en agencia', icono: 'send', rutaPrincipal: '/envios', grupo: 'Gestión de Activos', orden: 140 },
-  { codigo: 'reportes', nombre: 'Reportes Operativos', descripcion: 'Generación e impresión de informes consolidados de servicios y rendimiento', icono: 'file-bar-chart', rutaPrincipal: '/reportes', grupo: 'Administración', orden: 150 },
-  { codigo: 'usuarios', nombre: 'Usuarios, Roles y Permisos', descripcion: 'Directorio de colaboradores y matriz de creación/configuración de roles dinámicos', icono: 'users', rutaPrincipal: '/usuarios', grupo: 'Administración', orden: 160 },
-  { codigo: 'perfil', nombre: 'Mi Perfil de Usuario', descripcion: 'Información personal, credenciales y datos de sucursal', icono: 'user', rutaPrincipal: '/perfil', grupo: 'Mi Cuenta', orden: 170 },
+  { codigo: 'dashboard', nombre: 'Dashboard Principal', descripcion: 'Métricas clave, KPIs generales, gráficos de rendimiento y alertas de la red', icono: 'layout-dashboard', rutaPrincipal: '/dashboard', grupo: 'Panel Principal', disponibleEnApp: true, orden: 10 },
+  { codigo: 'mapa-operativo', nombre: 'Mapa Operativo en Vivo', descripcion: 'Trazabilidad visual jerárquica: Agencias, Bahías, Operadores y Maquinaria en tiempo real', icono: 'sliders', rutaPrincipal: '/mapa-operativo', grupo: 'Panel Principal', disponibleEnApp: false, orden: 20 },
+  { codigo: 'notificaciones', nombre: 'Centro de Notificaciones', descripcion: 'Alertas operativas, aprobaciones pendientes, inventario y avisos del sistema', icono: 'bell', rutaPrincipal: '/notificaciones', grupo: 'Panel Principal', disponibleEnApp: true, orden: 30 },
+  { codigo: 'agencias', nombre: 'Control de Agencias', descripcion: 'Gestión y estado operativo de las agencias de la red', icono: 'building-2', rutaPrincipal: '/agencias', grupo: 'Operación & Agencias', disponibleEnApp: false, orden: 40 },
+  { codigo: 'operadores', nombre: 'Gestión de Lavadores', descripcion: 'Directorio, métricas y estado del personal de lavado', icono: 'user-check', rutaPrincipal: '/operadores', grupo: 'Operación & Agencias', disponibleEnApp: true, orden: 50 },
+  { codigo: 'asignaciones', nombre: 'Asignación de Bahías', descripcion: 'Matriz dinámica para asignar operadores a bahías con historial', icono: 'check-circle-2', rutaPrincipal: '/asignaciones', grupo: 'Operación & Agencias', disponibleEnApp: false, orden: 60 },
+  { codigo: 'configuracion/servicios', nombre: 'Catálogo de Servicios', descripcion: 'Tarifario, tipos de lavado y políticas de evidencias (foto/video)', icono: 'file-text', rutaPrincipal: '/configuracion/servicios', grupo: 'Servicios de Lavado', disponibleEnApp: false, orden: 70 },
+  { codigo: 'servicios', nombre: 'Servicios de Lavado (OT)', descripcion: 'Digitalización de Hoja de Control, ingreso de placas y registro de vehículos', icono: 'car', rutaPrincipal: '/servicios', grupo: 'Servicios de Lavado', disponibleEnApp: true, orden: 80 },
+  { codigo: 'aprobaciones', nombre: 'Aprobaciones y Cierre Diario', descripcion: 'Auditoría gerencial de evidencias y aprobación de servicios para cierre de día', icono: 'shield-check', rutaPrincipal: '/aprobaciones', grupo: 'Servicios de Lavado', disponibleEnApp: true, orden: 90 },
+  { codigo: 'productividad', nombre: 'Productividad & Reto EasyDry', descripcion: 'Comparativa de agencias y ranking mensual de operarios', icono: 'trophy', rutaPrincipal: '/productividad', grupo: 'Servicios de Lavado', disponibleEnApp: false, orden: 100 },
+  { codigo: 'maquinaria', nombre: 'Maquinaria & Equipos', descripcion: 'Inventario de activos industriales y trazabilidad de transferencias', icono: 'hard-drive', rutaPrincipal: '/maquinaria', grupo: 'Gestión de Activos', disponibleEnApp: true, orden: 110 },
+  { codigo: 'taller-tecnico', nombre: 'Taller Técnico e Incidentes', descripcion: 'Control de mantenimientos preventivos y reporte/resolución de incidencias', icono: 'wrench', rutaPrincipal: '/taller-tecnico', grupo: 'Gestión de Activos', disponibleEnApp: true, orden: 120 },
+  { codigo: 'inventario', nombre: 'Inventario de Insumos & Bodega', descripcion: 'Control de stock central vs sucursales, tipos de producto, envases, transferencias y alertas', icono: 'boxes', rutaPrincipal: '/inventario', grupo: 'Gestión de Activos', disponibleEnApp: true, orden: 130 },
+  { codigo: 'envios', nombre: 'Envíos & Confirmación', descripcion: 'Control logístico de envíos de suministros y confirmación de recepción en agencia', icono: 'send', rutaPrincipal: '/envios', grupo: 'Gestión de Activos', disponibleEnApp: true, orden: 140 },
+  { codigo: 'reportes', nombre: 'Reportes Operativos', descripcion: 'Generación e impresión de informes consolidados de servicios y rendimiento', icono: 'file-bar-chart', rutaPrincipal: '/reportes', grupo: 'Administración', disponibleEnApp: false, orden: 150 },
+  { codigo: 'usuarios', nombre: 'Usuarios, Roles y Permisos', descripcion: 'Directorio de colaboradores y matriz de creación/configuración de roles dinámicos', icono: 'users', rutaPrincipal: '/usuarios', grupo: 'Administración', disponibleEnApp: false, orden: 160 },
+  { codigo: 'perfil', nombre: 'Mi Perfil de Usuario', descripcion: 'Información personal, credenciales y datos de sucursal', icono: 'user', rutaPrincipal: '/perfil', grupo: 'Mi Cuenta', disponibleEnApp: true, orden: 170 },
 ];
 
 
@@ -71,7 +74,7 @@ async function main() {
   for (const m of MODULOS_DATA) {
     await prisma.moduloSistema.upsert({
       where: { codigo: m.codigo },
-      update: { nombre: m.nombre, descripcion: m.descripcion, icono: m.icono, rutaPrincipal: m.rutaPrincipal, grupo: m.grupo, orden: m.orden },
+      update: { nombre: m.nombre, descripcion: m.descripcion, icono: m.icono, rutaPrincipal: m.rutaPrincipal, grupo: m.grupo, orden: m.orden, disponibleEnApp: m.disponibleEnApp },
       create: {
         id: randomUUID(),
         codigo: m.codigo,
@@ -81,12 +84,13 @@ async function main() {
         rutaPrincipal: m.rutaPrincipal,
         grupo: m.grupo,
         orden: m.orden,
+        disponibleEnApp: m.disponibleEnApp,
         estado: 1,
       },
     });
   }
 
-  // 2. Los 14 roles oficiales, con los permisos que exige el backend
+  // 2. Los 15 roles oficiales, con los permisos que exige el backend
   console.log('🛡️ Sembrando roles oficiales con permisos, ámbito y acciones...');
   const actualizarRoles = reset || process.env.SEED_ACTUALIZAR_ROLES === 'SI';
   const rolesMap = new Map<string, string>();
@@ -94,7 +98,7 @@ async function main() {
     const datos = {
       descripcion: r.descripcion,
       estado: 1,
-      permisos: r.modulos,
+      permisos: modulosDeCapacidades(r.capacidades, r.namerol),
       capacidades: r.capacidades,
       ambito: r.ambito,
       esSistema: true,
@@ -121,6 +125,30 @@ async function main() {
       await prisma.role.update({ where: { id: existente.id }, data: datosForzados });
       rolesMap.set(r.namerol, existente.id);
     }
+  }
+
+  // 2b. Roles tal como estaban en la base (prisma/roles-actuales.json), para no perder los ajustes hechos en la plataforma.
+  if (process.env.SEED_ROLES_ACTUALES === 'SI') {
+    const archivo = fileURLToPath(new URL('./roles-actuales.json', import.meta.url));
+    const guardados = JSON.parse(fs.readFileSync(archivo, 'utf8')) as Array<{
+      namerol: string; descripcion: string | null; estado: number; permisos: string[];
+      capacidades: string[]; ambito: string; esSistema: boolean; acciones: Prisma.InputJsonValue | null;
+    }>;
+    for (const r of guardados) {
+      const datos = {
+        descripcion: r.descripcion, estado: r.estado, permisos: r.permisos, capacidades: r.capacidades,
+        ambito: r.ambito, esSistema: r.esSistema, acciones: (r.acciones ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+      };
+      const existente = await prisma.role.findUnique({ where: { namerol: r.namerol } });
+      if (existente) {
+        await prisma.role.update({ where: { id: existente.id }, data: datos });
+      } else {
+        const creado = await prisma.role.create({ data: { namerol: r.namerol, ...datos } });
+        rolesMap.set(r.namerol, creado.id);
+      }
+      rolesMap.set(r.namerol, (await prisma.role.findUnique({ where: { namerol: r.namerol } }))!.id);
+    }
+    console.log(`🛡️ Roles restaurados desde roles-actuales.json (${guardados.length})`);
   }
 
   // 3. Cuentas Super Admin y Admin

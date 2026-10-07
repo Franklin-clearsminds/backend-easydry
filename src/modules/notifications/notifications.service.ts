@@ -126,18 +126,34 @@ export class NotificationsService {
    */
   async resolverDestinatariosPorRol(params: { global?: string[]; regionales?: string[]; regionId?: string | string[] | null }): Promise<string[]> {
     const or: Record<string, unknown>[] = [];
-    if (params.global?.length) or.push({ role: { namerol: { in: params.global } } });
+    if (params.global?.length) or.push({ role: { namerol: { in: params.global }, estado: 1 } });
     if (params.regionales?.length && params.regionId) {
       if (params.regionId === 'TODAS') {
-        or.push({ role: { namerol: { in: params.regionales } } });
+        or.push({ role: { namerol: { in: params.regionales }, estado: 1 } });
       } else {
         const regionIds = Array.isArray(params.regionId) ? params.regionId : [params.regionId];
-        if (regionIds.length) or.push({ role: { namerol: { in: params.regionales } }, regionId: { in: regionIds } });
+        if (regionIds.length) or.push({ role: { namerol: { in: params.regionales }, estado: 1 }, regionId: { in: regionIds } });
       }
     }
     if (!or.length) return [];
     const usuarios = await this.prisma.user.findMany({ where: { estado: 1, OR: or }, select: { id: true } });
     return usuarios.map((u) => u.id);
+  }
+
+  /** Notifica a los administradores cuando cambian módulos, capacidades o ámbito de un rol. */
+  async notificarCambioPermisosRol(params: { roleId: string; roleName: string; actorName?: string }) {
+    try {
+      const userIds = await this.resolverDestinatariosPorRol({ global: ['ADMIN', 'SUPER_ADMIN'] });
+      await this.notificarUsuarios(
+        userIds,
+        'Permisos de rol actualizados',
+        `${params.actorName || 'Un administrador'} actualizó los permisos del rol "${params.roleName}".`,
+        { roleId: params.roleId, roleName: params.roleName },
+        { tipo: 'USUARIO_ACTUALIZADO', entidadTipo: 'ROL', entidadId: params.roleId },
+      );
+    } catch (err: any) {
+      this.logger.warn(`No se pudo notificar el cambio de permisos del rol ${params.roleId}: ${err?.message || err}`);
+    }
   }
 
   /** Avisa solo al coordinador de mantenimiento de la región de la máquina. */
@@ -205,7 +221,7 @@ export class NotificationsService {
     const destinatarios = await this.prisma.user.findMany({
       where: {
         estado: 1,
-        role: { namerol: { in: ['COORD_BODEGA', 'ASISTENTE_BODEGA', 'LIDER', 'ADMIN'] } },
+        role: { namerol: { in: ['COORD_BODEGA', 'ASISTENTE_BODEGA', 'LIDER_AGENCIA', 'LIDER', 'BACKUP', 'ADMIN'] } },
         ...(params.agenciaId
           ? {
               OR: [
@@ -235,7 +251,11 @@ export class NotificationsService {
 
   /** Historial paginado de notificaciones del usuario, más reciente primero. */
   async list(dto: ListarNotificacionesDto, userId: string) {
-    const where = { userId, ...(dto.leida !== undefined ? { leida: dto.leida } : {}) };
+    const where = {
+      userId,
+      ...(dto.leida !== undefined ? { leida: dto.leida } : {}),
+      ...(dto.tipos?.length ? { tipo: { in: dto.tipos } } : {}),
+    };
     const { page, pageSize, skip, take } = resolverPaginacion(dto, { defecto: 50 });
     const [items, total] = await Promise.all([
       this.prisma.notification.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take }),

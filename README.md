@@ -129,7 +129,13 @@ pnpm run prisma:seed
 npx prisma db seed
 ```
 
-#### C. Crear una nueva migración (Durante el desarrollo de nuevas entidades)
+#### C. Crear retos y órdenes de prueba
+Solo para desarrollo local: crea/reutiliza un reto de agencias y uno de pulidores, con órdenes sintéticas finalizadas del mes actual. El script es idempotente y solo actualiza registros con IDs/OT `DEMO-RETO`; no borra datos operativos.
+```bash
+pnpm run seed:retos-demo
+```
+
+#### D. Crear una nueva migración (Durante el desarrollo de nuevas entidades)
 Cuando agregues o modifiques modelos en `prisma/schema.prisma`:
 ```bash
 # Genera el archivo SQL en prisma/migrations/<timestamp>_<nombre>/ y lo aplica localmente
@@ -138,7 +144,7 @@ npx prisma migrate dev --name <nombre_descriptivo_del_cambio>
 
 > ⚠️ **Si tu base de datos local tiene drift de esquema** (columnas o tablas creadas manualmente o con `db push` antes de existir su migración), `migrate dev` detectará la diferencia y **propondrá resetear toda la base de datos**, borrando los datos. Si ves esa advertencia, **no confirmes el reset**: en su lugar escribe el archivo `migration.sql` a mano dentro de `prisma/migrations/<timestamp>_<nombre>/` (copiando la sintaxis de una migración reciente) y aplícalo con `pnpm run prisma:deploy`, que solo ejecuta migraciones pendientes sin comparar ni resetear el esquema.
 
-#### D. Comandos útiles de auditoría y base de datos
+#### E. Comandos útiles de auditoría y base de datos
 | Comando | Descripción |
 |---|---|
 | `pnpm run prisma:status` | Revisa si existen migraciones pendientes de aplicar o si la BD está al día. |

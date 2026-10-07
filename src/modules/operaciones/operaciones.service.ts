@@ -64,7 +64,10 @@ export class OperacionesService {
     if (!actor) return;
     const alcance: Alcance = resolverAlcance(actor);
     if (alcance.tipo === 'PROPIO') {
-      if (servicio.operadorId === actor.id) return;
+      if (
+        servicio.operadorId === actor.id ||
+        servicio.operadoresAsignados?.some((asignacion: any) => asignacion.operadorId === actor.id)
+      ) return;
     } else if (puedeSobreAgencia(alcance, { id: servicio.bahia?.agencia?.id ?? servicio.bahia?.agenciaId, regionId: servicio.bahia?.agencia?.regionId })) {
       return;
     }
@@ -104,6 +107,7 @@ export class OperacionesService {
     // 1. Alcance del usuario (regla única): país, región, agencia o lo propio. Sin usuario o sin dato de su ámbito no ve nada.
     //    Nunca se toma una agencia o región del cliente para ampliar el alcance: solo para acotar dentro de él.
     const alcance: Alcance = currentUser ? resolverAlcance(currentUser) : { tipo: 'NINGUNO' };
+    let operadorPropioId: string | undefined;
     const pideAgencia = [params?.agenciaId, params?.sucursalId].find((v) => v && v !== 'Todas' && v !== 'TODAS');
     const pideRegion = params?.regionId && params.regionId !== 'Todas' && params.regionId !== 'TODAS' ? params.regionId : undefined;
     switch (alcance.tipo) {
@@ -118,7 +122,7 @@ export class OperacionesService {
         where.bahia = { agenciaId: alcance.agenciaId };
         break;
       case 'PROPIO':
-        where.operadorId = currentUser.id;
+        operadorPropioId = currentUser.id;
         break;
       default:
         where.id = { in: [] };
@@ -166,7 +170,15 @@ export class OperacionesService {
     const operadorNombre = whereBusqueda(['operador.name', 'operador.lastname'], params?.operadorNombre);
     if (operadorNombre) extra.push(operadorNombre);
     // Un lavador ya está limitado a sus propios servicios: no puede pedir los de otro operador.
-    if (params?.operadorId && !where.operadorId) where.operadorId = params.operadorId;
+    const operadorFiltro = operadorPropioId || params?.operadorId;
+    if (operadorFiltro) {
+      extra.push({
+        OR: [
+          { operadorId: operadorFiltro },
+          { operadoresAsignados: { some: { operadorId: operadorFiltro } } },
+        ],
+      });
+    }
 
     const desde = params?.fechaDesde ? new Date(params.fechaDesde) : null;
     const hasta = params?.fechaHasta ? new Date(params.fechaHasta) : null;
@@ -225,6 +237,9 @@ export class OperacionesService {
           },
           operador: {
             select: { id: true, name: true, lastname: true, email: true },
+          },
+          operadoresAsignados: {
+            include: { operador: { select: { id: true, name: true, lastname: true, email: true } } },
           },
         },
       }),
@@ -296,6 +311,9 @@ export class OperacionesService {
         },
         operador: {
           select: { id: true, name: true, lastname: true, email: true },
+        },
+        operadoresAsignados: {
+          include: { operador: { select: { id: true, name: true, lastname: true, email: true } } },
         },
         consumos: {
           include: {
@@ -499,22 +517,42 @@ export class OperacionesService {
     const resolvedBahiaId = bahia.id;
     const agenciaId = bahia.agenciaId;
 
-    // 2. Resolución de Operador: si la app indicó qué lavador realiza el servicio
-    //    (createDto.operadorId), la OT se le atribuye a él -siempre que sea de la misma
-    //    agencia que la bahía-. Si no se indicó, se atribuye a quien está autenticado.
-    let validOperadorId = createDto.operadorId || operadorId;
+    // 2. Resolución de lavadores asignados a la OT. operadorId conserva el responsable principal
+    // para compatibilidad con clientes antiguos; operadorIds registra al equipo de la bahía.
+    const operadorIdsSolicitados = [...new Set((createDto.operadorIds || []).filter(Boolean))];
+    if (operadorIdsSolicitados.length === 0 && createDto.operadorId) {
+      operadorIdsSolicitados.push(createDto.operadorId);
+    }
+    const validOperadorId = operadorIdsSolicitados[0] || operadorId;
     let user = validOperadorId ? await this.prisma.user.findUnique({ where: { id: validOperadorId } }) : null;
     if (!user) {
       throw new BadRequestException('No se encontró el operador autenticado para registrar el servicio.');
     }
-    if (createDto.operadorId) {
-      if (String(user.agenciaId || '') !== String(agenciaId || '')) {
-        throw new BadRequestException('El lavador seleccionado no pertenece a la agencia de la bahía indicada.');
+    if (operadorIdsSolicitados.length > 0) {
+      const usuariosSeleccionados = await this.prisma.user.findMany({
+        where: { id: { in: operadorIdsSolicitados } },
+        select: { id: true, agenciaId: true, estado: true },
+      });
+      if (usuariosSeleccionados.length !== operadorIdsSolicitados.length) {
+        throw new BadRequestException('Uno o más lavadores seleccionados ya no existen.');
       }
-      if (user.estado !== 1) {
-        throw new BadRequestException('El lavador seleccionado está inactivo y no puede recibir nuevas OTs.');
+      if (usuariosSeleccionados.some((op) => String(op.agenciaId || '') !== String(agenciaId || ''))) {
+        throw new BadRequestException('Todos los lavadores seleccionados deben pertenecer a la agencia de la bahía.');
+      }
+      if (usuariosSeleccionados.some((op) => op.estado !== 1)) {
+        throw new BadRequestException('Uno o más lavadores seleccionados están inactivos.');
+      }
+      if (createDto.operadorIds?.length) {
+        const asignacionesActivas = await this.prisma.bahiaOperador.findMany({
+          where: { bahiaId: resolvedBahiaId, operadorId: { in: operadorIdsSolicitados }, activo: true },
+          select: { operadorId: true },
+        });
+        if (asignacionesActivas.length !== operadorIdsSolicitados.length) {
+          throw new BadRequestException('Todos los lavadores seleccionados deben tener una asignación activa a la bahía elegida.');
+        }
       }
     }
+    const operadoresAsignadosIds = operadorIdsSolicitados.length > 0 ? operadorIdsSolicitados : [validOperadorId];
 
     // 3. Resolución Defensiva de Catálogo de Servicio y sus Recetas
     let catalogo: any = null;
@@ -701,6 +739,9 @@ export class OperacionesService {
         servicioCatalogoId: resolvedCatalogoId,
         precio: precioResuelto,
         operadorId: validOperadorId,
+        operadoresAsignados: {
+          create: operadoresAsignadosIds.map((id) => ({ operadorId: id })),
+        },
         horaIngreso: now,
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,
         horaSalida: horaSalidaFinal,
@@ -731,6 +772,9 @@ export class OperacionesService {
         },
         operador: {
           select: { id: true, name: true, lastname: true, email: true },
+        },
+        operadoresAsignados: {
+          include: { operador: { select: { id: true, name: true, lastname: true, email: true } } },
         },
       },
     });
@@ -1013,7 +1057,7 @@ export class OperacionesService {
   ): Promise<void> {
     if (!this.notifications) return;
     const [lideres, porRol] = await Promise.all([
-      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: 'LIDER' } }, select: { id: true } }),
+      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: ['LIDER', 'BACKUP'] } } }, select: { id: true } }),
       this.notifications.resolverDestinatariosPorRol({
         global: ['ADMIN', 'SUPER_ADMIN'],
         regionales: ['SUPERVISOR'],
@@ -1913,7 +1957,7 @@ export class OperacionesService {
 
       if (this.notifications) {
         const [lideres, porRol] = await Promise.all([
-          this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: 'LIDER' } }, select: { id: true } }),
+          this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: ['LIDER', 'BACKUP'] } } }, select: { id: true } }),
           this.notifications.resolverDestinatariosPorRol({
             global: ['ADMIN', 'SUPER_ADMIN'],
             regionales: ['SUPERVISOR'],

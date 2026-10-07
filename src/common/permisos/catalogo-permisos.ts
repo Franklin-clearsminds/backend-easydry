@@ -21,6 +21,7 @@ const def = (grupo: string, codigo: string, nombre: string, descripcion: string)
 export const CATALOGO_PERMISOS = [
   def('Panel', 'dashboard.ver', 'Ver dashboard y analítica', 'Indicadores, gráficos y consumo de químicos dentro de su ámbito.'),
   def('Panel', 'productividad.ver', 'Ver productividad', 'Comparativas de agencias y ranking de operarios.'),
+  def('Panel', 'reportes.ver', 'Ver reportes operativos', 'Informes consolidados de servicios y rendimiento dentro de su ámbito.'),
 
   def('Agencias', 'agencias.ver', 'Ver agencias, bahías, regiones y clientes', 'Listados, detalle, resumen y desplegables dentro de su ámbito.'),
   def('Agencias', 'agencias.crear', 'Crear agencias', 'Registrar una agencia nueva.'),
@@ -35,6 +36,7 @@ export const CATALOGO_PERMISOS = [
 
   def('Usuarios', 'usuarios.ver', 'Ver usuarios', 'Listar usuarios y operadores de su ámbito (nombre, rol y estado).'),
   def('Usuarios', 'usuarios.gestionar', 'Gestionar usuarios', 'Crear, editar, activar, eliminar y asignar usuarios.'),
+  def('Usuarios', 'backup.gestionar', 'Gestionar usuarios Backup', 'Crear usuarios Backup de su región y asignarlos temporalmente a una agencia.'),
   def('Usuarios', 'operadores.gestionar', 'Gestionar operadores', 'Registrar y editar lavadores y pulidores.'),
   def('Usuarios', 'roles.ver', 'Ver roles', 'Consultar roles, módulos y permisos.'),
   def('Usuarios', 'roles.gestionar', 'Gestionar roles y permisos', 'Crear roles, editar sus permisos y ámbito, y eliminarlos.'),
@@ -86,14 +88,15 @@ export const CATALOGO_PERMISOS = [
   def('Maquinaria', 'incidentes.resolver', 'Resolver incidentes', 'Editar y resolver incidentes.'),
   def('Maquinaria', 'mantenimientos.ver', 'Ver mantenimientos', 'Listado de mantenimientos.'),
   def('Maquinaria', 'mantenimientos.ejecutar', 'Ejecutar mantenimientos', 'Ejecutar y editar mantenimientos asignados.'),
-  def('Maquinaria', 'maquinaria.evidencias', 'Agregar evidencias de maquinaria', 'Subir fotos o videos a un incidente o mantenimiento.'),
+  def('Maquinaria', 'maquinaria.evidencias', 'Subir evidencias de incidencias y mantenimiento', 'Adjuntar fotos, videos o documentos a una incidencia o mantenimiento.'),
   def('Maquinaria', 'checklist.gestionar', 'Gestionar plantillas de checklist', 'Definir los pasos de cada tipo de mantenimiento (preventivo o correctivo).'),
+  def('Maquinaria', 'limpiezas.evidencias', 'Subir evidencias de limpieza', 'Registrar fotos de limpieza de maquinaria. Este permiso es independiente de evidencias de servicios, incidencias y mantenimiento.'),
   def('Maquinaria', 'limpiezas.ver', 'Ver limpiezas de maquinaria', 'Auditoría de limpiezas registradas (fecha, quién y fotos) dentro de su ámbito.'),
   def('Maquinaria', 'limpiezas.editar', 'Editar o eliminar limpiezas', 'Corregir las observaciones o eliminar un registro de limpieza dentro de su ámbito.'),
 
   def('Sistema', 'sync.usar', 'Usar la sincronización de la app', 'Sincronizar datos de la app móvil y registrar el dispositivo.'),
   def('Sistema', 'sync.dlq.gestionar', 'Gestionar errores de sincronización', 'Ver, resolver y reintentar los errores de todos los usuarios.'),
-  def('Sistema', 'evidencias.subir', 'Subir evidencias', 'Subir fotos y videos de servicios.'),
+  def('Sistema', 'evidencias.subir', 'Subir evidencias de servicios', 'Subir fotos y videos de órdenes de servicios generales y especiales.'),
   def('Sistema', 'evidencias.ver', 'Ver evidencias', 'Consultar fotos y videos dentro de su ámbito.'),
 ] as const satisfies readonly DefinicionPermiso[];
 

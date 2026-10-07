@@ -1,6 +1,8 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, Headers } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { SyncService } from './sync.service.js';
+import { exigirPermisoSubida } from '../storage/upload-permissions.js';
+import type { GenerateUploadTicketDto } from '../storage/storage.service.js';
 import { SyncPushDto, ReplayDlqDto, QueryPendingMediaDto } from './dto/sync-push.dto.js';
 import { SyncPullQueryDto } from './dto/sync-pull.dto.js';
 import { RegisterPushTokenDto } from './dto/sync-device.dto.js';
@@ -80,10 +82,13 @@ export class SyncController {
       incidenteId?: string;
       contentType?: string;
     },
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
+    const userId = String(user.id);
     if (body.type === 'FOTO_PERFIL' || body.category === 'PERFIL_USUARIO') {
       body.clientUuid = userId;
+    } else {
+      exigirPermisoSubida(user, body as Pick<GenerateUploadTicketDto, 'category' | 'type'>);
     }
     return this.syncService.generateMediaUploadTicket({
       ...body,
@@ -181,4 +186,3 @@ export class SyncController {
     return this.syncService.registerPushToken(dto, userId);
   }
 }
-

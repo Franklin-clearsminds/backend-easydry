@@ -83,3 +83,48 @@ describe('GET /storage/file ya no entrega evidencias', () => {
     expect(servicio.getPresignedDownloadUrl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('permisos de subida de evidencias de maquinaria', () => {
+  const usuarioCon = (...capacidades: string[]) => ({
+    id: 'lider-1',
+    roleDetails: { namerol: 'LIDER', capacidades },
+  });
+
+  it('permite subir limpieza con el permiso separado y bloquea la subida de incidentes', async () => {
+    const { controlador, servicio } = armar();
+    servicio.generateUploadTicket = vi.fn().mockResolvedValue({ ticketId: 'ticket' }) as any;
+    const usuario = usuarioCon('limpiezas.evidencias');
+
+    await expect(controlador.getUploadTicket({
+      type: 'FOTO_LIMPIEZA',
+      category: 'MAQUINARIA_LIMPIEZA',
+    }, usuario)).resolves.toEqual({ ticketId: 'ticket' });
+    await expect(controlador.getUploadTicket({
+      type: 'FOTO_INCIDENTE',
+      category: 'MAQUINARIA_INCIDENTE',
+    }, usuario)).rejects.toThrow(/incidencias o mantenimiento/);
+    expect(servicio.generateUploadTicket).toHaveBeenCalledTimes(1);
+  });
+
+  it('no permite usar maquinaria.evidencias para subir fotos de limpieza', async () => {
+    const { controlador, servicio } = armar();
+    servicio.generateUploadTicket = vi.fn().mockResolvedValue({ ticketId: 'ticket' }) as any;
+
+    await expect(controlador.getUploadTicket({
+      type: 'FOTO_LIMPIEZA',
+      category: 'MAQUINARIA_LIMPIEZA',
+    }, usuarioCon('maquinaria.evidencias'))).rejects.toThrow(/evidencias de limpieza/);
+    expect(servicio.generateUploadTicket).not.toHaveBeenCalled();
+  });
+
+  it('no permite usar evidencias.subir de servicios para subir fotos de limpieza', async () => {
+    const { controlador, servicio } = armar();
+    servicio.generateUploadTicket = vi.fn().mockResolvedValue({ ticketId: 'ticket' }) as any;
+
+    await expect(controlador.getUploadTicket({
+      type: 'FOTO_LIMPIEZA',
+      category: 'MAQUINARIA_LIMPIEZA',
+    }, usuarioCon('evidencias.subir'))).rejects.toThrow(/evidencias de limpieza/);
+    expect(servicio.generateUploadTicket).not.toHaveBeenCalled();
+  });
+});

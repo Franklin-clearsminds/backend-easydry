@@ -36,6 +36,7 @@ import {
 } from './dto/trazabilidad.dto.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
 @ApiTags('Taller & Maquinaria (100% POST)')
 @Controller('maquinaria')
 @ApiBearerAuth()
@@ -117,9 +118,9 @@ export class MaquinariaController {
   @Permiso('incidentes.reportar')
   @Post('incidentes/reportar')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Reportar incidencia de una máquina asignada (pulidor / líder operador). Requiere conexión.' })
+  @ApiOperation({ summary: 'Reportar una incidencia dentro del alcance; las evidencias se exigen solo si el rol tiene el permiso de subida.' })
   async reportarIncidente(@Body() dto: ReportarIncidenteDto, @CurrentUser() user: any) {
-    return this.maquinariaService.reportarIncidente(dto, actorFromUser(user));
+    return this.maquinariaService.reportarIncidente(dto, actorFromUser(user), tienePermiso(user, 'maquinaria.evidencias'));
   }
 
   @Permiso('maquinaria.gestionar')
@@ -133,9 +134,9 @@ export class MaquinariaController {
   @Permiso('incidentes.resolver')
   @Post('incidentes/resolver')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cerrar la incidencia con evidencia (técnico asignado o coordinador que la repara)' })
+  @ApiOperation({ summary: 'Cerrar la incidencia; las evidencias se exigen solo si el rol tiene el permiso de subida.' })
   async resolverIncidente(@Body() dto: ResolverIncidenteDto, @CurrentUser() user: any) {
-    return this.maquinariaService.resolverIncidente(dto, actorFromUser(user));
+    return this.maquinariaService.resolverIncidente(dto, actorFromUser(user), tienePermiso(user, 'maquinaria.evidencias'));
   }
 
   @Permiso('incidentes.resolver')
@@ -177,9 +178,9 @@ export class MaquinariaController {
   @Permiso('mantenimientos.ejecutar')
   @Post('mantenimientos/ejecutar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Ejecutar el mantenimiento con evidencia. Solo dentro de la ventana de adelanto de la máquina.' })
+  @ApiOperation({ summary: 'Ejecutar el mantenimiento; las evidencias se exigen solo si el rol tiene el permiso de subida.' })
   async ejecutarMantenimiento(@Body() dto: EjecutarMantenimientoDto, @CurrentUser() user: any) {
-    return this.maquinariaService.ejecutarMantenimiento(dto, actorFromUser(user));
+    return this.maquinariaService.ejecutarMantenimiento(dto, actorFromUser(user), tienePermiso(user, 'maquinaria.evidencias'));
   }
 
   @Permiso('mantenimientos.ejecutar')
@@ -246,7 +247,7 @@ export class MaquinariaController {
   // LIMPIEZA (2x/semana para la maquinaria de agencia, diaria para la asignada a un pulidor)
   // ==============================================================
 
-  @Permiso('maquinaria.evidencias')
+  @Permiso('limpiezas.evidencias')
   @Post('limpiezas/registrar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Registrar la limpieza de una máquina (una o varias fotos); el líder la de su agencia, el pulidor la suya' })

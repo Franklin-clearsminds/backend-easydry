@@ -29,9 +29,9 @@ const INSUMOS = [
 function construir(op: { rol?: string; usuario?: Record<string, unknown> } = {}) {
   const usuario = op.rol ? { id: 'u1', role: { namerol: op.rol }, regionId: 'r1', region: { nombre: 'Norte' }, ...op.usuario } : null;
   const agencias = [
-    { id: 'a1', codigo: 'A-01', nombre: 'Agencia Uno', region: 'Norte', direccion: '', numeroBahias: 2, servicioIds: [1], tieneServiciosEspeciales: false },
-    { id: 'a2', codigo: 'A-02', nombre: 'Agencia Dos', region: 'Norte', direccion: '', numeroBahias: 1, servicioIds: [1], tieneServiciosEspeciales: false },
-    { id: 'a3', codigo: 'A-03', nombre: 'Agencia Tres', region: 'Sur', direccion: '', numeroBahias: 1, servicioIds: [], tieneServiciosEspeciales: false },
+    { id: 'a1', codigo: 'A-01', nombre: 'Agencia Uno', region: 'Norte', regionId: 'r1', direccion: '', numeroBahias: 2, servicioIds: [1], tieneServiciosEspeciales: false },
+    { id: 'a2', codigo: 'A-02', nombre: 'Agencia Dos', region: 'Norte', regionId: 'r1', direccion: '', numeroBahias: 1, servicioIds: [1], tieneServiciosEspeciales: false },
+    { id: 'a3', codigo: 'A-03', nombre: 'Agencia Tres', region: 'Sur', regionId: 'r2', direccion: '', numeroBahias: 1, servicioIds: [], tieneServiciosEspeciales: false },
   ];
   const stocks = [
     { agenciaId: 'a1', insumoId: 'i1', cantidadActual: 0 }, // Sin Stock
@@ -45,17 +45,35 @@ function construir(op: { rol?: string; usuario?: Record<string, unknown> } = {})
     { pulidorId: 'p2', insumoId: 'i3', cantidadActual: 8 }, // Óptimo
   ];
   const pulidores = [
-    { id: 'p1', name: 'Ana', lastname: 'Paz', email: 'ana@x.com', role: { namerol: 'PULIDOR_FIJO' }, regionId: 'r1', region: { id: 'r1', nombre: 'Norte' }, agenciaId: 'a1', agencia: { id: 'a1', nombre: 'Agencia Uno' }, servicioIds: [] },
+    { id: 'p1', name: 'Ana', lastname: 'Paz', email: 'ana@x.com', role: { namerol: 'PULIDOR_FIJO' }, regionId: 'r1', region: { id: 'r1', nombre: 'Norte' }, agenciaId: 'a1', agencia: { id: 'a1', nombre: 'Agencia Uno', regionId: 'r1' }, servicioIds: [] },
     { id: 'p2', name: 'Beto', lastname: 'Ruiz', email: 'beto@x.com', role: { namerol: 'PULIDOR_MOVIL' }, regionId: 'r1', region: { id: 'r1', nombre: 'Norte' }, agenciaId: null, agencia: null, servicioIds: [] },
   ];
   const prisma = {
     user: {
       findUnique: vi.fn().mockResolvedValue(usuario),
-      findMany: vi.fn(async (args: any) => pulidores.filter((p) => !args.where?.id || p.id === args.where.id)),
+      findMany: vi.fn(async (args: any) =>
+        pulidores.filter((p) => {
+          const where = args.where || {};
+          const coincide = (filtro: any) =>
+            (!filtro.id || (typeof filtro.id === 'string' ? p.id === filtro.id : filtro.id.in?.includes(p.id))) &&
+            (!filtro.regionId || p.regionId === filtro.regionId) &&
+            (!filtro.agenciaId || p.agenciaId === filtro.agenciaId) &&
+            (!filtro.agencia?.regionId || p.agencia?.regionId === filtro.agencia.regionId) &&
+            (!filtro.OR || filtro.OR.some(coincide));
+          return coincide(where) && (where.AND || []).every(coincide);
+        }),
+      ),
     },
     agencia: {
       findMany: vi.fn(async (args: any) =>
-        agencias.filter((a) => (!args.where?.id || a.id === args.where.id) && (!args.where?.region || a.region === args.where.region)),
+        agencias.filter((a) => {
+          const where = args.where || {};
+          const coincide = (filtro: any) =>
+            (!filtro.id || (typeof filtro.id === 'string' ? a.id === filtro.id : filtro.id.in?.includes(a.id))) &&
+            (!filtro.region || a.region === filtro.region) &&
+            (!filtro.regionId || a.regionId === filtro.regionId);
+          return coincide(where) && (where.AND || []).every(coincide);
+        }),
       ),
     },
     insumo: { findMany: vi.fn().mockResolvedValue(INSUMOS) },
@@ -154,6 +172,14 @@ describe('obtenerStockAgenciasResumen', () => {
     expect(JSON.stringify(prisma.agencia.findMany.mock.calls[0][0].where)).toContain('"regionId":"r1"');
   });
 
+  it('el coordinador de mantenimiento ve agencias de su región y los filtros del cliente solo pueden reducirla', async () => {
+    const { service, prisma } = construir({ rol: 'COORD_MANTENIMIENTO' });
+    await service.obtenerStockAgenciasResumen({ page: 1, agenciaId: 'a-otra', region: 'Sur' } as any, 'u1');
+    const where = prisma.agencia.findMany.mock.calls[0][0].where;
+    expect(where.regionId).toBe('r1');
+    expect(where.AND).toEqual([{ id: 'a-otra' }, { region: 'Sur' }]);
+  });
+
   it('el líder queda acotado a las agencias de su región (para poder despachar), no a toda la red', async () => {
     const { service, prisma } = construir({
       rol: 'LIDER',
@@ -195,6 +221,29 @@ describe('obtenerStockPulidoresResumen', () => {
     const { service, prisma } = construir({ rol: 'PULIDOR' });
     await service.obtenerStockPulidoresResumen({ page: 1 } as any, 'p2');
     expect(prisma.user.findMany.mock.calls[0][0].where.id).toBe('p2');
+  });
+
+  it('el coordinador de mantenimiento ve kits de su región sin poder sustituirla desde los filtros', async () => {
+    const { service, prisma } = construir({ rol: 'COORD_MANTENIMIENTO' });
+    await service.obtenerStockPulidoresResumen({ page: 1, regionId: 'r-otra', pulidorId: 'p-ajeno' } as any, 'u1');
+    const where = prisma.user.findMany.mock.calls[0][0].where;
+    expect(where.OR).toEqual([{ regionId: 'r1' }, { agencia: { regionId: 'r1' } }]);
+    expect(where.AND).toEqual([
+      { id: 'p-ajeno' },
+      { OR: [{ regionId: 'r-otra' }, { agencia: { regionId: 'r-otra' } }] },
+    ]);
+  });
+
+  it('mantiene el alcance regional del asistente obtenido desde su bodega', async () => {
+    const { service, prisma } = construir({
+      rol: 'ASISTENTE_BODEGA',
+      usuario: { regionId: null, bodega: { regionId: 'r1' } },
+    });
+    await service.obtenerStockPulidoresResumen({ page: 1 } as any, 'u1');
+    expect(prisma.user.findMany.mock.calls[0][0].where.OR).toEqual([
+      { regionId: 'r1' },
+      { agencia: { regionId: 'r1' } },
+    ]);
   });
 });
 

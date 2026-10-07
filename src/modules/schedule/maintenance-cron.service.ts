@@ -113,13 +113,17 @@ export class MaintenanceCronService {
       let count = 0;
       for (const m of debidasHoy) {
         if (registradasIds.has(m.id)) continue;
-        const responsableId = m.operadorAsignadoId
-          ?? (m.agenciaId
-            ? (await this.prisma.user.findFirst({ where: { agenciaId: m.agenciaId, estado: 1, role: { namerol: 'LIDER' } }, select: { id: true } }))?.id
-            : null);
-        if (!responsableId) continue;
+        const responsables = m.operadorAsignadoId
+          ? [m.operadorAsignadoId]
+          : m.agenciaId
+            ? (await this.prisma.user.findMany({
+              where: { agenciaId: m.agenciaId, estado: 1, role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
+              select: { id: true },
+            })).map((u) => u.id)
+            : [];
+        if (!responsables.length) continue;
         await this.notifications.notificarUsuarios(
-          [responsableId],
+          responsables,
           `Limpieza pendiente hoy: ${m.codigo}`,
           `${m.nombre} tiene limpieza programada para hoy.`,
           { type: 'LIMPIEZA_RECORDATORIO', maquinariaId: m.id },

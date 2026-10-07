@@ -150,6 +150,19 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       )).rejects.toThrow(/foto o un video/);
     });
 
+    it('permite ejecutar sin evidencias cuando el rol no tiene permiso para subirlas', async () => {
+      const { service, prisma, tx } = build();
+      prisma.mantenimientoMaquinaria.findUnique.mockResolvedValue(mantenimiento(0));
+
+      await service.ejecutarMantenimiento(
+        { mantenimientoId: 'mt1', costoTotal: 50, evidencias: [] } as never,
+        tecnico,
+        false,
+      );
+
+      expect(tx.mantenimientoMaquinaria.update.mock.calls[0][0].data.estado).toBe('FINALIZADO');
+    });
+
     it('solo el técnico asignado puede ejecutarlo', async () => {
       const { service, prisma } = build();
       prisma.mantenimientoMaquinaria.findUnique.mockResolvedValue(mantenimiento(0));
@@ -224,6 +237,26 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
         { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
         pulidor,
       )).rejects.toThrow(/al menos una foto o un video/);
+    });
+
+    it('permite reportar sin evidencia cuando el rol no tiene permiso para subirla', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'pul-1' }));
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
+        pulidor,
+        false,
+      )).resolves.toBeDefined();
+    });
+
+    it('rechaza evidencias recibidas si el rol no puede subirlas', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'pul-1' }));
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [{ url: 'maquinaria/mq-01/incidentes/i1/reporte/a.jpg' }] } as never,
+        pulidor,
+        false,
+      )).rejects.toThrow(/no puede adjuntar evidencias/);
     });
 
     it('el líder puede reportar cualquier máquina de su agencia, no solo la asignada a él', async () => {
@@ -311,7 +344,7 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       await service.setActiva({ maquinariaId: 'm1', activa: false, motivo: 'Irreparable' } as never, admin);
 
       expect(prisma.user.findMany).toHaveBeenCalledWith({
-        where: { estado: 1, agenciaId: 'ag-1', role: { namerol: 'LIDER' } },
+        where: { estado: 1, agenciaId: 'ag-1', role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
         select: { id: true },
       });
       expect(notifications.resolverDestinatariosPorRol).toHaveBeenCalledWith({
@@ -691,6 +724,17 @@ describe('MaquinariaService — costo de mantenimiento e incidencias', () => {
         tecnico,
       );
       expect(tx.incidenteTecnico.update.mock.calls[0][0].data.costoTotal).toBe(35.5);
+    });
+
+    it('permite resolver sin evidencias cuando el rol no tiene permiso para subirlas', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente());
+      await service.resolverIncidente(
+        { incidenteId: 'inc-1', solucion: 'Se reparó', costoTotal: 35.5, evidencias: [] } as never,
+        tecnico,
+        false,
+      );
+      expect(tx.incidenteTecnico.update.mock.calls[0][0].data.estado).toBe('RESUELTO');
     });
   });
 
