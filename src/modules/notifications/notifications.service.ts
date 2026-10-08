@@ -172,6 +172,7 @@ export class NotificationsService {
     await this.notificarUsuarios(coordinadores.map((u) => u.id), params.title, params.body, params.data, params.opts);
   }
 
+  /** Avisa a mantenimiento/supervisión de un incidente crítico y lo deja persistido en la campanita web. */
   async notificarIncidenteCritico(params: {
     incidenteId: string;
     titulo: string;
@@ -179,53 +180,58 @@ export class NotificationsService {
     maquinariaCodigo: string;
     agenciaId?: string;
   }) {
-    // Buscar usuarios con rol COORD_MANTENIMIENTO y SUPERVISOR
     const destinatarios = await this.prisma.user.findMany({
       where: {
-        role: {
-          namerol: { in: ['COORD_MANTENIMIENTO', 'SUPERVISOR', 'ADMIN'] },
-        },
+        estado: 1,
+        role: { namerol: { in: ['COORD_MANTENIMIENTO', 'SUPERVISOR', 'ADMIN'] } },
         ...(params.agenciaId ? { OR: [{ agenciaId: params.agenciaId }, { agenciasIds: { has: params.agenciaId } }, { agenciaId: null }] } : {}),
       },
       select: { id: true },
     });
 
-    const userIds = destinatarios.map((u) => u.id);
-    if (userIds.length === 0) return;
-
-    const devices = await this.prisma.syncDevice.findMany({
-      where: {
-        userId: { in: userIds },
-        pushToken: { not: null },
-      },
-      select: { pushToken: true },
-    });
-
-    const tokens = devices.map((d) => d.pushToken as string);
-    if (tokens.length > 0) {
-      await this.sendPushNotification({
-        to: tokens,
-        title: `Alerta Crítica Taller: ${params.maquinariaCodigo}`,
-        body: `Incidente: ${params.titulo} (Gravedad: ${params.gravedad})`,
-        data: {
-          type: 'INCIDENTE_CRITICO',
-          incidenteId: params.incidenteId,
-        },
-      });
-    }
+    // `notificarUsuarios` hace el push y, con `opts.tipo`, persiste y emite por WebSocket la notificación web.
+    await this.notificarUsuarios(
+      destinatarios.map((u) => u.id),
+      `Alerta Crítica Taller: ${params.maquinariaCodigo}`,
+      `Incidente: ${params.titulo} (Gravedad: ${params.gravedad})`,
+      { type: 'INCIDENTE_CRITICO', incidenteId: params.incidenteId },
+      { tipo: 'INCIDENTE_NUEVO', entidadTipo: 'MAQUINARIA', entidadId: params.incidenteId },
+    );
   }
 
+  /**
+   * Avisa de un stock crítico solo a quien corresponde a esa agencia: bodega nacional, bodega de su región
+   * y líder de la agencia. Antes se avisaba a roles globales sin alcance (toda la red recibía todo).
+   */
   async notificarAlertaStock(params: {
     insumoNombre: string;
     nivel: string;
     agenciaId?: string;
     entidadId?: string;
   }) {
+    let regionId: string | null = null;
+    if (params.agenciaId) {
+      const agencia = await this.prisma.agencia.findUnique({
+        where: { id: params.agenciaId },
+        select: { regionId: true },
+      });
+      regionId = agencia?.regionId ?? null;
+    }
+
     const destinatarios = await this.prisma.user.findMany({
       where: {
-        role: {
-          namerol: { in: ['COORD_BODEGA', 'LIDER_AGENCIA', 'LIDER', 'BACKUP', 'ADMIN'] },
-        },
+        estado: 1,
+        role: { namerol: { in: ['COORD_BODEGA', 'ASISTENTE_BODEGA', 'LIDER_AGENCIA', 'LIDER', 'BACKUP', 'ADMIN'] } },
+        ...(params.agenciaId
+          ? {
+              OR: [
+                { role: { namerol: { in: ['COORD_BODEGA', 'ADMIN'] } } },
+                ...(regionId ? [{ regionId }] : []),
+                { agenciaId: params.agenciaId },
+                { agenciasIds: { has: params.agenciaId } },
+              ],
+            }
+          : {}),
       },
       select: { id: true },
     });

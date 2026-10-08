@@ -1,5 +1,5 @@
 import { IsArray, IsBoolean, IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Min, Max } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { TipoNotificacion } from '@prisma/client';
 
@@ -21,7 +21,7 @@ export class ListarNotificacionesDto {
 
   @ApiPropertyOptional({ description: 'Filtra solo leídas (true) o no leídas (false). Sin filtro: todas.' })
   @IsOptional()
-  @Type(() => Boolean)
+  @Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : value === true || value === 'true'))
   @IsBoolean()
   leida?: boolean;
 

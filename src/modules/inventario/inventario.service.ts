@@ -3985,7 +3985,7 @@ export class InventarioService {
         const alertaExistente = await this.prisma.alertaStock.findFirst({
           where: {
             insumoId,
-            estado: 'PENDIENTE',
+            estado: { not: 'RESUELTO' },
             ...(params.pulidorId
               ? { pulidorId: params.pulidorId }
               : { agenciaId: params.agenciaId || null, pulidorId: null }),
@@ -4201,6 +4201,7 @@ export class InventarioService {
       !sinEstadoNiNivel && dto.grupoNivel ? { nivel: { in: dto.grupoNivel === 'CRITICO' ? ['CRITICO', 'AGOTADO'] : ['BAJO'] } } : undefined,
       !sinEstadoNiNivel && dto.estado ? { estado: dto.estado } : undefined,
       !sinEstadoNiNivel && dto.soloActivas ? { estado: { not: 'RESUELTO' } } : undefined,
+      !sinEstadoNiNivel && dto.pulidorId ? { pulidorId: dto.pulidorId } : undefined,
     );
 
     if (!paginado) {
@@ -6078,7 +6079,21 @@ export class InventarioService {
         });
 
         const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
-        if (stockPosterior <= 0 && finalUsuarioId) {
+        
+        // Evitar duplicados revisando si ya existe una alerta activa para este insumo y agencia
+        let alertaExistente = null;
+        if (finalUsuarioId && stockPosterior <= stockMinimo) {
+          alertaExistente = await tx.alertaStock.findFirst({
+            where: {
+              insumoId: insumo.id,
+              agenciaId: targetAgenciaId,
+              estado: { not: 'RESUELTO' },
+            },
+            select: { id: true }
+          });
+        }
+
+        if (stockPosterior <= 0 && finalUsuarioId && !alertaExistente) {
           alertasGeneradas.push(`¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
           await tx.alertaStock.create({
             data: {
@@ -6090,7 +6105,7 @@ export class InventarioService {
               stockReportado: stockPosterior,
             },
           });
-        } else if (stockPosterior <= stockMinimo && finalUsuarioId) {
+        } else if (stockPosterior <= stockMinimo && finalUsuarioId && !alertaExistente) {
           alertasGeneradas.push(`Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
           await tx.alertaStock.create({
             data: {

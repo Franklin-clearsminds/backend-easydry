@@ -1,63 +1,93 @@
-import { IsString, IsOptional, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsDateString, IsIn } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
-export class DashboardAnalyticsDto {
-  @ApiPropertyOptional({ description: 'Filtrar por agencia específica' })
+/** Periodos predefinidos del filtro de fecha global (compartido por todos los dashboards). */
+export const RANGOS_PERIODO = ['HOY', 'SEMANA', 'MES', 'TRIMESTRE', 'SEMESTRE', 'ANIO', 'RANGO'] as const;
+export type RangoPeriodo = (typeof RANGOS_PERIODO)[number];
+
+/**
+ * Filtro base de toda la analítica. Es el ESTÁNDAR de filtros: acota por periodo, agencia, región y pulidor.
+ * El servidor SIEMPRE intersecta esto con el alcance del usuario, así que un id de fuera de su alcance
+ * nunca se usa como respaldo.
+ */
+export class FiltroAnaliticaDto {
+  @ApiPropertyOptional({ enum: RANGOS_PERIODO, description: 'Periodo del dashboard. Por defecto HOY.' })
   @IsOptional()
-  @IsString()
-  agenciaId?: string;
+  @IsIn(RANGOS_PERIODO as unknown as string[])
+  rango?: RangoPeriodo;
 
   @ApiPropertyOptional({ description: 'Filtrar por región' })
   @IsOptional()
   @IsString()
   regionId?: string;
 
-  @ApiPropertyOptional({ description: 'Fecha para el cálculo (YYYY-MM-DD). Si no se envía, se usa hoy.' })
+  @ApiPropertyOptional({ description: 'Filtrar por agencia específica' })
+  @IsOptional()
+  @IsString()
+  agenciaId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar por pulidor (servicios especiales)' })
+  @IsOptional()
+  @IsString()
+  pulidorId?: string;
+
+  @ApiPropertyOptional({
+    enum: ['GENERAL', 'ESPECIAL'],
+    description: 'Tipo de servicio del catálogo: lavados generales o especiales. Es un modificador continuo, se combina con los demás filtros.',
+  })
+  @IsOptional()
+  @IsIn(['GENERAL', 'ESPECIAL'])
+  categoriaServicio?: 'GENERAL' | 'ESPECIAL';
+
+  @ApiPropertyOptional({
+    enum: ['REGION', 'AGENCY', 'POLISHER'],
+    description: 'Nivel de desglose explícito del gráfico de rendimiento (nivel país), independiente del filtro estructural.',
+  })
+  @IsOptional()
+  @IsIn(['REGION', 'AGENCY', 'POLISHER'])
+  desglose?: 'REGION' | 'AGENCY' | 'POLISHER';
+
+  @ApiPropertyOptional({
+    enum: ['GLOBAL', 'REGION', 'AGENCY', 'POLISHER'],
+    description: 'Nivel de análisis (drill-down). Si no se envía, se infiere del id presente.',
+  })
+  @IsOptional()
+  @IsIn(['GLOBAL', 'REGION', 'AGENCY', 'POLISHER'])
+  dimension?: 'GLOBAL' | 'REGION' | 'AGENCY' | 'POLISHER';
+}
+
+/** Filtro por rango de fechas (aplica cuando `rango = RANGO`), además de agencia/región/pulidor. */
+export class RangoAnaliticaDto extends FiltroAnaliticaDto {
+  @ApiPropertyOptional({ description: 'Fecha inicio del rango (YYYY-MM-DD). Usar con rango=RANGO.' })
+  @IsOptional()
+  @IsDateString()
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha fin del rango (YYYY-MM-DD). Usar con rango=RANGO.' })
+  @IsOptional()
+  @IsDateString()
+  fechaHasta?: string;
+}
+
+export class DashboardAnalyticsDto extends RangoAnaliticaDto {
+  @ApiPropertyOptional({ description: 'Fecha exacta (YYYY-MM-DD). Compatibilidad: equivale a rango=RANGO de un día.' })
   @IsOptional()
   @IsDateString()
   fecha?: string;
 }
 
-export class ConsumoQuimicosAnalyticsDto {
-  @ApiPropertyOptional({ description: 'Filtrar por agencia específica' })
-  @IsOptional()
-  @IsString()
-  agenciaId?: string;
+/** Filtro de los dashboards dedicados (Taller, Bodega, Servicios Especiales). */
+export class DashboardDedicadoDto extends RangoAnaliticaDto {}
 
-  @ApiPropertyOptional({ description: 'Fecha inicio del rango (YYYY-MM-DD)' })
+export class ConsumoQuimicosAnalyticsDto extends RangoAnaliticaDto {
+  @ApiPropertyOptional({
+    description: 'Agrupación temporal de la serie de consumo: DIA | SEMANA | MES',
+    enum: ['DIA', 'SEMANA', 'MES'],
+    example: 'DIA',
+  })
   @IsOptional()
-  @IsDateString()
-  fechaDesde?: string;
-
-  @ApiPropertyOptional({ description: 'Fecha fin del rango (YYYY-MM-DD)' })
-  @IsOptional()
-  @IsDateString()
-  fechaHasta?: string;
-
-  @ApiPropertyOptional({ description: 'Agrupación temporal: DIA | SEMANA | MES', example: 'DIA' })
-  @IsOptional()
-  @IsString()
+  @IsIn(['DIA', 'SEMANA', 'MES'])
   agrupacion?: 'DIA' | 'SEMANA' | 'MES';
 }
 
-export class RankingLavadoresDto {
-  @ApiPropertyOptional({ description: 'Filtrar por agencia específica' })
-  @IsOptional()
-  @IsString()
-  agenciaId?: string;
-
-  @ApiPropertyOptional({ description: 'Filtrar por región' })
-  @IsOptional()
-  @IsString()
-  regionId?: string;
-
-  @ApiPropertyOptional({ description: 'Fecha inicio del rango (YYYY-MM-DD). Si no se envía, inicio del mes actual.' })
-  @IsOptional()
-  @IsDateString()
-  fechaDesde?: string;
-
-  @ApiPropertyOptional({ description: 'Fecha fin del rango (YYYY-MM-DD). Si no se envía, hoy.' })
-  @IsOptional()
-  @IsDateString()
-  fechaHasta?: string;
-}
+export class RankingLavadoresDto extends RangoAnaliticaDto {}

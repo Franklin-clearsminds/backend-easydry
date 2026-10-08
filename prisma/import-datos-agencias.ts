@@ -599,16 +599,18 @@ async function main() {
         continue;
       }
       const nombre = (op.nombre || '').trim() || `SIN NOMBRE ${cedula || 'X'}`;
-      const esPulidor = Boolean(op.esPulidor);
+      let esPulidor = Boolean(op.esPulidor);
       if (esPulidor) {
         const yaAsignado = fijoPorAgencia.get(agenciaId);
         if (yaAsignado && yaAsignado !== (cedula || nombre)) {
-          throw new Error(
+          console.warn(
             `La agencia "${ag.nombre}" tiene más de un pulidor marcado en el Excel (${yaAsignado} y ${cedula || nombre}). `
-            + `Cada agencia solo puede tener un pulidor fijo: corrige la hoja antes de reimportar.`,
+            + `Se asignará como lavador en su lugar.`
           );
+          esPulidor = false;
+        } else {
+          fijoPorAgencia.set(agenciaId, cedula || nombre);
         }
-        fijoPorAgencia.set(agenciaId, cedula || nombre);
       }
       const rol = esPulidor ? 'pulidor' : 'lavador';
       const email = makeEmail(nombre, rol, cedula, claimedEmails);

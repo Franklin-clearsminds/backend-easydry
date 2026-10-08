@@ -7,7 +7,7 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 
-const ROOT = path.resolve(__dirname, '..', '..');
+const ROOT = path.resolve(__dirname, '..');
 const XLSX = path.join(ROOT, 'DATOS AGENCIAS.xlsx');
 const OUT = path.join(__dirname, 'data', 'datos-agencias.json');
 
