@@ -40,7 +40,7 @@ describe('RolesService — crear', () => {
     const data = prisma.role.create.mock.calls[0][0].data;
     expect(data.namerol).toBe('INSPECTOR_ZONA');
     expect(data.esSistema).toBe(false);
-    expect(data.capacidades).toEqual(['servicios.ver', 'agencias.ver']);
+    expect(data.capacidades).toEqual(expect.arrayContaining(['servicios.ver', 'agencias.ver', 'pagina.servicios', 'pagina.servicios.generales']));
     expect(data.acciones.verTodosServicios).toBe(true);
     expect(r.ambito).toBe('REGION');
   });
@@ -87,7 +87,8 @@ describe('RolesService — editar', () => {
     await expect(service.update({ id: 'r-LIDER', namerol: 'OTRO_NOMBRE' } as any, superAdmin)).rejects.toThrow(/rol oficial/);
     await service.update({ id: 'r-LIDER', capacidades: ['servicios.ver'] } as any, superAdmin);
     const data = prisma.role.update.mock.calls[0][0].data;
-    expect(data.capacidades).toEqual(['servicios.ver']);
+    expect(data.capacidades).toContain('servicios.ver');
+    expect(data.capacidades).not.toContain('servicios.crear');
     expect(data.acciones.registrarServicio).toBe(false);
     expect(notifications.notificarCambioPermisosRol).toHaveBeenCalledWith({
       roleId: 'r-LIDER',
@@ -111,9 +112,9 @@ describe('RolesService — editar', () => {
     });
   });
 
-  it('dar un permiso habilita su pantalla: coordinador de mantenimiento con inventario.ver ve Inventario', async () => {
+  it('dar una página habilita su pantalla: coordinador de mantenimiento con la página Inventario ve Inventario', async () => {
     const { prisma, service } = armar(oficial('COORD_MANTENIMIENTO'));
-    const capacidades = [...oficial('COORD_MANTENIMIENTO').capacidades, 'inventario.ver'];
+    const capacidades = [...oficial('COORD_MANTENIMIENTO').capacidades, 'pagina.inventario'];
     const r = await service.update({ id: 'r-COORD_MANTENIMIENTO', capacidades } as any, superAdmin);
     expect(prisma.role.update.mock.calls[0][0].data.permisos).toContain('inventario');
     expect(r.permisos).toContain('inventario');

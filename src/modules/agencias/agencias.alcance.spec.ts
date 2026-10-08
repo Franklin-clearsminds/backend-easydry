@@ -45,6 +45,16 @@ describe('detalle de agencia', () => {
     const admin: any = await service.detailAgencia('a1', usuario('ADMIN'));
     expect(admin.usuarios[0].email).toBe('x@y.com');
   });
+
+  it('el correo y el teléfono los ve quien tenga la casilla, aunque no sea administrador', async () => {
+    const { service } = armar();
+    const base = usuario('LIDER', { agenciaId: 'a1' }) as any;
+    const sin: any = await service.detailAgencia('a1', base);
+    expect(sin.usuarios[0]).not.toHaveProperty('email');
+    const con = { ...base, roleDetails: { ...base.roleDetails, capacidades: [...base.roleDetails.capacidades, 'datos.contacto.ver'] } };
+    const visto: any = await service.detailAgencia('a1', con);
+    expect(visto.usuarios[0].email).toBe('x@y.com');
+  });
 });
 
 describe('bahías: lectura y edición dentro del alcance', () => {

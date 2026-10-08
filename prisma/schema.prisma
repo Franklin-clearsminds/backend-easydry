@@ -911,7 +911,6 @@ model SyncDevice {
   platform   String? // "ANDROID" | "IOS" | "WEB"
   pushToken  String? // Expo Push Token para notificaciones push en tiempo real
   lastSyncAt DateTime @default(now())
-  lastIp     String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -1405,13 +1404,10 @@ model ServicioEspecial {
   videoPausaUrl             String? // Dirección directa del vídeo de evidencia de pausa
   videoUltimaReanudacionUrl String? // Vídeo de evidencia de la última reanudación
   videoReanudacionUrl       String? // Dirección directa del vídeo de reanudación
-  fotosPausaUrls            String[]  @default([]) // Direcciones de evidencias fotográficas de la pausa
-  evidenciasPausa           Json? // Registro estructurado de evidencias de pausas
   historialPausas           Json? // Historial estructurado de todas las pausas con sus URLs
 
   recetaInsumos       Json?
   evidencias          Json?
-  notasSupervisor     String?
   notasOperador       String?
   observaciones       String?
   calificacionCalidad Int? // 1 a 5 estrellas
@@ -1466,8 +1462,6 @@ model Reto {
   creadorNombre       String?
   creadorRol          String?
   estado              String            @default("ACTIVO")
-  /// Obsoleto: criterios fijos de la versión anterior. El reto ahora se define con tipoServicios + metrica + modoGanador.
-  criterios           String[]          @default([])
   catalogoServicioId  Int?
   catalogoServicio    CatalogoServicio? @relation(fields: [catalogoServicioId], references: [id], onDelete: SetNull)
   catalogoServicioIds Int[]             @default([])
@@ -1481,7 +1475,6 @@ model Reto {
   modoGanador         String            @default("RANKING")
   cantidadGanadores   Int               @default(1)
   meta                Decimal?          @db.Decimal(12, 2)
-  bahiasIds           String[]          @default([])
   pulidoresIds        String[]          @default([])
   lavadoresIds        String[]          @default([])
   /// Ganadores calculados del ranking al cerrar: [{ participanteId, nombre, valor, posicion }]

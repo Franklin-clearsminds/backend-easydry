@@ -9,6 +9,7 @@ import { AgenciasService } from './agencias.service.js';
  */
 function armarPrisma(overrides: Record<string, any> = {}) {
   const prisma: any = {
+    bahiaOperador: { findMany: vi.fn().mockResolvedValue([]) },
     user: {
       findUnique: vi.fn().mockResolvedValue({
         id: 'tecnico-1',

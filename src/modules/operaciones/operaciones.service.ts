@@ -575,6 +575,10 @@ export class OperacionesService {
     if (catalogo.estado === 'Inactivo') {
       throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar en una nueva OT.`);
     }
+    // El líder (y Backup, que opera como líder) solo registra servicios generales; los especiales los gestiona su coordinación.
+    if (rolDeUsuario(actor) === 'LIDER' && catalogo.categoria !== 'GENERAL') {
+      throw new ForbiddenException('Tu rol solo puede registrar servicios generales.');
+    }
     const resolvedCatalogoId = catalogo.id;
 
     // Validar que el servicio esté en la lista de la agencia (Agencia.servicioIds)

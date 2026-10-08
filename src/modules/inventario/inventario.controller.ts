@@ -1,4 +1,5 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
+import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ForbiddenException, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { InventarioService } from './inventario.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -20,6 +21,7 @@ import { CreateBodegaDto, UpdateBodegaDto, ToggleActivaBodegaDto, DeleteBodegaDt
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Inventario & Bodega (100% POST)')
+@UseInterceptors(OcultarPreciosInterceptor)
 @Controller('inventario')
 @ApiBearerAuth()
 export class InventarioController {
@@ -197,7 +199,7 @@ export class InventarioController {
     return this.inventarioService.listBodegas(user?.id);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.gestionar')
   @Post('bodegas/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva bodega regional vinculada estrictamente a una región (SUPER_ADMIN / ADMIN / COORD_BODEGA)' })
@@ -205,7 +207,7 @@ export class InventarioController {
     return this.inventarioService.crearBodega(dto);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.gestionar')
   @Post('bodegas/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar bodega (nombre, código, región, ciudad, etc.)' })
@@ -213,7 +215,7 @@ export class InventarioController {
     return this.inventarioService.actualizarBodega(dto);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.estado')
   @Post('bodegas/toggle-activa')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activar o desactivar bodega regional' })
@@ -221,7 +223,7 @@ export class InventarioController {
     return this.inventarioService.toggleActivaBodega(dto);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.eliminar')
   @Post('bodegas/delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar bodega regional del sistema' })
@@ -237,7 +239,7 @@ export class InventarioController {
     return this.inventarioService.obtenerStockBodegasResumen(dto, user?.id);
   }
 
-  @Permiso('inventario.ver')
+  @Permiso('inventario.kits.ver')
   @Post('stock/pulidores-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen consolidado de insumos en kits de pulidores' })
@@ -281,7 +283,7 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
-  @Permiso('despachos.recibir')
+  @Permiso('envios.confirmar')
   @Post('movimientos/despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -293,7 +295,7 @@ export class InventarioController {
     return this.inventarioService.confirmarRecepcion(dto, user.id);
   }
 
-  @Permiso('despachos.recibir')
+  @Permiso('envios.confirmar')
   @Post('despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Confirmar recepción física de químicos en agencia (Ruta canónica frontend)' })
@@ -301,7 +303,7 @@ export class InventarioController {
     return this.inventarioService.confirmarRecepcion({ ...dto, accion: dto.accion || 'RECIBIDO' }, user.id);
   }
 
-  @Permiso('despachos.recibir')
+  @Permiso('envios.rechazar')
   @Post('despachos/rechazar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rechazar despacho químico recibido en agencia (devuelve stock a Bodega)' })

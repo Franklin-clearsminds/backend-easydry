@@ -266,6 +266,9 @@ export class SyncService {
                 'No se pudo resolver el servicio en el catálogo offline.',
               );
             }
+            if (rolDeUsuario(currentUser) === 'LIDER' && catalogo.categoria !== 'GENERAL') {
+              throw new BadRequestException('Tu rol solo puede registrar servicios generales.');
+            }
 
             const placa = String(
               mut.data?.placa || mut.data?.vehiclePlate || '',

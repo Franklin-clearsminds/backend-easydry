@@ -1,4 +1,5 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
+import { Controller, Post, Body, HttpCode, HttpStatus, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { ServiciosEspecialesService } from './servicios-especiales.service.js';
 import {
@@ -15,6 +16,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Servicios Especiales y Detailing (100% POST)')
+@UseInterceptors(OcultarPreciosInterceptor)
 @Controller('operaciones/servicios-especiales')
 @ApiBearerAuth()
 export class ServiciosEspecialesController {
@@ -131,7 +133,8 @@ export class ServiciosEspecialesController {
     return this.service.softDelete(body.id, body.motivo, user);
   }
 
-  @Permiso('especiales.ver')
+  // `despachos.crear`: quien despacha (líder, Backup) necesita elegir al pulidor destinatario aunque no vea servicios especiales.
+  @Permiso('especiales.ver', 'despachos.crear')
   @Post('pulidores')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar pulidores activos por región o sucursal' })

@@ -3,6 +3,7 @@ import { AgenciasService } from './agencias.service.js';
 
 function armar() {
   const prisma: any = {
+    bahiaOperador: { findMany: vi.fn().mockResolvedValue([]) },
     user: {
       findUnique: vi.fn(),
       update: vi.fn(),

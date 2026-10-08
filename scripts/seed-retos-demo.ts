@@ -159,7 +159,7 @@ async function main(): Promise<void> {
         INSERT INTO "Reto" (
           "id", "titulo", "descripcion", "premio", "fechaInicio", "fechaFin",
           "regiones", "marcas", "sucursalesIds", "creadoPorId", "creadorNombre",
-          "creadorRol", "estado", "criterios", "catalogoServicioId",
+          "creadorRol", "estado", "catalogoServicioId",
           "catalogoServicioIds", "tipoReto", "pulidoresIds", "tipoServicios", "metrica",
           "modoGanador", "cantidadGanadores", "createdAt", "updatedAt"
         ) VALUES (
@@ -167,7 +167,7 @@ async function main(): Promise<void> {
           '${reto.descripcion.replaceAll("'", "''")}', '${reto.premio}',
           '${inicio.toISOString().slice(0, 10)}', '${fin.toISOString().slice(0, 10)}',
           ${sqlArray(reto.regiones)}, ${sqlArray(reto.marcas)}, ${sqlArray(reto.agenciasIds)},
-          NULL, 'Datos demo', 'ADMIN', 'ACTIVO', ARRAY[]::TEXT[],
+          NULL, 'Datos demo', 'ADMIN', 'ACTIVO',
           ${reto.serviciosIds[0]}, ${sqlIntArray(reto.serviciosIds)},
           '${reto.tipo}', ${sqlArray(reto.participantesIds)}, '${reto.tipoServicios}', 'SERVICIOS',
           'RANKING', 1, NOW(), NOW()
@@ -178,7 +178,7 @@ async function main(): Promise<void> {
           "fechaFin" = EXCLUDED."fechaFin", "regiones" = EXCLUDED."regiones",
           "marcas" = EXCLUDED."marcas", "sucursalesIds" = EXCLUDED."sucursalesIds",
           "creadorNombre" = EXCLUDED."creadorNombre", "creadorRol" = EXCLUDED."creadorRol",
-          "estado" = EXCLUDED."estado", "criterios" = EXCLUDED."criterios",
+          "estado" = EXCLUDED."estado",
           "catalogoServicioId" = EXCLUDED."catalogoServicioId",
           "catalogoServicioIds" = EXCLUDED."catalogoServicioIds",
           "tipoReto" = EXCLUDED."tipoReto", "pulidoresIds" = EXCLUDED."pulidoresIds",

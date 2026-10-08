@@ -1,4 +1,5 @@
 import { ROL_SUPER_ADMIN, type CodigoPermiso } from './catalogo-permisos.js';
+import { PAGINAS } from './catalogo-paginas.js';
 
 /**
  * Pantallas (módulos de navegación) que habilita cada permiso.
@@ -12,9 +13,9 @@ import { ROL_SUPER_ADMIN, type CodigoPermiso } from './catalogo-permisos.js';
 export const PERMISOS_POR_MODULO: Readonly<Record<string, readonly CodigoPermiso[] | null>> = {
   dashboard: ['dashboard.ver'],
   notificaciones: null,
-  'mapa-operativo': ['bahias.asignar'],
-  agencias: ['agencias.crear', 'agencias.editar', 'agencias.estado', 'regiones.gestionar', 'clientes.gestionar', 'agencias.precios.gestionar'],
-  operadores: ['operadores.gestionar', 'bahias.asignar', 'especiales.crear', 'especiales.reasignar'],
+  'mapa-operativo': ['mapa.ver', 'bahias.asignar'],
+  agencias: ['agencias.consultar', 'agencias.crear', 'agencias.editar', 'agencias.estado', 'regiones.gestionar', 'clientes.gestionar', 'agencias.precios.gestionar'],
+  operadores: ['operadores.ver', 'operadores.gestionar', 'bahias.asignar', 'especiales.crear', 'especiales.reasignar'],
   'configuracion/servicios': ['catalogo.ver'],
   servicios: ['servicios.ver', 'especiales.ver'],
   aprobaciones: ['servicios.decidir'],
@@ -35,6 +36,11 @@ export function modulosDeCapacidades(capacidades: readonly string[] | null | und
   if (namerol === ROL_SUPER_ADMIN) return [...MODULOS_NAVEGACION];
   const propias = new Set(capacidades ?? []);
   if (!propias.size) return [];
+  // Con páginas guardadas, el menú sale de las páginas activas (más las pantallas de cuenta).
+  if ([...propias].some((c) => c.startsWith('pagina.'))) {
+    const activas = new Set(PAGINAS.filter((p) => propias.has(p.codigo) && p.modulo !== null).map((p) => p.modulo as string));
+    return MODULOS_NAVEGACION.filter((m) => PERMISOS_POR_MODULO[m] === null || activas.has(m));
+  }
   return MODULOS_NAVEGACION.filter((m) => {
     const requeridos = PERMISOS_POR_MODULO[m];
     return requeridos === null || requeridos.some((c) => propias.has(c));

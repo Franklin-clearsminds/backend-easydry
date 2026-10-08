@@ -35,7 +35,7 @@ export class AprobacionesController {
     return this.aprobacionesService.solicitar(dto, user);
   }
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.aprobar')
   @Post('aprobar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Aprobar solicitud (Rol APROBADOR, ADMIN, SUPER_ADMIN)' })
@@ -47,7 +47,7 @@ export class AprobacionesController {
     return this.aprobacionesService.aprobar(dto, user);
   }
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.rechazar')
   @Post('rechazar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rechazar solicitud con motivo justificado (Rol APROBADOR, ADMIN)' })

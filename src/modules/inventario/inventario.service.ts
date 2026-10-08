@@ -123,6 +123,7 @@ const COLUMNAS_INSUMO_RESUMEN: ColumnasFila<any> = {
   minimo: (i) => i.stockMinimo,
   optimo: (i) => i.stockOptimo,
   deficit: (i) => i.deficit,
+  transito: (i) => i.enTransitoUnidades ?? 0,
   estado: (i) => GRAVEDAD_ESTADO_INSUMO[normalizarTexto(i.estado)] ?? 9,
 };
 
@@ -432,12 +433,12 @@ export class InventarioService {
    */
   private async alcanceInsumos(dto: ListInsumosDto, user?: any) {
     const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'APROBADOR', 'LAVADOR'];
-    const userRole = (
+    const userRole = normalizarRol(
       user?.roleDetails?.namerol ||
       user?.role?.namerol ||
       (typeof user?.role === 'string' ? user.role : '') ||
-      ''
-    ).toString().toUpperCase();
+      '',
+    );
     const isScopedRole = ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r));
     // Igual que el asistente de bodega con su `bodegaId`: un rol de sede nunca amplía su alcance con
     // un `agenciaId` que mande el cliente — siempre es la suya, tomada del token.
@@ -1412,6 +1413,8 @@ export class InventarioService {
       }
     }
 
+    const enTransito = await this.enTransitoPorDestino('agencia');
+
     let agenciasEnAlerta = 0;
     let insumosCriticosTotal = 0;
 
@@ -1428,11 +1431,12 @@ export class InventarioService {
       const insumosDeEstaAgencia = insumos.filter((ins) => {
         const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
         const perteneceAServicios = ins.recetas?.some((r: any) => sIds.has(Number(r.catalogoServicioId)));
-        return perteneceAServicios || actual > 0;
+        return perteneceAServicios || actual > 0 || enTransito.has(`${ag.id}_${ins.id}`);
       });
 
       const insumosAgencia = insumosDeEstaAgencia.map((ins) => {
         const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
+        const transito = enTransito.get(`${ag.id}_${ins.id}`);
         const cNeto = Number(ins.contenidoNeto) || 1;
         const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
         const rawMinimo = Number(ins.stockMinimoAgencia) || 2;
@@ -1470,6 +1474,8 @@ export class InventarioService {
           stockMinimo: minimo,
           deficit,
           estado,
+          enTransitoUnidades: transito?.unidades ?? 0,
+          enTransitoDespachos: transito?.despachos ?? 0,
           requeridoPorServicios: ins.recetas?.some((r: any) => sIds.has(Number(r.catalogoServicioId))) || false,
         };
       });
@@ -2207,6 +2213,8 @@ export class InventarioService {
       }
     }
 
+    const enTransito = await this.enTransitoPorDestino('pulidor');
+
     let pulidoresEnAlerta = 0;
     let insumosCriticosTotal = 0;
 
@@ -2218,13 +2226,14 @@ export class InventarioService {
       const insumosDelPulidor = insumos.filter((ins) => {
         const actual = stockMap.get(`${pul.id}_${ins.id}`) ?? 0;
         const esInsumoEspecial = insumoIdsEspeciales.has(ins.id);
-        return esInsumoEspecial || actual > 0;
+        return esInsumoEspecial || actual > 0 || enTransito.has(`${pul.id}_${ins.id}`);
       });
 
       const insumosList = (insumosDelPulidor.length > 0 ? insumosDelPulidor : insumos.slice(0, 10)).map((ins) => {
         const actual = stockMap.get(`${pul.id}_${ins.id}`) ?? 0;
         const cNeto = Number(ins.contenidoNeto) || 1;
         const unidadesActuales = Math.floor(actual / cNeto + 1e-9);
+        const transito = enTransito.get(`${pul.id}_${ins.id}`);
         const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
         const rawMinimo = Number(ins.stockMinimoAgencia) || 1;
         const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
@@ -2265,6 +2274,8 @@ export class InventarioService {
           stockMinimoUnidades: Math.floor(minimo / cNeto + 1e-9) || 1,
           deficit,
           estado,
+          enTransitoUnidades: transito?.unidades ?? 0,
+          enTransitoDespachos: transito?.despachos ?? 0,
         };
       });
 
@@ -2468,6 +2479,32 @@ export class InventarioService {
       );
     }
     return Math.round(n);
+  }
+
+  /**
+   * Unidades despachadas que siguen en camino (EN_TRANSITO o PENDIENTE de confirmar) hacia cada agencia o kit de pulidor,
+   * por insumo. Clave: `${destinoId}_${insumoId}`. Un despacho a un pulidor cuenta solo para su kit, no para la agencia.
+   */
+  private async enTransitoPorDestino(tipo: 'agencia' | 'pulidor'): Promise<Map<string, { unidades: number; despachos: number }>> {
+    const mapa = new Map<string, { unidades: number; despachos: number }>();
+    const columna = tipo === 'agencia' ? 'destinoAgenciaId' : 'destinoPulidorId';
+    const soloAgencia = tipo === 'agencia' ? `AND m."destinoPulidorId" IS NULL` : '';
+    try {
+      const rows: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT m."${columna}" AS destino, d."insumoId" AS "insumoId",
+                COALESCE(SUM(d."cantidadEnviada"), 0)::float AS unidades,
+                COUNT(DISTINCT m."id")::int AS despachos
+         FROM "MovimientoDetalle" d
+         INNER JOIN "MovimientoInventario" m ON m."id" = d."movimientoId"
+         WHERE m."estadoDespacho" IN ('EN_TRANSITO', 'PENDIENTE')
+           AND m."${columna}" IS NOT NULL ${soloAgencia}
+         GROUP BY m."${columna}", d."insumoId"`,
+      );
+      for (const r of rows) mapa.set(`${r.destino}_${r.insumoId}`, { unidades: Number(r.unidades) || 0, despachos: Number(r.despachos) || 0 });
+    } catch {
+      // Sin la marca de tránsito la tabla sigue siendo útil.
+    }
+    return mapa;
   }
 
   private async cantidadReservadaEnTransito(
@@ -2754,7 +2791,8 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, bodega: true },
     });
-    const role = (usuario?.role?.namerol || '').toUpperCase();
+    // Backup opera como líder de la agencia a la que está asignado: se normaliza el alias antes de comparar.
+    const role = normalizarRol(usuario?.role?.namerol);
     const isSuperAdmin =
       role === 'SUPER_ADMIN' || (role.includes('SUPER') && role.includes('ADMIN'));
 
@@ -3520,7 +3558,7 @@ export class InventarioService {
     const viewer: any = usuarioId
       ? await this.prisma.user.findUnique({ where: { id: usuarioId }, include: { role: true, region: true } })
       : null;
-    const rol = (viewer?.role?.namerol || '').toUpperCase();
+    const rol = normalizarRol(viewer?.role?.namerol);
     const esSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
     const esAdmin = rol === 'ADMIN' && !esSuperAdmin;
     const esPulidor = rol.includes('PULIDOR');
@@ -5022,7 +5060,7 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, bodega: true },
     });
-    const role = (usuario?.role?.namerol || '').toUpperCase();
+    const role = normalizarRol(usuario?.role?.namerol);
 
     const isAdmin =
       role === 'SUPER_ADMIN' ||

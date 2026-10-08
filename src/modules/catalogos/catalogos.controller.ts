@@ -1,11 +1,11 @@
+import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
 import {
   Controller,
   Post,
   Body,
   HttpCode,
   HttpStatus,
-  Request,
-} from '@nestjs/common';
+  Request, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { CatalogosService } from './catalogos.service.js';
 import {
@@ -19,6 +19,7 @@ import {
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Catálogo de Servicios (100% POST)')
+@UseInterceptors(OcultarPreciosInterceptor)
 @Controller('catalogos')
 @ApiBearerAuth()
 export class CatalogosController {

@@ -1,4 +1,5 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
+import { Controller, Post, Body, HttpCode, HttpStatus, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { OperacionesService } from './operaciones.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -12,6 +13,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Operaciones y Lavados (100% POST)')
+@UseInterceptors(OcultarPreciosInterceptor)
 @Controller('operaciones')
 @ApiBearerAuth()
 export class OperacionesController {
@@ -114,7 +116,7 @@ export class OperacionesController {
   //  APROBACIONES Y CIERRE DIARIO (GERENCIA / SUPERVISIÓN)
   // ──────────────────────────────────────────────────────────────────
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.aprobar')
   @Post('servicios/aprobar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Aprobar orden de servicio finalizada (Cierre diario por Gerencia)' })
@@ -126,7 +128,7 @@ export class OperacionesController {
     return this.operacionesService.aprobarServicio(dto.id, dto.observacion, user);
   }
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.rechazar')
   @Post('servicios/rechazar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rechazar orden de servicio por inconformidad técnica o calidad' })
@@ -138,7 +140,7 @@ export class OperacionesController {
     return this.operacionesService.rechazarServicio(dto.id, dto.motivo, user);
   }
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.aprobar.todos')
   @Post('servicios/aprobar-todos')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Aprobación masiva de todos los servicios FINALIZADOS de una agencia (Cierre diario)' })

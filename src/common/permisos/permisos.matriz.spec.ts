@@ -3,6 +3,7 @@ import {
   CATALOGO_PERMISOS,
   CODIGOS_PERMISOS,
   AMBITOS,
+  esCodigoPermiso,
 } from './catalogo-permisos.js';
 import { ROLES_BASE } from './roles-base.js';
 import { normalizarRol } from './alias-roles.js';
@@ -33,7 +34,7 @@ describe('catálogo de permisos', () => {
     expect(new Set(ROLES_BASE.map((r) => r.namerol)).size).toBe(15);
     for (const r of ROLES_BASE) {
       expect(AMBITOS).toContain(r.ambito);
-      for (const c of r.capacidades) expect(CODIGOS_PERMISOS).toContain(c);
+      for (const c of r.capacidades) expect(esCodigoPermiso(c), `${r.namerol}: ${c} fuera del catálogo`).toBe(true);
       expect(new Set(r.capacidades).size).toBe(r.capacidades.length);
     }
   });
@@ -48,9 +49,9 @@ describe('matriz acordada de permisos por rol', () => {
   it('el coordinador es el único que crea servicios especiales', () => {
     expect(
       ROLES_BASE.find((r) => r.namerol === 'SUPER_ADMIN')!.capacidades,
-    ).toHaveLength(CODIGOS_PERMISOS.length - 1);
+    ).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'especiales.crear')));
     const admin = ROLES_BASE.find((r) => r.namerol === 'ADMIN')!.capacidades;
-    expect(admin).toHaveLength(CODIGOS_PERMISOS.length - 2);
+    expect(admin).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'roles.gestionar' && c !== 'especiales.crear')));
     expect(admin).not.toContain('roles.gestionar');
     expect(admin).not.toContain('especiales.crear');
     expect(rolesCon('roles.gestionar')).toEqual(['SUPER_ADMIN']);
@@ -262,8 +263,6 @@ describe('matriz acordada de permisos por rol', () => {
     ]);
     expect(rolesCon('bahias.asignar')).toEqual([
       'ADMIN',
-      'BACKUP',
-      'LIDER',
       'SUPERVISOR',
       'SUPER_ADMIN',
     ]);
