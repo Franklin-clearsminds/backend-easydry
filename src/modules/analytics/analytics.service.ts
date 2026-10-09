@@ -139,37 +139,46 @@ export class AnalyticsService {
     const periodo = this.resolverPeriodo(dto);
     const startOfDay = periodo.desde;
     const endOfDay = periodo.hasta;
-    // Las ventanas "de tendencia" siguen el periodo elegido (no un fijo de 30 días).
     const hace30Dias = periodo.desde;
     const roleName = rolDeUsuario(user);
 
     if (roleName === 'ADMIN') {
-      return { success: true, isAdminView: true, ...(await this.getAdminMetrics(dto, filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, user)) };
+      return { success: true, isAdminView: true, isEjecutivoView: true, ...(await this.getAdminMetrics(dto, filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, user)) };
     }
     if (roleName === 'APROBADOR') {
       return { success: true, isAprobadorView: true, ...(await this.getAprobadorMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio)) };
     }
-    if (roleName === 'COORD_COMERCIAL' || roleName === 'JEFE_COMERCIAL') {
-      return { success: true, isComercialView: true, ...(await this.getComercialMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio)) };
+
+    // Roles que ven el dashboard analítico (Super Admin, Supervisor, Líder, Comerciales)
+    let baseMetrics: any;
+    const isComercial = roleName === 'COORD_COMERCIAL' || roleName === 'JEFE_COMERCIAL';
+    
+    if (isComercial) {
+      baseMetrics = await this.getComercialMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio);
+      baseMetrics.isComercialView = true;
+    } else {
+      const isSupervisorView = roleName === 'SUPERVISOR';
+      baseMetrics = await this.getEjecutivoMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, isSupervisorView, dto);
     }
 
-    const isSupervisorView = roleName === 'SUPERVISOR';
-    const baseMetrics = await this.getEjecutivoMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, isSupervisorView, dto);
+    // Todos los roles de negocio reciben la analítica estratégica y jerárquica (filtrada por su ámbito)
+    const isEjecutivo = ['SUPER_ADMIN', 'SUPERVISOR', 'LIDER', 'COORD_COMERCIAL', 'JEFE_COMERCIAL'].includes(roleName);
     
-    if (roleName === 'SUPER_ADMIN') {
+    if (isEjecutivo) {
       const globalMetrics = await this.getAdminEstrategicos(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.pulidorId, dto?.categoriaServicio);
-      // El drill-down jerárquico (Región → Agencia → Bahía → Pulidor) también aplica al Super Admin.
       const jerarquia = await this.getAdminJerarquia(dto, filtro, hayFiltro, startOfDay, endOfDay, user);
       return {
-        isSuperAdminView: true,
+        success: true,
+        isSuperAdminView: roleName === 'SUPER_ADMIN',
+        isEjecutivoView: true,
         ...baseMetrics,
         ...globalMetrics,
         jerarquia,
-        kpis: { ...baseMetrics.kpis, ...globalMetrics.kpis },
+        kpis: { ...(baseMetrics.kpis || {}), ...globalMetrics.kpis },
       };
     }
     
-    return baseMetrics;
+    return { success: true, ...baseMetrics };
   }
 
   // ═══ ADMIN ═══════════════════════════════════════════════════════════
