@@ -227,6 +227,7 @@ export class AnalyticsService {
       distribucionDecisiones: decisionesAgrupadas.map(d => ({ nombre: d.accion, total: d._count.id })).sort((a, b) => b.total - a.total),
       distribucionCategorias: serviciosPorCategoria.map(s => ({ nombre: s.categoria, total: s._count.id })).sort((a, b) => b.total - a.total),
       topAgenciasProductivas: estrategicos.topAgenciasProductivas,
+      rankingsAgencias: estrategicos.rankingsAgencias,
       mixGenerales: estrategicos.mixGenerales,
       mixEspeciales: estrategicos.mixEspeciales,
       topColores: estrategicos.topColores,
@@ -312,6 +313,14 @@ export class AnalyticsService {
       }))
       .sort((a, b) => b.cantidad - a.cantidad);
     const desglose = desgloseCompleto.slice(0, 12);
+
+    // Serie propia del gráfico de rendimiento: los 10 mayores y los 10 menores por servicios. Se envían los
+    // dos extremos porque el gráfico permite alternar Top 5 / Top 10 en orden descendente o ascendente; con
+    // solo el top 10, el orden ascendente mentiría al mostrar los menores de ese top y no los reales.
+    const extremosGrafico: Record<string, { nombre: string; cantidad: number; tiempoPromedioMin: number; ingresos: number }> = {};
+    for (const d of desgloseCompleto.slice(0, 10)) extremosGrafico[d.nombre] = d;
+    for (const d of desgloseCompleto.slice(-10)) extremosGrafico[d.nombre] = d;
+    const desgloseGrafico = Object.values(extremosGrafico).sort((a, b) => b.cantidad - a.cantidad);
 
     // Agrupación efectiva del gráfico: el desglose explícito manda; si no, se deriva de la dimensión activa
     // (país → región, región → agencia, agencia → bahía, pulidor → día).
@@ -412,6 +421,7 @@ export class AnalyticsService {
               : 'Evolución Diaria del Pulidor',
       entidad,
       desglose,
+      desgloseGrafico,
       ranking: { entidad, top, bottom },
       bajaActividad: { entidad: nombreEntidadBaja, items: bajaActividad },
       heatmap,
@@ -616,6 +626,24 @@ export class AnalyticsService {
     const topN = (rec: Record<string, number>, n: number) =>
       Object.keys(rec).map((nombre) => ({ nombre, cantidad: rec[nombre] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, n);
 
+    // Rankings completos por agencia que alimentan el control de orden (Top N, mayor→menor o menor→mayor).
+    // Van sin recortar a propósito: sobre un top 5 ya recortado, un orden ascendente solo invertiría esos
+    // cinco y mostraría como "menores" a agencias que no lo son. Son ~74 agencias, así que el coste es nulo.
+    const rankingsAgencias = {
+      servicios: Object.keys(agenciaStats)
+        .map((n) => ({ nombre: n, valor: agenciaStats[n].cantidad }))
+        .sort((a, b) => b.valor - a.valor),
+      ganancia: Object.keys(agenciaStats)
+        .map((n) => {
+          const ag = agenciaStats[n];
+          return { nombre: n, valor: Number((ag.ingresos - ag.costoIncidentes - ag.costoMantenimientos).toFixed(2)) };
+        })
+        .sort((a, b) => b.valor - a.valor),
+      costoIncidentes: Object.keys(agenciaStats)
+        .map((n) => ({ nombre: n, valor: Number(agenciaStats[n].costoIncidentes.toFixed(2)) }))
+        .sort((a, b) => b.valor - a.valor),
+    };
+
     return {
       kpis: {
         ingresoHoy: Number(ingresoHoy.toFixed(2)),
@@ -633,6 +661,7 @@ export class AnalyticsService {
         gananciaNetaGlobal: Number((topAgenciasRentabilidad.reduce((sum, a) => sum + a.gananciaNeta, 0)).toFixed(2))
       },
       topAgenciasProductivas,
+      rankingsAgencias,
       mixGenerales: topN(mixGenerales, 5),
       mixEspeciales: topN(mixEspeciales, 5),
       topColores: topN(colores, 5),
@@ -936,8 +965,11 @@ export class AnalyticsService {
       }
     }
     const topMaquinasDañadas = Object.values(maquinasDañadas).sort((a, b) => b.total - a.total).slice(0, 5);
+    const bottomMaquinasDañadas = Object.values(maquinasDañadas).sort((a, b) => a.total - b.total).slice(0, 5);
     const topAgenciasIncidentes = Object.values(agenciasIncidentes).sort((a, b) => b.total - a.total).slice(0, 5);
+    const bottomAgenciasIncidentes = Object.values(agenciasIncidentes).sort((a, b) => a.total - b.total).slice(0, 5);
     const topPulidoresIncidentes = Object.values(pulidoresIncidentes).sort((a, b) => b.total - a.total).slice(0, 5);
+    const bottomPulidoresIncidentes = Object.values(pulidoresIncidentes).sort((a, b) => a.total - b.total).slice(0, 5);
     const topAgenciasReparaciones = Object.keys(reparacionesPorAgencia).map(n => ({ nombre: n, costo: Number(reparacionesPorAgencia[n].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5);
     // Orden por severidad (no por cantidad): el gráfico se lee de la falla más grave a la más leve.
     const ORDEN_GRAVEDAD = ['CRITICA', 'ALTA', 'MEDIA', 'BAJA'];
@@ -963,8 +995,11 @@ export class AnalyticsService {
       distribucionBahias,
       tiemposBahias,
       topMaquinasDañadas,
+      bottomMaquinasDañadas,
       topAgenciasIncidentes,
+      bottomAgenciasIncidentes,
       topPulidoresIncidentes,
+      bottomPulidoresIncidentes,
       topAgenciasReparaciones,
       mixGenerales: Object.keys(mixGenerales).map(k => ({ nombre: k, cantidad: mixGenerales[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
       mixEspeciales: Object.keys(mixEspeciales).map(k => ({ nombre: k, cantidad: mixEspeciales[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
@@ -1073,7 +1108,7 @@ export class AnalyticsService {
     }
     const serie = Object.keys(costoPorPeriodo).sort().map((periodo) => ({ periodo, costoUSD: Number(costoPorPeriodo[periodo].toFixed(2)) }));
 
-    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
+    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].toFixed(2)) })).sort((a, b) => b.costo - a.costo), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
   }
 
   /** Clave de agrupación temporal (día, semana ISO o mes) para las series de analítica. */
@@ -1127,8 +1162,10 @@ export class AnalyticsService {
       acumulado[s.operadorId].cantidadServicios++;
       if (s.horaSalida) { acumulado[s.operadorId].tiempoTotalMin += Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime()) / 60000)); acumulado[s.operadorId].serviciosConTiempo++; }
     }
-    const ranking = Object.values(acumulado).map(a => ({ operadorId: a.operadorId, nombre: a.nombre, agencia: a.agencia, bahia: a.bahia, cantidadServicios: a.cantidadServicios, tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0 })).sort((a, b) => b.cantidadServicios - a.cantidadServicios || a.tiempoPromedioMin - b.tiempoPromedioMin).slice(0, 10);
-    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, ranking };
+    const arr = Object.values(acumulado).map(a => ({ operadorId: a.operadorId, nombre: a.nombre, agencia: a.agencia, bahia: a.bahia, cantidadServicios: a.cantidadServicios, tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0 }));
+    const ranking = [...arr].sort((a, b) => b.cantidadServicios - a.cantidadServicios || a.tiempoPromedioMin - b.tiempoPromedioMin).slice(0, 10);
+    const rankingBottom = [...arr].sort((a, b) => a.cantidadServicios - b.cantidadServicios || b.tiempoPromedioMin - a.tiempoPromedioMin).slice(0, 10);
+    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, ranking, rankingBottom };
   }
 
   async getRankingPulidores(dto: RankingLavadoresDto, user: any) {
@@ -1167,10 +1204,16 @@ export class AnalyticsService {
       if (s.precio) { acumulado[s.operadorId].dineroTotal += Number(s.precio); }
     }
     
-    const rankingFijos = Object.values(acumulado).filter(a => a.esFijo).map(a => ({ ...a, dineroTotal: Number(a.dineroTotal.toFixed(2)) })).sort((a, b) => b.cantidadServicios - a.cantidadServicios || b.dineroTotal - a.dineroTotal).slice(0, 10);
-    const rankingMoviles = Object.values(acumulado).filter(a => !a.esFijo).map(a => ({ ...a, dineroTotal: Number(a.dineroTotal.toFixed(2)) })).sort((a, b) => b.cantidadServicios - a.cantidadServicios || b.dineroTotal - a.dineroTotal).slice(0, 10);
+    const fijos = Object.values(acumulado).filter(a => a.esFijo).map(a => ({ ...a, dineroTotal: Number(a.dineroTotal.toFixed(2)) }));
+    const moviles = Object.values(acumulado).filter(a => !a.esFijo).map(a => ({ ...a, dineroTotal: Number(a.dineroTotal.toFixed(2)) }));
+
+    const rankingFijos = [...fijos].sort((a, b) => b.cantidadServicios - a.cantidadServicios || b.dineroTotal - a.dineroTotal).slice(0, 10);
+    const rankingBottomFijos = [...fijos].sort((a, b) => a.cantidadServicios - b.cantidadServicios || a.dineroTotal - b.dineroTotal).slice(0, 10);
     
-    return { success: true, rankingFijos, rankingMoviles };
+    const rankingMoviles = [...moviles].sort((a, b) => b.cantidadServicios - a.cantidadServicios || b.dineroTotal - a.dineroTotal).slice(0, 10);
+    const rankingBottomMoviles = [...moviles].sort((a, b) => a.cantidadServicios - b.cantidadServicios || a.dineroTotal - b.dineroTotal).slice(0, 10);
+    
+    return { success: true, rankingFijos, rankingBottomFijos, rankingMoviles, rankingBottomMoviles };
   }
 
   // ═══════════════════════════════════════════════════════════════════════

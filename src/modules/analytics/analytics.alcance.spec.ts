@@ -135,6 +135,34 @@ describe('dashboard admin — KPIs estratégicos', () => {
     expect(comercial.kpis.unidadesQuimicos).toBe(3); // 2 + 1 consumidas
     expect(comercial.kpis.costoQuimicos30d).toBeUndefined();
   });
+
+  it('publica los rankings de agencias completos para el control Top N', async () => {
+    const { prisma, service } = armar();
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+    // Ocho agencias con volúmenes decrecientes: el top clásico se queda en 5, el ranking del control no.
+    const servicios: any[] = [];
+    for (let i = 0; i < 8; i++) {
+      for (let j = 0; j < 8 - i; j++) {
+        servicios.push({
+          precio: 10, horaInicio: null, horaSalida: null, marca: 'Toyota', modelo: 'Corolla', color: 'Rojo',
+          catalogo: { nombre: 'Lavado Express', categoria: 'GENERAL' },
+          bahia: { nombre: 'Bahía 01', agencia: { nombre: `Agencia ${i + 1}`, region: 'Sierra' } },
+        });
+      }
+    }
+    prisma.servicioLavado.findMany.mockResolvedValue(servicios);
+
+    const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
+
+    expect(res.topAgenciasProductivas.length).toBe(5);
+    expect(res.rankingsAgencias.servicios.length).toBe(8);
+    expect(res.rankingsAgencias.servicios[0]).toEqual({ nombre: 'Agencia 1', valor: 8 });
+    // El último del ranking es el de menos servicios: es justo lo que muestra el orden ascendente.
+    expect(res.rankingsAgencias.servicios[7]).toEqual({ nombre: 'Agencia 8', valor: 1 });
+    expect(res.rankingsAgencias.ganancia.length).toBe(8);
+    expect(res.rankingsAgencias.costoIncidentes.length).toBe(8);
+  });
 });
 
 describe('dashboard admin — drill-down jerárquico', () => {
@@ -199,6 +227,32 @@ describe('dashboard admin — drill-down jerárquico', () => {
     expect(res.jerarquia.dimension).toBe('POLISHER');
     expect(res.jerarquia.entidad).toBe('Día');
     expect(res.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['2026-10-05', '2026-10-06']);
+  });
+
+  it('la serie del gráfico trae los dos extremos para que el orden ascendente no mienta', async () => {
+    const { prisma, service } = armar();
+    // 25 agencias con volúmenes decrecientes: el desglose normal se queda en 12 y nunca vería la más baja.
+    const servicios: any[] = [];
+    for (let i = 1; i <= 25; i++) {
+      for (let j = 0; j < 26 - i; j++) {
+        servicios.push({
+          precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null,
+          operador: { name: 'Ana', lastname: 'Soto' },
+          bahia: { nombre: 'Bahía 01', agencia: { id: `a${i}`, nombre: `Agencia ${String(i).padStart(2, '0')}`, region: 'Sierra', regionRel: { nombre: 'Sierra' } } },
+        });
+      }
+    }
+    prisma.servicioLavado.findMany.mockResolvedValue(servicios);
+    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
+    prisma.servicioLavado.count.mockResolvedValue(0);
+
+    const res: any = await service.getDashboardMetrics({ desglose: 'AGENCY' } as any, usuario('ADMIN'));
+
+    // El desglose que alimenta los tiempos no cambia: la serie del gráfico es un campo aparte.
+    expect(res.jerarquia.desglose.length).toBe(12);
+    expect(res.jerarquia.desgloseGrafico.length).toBe(20);
+    expect(res.jerarquia.desgloseGrafico[0]).toMatchObject({ nombre: 'Agencia 01', cantidad: 25 });
+    expect(res.jerarquia.desgloseGrafico[19]).toMatchObject({ nombre: 'Agencia 25', cantidad: 1 });
   });
 
   it('lista las agencias operativas con menos actividad, incluidas las que no registraron servicios', async () => {
