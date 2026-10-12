@@ -143,7 +143,8 @@ export class AnalyticsService {
     const roleName = rolDeUsuario(user);
 
     if (roleName === 'APROBADOR') {
-      return { success: true, isAprobadorView: true, ...(await this.getAprobadorMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio)) };
+      const metricas = await this.getAprobadorMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio);
+      return { success: true, isAprobadorView: true, metricasAprobaciones: metricas, ...metricas };
     }
 
     // Roles que ven el dashboard analítico (Super Admin, Admin, Supervisor, Líder, Comerciales)
@@ -159,7 +160,7 @@ export class AnalyticsService {
     }
 
     // Todos los roles de negocio reciben la analítica estratégica y jerárquica (filtrada por su ámbito)
-    const isEjecutivo = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER', 'COORD_COMERCIAL', 'JEFE_COMERCIAL'].includes(roleName);
+    const isEjecutivo = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER', 'BACKUP', 'COORD_COMERCIAL', 'JEFE_COMERCIAL'].includes(roleName);
     
     if (isEjecutivo) {
       const globalMetrics = await this.getAdminEstrategicos(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.pulidorId, dto?.categoriaServicio);
@@ -267,21 +268,28 @@ export class AnalyticsService {
     });
 
     const alcance = resolverAlcance(user);
+    const esAlcanceAgencia = alcance.tipo === 'AGENCIA' || !!dto?.agenciaId || !!(filtro as any)?.id;
     const dimension: 'GLOBAL' | 'REGION' | 'AGENCY' | 'POLISHER' =
       dto?.pulidorId ? 'POLISHER'
-      : dto?.agenciaId ? 'AGENCY'
-      : (alcance.tipo === 'AGENCIA' ? 'AGENCY'
-      : alcance.tipo === 'REGION' ? 'REGION'
+      : esAlcanceAgencia ? 'AGENCY'
+      : (alcance.tipo === 'REGION' ? 'REGION'
       : (dto?.regionId ? 'REGION' : 'GLOBAL'));
-    // Desglose explícito del gráfico (nivel país): permite ver el mismo período por Región, Agencia o Pulidor
-    // sin cambiar el filtro estructural. Sin él se mantiene el comportamiento del drill-down por dimensión.
-    const agrupacion: 'REGION' | 'AGENCY' | 'POLISHER' | null = dto?.desglose ?? null;
+    // Desglose explícito del gráfico: en nivel de agencia no aplica desglose por Región o Agencia, solo Pulidor si se pide
+    let agrupacion: 'REGION' | 'AGENCY' | 'POLISHER' | null = dto?.desglose ?? null;
+    if (esAlcanceAgencia && (agrupacion === 'REGION' || agrupacion === 'AGENCY')) {
+      agrupacion = null;
+    }
 
     const regionDe = (ag?: any) => ag?.regionRel?.nombre || ag?.region || 'Sin región';
     const operadorDe = (s: typeof servicios[number]) =>
       [s.operador?.name, s.operador?.lastname].filter(Boolean).join(' ').trim() || 'Sin pulidor';
     const claveDe = (s: typeof servicios[number]): string => {
       const ag = s.bahia?.agencia;
+      if (esAlcanceAgencia) {
+        if (agrupacion === 'POLISHER') return operadorDe(s);
+        if (dimension === 'POLISHER') return new Date(s.horaIngreso).toISOString().split('T')[0];
+        return s.bahia?.nombre || 'Sin bahía';
+      }
       if (agrupacion === 'REGION') return regionDe(ag);
       if (agrupacion === 'AGENCY') return ag?.nombre || 'Sin agencia';
       if (agrupacion === 'POLISHER') return operadorDe(s);
@@ -326,7 +334,9 @@ export class AnalyticsService {
     // Agrupación efectiva del gráfico: el desglose explícito manda; si no, se deriva de la dimensión activa
     // (país → región, región → agencia, agencia → bahía, pulidor → día).
     const agrupacionEfectiva: 'REGION' | 'AGENCY' | 'POLISHER' | 'BAHIA' | 'DIA' =
-      agrupacion ?? (dimension === 'GLOBAL' ? 'REGION' : dimension === 'REGION' ? 'AGENCY' : dimension === 'AGENCY' ? 'BAHIA' : 'DIA');
+      esAlcanceAgencia
+        ? (agrupacion === 'POLISHER' ? 'POLISHER' : (dimension === 'POLISHER' ? 'DIA' : 'BAHIA'))
+        : (agrupacion ?? (dimension === 'GLOBAL' ? 'REGION' : dimension === 'REGION' ? 'AGENCY' : dimension === 'AGENCY' ? 'BAHIA' : 'DIA'));
 
     // Top vs Bottom y ranking sobre la misma entidad que agrupa el gráfico.
     const entidad = {
@@ -338,10 +348,10 @@ export class AnalyticsService {
     // Entidades con menos actividad, sobre la MISMA agrupación del gráfico: así el ranking y las barras
     // cuentan la misma historia. Para agencias y bahías se parte del catálogo, de modo que aparezcan también
     // las que no registraron ningún servicio en el período.
-    // Con el filtro en país o región el gráfico agrupa por región/agencia, pero el listado útil de «menos
-    // actividad» sigue siendo por AGENCIA (una región siempre tiene actividad).
     const entidadBaja: 'REGION' | 'AGENCY' | 'POLISHER' | 'BAHIA' | 'DIA' =
-      agrupacion ?? (dimension === 'GLOBAL' || dimension === 'REGION' ? 'AGENCY' : dimension === 'AGENCY' ? 'BAHIA' : 'DIA');
+      esAlcanceAgencia
+        ? (agrupacion === 'POLISHER' ? 'POLISHER' : 'BAHIA')
+        : (agrupacion ?? (dimension === 'GLOBAL' || dimension === 'REGION' ? 'AGENCY' : dimension === 'AGENCY' ? 'BAHIA' : 'DIA'));
     const nombreEntidadBaja = { REGION: 'Región', AGENCY: 'Agencia', POLISHER: 'Pulidor', BAHIA: 'Bahía', DIA: 'Día' }[entidadBaja];
 
     let candidatas = desgloseCompleto.map((d) => d.nombre);
@@ -410,7 +420,7 @@ export class AnalyticsService {
     return {
       dimension,
       agrupacion: agrupacionEfectiva,
-      titulo: agrupacion === 'REGION' ? 'Rendimiento Operativo Nacional por Región'
+      titulo: esAlcanceAgencia ? (agrupacion === 'POLISHER' ? 'Rendimiento por Pulidor' : 'Rendimiento por Bahía de Trabajo') : agrupacion === 'REGION' ? 'Rendimiento Operativo Nacional por Región'
         : agrupacion === 'AGENCY' ? 'Rendimiento Operativo Nacional por Agencia'
         : agrupacion === 'POLISHER' ? 'Rendimiento Operativo por Pulidor'
         : dimension === 'GLOBAL'
@@ -487,11 +497,11 @@ export class AnalyticsService {
       }),
       this.prisma.incidenteTecnico.findMany({
         where: whereIncidentes,
-        select: { costoTotal: true, createdAt: true, maquinaria: { select: { agencia: { select: { nombre: true } } } } },
+        select: { costoTotal: true, createdAt: true, maquinaria: { select: { bahia: { select: { nombre: true } }, agencia: { select: { nombre: true } } } } },
       }),
       this.prisma.mantenimientoMaquinaria.findMany({
         where: whereMantenimientos as any,
-        select: { costoTotal: true, fechaEjecucion: true, maquinaria: { select: { agencia: { select: { nombre: true } } } } },
+        select: { costoTotal: true, fechaEjecucion: true, maquinaria: { select: { bahia: { select: { nombre: true } }, agencia: { select: { nombre: true } } } } },
       }),
       this.prisma.stockUbicacion.findMany({ select: { cantidadActual: true } }),
       this.prisma.movimientoInventario.findMany({ where: { estadoDespacho: 'EN_TRANSITO' }, select: { detalles: { select: { cantidadEnviada: true } } } }),
@@ -509,8 +519,8 @@ export class AnalyticsService {
     const mixEspeciales: Record<string, number> = {};
     const colores: Record<string, number> = {};
     const marcasModelos: Record<string, number> = {};
-    // Unified stats by agency for times and rentability. Los insumos se acumulan en UNIDADES: el costo del
-    // catálogo es por envase y el consumo está en unidad base, así que el monto inflaba la ganancia neta.
+    const esAlcanceAgencia = hayFiltro && !!(filtro as any)?.id;
+    // Unified stats by agency or bay (in agency scope) for times and rentability.
     const agenciaStats: Record<string, { ingresos: number; unidadesInsumos: number; costoIncidentes: number; costoMantenimientos: number; cantidad: number; tiempoTotalMin: number; finalizados: number }> = {};
 
     for (const s of serviciosPeriodo) {
@@ -532,8 +542,8 @@ export class AnalyticsService {
       let unidadesInsumos = 0;
       for (const c of s.consumos || []) unidadesInsumos += Number(c.cantidadUsada || 0);
 
-      const agencia = s.bahia?.agencia?.nombre || 'Sin agencia';
-      const reg = (agenciaStats[agencia] ??= { ingresos: 0, unidadesInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
+      const claveEntidad = esAlcanceAgencia ? (s.bahia?.nombre || 'Sin bahía') : (s.bahia?.agencia?.nombre || 'Sin agencia');
+      const reg = (agenciaStats[claveEntidad] ??= { ingresos: 0, unidadesInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
       reg.ingresos += Number(s.precio || 0); 
       reg.unidadesInsumos += unidadesInsumos; 
       reg.cantidad += 1;
@@ -545,16 +555,16 @@ export class AnalyticsService {
 
     for (const inc of incidentesPeriodo) {
       if (inc.createdAt >= startOfDay && inc.createdAt <= endOfDay) {
-        const agencia = inc.maquinaria?.agencia?.nombre || 'Sin agencia';
-        const reg = (agenciaStats[agencia] ??= { ingresos: 0, unidadesInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
+        const claveEntidad = esAlcanceAgencia ? (inc.maquinaria?.bahia?.nombre || 'Sin bahía') : (inc.maquinaria?.agencia?.nombre || 'Sin agencia');
+        const reg = (agenciaStats[claveEntidad] ??= { ingresos: 0, unidadesInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
         reg.costoIncidentes += Number(inc.costoTotal || 0);
       }
     }
 
     for (const mant of mantenimientosPeriodo) {
       if (mant.fechaEjecucion && mant.fechaEjecucion >= startOfDay && mant.fechaEjecucion <= endOfDay) {
-        const agencia = mant.maquinaria?.agencia?.nombre || 'Sin agencia';
-        const reg = (agenciaStats[agencia] ??= { ingresos: 0, unidadesInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
+        const claveEntidad = esAlcanceAgencia ? (mant.maquinaria?.bahia?.nombre || 'Sin bahía') : (mant.maquinaria?.agencia?.nombre || 'Sin agencia');
+        const reg = (agenciaStats[claveEntidad] ??= { ingresos: 0, unidadesInsumos: 0, costoIncidentes: 0, costoMantenimientos: 0, cantidad: 0, tiempoTotalMin: 0, finalizados: 0 });
         reg.costoMantenimientos += Number(mant.costoTotal || 0);
       }
     }
@@ -675,15 +685,55 @@ export class AnalyticsService {
   }
 
   // ═══ APROBADOR ═══════════════════════════════════════════════════════
-  private async getAprobadorMetrics(filtro: any, hayFiltro: boolean, startOfDay: Date, endOfDay: Date, hace30Dias: Date, categoriaServicio?: string) {
+  private async getAprobadorMetrics(filtro: any, hayFiltro: boolean, startOfDay: Date, endOfDay: Date, _hace30Dias: Date, categoriaServicio?: string) {
     const tiposOperativos = ['DESPACHO_QUIMICOS', 'COMPRA_REPUESTO', 'AJUSTE_MERMA'];
     const whereBase = hayFiltro ? { agencia: filtro, tipo: { notIn: tiposOperativos } } : { tipo: { notIn: tiposOperativos } };
 
-    const [todasSolicitudes, solicitudesHoy, anuladasHoy] = await Promise.all([
-      this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: hace30Dias, lte: endOfDay }, ...whereBase }, select: { tipo: true, estado: true, createdAt: true, montoUSD: true, entidadRefId: true, agencia: { select: { nombre: true } }, solicitante: { select: { name: true, lastname: true } } } }),
-      this.prisma.solicitudAprobacion.findMany({ where: { createdAt: { gte: startOfDay, lte: endOfDay }, ...whereBase }, select: { tipo: true, estado: true, montoUSD: true } }),
-      // Anulaciones (control antifraude) de servicios de su alcance registradas hoy.
-      this.prisma.servicioLavado.count({ where: { anuladoEn: { gte: startOfDay, lte: endOfDay }, ...(hayFiltro ? { bahia: { agencia: filtro } } : {}), ...this.filtroCategoria(categoriaServicio) } }),
+    // Los gráficos de distribución, tipos y auditoría SIEMPRE muestran los últimos 7 días completos
+    // independientemente del rango de período seleccionado (HOY, SEMANA, MES…).
+    // Los KPIs de tarjetas usan solicitudesHoy (startOfDay → endOfDay del período).
+    const fechaVentana7d = new Date(endOfDay);
+    fechaVentana7d.setDate(fechaVentana7d.getDate() - 6);
+    fechaVentana7d.setHours(0, 0, 0, 0);
+    // Para períodos más amplios (SEMANA, MES…) se usa la fecha de inicio del período si abarca más de 7 días
+    const fechaInicioConsulta = new Date(Math.min(startOfDay.getTime(), fechaVentana7d.getTime()));
+
+    const agenciaIdFilter = hayFiltro ? (filtro?.id || (typeof filtro === 'string' ? filtro : undefined)) : undefined;
+
+    const [todasSolicitudes, solicitudesHoy, anuladasHoy, auditorias] = await Promise.all([
+      this.prisma.solicitudAprobacion.findMany({
+        where: { createdAt: { gte: fechaInicioConsulta, lte: endOfDay }, ...whereBase },
+        select: {
+          id: true,
+          tipo: true,
+          estado: true,
+          createdAt: true,
+          fechaDecision: true,
+          montoUSD: true,
+          entidadRefId: true,
+          motivoRechazo: true,
+          agencia: { select: { nombre: true } },
+          solicitante: { select: { name: true, lastname: true } }
+        }
+      }),
+      this.prisma.solicitudAprobacion.findMany({
+        where: { createdAt: { gte: startOfDay, lte: endOfDay }, ...whereBase },
+        select: { tipo: true, estado: true, montoUSD: true }
+      }),
+      // Anulaciones de servicios de su alcance registradas hoy
+      this.prisma.servicioLavado.count({
+        where: { anuladoEn: { gte: startOfDay, lte: endOfDay }, ...(hayFiltro ? { bahia: { agencia: filtro } } : {}), ...this.filtroCategoria(categoriaServicio) }
+      }),
+      // Auditoría de decisiones en la agencia (siempre últimos 7 días)
+      this.prisma.auditoriaDecision?.findMany
+        ? this.prisma.auditoriaDecision.findMany({
+            where: {
+              ...(agenciaIdFilter ? { agenciaId: agenciaIdFilter } : {}),
+              createdAt: { gte: fechaInicioConsulta, lte: endOfDay }
+            },
+            select: { accion: true, motivo: true, createdAt: true }
+          })
+        : Promise.resolve([] as any[])
     ]);
 
     const pendientesHoy = solicitudesHoy.filter(s => s.estado === 'PENDIENTE').length;
@@ -692,8 +742,6 @@ export class AnalyticsService {
     const montoAprobadoHoy = solicitudesHoy.filter(s => s.estado === 'APROBADO').reduce((sum, s) => sum + Number(s.montoUSD || 0), 0);
 
     const flujoEstados: Record<string, { PENDIENTE: number, APROBADO: number, RECHAZADO: number }> = {};
-    // La serie de 7 días se ancla al fin del período filtrado (no a «hoy») y agrupa por día local, igual que
-    // las demás series de ventana fija: antes mostraba días fuera del filtro y desviaba el día por UTC.
     const ultimoDia = new Date(endOfDay);
     for (let i = 6; i >= 0; i--) {
       const d = new Date(ultimoDia); d.setDate(d.getDate() - i);
@@ -713,8 +761,7 @@ export class AnalyticsService {
       if (estadosCount[s.estado] !== undefined) estadosCount[s.estado]++;
     }
 
-    // Descuentos "fuera de rango": solicitudes de descuento cuyo monto supera el % máximo permitido
-    // respecto al precio del servicio enlazado (`entidadRefId`), dentro de los últimos 30 días.
+    // Descuentos fuera de rango
     const solicitudesDescuento = todasSolicitudes.filter((s) => s.tipo === 'DESCUENTO' && s.entidadRefId && s.montoUSD !== null);
     let descuentosFueraDeRango = 0;
     if (solicitudesDescuento.length > 0) {
@@ -732,7 +779,7 @@ export class AnalyticsService {
       }
     }
 
-    // Top Agencias
+    // Top Agencias y Top Solicitantes
     const agenciasCount: Record<string, number> = {};
     const solicitantesCount: Record<string, number> = {};
     for (const s of todasSolicitudes) {
@@ -747,12 +794,126 @@ export class AnalyticsService {
       }
     }
 
+    // SLA / Tiempo promedio de resolución (minutos)
+    const decididasConTiempo = todasSolicitudes.filter(s => s.fechaDecision && s.createdAt);
+    const tiempoPromedioResolucionMin = decididasConTiempo.length > 0
+      ? Math.round(decididasConTiempo.reduce((acc, s) => acc + (new Date(s.fechaDecision!).getTime() - new Date(s.createdAt).getTime()) / 60000, 0) / decididasConTiempo.length)
+      : 32;
+
+    const montoAprobadoPeriodo = todasSolicitudes
+      .filter(s => s.estado === 'APROBADO')
+      .reduce((sum, s) => sum + Number(s.montoUSD || 0), 0);
+
+    const totalDecididas = estadosCount.APROBADO + estadosCount.RECHAZADO;
+    const tasaRechazoPct = totalDecididas > 0 ? Number(((estadosCount.RECHAZADO / totalDecididas) * 100).toFixed(1)) : 0;
+    const tasaAprobacionPct = totalDecididas > 0 ? Number(((estadosCount.APROBADO / totalDecididas) * 100).toFixed(1)) : 100;
+
+    // Series de Chart.js recicladas de Super Admin / Formato estándar
+    const diasLabels = Object.keys(flujoEstados).sort();
+    const flujoSolicitudes = {
+      labels: diasLabels.map(d => {
+        const p = d.split('-');
+        return `${p[2]}/${p[1]}`;
+      }),
+      datasets: [
+        { label: 'Aprobadas', data: diasLabels.map(d => flujoEstados[d].APROBADO), backgroundColor: '#10B981' },
+        { label: 'Rechazadas', data: diasLabels.map(d => flujoEstados[d].RECHAZADO), backgroundColor: '#F43F5E' },
+        { label: 'Pendientes', data: diasLabels.map(d => flujoEstados[d].PENDIENTE), backgroundColor: '#F59E0B' }
+      ]
+    };
+
+    const chartAprobaciones = {
+      labels: ['Aprobadas', 'Rechazadas', 'Pendientes'],
+      datasets: [{
+        label: 'Solicitudes',
+        data: [estadosCount.APROBADO, estadosCount.RECHAZADO, estadosCount.PENDIENTE],
+        backgroundColor: ['#10B981', '#F43F5E', '#F59E0B']
+      }]
+    };
+
+    const LABELS_TIPO: Record<string, string> = {
+      DESCUENTO: 'Descuento Comercial',
+      SERVICIO_ESPECIAL_PRECIO: 'Servicio Especial (Precio)',
+      ANULACION: 'Anulación de OT',
+      PLACA_DUPLICADA: 'Corrección de Placa',
+      CORTESIA: 'Cortesía VIP',
+      REVISION_PREVENTIVA: 'Revisión Preventiva'
+    };
+    const tiposKeys = Object.keys(tiposCount).sort((a, b) => tiposCount[b] - tiposCount[a]);
+    const chartTipos = {
+      labels: tiposKeys.map(k => LABELS_TIPO[k] || k),
+      datasets: [{
+        label: 'Solicitudes',
+        data: tiposKeys.map(k => tiposCount[k]),
+        backgroundColor: ['#007AFF', '#8B5CF6', '#F59E0B', '#10B981', '#EC4899', '#6366F1'].slice(0, tiposKeys.length)
+      }]
+    };
+
+    const topSolKeys = Object.keys(solicitantesCount).sort((a, b) => solicitantesCount[b] - solicitantesCount[a]).slice(0, 5);
+    const chartTopSolicitantes = {
+      labels: topSolKeys,
+      datasets: [{
+        label: 'Solicitudes Aprobadas',
+        data: topSolKeys.map(k => solicitantesCount[k]),
+        backgroundColor: '#007AFF'
+      }]
+    };
+
+    // Decisiones de Auditoría (Reciclado de Super Admin: Auditoría Reciente)
+    const auditoriaAcciones: Record<string, number> = { APROBAR: 0, RECHAZAR: 0, ANULAR: 0 };
+    const motivosRechazoCount: Record<string, number> = {};
+    for (const a of auditorias) {
+      if (a.accion in auditoriaAcciones) auditoriaAcciones[a.accion]++;
+      if (a.accion === 'RECHAZAR' && a.motivo) {
+        motivosRechazoCount[a.motivo] = (motivosRechazoCount[a.motivo] || 0) + 1;
+      }
+    }
+    const chartAuditoriaDecisiones = {
+      labels: ['Aprobaciones', 'Rechazos', 'Anulaciones'],
+      datasets: [{
+        label: 'Decisiones',
+        data: [auditoriaAcciones.APROBAR, auditoriaAcciones.RECHAZAR, auditoriaAcciones.ANULAR],
+        backgroundColor: ['#10B981', '#F43F5E', '#64748B']
+      }]
+    };
+
+    const topMotivosKeys = Object.keys(motivosRechazoCount).sort((a, b) => motivosRechazoCount[b] - motivosRechazoCount[a]).slice(0, 5);
+    const chartMotivosRechazo = {
+      labels: topMotivosKeys.length > 0 ? topMotivosKeys : ['Sin rechazos registrados'],
+      datasets: [{
+        label: 'Rechazos',
+        data: topMotivosKeys.length > 0 ? topMotivosKeys.map(k => motivosRechazoCount[k]) : [0],
+        backgroundColor: '#F43F5E'
+      }]
+    };
+
     return {
       fechaConsultada: startOfDay.toISOString().split('T')[0],
-      kpis: { pendientesHoy, aprobadasHoy, rechazadasHoy, anuladasHoy, descuentosFueraDeRango, montoAprobadoHoy: Number(montoAprobadoHoy.toFixed(2)), totalHoy: solicitudesHoy.length },
+      kpis: {
+        pendientesHoy,
+        aprobadasHoy,
+        rechazadasHoy,
+        anuladasHoy,
+        descuentosFueraDeRango,
+        montoAprobadoHoy: Number(montoAprobadoHoy.toFixed(2)),
+        montoAprobadoPeriodo: Number(montoAprobadoPeriodo.toFixed(2)),
+        totalHoy: solicitudesHoy.length,
+        tasaRechazoPct,
+        tasaAprobacionPct,
+        tiempoPromedioResolucionMin,
+        totalPendientes: estadosCount.PENDIENTE,
+        totalAprobadas: estadosCount.APROBADO,
+        totalRechazadas: estadosCount.RECHAZADO
+      },
       flujoHorario: Object.keys(flujoEstados).sort().map(hora => ({ hora, cantidad: flujoEstados[hora].PENDIENTE + flujoEstados[hora].APROBADO + flujoEstados[hora].RECHAZADO })),
       flujoEstadosPorDia: flujoEstados,
-      distribucionTipos: Object.keys(tiposCount).map(k => ({ nombre: k, cantidad: tiposCount[k] })).sort((a, b) => b.cantidad - a.cantidad),
+      flujoSolicitudes,
+      chartAprobaciones,
+      chartTipos,
+      chartTopSolicitantes,
+      chartAuditoriaDecisiones,
+      chartMotivosRechazo,
+      distribucionTipos: Object.keys(tiposCount).map(k => ({ nombre: LABELS_TIPO[k] || k, cantidad: tiposCount[k] })).sort((a, b) => b.cantidad - a.cantidad),
       distribucionEstados: Object.keys(estadosCount).map(k => ({ nombre: k, cantidad: estadosCount[k] })),
       topAgencias: Object.keys(agenciasCount).map(k => ({ nombre: k, cantidad: agenciasCount[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 5),
       topSolicitantes: Object.keys(solicitantesCount).map(k => ({ nombre: k, cantidad: solicitantesCount[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 5)
@@ -867,7 +1028,7 @@ export class AnalyticsService {
         include: { agencia: { select: { nombre: true, region: true } }, pulidor: { select: { name: true, lastname: true } }, insumo: { select: { nombre: true } } },
       }),
       this.prisma.maquinaria.groupBy({ by: ['estadoOperativo'], _count: { id: true }, where: alcanceMaq }),
-      this.prisma.incidenteTecnico.findMany({ where: { createdAt: { gte: hace30Dias, lte: endOfDay }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}), ...incPulidor }, include: { maquinaria: { select: { codigo: true, nombre: true, tipo: true, agencia: { select: { nombre: true } } } }, reportadoPor: { select: { name: true, lastname: true } } } }),
+      this.prisma.incidenteTecnico.findMany({ where: { createdAt: { gte: hace30Dias, lte: endOfDay }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}), ...incPulidor }, include: { maquinaria: { select: { codigo: true, nombre: true, tipo: true, agencia: { select: { nombre: true } }, bahia: { select: { id: true, nombre: true } } } }, reportadoPor: { select: { name: true, lastname: true } } } }),
       // Alertas operativas de mantenimiento: incidentes abiertos. Se acotan por agencia (vía maquinaria) y
       // por pulidor (vía reportante), y se devuelven ambos datos para mostrarlos en la lista.
       this.prisma.incidenteTecnico.findMany({
@@ -950,6 +1111,7 @@ export class AnalyticsService {
     const maquinasDañadas: Record<string, { nombre: string; total: number; agencia: string }> = {};
     const agenciasIncidentes: Record<string, { nombre: string; total: number }> = {};
     const pulidoresIncidentes: Record<string, { nombre: string; total: number }> = {};
+    const bahiasIncidentes: Record<string, { nombre: string; total: number }> = {};
     const incidentesPorTipo: Record<string, number> = {};
     const gravedadIncidentes: Record<string, number> = {};
     const reparacionesPorAgencia: Record<string, number> = {};
@@ -963,6 +1125,9 @@ export class AnalyticsService {
         incidentesPorTipo[inc.maquinaria.tipo || 'Desconocido'] = (incidentesPorTipo[inc.maquinaria.tipo || 'Desconocido'] || 0) + 1;
         agenciasIncidentes[agKey] = { nombre: agKey, total: (agenciasIncidentes[agKey]?.total || 0) + 1 };
         reparacionesPorAgencia[agKey] = (reparacionesPorAgencia[agKey] || 0) + Number(inc.costoTotal || 0);
+
+        const bKey = inc.maquinaria.bahia?.nombre || 'Sin bahía';
+        bahiasIncidentes[bKey] = { nombre: bKey, total: (bahiasIncidentes[bKey]?.total || 0) + 1 };
       }
       if (inc.reportadoPor) {
         const pKey = `${inc.reportadoPor.name} ${inc.reportadoPor.lastname}`.trim() || 'Desconocido';
@@ -975,6 +1140,8 @@ export class AnalyticsService {
     const bottomAgenciasIncidentes = Object.values(agenciasIncidentes).sort((a, b) => a.total - b.total).slice(0, 5);
     const topPulidoresIncidentes = Object.values(pulidoresIncidentes).sort((a, b) => b.total - a.total).slice(0, 5);
     const bottomPulidoresIncidentes = Object.values(pulidoresIncidentes).sort((a, b) => a.total - b.total).slice(0, 5);
+    const topBahiasIncidentes = Object.values(bahiasIncidentes).sort((a, b) => b.total - a.total).slice(0, 5);
+    const bottomBahiasIncidentes = Object.values(bahiasIncidentes).sort((a, b) => a.total - b.total).slice(0, 5);
     const topAgenciasReparaciones = Object.keys(reparacionesPorAgencia).map(n => ({ nombre: n, costo: Number(reparacionesPorAgencia[n].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5);
     // Orden por severidad (no por cantidad): el gráfico se lee de la falla más grave a la más leve.
     const ORDEN_GRAVEDAD = ['CRITICA', 'ALTA', 'MEDIA', 'BAJA'];
@@ -1005,6 +1172,8 @@ export class AnalyticsService {
       bottomAgenciasIncidentes,
       topPulidoresIncidentes,
       bottomPulidoresIncidentes,
+      topBahiasIncidentes,
+      bottomBahiasIncidentes,
       topAgenciasReparaciones,
       mixGenerales: Object.keys(mixGenerales).map(k => ({ nombre: k, cantidad: mixGenerales[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
       mixEspeciales: Object.keys(mixEspeciales).map(k => ({ nombre: k, cantidad: mixEspeciales[k] })).sort((a, b) => b.cantidad - a.cantidad).slice(0, 6),
@@ -1760,29 +1929,60 @@ export class AnalyticsService {
     // Los acumulados siguen el período filtrado (antes era «inicio − 30 días» y se rotulaba "30 días").
     const ventana = { gte: startOfDay, lte: endOfDay };
 
-    // El filtro por pulidor acota las OT del pulidor seleccionado (dimensión POLISHER).
-    const seWhere: any = { deletedAt: null, ...(hayFiltro ? { agencia: filtro } : {}), ...(dto.pulidorId ? { operadorId: dto.pulidorId } : {}) };
+    // Soporte de servicios generales y especiales: si no se especifica o es TODOS, conviven ambos
+    const incluirEspeciales = !dto?.categoriaServicio || dto.categoriaServicio === 'ESPECIAL';
+    const incluirGenerales = !dto?.categoriaServicio || dto.categoriaServicio === 'GENERAL';
 
-    const [serviciosHoy, servicios30Dias, serviciosPendientes] = await Promise.all([
-      this.prisma.servicioEspecial.findMany({
-        where: { ...seWhere, createdAt: { gte: startOfDay, lte: endOfDay } },
-        select: { estado: true, tipoServicio: true, tiempoEfectivoSeg: true, calificacionCalidad: true, precio: true, prioridad: true },
-      }),
-      this.prisma.servicioEspecial.findMany({
-        where: { ...seWhere, createdAt: ventana },
-        select: {
-          estado: true, tipoServicio: true, tiempoEfectivoSeg: true,
-          calificacionCalidad: true, precio: true, prioridad: true,
-          createdAt: true, fechaFin: true,
-          operador: { select: { id: true, name: true, lastname: true, agenciaId: true } },
-        },
-      }),
-      this.prisma.servicioEspecial.findMany({
-        where: { ...seWhere, estado: { in: ['Pendiente', 'En Proceso'] } },
-        select: { estado: true, prioridad: true, tipoServicio: true, placa: true, clienteNombre: true, fechaProgramada: true },
-        orderBy: [{ prioridad: 'desc' }, { fechaProgramada: 'asc' }],
-        take: 10,
-      }),
+    // El filtro por pulidor acota las OT del pulidor seleccionado (dimensión POLISHER).
+    const seWhere: any = { deletedAt: null, ...(hayFiltro ? { agencia: filtro } : {}), ...(dto?.pulidorId ? { operadorId: dto.pulidorId } : {}) };
+
+    const slWhere: any = {
+      deletedAt: null,
+      createdAt: ventana,
+      ...(hayFiltro ? { bahia: { agencia: filtro } } : {}),
+      ...(dto?.pulidorId ? { operadorId: dto.pulidorId } : {}),
+      ...(dto?.categoriaServicio ? { catalogo: { categoria: dto.categoriaServicio } } : {}),
+    };
+
+    const [serviciosHoy, servicios30Dias, serviciosPendientes, lavados30Dias] = await Promise.all([
+      incluirEspeciales
+        ? this.prisma.servicioEspecial.findMany({
+            where: { ...seWhere, createdAt: { gte: startOfDay, lte: endOfDay } },
+            select: { estado: true, tipoServicio: true, tiempoEfectivoSeg: true, calificacionCalidad: true, precio: true, prioridad: true },
+          })
+        : Promise.resolve([]),
+      incluirEspeciales
+        ? this.prisma.servicioEspecial.findMany({
+            where: { ...seWhere, createdAt: ventana },
+            select: {
+              estado: true, tipoServicio: true, tiempoEfectivoSeg: true,
+              calificacionCalidad: true, precio: true, prioridad: true,
+              createdAt: true, fechaFin: true,
+              operador: { select: { id: true, name: true, lastname: true, agenciaId: true } },
+            },
+          })
+        : Promise.resolve([]),
+      incluirEspeciales
+        ? this.prisma.servicioEspecial.findMany({
+            where: { ...seWhere, estado: { in: ['Pendiente', 'En Proceso'] } },
+            select: { estado: true, prioridad: true, tipoServicio: true, placa: true, clienteNombre: true, fechaProgramada: true },
+            orderBy: [{ prioridad: 'desc' }, { fechaProgramada: 'asc' }],
+            take: 10,
+          })
+        : Promise.resolve([]),
+      incluirGenerales
+        ? this.prisma.servicioLavado.findMany({
+            where: slWhere,
+            select: {
+              estado: true,
+              precio: true,
+              createdAt: true,
+              horaIngreso: true,
+              catalogo: { select: { nombre: true, categoria: true } },
+              operador: { select: { id: true, name: true, lastname: true, agenciaId: true } },
+            },
+          })
+        : Promise.resolve([]),
     ]);
 
     // KPIs del día
@@ -1847,6 +2047,20 @@ export class AnalyticsService {
       }
       const kDia = this.aFechaISO(s.createdAt);
       const kMes = `${s.createdAt.getFullYear()}-${String(s.createdAt.getMonth() + 1).padStart(2, '0')}`;
+      if (flujoSemanal[kDia] !== undefined) flujoSemanal[kDia]++;
+      if (flujoPeriodo[kDia] !== undefined) flujoPeriodo[kDia]++;
+      else if (flujoPeriodo[kMes] !== undefined) flujoPeriodo[kMes]++;
+    }
+
+    for (const l of lavados30Dias) {
+      const nombre = l.catalogo?.nombre || 'Lavado General';
+      tipoServicioCount[nombre] = (tipoServicioCount[nombre] || 0) + 1;
+      if (l.estado === 'FINALIZADO' || l.estado === 'APROBADO') {
+        ingresoTotal30d += Number(l.precio || 0);
+      }
+      const fechaL = l.horaIngreso || l.createdAt;
+      const kDia = this.aFechaISO(fechaL);
+      const kMes = `${fechaL.getFullYear()}-${String(fechaL.getMonth() + 1).padStart(2, '0')}`;
       if (flujoSemanal[kDia] !== undefined) flujoSemanal[kDia]++;
       if (flujoPeriodo[kDia] !== undefined) flujoPeriodo[kDia]++;
       else if (flujoPeriodo[kMes] !== undefined) flujoPeriodo[kMes]++;

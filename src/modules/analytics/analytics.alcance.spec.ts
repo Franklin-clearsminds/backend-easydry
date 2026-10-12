@@ -38,7 +38,7 @@ function armar() {
     stockUbicacion: { findMany: vi.fn().mockResolvedValue([]) },
     servicioEspecial: { findMany: vi.fn().mockResolvedValue([]) },
     solicitudAprobacion: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
-    auditoriaDecision: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
+    auditoriaDecision: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
     user: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
     role: { findMany: vi.fn().mockResolvedValue([]) },
     catalogoServicio: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
