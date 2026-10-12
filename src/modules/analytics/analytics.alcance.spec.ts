@@ -105,7 +105,7 @@ describe('dashboard admin — KPIs estratégicos', () => {
 
     const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
 
-    expect(res.isAdminView).toBe(true);
+    expect(res.isSuperAdminView).toBe(true);
     expect(res.kpis.ingresoHoy).toBe(500);
     expect(res.kpis.ticketPromedioHoy).toBe(50); // 500 / 10 servicios
     expect(res.kpis.variacionMesPct).toBe(20); // (6000 - 5000) / 5000
@@ -738,6 +738,41 @@ describe('dashboard taller — MTTR y periodo', () => {
     const mantWhere = prisma.mantenimientoMaquinaria.findMany.mock.calls[0][0].where;
     expect(mantWhere.createdAt.gte.getTime()).toBe(new Date(2026, 0, 1).getTime());
     expect(mantWhere.createdAt.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
+  });
+
+  it('publica los rankings completos de equipos, MTTR y costo para el control Top N', async () => {
+    const { prisma, service } = armar();
+    // Seis equipos con volúmenes y costos decrecientes: los tops recortados de 5 no bastan para el
+    // orden ascendente, que necesita ver también al último.
+    const incidentes: any[] = [];
+    for (let i = 1; i <= 6; i++) {
+      for (let j = 0; j < 7 - i; j++) {
+        const inc = incidente(`Agencia ${i}`, i * 2);
+        inc.maquinaria = { nombre: `Equipo ${i}`, codigo: `MQ-0${i}`, tipo: 'HIDRO', agencia: { nombre: `Agencia ${i}` } };
+        incidentes.push(inc);
+      }
+    }
+    prisma.incidenteTecnico.findMany.mockResolvedValue(incidentes);
+    prisma.maquinaria.findMany.mockResolvedValue([]);
+    prisma.mantenimientoMaquinaria.findMany.mockResolvedValue([]);
+
+    const res: any = await service.getDashboardTaller({} as any, usuario('ADMIN'));
+
+    // Los campos recortados que consume el panel ejecutivo no cambian: los equipos se capan en 5.
+    expect(res.topMaquinasProblematicas.length).toBe(5);
+    expect(res.topMaquinasCostosas.length).toBe(5);
+    // MTTR y costo se capan en 8, así que con 6 agencias el campo recortado trae las 6.
+    expect(res.mttrPorAgencia.length).toBe(6);
+    expect(res.costoPorAgencia.length).toBe(6);
+
+    // Los rankings del control sí traen el universo completo.
+    expect(res.maquinasProblematicasRank.length).toBe(6);
+    expect(res.maquinasProblematicasRank[0]).toMatchObject({ total: 6 });
+    expect(res.maquinasProblematicasRank[5]).toMatchObject({ total: 1 });
+    expect(res.maquinasCostosasRank.length).toBe(6);
+    expect(res.maquinasCostosasRank[5].costoTotal).toBe(100);
+    expect(res.mttrAgenciaRank.length).toBe(6);
+    expect(res.costoAgenciaRank.length).toBe(6);
   });
 
   it('el desglose explícito decide la agrupación del gráfico de rendimiento', async () => {

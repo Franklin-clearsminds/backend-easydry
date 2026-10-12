@@ -142,14 +142,11 @@ export class AnalyticsService {
     const hace30Dias = periodo.desde;
     const roleName = rolDeUsuario(user);
 
-    if (roleName === 'ADMIN') {
-      return { success: true, isAdminView: true, isEjecutivoView: true, ...(await this.getAdminMetrics(dto, filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, user)) };
-    }
     if (roleName === 'APROBADOR') {
       return { success: true, isAprobadorView: true, ...(await this.getAprobadorMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio)) };
     }
 
-    // Roles que ven el dashboard analítico (Super Admin, Supervisor, Líder, Comerciales)
+    // Roles que ven el dashboard analítico (Super Admin, Admin, Supervisor, Líder, Comerciales)
     let baseMetrics: any;
     const isComercial = roleName === 'COORD_COMERCIAL' || roleName === 'JEFE_COMERCIAL';
     
@@ -162,14 +159,14 @@ export class AnalyticsService {
     }
 
     // Todos los roles de negocio reciben la analítica estratégica y jerárquica (filtrada por su ámbito)
-    const isEjecutivo = ['SUPER_ADMIN', 'SUPERVISOR', 'LIDER', 'COORD_COMERCIAL', 'JEFE_COMERCIAL'].includes(roleName);
+    const isEjecutivo = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER', 'COORD_COMERCIAL', 'JEFE_COMERCIAL'].includes(roleName);
     
     if (isEjecutivo) {
       const globalMetrics = await this.getAdminEstrategicos(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.pulidorId, dto?.categoriaServicio);
       const jerarquia = await this.getAdminJerarquia(dto, filtro, hayFiltro, startOfDay, endOfDay, user);
       return {
         success: true,
-        isSuperAdminView: roleName === 'SUPER_ADMIN',
+        isSuperAdminView: ['SUPER_ADMIN', 'ADMIN'].includes(roleName),
         isEjecutivoView: true,
         ...baseMetrics,
         ...globalMetrics,
@@ -221,6 +218,7 @@ export class AnalyticsService {
 
     return {
       fechaConsultada: startOfDay.toISOString().split('T')[0],
+      ...estrategicos,
       kpis: {
         totalUsuarios,
         usuariosActivos: totalUsuarios - usuariosInactivos,
@@ -235,14 +233,6 @@ export class AnalyticsService {
       distribucionRoles,
       distribucionDecisiones: decisionesAgrupadas.map(d => ({ nombre: d.accion, total: d._count.id })).sort((a, b) => b.total - a.total),
       distribucionCategorias: serviciosPorCategoria.map(s => ({ nombre: s.categoria, total: s._count.id })).sort((a, b) => b.total - a.total),
-      topAgenciasProductivas: estrategicos.topAgenciasProductivas,
-      rankingsAgencias: estrategicos.rankingsAgencias,
-      mixGenerales: estrategicos.mixGenerales,
-      mixEspeciales: estrategicos.mixEspeciales,
-      topColores: estrategicos.topColores,
-      topMarcasModelos: estrategicos.topMarcasModelos,
-      tiemposAgencias: estrategicos.tiemposAgencias,
-      topAgenciasRentabilidad: estrategicos.topAgenciasRentabilidad,
       jerarquia,
     };
   }
@@ -278,9 +268,11 @@ export class AnalyticsService {
 
     const alcance = resolverAlcance(user);
     const dimension: 'GLOBAL' | 'REGION' | 'AGENCY' | 'POLISHER' =
-      alcance.tipo === 'AGENCIA' ? 'AGENCY'
+      dto?.pulidorId ? 'POLISHER'
+      : dto?.agenciaId ? 'AGENCY'
+      : (alcance.tipo === 'AGENCIA' ? 'AGENCY'
       : alcance.tipo === 'REGION' ? 'REGION'
-      : (dto?.pulidorId ? 'POLISHER' : dto?.agenciaId ? 'AGENCY' : dto?.regionId ? 'REGION' : 'GLOBAL');
+      : (dto?.regionId ? 'REGION' : 'GLOBAL'));
     // Desglose explícito del gráfico (nivel país): permite ver el mismo período por Región, Agencia o Pulidor
     // sin cambiar el filtro estructural. Sin él se mantiene el comportamiento del drill-down por dimensión.
     const agrupacion: 'REGION' | 'AGENCY' | 'POLISHER' | null = dto?.desglose ?? null;
@@ -930,24 +922,28 @@ export class AnalyticsService {
       }
       for (const c of s.consumos || []) costoTotalQuimicosUSD += Number(c.cantidadUsada || 0) * Number(c.insumo?.costoUnitarioUSD || 0);
       if (s.bahia) {
-        if (!bahiasStats[s.bahia.id]) {
-          // El nombre incluye la agencia de origen para saber de dónde proviene cada bahía.
-          const origen = s.bahia.agencia?.nombre ? ` · ${s.bahia.agencia.nombre}` : '';
-          bahiasStats[s.bahia.id] = { id: s.bahia.id, nombre: `${s.bahia.nombre}${origen}`, total: 0, tiempoTotalMin: 0, finalizados: 0 };
+        const esPorAgencia = isSupervisorView && !dto?.agenciaId;
+        const entidadId = esPorAgencia ? (s.bahia.agencia?.nombre || 'Sin agencia') : s.bahia.id;
+        const entidadNombre = esPorAgencia ? (s.bahia.agencia?.nombre || 'Sin agencia') : (s.bahia.nombre || 'Sin bahía');
+        if (!bahiasStats[entidadId]) {
+          bahiasStats[entidadId] = { id: entidadId, nombre: entidadNombre, total: 0, tiempoTotalMin: 0, finalizados: 0 };
         }
-        bahiasStats[s.bahia.id].total++;
-        if (s.estado === ServiceStatus.FINALIZADO && s.horaSalida) { bahiasStats[s.bahia.id].finalizados++; bahiasStats[s.bahia.id].tiempoTotalMin += duracionMin; }
+        bahiasStats[entidadId].total++;
+        if (s.estado === ServiceStatus.FINALIZADO && s.horaSalida) {
+          bahiasStats[entidadId].finalizados++;
+          bahiasStats[entidadId].tiempoTotalMin += duracionMin;
+        }
       }
     }
 
     const tiempoPromedioMin = serviciosFinalizadosConTiempo > 0 ? Math.round(tiempoTotalMinutos / serviciosFinalizadosConTiempo) : 0;
-    const distribucionBahias = Object.values(bahiasStats).map(b => ({ nombre: b.nombre, total: b.total })).sort((a, b) => b.total - a.total).slice(0, 7);
-    const tiemposBahias = Object.values(bahiasStats).filter(b => b.finalizados > 0).map(b => ({ nombre: b.nombre, promedio: Math.round(b.tiempoTotalMin / b.finalizados) })).sort((a, b) => a.promedio - b.promedio).slice(0, 7);
-    // Serie unificada: cantidad de lavados + tiempo promedio por bahía (con su agencia de origen).
+    const distribucionBahias = Object.values(bahiasStats).map(b => ({ nombre: b.nombre, total: b.total })).sort((a, b) => b.total - a.total);
+    const tiemposBahias = Object.values(bahiasStats).filter(b => b.finalizados > 0).map(b => ({ nombre: b.nombre, promedio: Math.round(b.tiempoTotalMin / b.finalizados) })).sort((a, b) => a.promedio - b.promedio);
+    // Serie unificada: cantidad de lavados + tiempo promedio por bahía o agencia.
     const bahias = Object.values(bahiasStats)
       .map(b => ({ nombre: b.nombre, cantidad: b.total, tiempoPromedioMin: b.finalizados > 0 ? Math.round(b.tiempoTotalMin / b.finalizados) : 0 }))
       .sort((a, b) => b.cantidad - a.cantidad)
-      .slice(0, 8);
+      .slice(0, 10);
     const bahiaMasActiva = distribucionBahias[0] || { nombre: 'Sin actividad', total: 0 };
     const flujoArr = Object.keys(flujoHorario).sort().map(hora => ({ hora, cantidad: flujoHorario[hora] }));
 
@@ -1314,6 +1310,12 @@ export class AnalyticsService {
     const topMaquinasProblematicas = Object.values(maquinaMasProblematica).sort((a, b) => b.total - a.total).slice(0, 5);
     const topMaquinasCostosas = Object.values(maquinaMasProblematica).filter(m => m.costoTotal > 0).sort((a, b) => b.costoTotal - a.costoTotal).slice(0, 5);
 
+    // Rankings completos que alimentan el control Top N (5 o 10, mayor→menor o menor→mayor) del dashboard de
+    // mantenimiento. Van sin recortar porque, sobre un top 5 ya recortado, el orden ascendente solo invertiría
+    // esos cinco y mostraría como "mejores" equipos o agencias que no lo son.
+    const maquinasProblematicasRank = Object.values(maquinaMasProblematica).sort((a, b) => b.total - a.total);
+    const maquinasCostosasRank = Object.values(maquinaMasProblematica).filter(m => m.costoTotal > 0).sort((a, b) => b.costoTotal - a.costoTotal);
+
     // Mantenimientos preventivos vs correctivos (cantidad y costo) + costo por agencia (fallas + mantenimiento)
     const tipoMantenimiento: Record<string, number> = { PREVENTIVO: 0, CORRECTIVO: 0 };
     const costoTipoMant: Record<string, number> = { PREVENTIVO: 0, CORRECTIVO: 0 };
@@ -1334,8 +1336,9 @@ export class AnalyticsService {
     const costoPorAgencia = Object.keys(costoAgencia)
       .map(n => ({ nombre: n, reparaciones: Number(costoAgencia[n].reparaciones.toFixed(2)), mantenimiento: Number(costoAgencia[n].mantenimiento.toFixed(2)) }))
       .filter(a => a.reparaciones + a.mantenimiento > 0)
-      .sort((a, b) => (b.reparaciones + b.mantenimiento) - (a.reparaciones + a.mantenimiento))
-      .slice(0, 8);
+      .sort((a, b) => (b.reparaciones + b.mantenimiento) - (a.reparaciones + a.mantenimiento));
+    // Se conserva el recorte de 8 filas para el panel ejecutivo; el ranking completo alimenta el control Top N.
+    const costoPorAgenciaTop = costoPorAgencia.slice(0, 8);
 
     // MTTR (tiempo medio de resolución) por gravedad y por agencia. El gráfico por gravedad suele salir
     // plano (todas las gravedades tardan parecido), así que el desglose por agencia indica DÓNDE se
@@ -1359,14 +1362,14 @@ export class AnalyticsService {
 
     const mttrPorAgencia = Object.keys(mttrAgenciaAcum)
       .map(n => ({ nombre: n, horas: promedioHoras(mttrAgenciaAcum[n]), incidentes: mttrAgenciaAcum[n].n }))
-      .sort((a, b) => b.horas - a.horas)
-      .slice(0, 8);
+      .sort((a, b) => b.horas - a.horas);
+    const mttrPorAgenciaTop = mttrPorAgencia.slice(0, 8);
 
     return {
       success: true,
       mttrPorGravedad,
-      mttrPorAgencia,
-      costoPorAgencia,
+      mttrPorAgencia: mttrPorAgenciaTop,
+      costoPorAgencia: costoPorAgenciaTop,
       costoPorTipoMantenimiento: Object.keys(costoTipoMant).map(k => ({ nombre: k, costo: Number(costoTipoMant[k].toFixed(2)) })).filter(x => x.costo > 0),
       kpis: {
         costoMantenimientos30d: Number(costoMantenimientos.toFixed(2)),
@@ -1385,6 +1388,11 @@ export class AnalyticsService {
       estadoIncidentes: Object.keys(estadoIncCount).filter(k => estadoIncCount[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: estadoIncCount[k] })),
       topMaquinasProblematicas,
       topMaquinasCostosas,
+      // Rankings completos para el control Top 5 / Top 10 con orden ascendente o descendente.
+      maquinasProblematicasRank,
+      maquinasCostosasRank,
+      mttrAgenciaRank: mttrPorAgencia,
+      costoAgenciaRank: costoPorAgencia,
       tipoMantenimiento: Object.keys(tipoMantenimiento).map(k => ({ nombre: k, cantidad: tipoMantenimiento[k] })),
       distribucionTipoMaquinaria: Object.keys(tipoMaq).map(k => ({ nombre: k, total: tipoMaq[k] })).sort((a, b) => b.total - a.total),
       proxMantenimientos: proxMantenimientos.map(m => ({ nombre: m.maquinaria.nombre, codigo: m.maquinaria.codigo, tipo: m.tipo, fechaProgramada: m.fechaProgramada })),
@@ -1507,7 +1515,8 @@ export class AnalyticsService {
       alertasPorAgencia[ag] = (alertasPorAgencia[ag] || 0) + 1;
     }
 
-    // Top agencias con alertas
+    // Top agencias con alertas. Solo se expone recortado: el dashboard de bodega no lleva control de orden
+    // en las tarjetas de alertas.
     const topAgenciasConAlertas = Object.keys(alertasPorAgencia).map(k => ({ nombre: k, alertas: alertasPorAgencia[k] })).sort((a, b) => b.alertas - a.alertas).slice(0, 7);
 
     // Movimientos: despachados pendientes, en tránsito, recibidos
@@ -1546,14 +1555,12 @@ export class AnalyticsService {
     // Rotación real desde bodega: insumos con más unidades despachadas en 30 días.
     const topInsumosConsumo = Object.keys(consumoPorInsumo)
       .map((nombre) => ({ nombre, cantidad: Number(consumoPorInsumo[nombre].toFixed(2)) }))
-      .sort((a, b) => b.cantidad - a.cantidad)
-      .slice(0, 7);
+      .sort((a, b) => b.cantidad - a.cantidad);
       
     // Top agencias por consumo
     const topAgenciasConsumo = Object.keys(consumoPorAgencia)
       .map((nombre) => ({ nombre, cantidad: Number(consumoPorAgencia[nombre].toFixed(2)) }))
-      .sort((a, b) => b.cantidad - a.cantidad)
-      .slice(0, 7);
+      .sort((a, b) => b.cantidad - a.cantidad);
 
     // Existencias totales del alcance: se reportan en UNIDADES, no en USD. El costo unitario del catálogo
     // es el precio del envase (p. ej. $75 los 5 L) mientras las existencias se llevan en unidad base (ml),
@@ -1568,7 +1575,7 @@ export class AnalyticsService {
       unidadesStockPorCategoria[cat] = (unidadesStockPorCategoria[cat] || 0) + cantidad;
     }
 
-    // Top insumos con alerta
+    // Top insumos con alerta. Recortado: el dashboard de bodega no lleva control de orden en alertas.
     const topInsumosCriticos = Object.keys(alertasPorInsumo).map(k => ({ nombre: k, alertas: alertasPorInsumo[k] })).sort((a, b) => b.alertas - a.alertas).slice(0, 7);
 
     return {
@@ -1586,15 +1593,20 @@ export class AnalyticsService {
         insumosCoberturaCritica: coberturaCritica,
       },
       coberturaDias: cobertura.slice(0, 8),
+      coberturaDiasRank: cobertura,
       saludStock: salud.saludStock,
       saludPorUbicacion: salud.saludPorUbicacion,
+      saludPorUbicacionExtremos: salud.saludPorUbicacionExtremos,
       stockVsIdealCategoria: salud.stockVsIdealCategoria,
       topDeficit: salud.topDeficit,
+      topDeficitRank: salud.topDeficitRank,
       alertasPorCategoriaNivel: salud.alertasPorCategoriaNivel,
       topInsumosCriticos,
       topAgenciasConAlertas,
-      topInsumosConsumo,
-      topAgenciasConsumo,
+      topInsumosConsumo: topInsumosConsumo.slice(0, 7),
+      topInsumosConsumoRank: topInsumosConsumo,
+      topAgenciasConsumo: topAgenciasConsumo.slice(0, 7),
+      topAgenciasConsumoRank: topAgenciasConsumo,
       unidadesStockPorCategoria: Object.keys(unidadesStockPorCategoria).map(k => ({ nombre: k, cantidad: Number(unidadesStockPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),
       despachosEstado: Object.keys(despachosEstado).filter(k => despachosEstado[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: despachosEstado[k] })),
       consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),
@@ -1679,6 +1691,25 @@ export class AnalyticsService {
     const total = ESTADOS.reduce((acc, e) => acc + global[e], 0);
     const bajoIdeal = global.AGOTADO + global['CRÍTICO'] + global['BAJO MÍNIMO'] + global['BAJO IDEAL'];
 
+    const saludPorUbicacionCompleta = Object.keys(porUbicacion)
+      .map((nombre) => {
+        const v = porUbicacion[nombre];
+        const criticos = v['CRÍTICO'] + v['BAJO MÍNIMO'] + v['BAJO IDEAL'];
+        return { nombre, ...v, criticos, problemas: v.AGOTADO + criticos };
+      })
+      .filter((u) => u.problemas > 0)
+      .sort((a, b) => Number(b.criticos > 0) - Number(a.criticos > 0) || b.criticos - a.criticos || b.problemas - a.problemas);
+
+    const topDeficitCompleto = Object.values(deficitPorInsumo)
+      .map((d) => ({ nombre: d.nombre, unidades: r2(d.unidades), unidad: d.unidad, ubicaciones: d.ubicaciones }))
+      .sort((a, b) => b.unidades - a.unidades);
+
+    /** Los 10 primeros y los 10 últimos de una lista ordenada (evita enviar cientos de filas). */
+    const extremos = <T>(lista: T[]): T[] => {
+      if (lista.length <= 20) return lista;
+      return [...lista.slice(0, 10), ...lista.slice(-10)];
+    };
+
     return {
       kpis: {
         posicionesEvaluadas: total,
@@ -1689,28 +1720,28 @@ export class AnalyticsService {
         insumosConDeficit: Object.keys(deficitPorInsumo).length,
         ubicacionesConDeficit,
       },
+      // Las dos listas se construyen ordenadas y completas; los campos con `slice` son los que consume el
+      // panel ejecutivo y `*Rank` los que alimentan el control Top N del dashboard de bodega. Se calculan una
+      // sola vez para que ambos no puedan divergir.
+      // Las dos listas se construyen ordenadas y completas; los campos con `slice` son los que consume el
+      // panel ejecutivo y `*Rank` los que alimentan el control Top N del dashboard de bodega. Se calculan una
+      // sola vez para que ambos no puedan divergir.
       saludStock: ESTADOS.map((e) => ({ nombre: e, cantidad: global[e] })),
       // Orden pensado para que el gráfico sea legible: primero las ubicaciones que COMBINAN agotado con
       // crítico/bajo mínimo/bajo ideal (son las accionables), y después las más agotadas. Al ordenar solo por
       // cantidad de problemas, las ubicaciones 100% agotadas copaban las primeras posiciones y el gráfico
       // parecía de un solo color aunque la mezcla existiera.
-      saludPorUbicacion: Object.keys(porUbicacion)
-        .map((nombre) => {
-          const v = porUbicacion[nombre];
-          const criticos = v['CRÍTICO'] + v['BAJO MÍNIMO'] + v['BAJO IDEAL'];
-          return { nombre, ...v, criticos, problemas: v.AGOTADO + criticos };
-        })
-        .filter((u) => u.problemas > 0)
-        .sort((a, b) => Number(b.criticos > 0) - Number(a.criticos > 0) || b.criticos - a.criticos || b.problemas - a.problemas)
-        .slice(0, 8),
+      saludPorUbicacion: saludPorUbicacionCompleta.slice(0, 8),
+      // Serie propia del control Top N: los 10 extremos por cada lado. Enviar las 720 ubicaciones para
+      // mostrar 5-10 filas infla el payload sin aportar nada, y con solo el top 10 el orden ascendente
+      // mostraría como "mejores" las que no entraron al top.
+      saludPorUbicacionExtremos: extremos(saludPorUbicacionCompleta),
       stockVsIdealCategoria: Object.keys(porCategoria)
         .map((nombre) => ({ nombre, actual: r2(porCategoria[nombre].actual), minimo: r2(porCategoria[nombre].minimo), ideal: r2(porCategoria[nombre].ideal) }))
         .sort((a, b) => b.ideal - a.ideal)
         .slice(0, 8),
-      topDeficit: Object.values(deficitPorInsumo)
-        .map((d) => ({ nombre: d.nombre, unidades: r2(d.unidades), unidad: d.unidad, ubicaciones: d.ubicaciones }))
-        .sort((a, b) => b.unidades - a.unidades)
-        .slice(0, 8),
+      topDeficit: topDeficitCompleto.slice(0, 8),
+      topDeficitRank: topDeficitCompleto,
       alertasPorCategoriaNivel: Object.keys(alertasCat)
         .map((nombre) => ({ nombre, ...alertasCat[nombre] }))
         .sort((a, b) => (b.AGOTADO + b.CRITICO + b.BAJO) - (a.AGOTADO + a.CRITICO + a.BAJO))
@@ -1768,13 +1799,35 @@ export class AnalyticsService {
     const pulidoresMoviles: Record<string, { nombre: string; servicios: number; ingresos: number }> = {};
     let tiempoEfectivoTotal = 0; let serviciosConTiempo = 0;
     let ingresoTotal30d = 0;
-    const flujoDiario: Record<string, number> = {};
-    // La serie de 7 días se ancla al fin del período filtrado (no a «hoy») para que siempre caiga dentro
-    // del rango elegido, y agrupa por día local: con UTC una OT de la tarde se iba al día siguiente.
+    // Serie semanal (7 días anclados al fin del período)
+    const flujoSemanal: Record<string, number> = {};
     const ultimoDia = new Date(endOfDay);
     for (let i = 6; i >= 0; i--) {
       const d = new Date(ultimoDia); d.setDate(d.getDate() - i);
-      flujoDiario[this.aFechaISO(d)] = 0;
+      flujoSemanal[this.aFechaISO(d)] = 0;
+    }
+
+    // Serie adaptativa del período completo (días o meses para adaptarse al filtro de semana/mes/año)
+    const flujoPeriodo: Record<string, number> = {};
+    const diffDias = Math.max(1, Math.round((endOfDay.getTime() - startOfDay.getTime()) / (24 * 3600 * 1000)));
+
+    if (diffDias > 1 && diffDias <= 62) {
+      const cur = new Date(startOfDay);
+      while (cur <= endOfDay) {
+        flujoPeriodo[this.aFechaISO(cur)] = 0;
+        cur.setDate(cur.getDate() + 1);
+      }
+    } else if (diffDias > 62) {
+      const cur = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), 1);
+      while (cur <= endOfDay) {
+        const mesKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+        flujoPeriodo[mesKey] = 0;
+        cur.setMonth(cur.getMonth() + 1);
+      }
+    } else {
+      for (const k of Object.keys(flujoSemanal)) {
+        flujoPeriodo[k] = 0;
+      }
     }
 
     for (const s of servicios30Dias) {
@@ -1792,14 +1845,17 @@ export class AnalyticsService {
         reg.servicios += 1;
         if (s.estado === 'Completado') reg.ingresos += Number(s.precio || 0);
       }
-      const k = this.aFechaISO(s.createdAt);
-      if (flujoDiario[k] !== undefined) flujoDiario[k]++;
+      const kDia = this.aFechaISO(s.createdAt);
+      const kMes = `${s.createdAt.getFullYear()}-${String(s.createdAt.getMonth() + 1).padStart(2, '0')}`;
+      if (flujoSemanal[kDia] !== undefined) flujoSemanal[kDia]++;
+      if (flujoPeriodo[kDia] !== undefined) flujoPeriodo[kDia]++;
+      else if (flujoPeriodo[kMes] !== undefined) flujoPeriodo[kMes]++;
     }
 
     const calificacionPromedio = calificaciones.length > 0 ? Number((calificaciones.reduce((a, b) => a + b, 0) / calificaciones.length).toFixed(1)) : 0;
     const tiempoPromedioMin = serviciosConTiempo > 0 ? Math.round((tiempoEfectivoTotal / serviciosConTiempo) / 60) : 0;
 
-    const topOperadores = Object.keys(operadoresCount).map(k => ({ nombre: k, servicios: operadoresCount[k] })).sort((a, b) => b.servicios - a.servicios).slice(0, 5);
+    const topOperadores = Object.keys(operadoresCount).map(k => ({ nombre: k, servicios: operadoresCount[k] })).sort((a, b) => b.servicios - a.servicios).slice(0, 10);
     const aRanking = (rec: Record<string, { nombre: string; servicios: number; ingresos: number }>) =>
       Object.values(rec)
         .map((p) => ({ nombre: p.nombre, servicios: p.servicios, ingresos: Number(p.ingresos.toFixed(2)) }))
@@ -1819,7 +1875,8 @@ export class AnalyticsService {
         calificacionPromedio,
         tiempoPromedioMin,
       },
-      flujoSemanal: Object.keys(flujoDiario).sort().map(hora => ({ hora, cantidad: flujoDiario[hora] })),
+      flujoSemanal: Object.keys(flujoSemanal).sort().map(hora => ({ hora, cantidad: flujoSemanal[hora] })),
+      flujoPeriodo: Object.keys(flujoPeriodo).sort().map(hora => ({ hora, cantidad: flujoPeriodo[hora] })),
       tipoServicio: Object.keys(tipoServicioCount).map(k => ({ nombre: k, cantidad: tipoServicioCount[k] })).sort((a, b) => b.cantidad - a.cantidad),
       prioridad: Object.keys(prioridadCount).map(k => ({ nombre: k, cantidad: prioridadCount[k] })),
       estadosHoy: Object.keys(estadosHoy).filter(k => estadosHoy[k] > 0).map(k => ({ nombre: k, cantidad: estadosHoy[k] })),
