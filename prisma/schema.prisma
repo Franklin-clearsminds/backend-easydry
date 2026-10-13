@@ -142,6 +142,8 @@ model User {
   servicioIds Json?
 
   estado    Int      @default(1) // 0 desactivo, 1 activo
+  /// Los access tokens emitidos antes de esta fecha dejan de valer (cambio de contraseña)
+  sesionesRevocadasAt DateTime?
   avatarUrl String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -181,6 +183,7 @@ model User {
   evidenciasIncidenteSubidas     EvidenciaIncidente[]         @relation("EvidenciaIncidenteSubidaPor")
   evidenciasMantenimientoSubidas EvidenciaMantenimiento[]     @relation("EvidenciaMantenimientoSubidaPor")
   limpiezasMaquinariaRegistradas LimpiezaMaquinaria[]         @relation("LimpiezaRegistradaPor")
+  sesionesRefresh                RefreshSession[]
 
   @@index([email])
   @@index([roleId])
@@ -1568,4 +1571,36 @@ model ChecklistRespuesta {
   createdAt        DateTime                @default(now())
 
   @@index([mantenimientoId])
+}
+
+/// Sesión de refresh token. `id` es el `jti` del token: cada refresh crea una sesión nueva y revoca la anterior.
+/// Todas las sesiones encadenadas por rotación comparten `familyId`; si se reutiliza un token ya rotado, se revoca la familia.
+model RefreshSession {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  familyId  String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+}
+
+/// Intentos fallidos de login por correo. Vive en la base (no en memoria) para sobrevivir a reinicios y a varias instancias.
+model LoginIntento {
+  email    String   @id
+  intentos Int      @default(0)
+  desde    DateTime @default(now())
+}
+
+/// Contadores del límite de peticiones (ver PostgresThrottlerStorage): una fila por clave y ventana de tiempo.
+model LimiteSolicitud {
+  clave    String   @id
+  hits     Int
+  expiraEn DateTime
+
+  @@index([expiraEn])
 }
