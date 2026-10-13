@@ -3,6 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { PrismaModule } from './modules/prisma/prisma.module.js';
+import { PrismaService } from './modules/prisma/prisma.service.js';
+import { PostgresThrottlerStorage } from './common/guards/throttler-postgres.storage.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { SyncModule } from './modules/sync/sync.module.js';
 import { CatalogosModule } from './modules/catalogos/catalogos.module.js';
@@ -27,12 +29,20 @@ import { RetosModule } from './modules/retos/retos.module.js';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60000, // Ventana de 1 minuto
-        limit: 120, // 120 peticiones/minuto por tracker (dispositivo/usuario)
-      },
-    ]),
+    // Los contadores viven en PostgreSQL: el límite vale para todas las instancias del servidor y sobrevive a reinicios.
+    ThrottlerModule.forRootAsync({
+      imports: [PrismaModule],
+      inject: [PrismaService],
+      useFactory: (prisma: PrismaService) => ({
+        throttlers: [
+          {
+            ttl: 60000, // Ventana de 1 minuto
+            limit: 120, // 120 peticiones/minuto por tracker (dispositivo/usuario)
+          },
+        ],
+        storage: new PostgresThrottlerStorage(prisma),
+      }),
+    }),
     PrismaModule,
     PermisosModule,
     CryptoModule,
