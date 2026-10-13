@@ -172,8 +172,8 @@ export class OperacionesController {
   })
   @ApiResponse({ status: 200, description: 'Receta asignada/actualizada' })
   @ApiResponse({ status: 404, description: 'Catálogo o insumo no encontrado' })
-  async asignarReceta(@Body() dto: AsignarRecetaDto, @CurrentUser('id') userId: string) {
-    return this.operacionesService.asignarReceta(dto, userId);
+  async asignarReceta(@Body() dto: AsignarRecetaDto, @CurrentUser('id') userId: string, @CurrentUser() actor: any) {
+    return this.operacionesService.asignarReceta(dto, userId, actor);
   }
 
   @Permiso('recetas.ver')
@@ -181,8 +181,8 @@ export class OperacionesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ver la receta de insumos completa de un servicio del catálogo' })
   @ApiResponse({ status: 200, description: 'Receta del catálogo de servicio' })
-  async listReceta(@Body() dto: ListRecetaDto) {
-    return this.operacionesService.listReceta(dto);
+  async listReceta(@Body() dto: ListRecetaDto, @CurrentUser() actor: any) {
+    return this.operacionesService.listReceta(dto, actor);
   }
 
   @Permiso('recetas.gestionar')
@@ -190,8 +190,8 @@ export class OperacionesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Quitar un insumo de la receta de un servicio (COORD_BODEGA / ADMIN)' })
   @ApiResponse({ status: 404, description: 'Receta no encontrada' })
-  async eliminarRecetaItem(@Body() dto: EliminarRecetaItemDto, @CurrentUser('id') userId: string) {
-    return this.operacionesService.eliminarRecetaItem(dto, userId);
+  async eliminarRecetaItem(@Body() dto: EliminarRecetaItemDto, @CurrentUser('id') userId: string, @CurrentUser() actor: any) {
+    return this.operacionesService.eliminarRecetaItem(dto, userId, actor);
   }
 
   @Permiso('recetas.historial')
@@ -202,8 +202,8 @@ export class OperacionesController {
     description: 'Cada cambio de receta (agregar, modificar cantidad, quitar un insumo) queda registrado con fecha, quién lo hizo, y el producto/cantidad exactos involucrados.',
   })
   @ApiResponse({ status: 200, description: 'Historial de cambios de receta, más reciente primero' })
-  async listRecetaHistorial(@Body() dto: ListRecetaDto) {
-    return this.operacionesService.listRecetaHistorial(dto);
+  async listRecetaHistorial(@Body() dto: ListRecetaDto, @CurrentUser() actor: any) {
+    return this.operacionesService.listRecetaHistorial(dto, actor);
   }
 
   @Permiso('consumos.ver')

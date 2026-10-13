@@ -149,7 +149,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('catalogo', 'generales', 'Servicios generales', [], [
       accion('catalogo.generales.crear', 'Crear servicio', ['catalogo.gestionar']),
       accion('catalogo.generales.editar', 'Editar servicio', ['catalogo.gestionar']),
-      accion('catalogo.generales.eliminar', 'Desactivar o eliminar servicio', ['catalogo.gestionar']),
+      accion('catalogo.generales.estado', 'Activar o desactivar servicio', ['catalogo.gestionar']),
       accion('catalogo.generales.recetas.ver', 'Ver recetas de insumos', ['recetas.ver']),
       accion('catalogo.generales.recetas.editar', 'Editar recetas de insumos', ['recetas.gestionar']),
       accion('catalogo.generales.recetas.historial', 'Ver historial de recetas', ['recetas.historial']),
@@ -158,7 +158,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('catalogo', 'especiales', 'Servicios especiales', [], [
       accion('catalogo.especiales.crear', 'Crear servicio', ['catalogo.gestionar']),
       accion('catalogo.especiales.editar', 'Editar servicio', ['catalogo.gestionar']),
-      accion('catalogo.especiales.eliminar', 'Desactivar o eliminar servicio', ['catalogo.gestionar']),
+      accion('catalogo.especiales.estado', 'Activar o desactivar servicio', ['catalogo.gestionar']),
       accion('catalogo.especiales.recetas.ver', 'Ver recetas de insumos', ['recetas.ver']),
       accion('catalogo.especiales.recetas.editar', 'Editar recetas de insumos', ['recetas.gestionar']),
       accion('catalogo.especiales.recetas.historial', 'Ver historial de recetas', ['recetas.historial']),

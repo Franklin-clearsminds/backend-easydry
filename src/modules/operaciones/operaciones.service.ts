@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
-import { tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
+import { tieneAlgunPermiso, tienePermiso } from '../../common/permisos/capacidades.js';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -1373,7 +1373,19 @@ export class OperacionesService {
   //  RECETAS DE INSUMOS POR CATÁLOGO DE SERVICIO
   // ============================================================
 
-  async asignarReceta(dto: AsignarRecetaDto, usuarioId?: string) {
+  /** Las recetas se rigen por la categoría del servicio: «catalogo.generales.recetas.*» o «catalogo.especiales.recetas.*». */
+  private async exigirRecetaDe(actor: any, catalogoServicioId: number, accion: 'ver' | 'editar' | 'historial') {
+    if (!actor) return;
+    const servicio = await this.prisma.catalogoServicio.findUnique({ where: { id: catalogoServicioId }, select: { categoria: true } });
+    if (!servicio) return; // el método que sigue responde el 404
+    const grupo = String(servicio.categoria).toUpperCase() === 'ESPECIAL' ? 'especiales' : 'generales';
+    if (!tienePermiso(actor, `catalogo.${grupo}.recetas.${accion}`)) {
+      throw new ForbiddenException(`Tu rol no tiene permiso para ${accion === 'ver' ? 'ver' : accion === 'editar' ? 'editar' : 'ver el historial de'} recetas de servicios ${grupo}.`);
+    }
+  }
+
+  async asignarReceta(dto: AsignarRecetaDto, usuarioId?: string, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'editar');
     // Verificar que el catálogo existe
     const catalogo = await this.prisma.catalogoServicio.findUnique({
       where: { id: dto.catalogoServicioId },
@@ -1714,7 +1726,8 @@ export class OperacionesService {
     };
   }
 
-  async listRecetaHistorial(dto: ListRecetaDto) {
+  async listRecetaHistorial(dto: ListRecetaDto, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'historial');
     return this.prisma.recetaInsumoHistorial.findMany({
       where: { catalogoServicioId: dto.catalogoServicioId },
       include: {
@@ -1724,7 +1737,8 @@ export class OperacionesService {
     });
   }
 
-  async listReceta(dto: ListRecetaDto) {
+  async listReceta(dto: ListRecetaDto, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'ver');
     const catalogo = await this.prisma.catalogoServicio.findUnique({
       where: { id: dto.catalogoServicioId },
       include: {
@@ -1753,7 +1767,8 @@ export class OperacionesService {
     return catalogo;
   }
 
-  async eliminarRecetaItem(dto: EliminarRecetaItemDto, usuarioId?: string) {
+  async eliminarRecetaItem(dto: EliminarRecetaItemDto, usuarioId?: string, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'editar');
     const receta = await this.prisma.recetaInsumo.findUnique({
       where: {
         catalogoServicioId_insumoId: {
