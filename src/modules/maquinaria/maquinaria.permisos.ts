@@ -1,5 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { esLiderDeAgencia, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 
 /** Roles del módulo de maquinaria (nombres normalizados, tal cual están en la tabla roles). */
 export const ROL = {
@@ -55,7 +55,7 @@ export const esCoordServiciosEspeciales = (actor: Actor): boolean => actor.rol =
 export const esCoordMantenimiento = (actor: Actor): boolean => actor.rol === ROL.COORD_MANTENIMIENTO;
 export const esCoordComercial = (actor: Actor): boolean => actor.rol === ROL.COORD_COMERCIAL;
 export const esTecnico = (actor: Actor): boolean => actor.rol === ROL.TECNICO;
-export const esLider = (actor: Actor): boolean => actor.rol === ROL.LIDER;
+export const esLider = (actor: Actor): boolean => esLiderDeAgencia(actor.rol);
 export const esPulidor = (actor: Actor): boolean => actor.rol === ROL.PULIDOR;
 
 /**

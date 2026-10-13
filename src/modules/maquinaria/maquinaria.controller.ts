@@ -87,7 +87,7 @@ export class MaquinariaController {
     return this.maquinariaService.setActiva(dto, actorFromUser(user));
   }
 
-  @Permiso('maquinaria.gestionar')
+  @Permiso('maquinaria.responsable')
   @Post('asignar-operador')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Asignar la máquina a un pulidor o líder operador (coordinador de mantenimiento, admin)' })
@@ -123,7 +123,7 @@ export class MaquinariaController {
     return this.maquinariaService.reportarIncidente(dto, actorFromUser(user), tienePermiso(user, 'maquinaria.evidencias'));
   }
 
-  @Permiso('maquinaria.gestionar')
+  @Permiso('taller.incidentes.asignar')
   @Post('incidentes/asignar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Asignar la incidencia a un técnico de la región o al propio coordinador' })
@@ -159,7 +159,7 @@ export class MaquinariaController {
   // MANTENIMIENTOS
   // ==============================================================
 
-  @Permiso('maquinaria.gestionar')
+  @Permiso('taller.mantenimientos.programar')
   @Post('mantenimientos/registrar')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Programar un mantenimiento (coordinador de mantenimiento, admin)' })
@@ -167,7 +167,7 @@ export class MaquinariaController {
     return this.maquinariaService.registrarMantenimiento(dto, actorFromUser(user));
   }
 
-  @Permiso('maquinaria.gestionar')
+  @Permiso('taller.mantenimientos.programar')
   @Post('mantenimientos/asignar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Asignar el mantenimiento a un técnico de la región o al propio coordinador' })
@@ -271,7 +271,7 @@ export class MaquinariaController {
     return this.maquinariaService.resumenLimpiezas(actorFromUser(user));
   }
 
-  @Permiso('limpiezas.ver')
+  @Permiso('reportes.maquinaria.limpiezas')
   @Post('limpiezas/exportar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Historial completo de limpiezas (hasta 5000 filas) dentro del alcance del actor, para exportar a CSV' })
@@ -299,7 +299,7 @@ export class MaquinariaController {
   // MOVIMIENTOS
   // ==============================================================
 
-  @Permiso('maquinaria.gestionar')
+  @Permiso('maquinaria.trasladar')
   @Post('transferir')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mover la máquina a otra agencia, bahía o taller (registra quién y de dónde a dónde)' })

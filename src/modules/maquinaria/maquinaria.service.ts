@@ -14,7 +14,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { ChecklistService } from './checklist.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
-import { normalizarRol } from '../../common/permisos/alias-roles.js';
+import { normalizarRol, ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
 import {
   columnasSimples,
   combinarWhere,
@@ -814,7 +814,7 @@ export class MaquinariaService {
 
     if (!dto.activa && updated.agencia?.id) {
       const lideres = await this.prisma.user.findMany({
-        where: { estado: 1, agenciaId: updated.agencia.id, role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
+        where: { estado: 1, agenciaId: updated.agencia.id, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } },
         select: { id: true },
       });
       const porRol = await this.notifications.resolverDestinatariosPorRol({

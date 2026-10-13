@@ -1973,8 +1973,6 @@ export class ServiciosEspecialesService {
         namerol: {
           in: [
             'PULIDOR',
-            'PULIDOR_MOVIL',
-            'PULIDOR_FIJO',
             'Pulidor',
             'Pulidor Móvil',
             'Pulidor Fijo',
@@ -2020,7 +2018,7 @@ export class ServiciosEspecialesService {
 
     return list.map((p) => {
       // Pulidor fijo: asignado a una sucursal / agencia en la base de datos (p.agenciaId != null)
-      const esFijo = Boolean(p.agenciaId || p.role?.namerol === 'PULIDOR_FIJO');
+      const esFijo = Boolean(p.agenciaId);
       return {
         id: p.id,
         name: p.name,

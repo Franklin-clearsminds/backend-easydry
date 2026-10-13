@@ -3,6 +3,7 @@ import {
   CODIGOS_PERMISOS,
   CodigoPermiso,
 } from './catalogo-permisos.js';
+import { capacidadesConPaginas } from './migracion-paginas.js';
 
 /**
  * Los 15 roles oficiales con los permisos acordados. Es lo que carga el seed y lo que usan las pruebas para verificar la
@@ -28,11 +29,26 @@ const ADMIN_CAPACIDADES: CodigoPermiso[] = CODIGOS_PERMISOS.filter(
   (c) => c !== 'roles.gestionar' && c !== 'especiales.crear',
 );
 
+/** Lo que los roles comerciales consultan, solo lectura: OT especiales, agencias, mapa, lavadores, inventario y envíos. */
+const LECTURA_COMERCIAL: CodigoPermiso[] = p(
+  'especiales.ver',
+  'operadores.ver',
+  'agencias.consultar',
+  'mapa.ver',
+  'inventario.ver',
+  'despachos.ver',
+);
+
+/** Roles que no ven precios ni costos. El Coordinador Comercial sí los ve (en su región); el Jefe Comercial no. */
+const ROLES_SIN_PRECIOS = ['JEFE_COMERCIAL'];
+/** Roles comerciales que ven bodegas y agencias pero no el stock de los kits. */
+const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
+
 const CAPACIDADES_LIDER = p(
   ...LECTURA_RED,
   'dashboard.ver',
   'bahias.editar',
-  'bahias.asignar',
+  'operadores.ver',
   'servicios.ver',
   'servicios.crear',
   'servicios.editar',
@@ -113,10 +129,11 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'JEFE_COMERCIAL',
     descripcion:
-      'Jefe comercial: visibilidad comercial nacional, retos, productividad y reportes.',
+      'Jefe comercial: visibilidad comercial nacional (solo lectura, sin precios), retos, productividad y reportes.',
     ambito: 'GLOBAL',
     capacidades: p(
       ...LECTURA_RED,
+      ...LECTURA_COMERCIAL,
       'dashboard.ver',
       'productividad.ver',
       'reportes.ver',
@@ -130,10 +147,11 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'COORD_COMERCIAL',
     descripcion:
-      'Coordinador comercial: asigna y monitorea retos, productividad y reportes de su región.',
+      'Coordinador comercial: consulta (solo lectura, con precios) su región, y asigna y monitorea retos, productividad y reportes.',
     ambito: 'REGION',
     capacidades: p(
       ...LECTURA_RED,
+      ...LECTURA_COMERCIAL,
       'dashboard.ver',
       'productividad.ver',
       'reportes.ver',
@@ -338,6 +356,18 @@ export const ROLES_BASE: RolBase[] = [
     ),
   },
 ];
+
+// `precios.ver` lo tienen todos los roles que usan la plataforma salvo el Jefe Comercial, e `inventario.kits.ver` todos los que ven
+// inventario salvo los comerciales (que ven bodegas y agencias, no el stock de los kits).
+for (const rol of ROLES_BASE) {
+  if (rol.capacidades.length === 0) continue;
+  const extra: CodigoPermiso[] = [];
+  if (!ROLES_SIN_PRECIOS.includes(rol.namerol)) extra.push('precios.ver');
+  if (rol.capacidades.includes('inventario.ver') && !ROLES_SIN_KITS.includes(rol.namerol)) extra.push('inventario.kits.ver');
+  rol.capacidades = [...new Set([...rol.capacidades, ...extra])];
+}
+// Y cada rol oficial trae también sus páginas, sub-páginas y acciones equivalentes (sin perder ningún permiso clásico).
+for (const rol of ROLES_BASE) rol.capacidades = capacidadesConPaginas(rol.capacidades, rol.namerol) as CodigoPermiso[];
 
 export const NOMBRES_ROLES_BASE: readonly string[] = ROLES_BASE.map(
   (r) => r.namerol,

@@ -1,335 +1,265 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { InventarioService } from './inventario.service.js';
 import { ListDespachosDto } from './dto/movimientos.dto.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
-interface Opciones {
-  rol?: string;
-  usuario?: Record<string, unknown>;
-  filas?: any[];
-  total?: number;
-  porEstado?: Array<{ estado: string; total: number }>;
-  detalles?: any[];
-}
+/**
+ * Integración con la base real (sin mocks): el listado de despachos (SQL con alcance por rol).
+ *
+ * Mundo de la prueba, todo creado aquí. Región R1 (agencias A1 y A2, Bodega B-R1) y región R2 (agencia A3).
+ * Despachos D1…D7 (D1 el más antiguo), más una compra que NO es un despacho y nunca debe aparecer:
+ *   D1 agencia   EN_TRANSITO  a A1        despacha Coord. Bodega · lleva 3 de JABON
+ *   D2 agencia   RECIBIDO     a A1        despacha Coord. Bodega · recibe Lía
+ *   D3 agencia   RECHAZADO    a A2        (el destino solo viene en el texto "[id]") · motivo "derrame en tránsito"
+ *   D4 pulidor   EN_TRANSITO  a Paco      recibe Paco
+ *   D5 bodega    EN_TRANSITO  a B-R1
+ *   D6 agencia   EN_TRANSITO  de A1 a A3  (traslado entre agencias)
+ *   D7 agencia   EN_TRANSITO  a A3
+ * Todo se consulta con `numeroGuia: marca`: la base real tiene cientos de despachos.
+ */
+const DIA = 24 * 60 * 60 * 1000;
+const hace = (dias: number) => new Date(Date.now() - dias * DIA);
 
-/** Servicio con Prisma simulado: el SQL se enruta por su texto y se guardan las llamadas para inspeccionarlas. */
-function construir(op: Opciones = {}) {
-  const viewer = op.rol
-    ? { id: 'u1', role: { namerol: op.rol }, region: null, regionId: null, agenciaId: null, bodegaId: null, ...op.usuario }
-    : null;
-  const sql: Array<{ texto: string; params: unknown[] }> = [];
-  const queryRaw = vi.fn(async (texto: string, ...params: unknown[]) => {
-    sql.push({ texto, params });
-    if (texto.includes('GROUP BY')) return op.porEstado ?? [];
-    if (texto.includes('COUNT(*)')) return [{ total: op.total ?? (op.filas?.length ?? 0) }];
-    if (texto.includes('FROM "bodegas"')) return [{ id: 'bod-r', nombre: 'Bodega Norte', codigo: 'BN' }];
-    return op.filas ?? [];
-  });
-  const prisma = {
-    $queryRawUnsafe: queryRaw,
-    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
-    user: {
-      findUnique: vi.fn().mockResolvedValue(viewer),
-      findMany: vi.fn().mockResolvedValue([{ id: 'u9', name: 'Ana', lastname: 'Paz' }]),
-    },
-    agencia: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'ag-1', nombre: 'Agencia Centro', codigo: 'AC' }),
-      findMany: vi.fn().mockResolvedValue([{ id: 'ag-r', nombre: 'Agencia Regional' }]),
-    },
-    movimientoDetalle: { findMany: vi.fn().mockResolvedValue(op.detalles ?? []) },
-  };
-  const service = new InventarioService(prisma as never);
-  const pagina = () => sql.find((s) => s.texto.includes('LIMIT'))!;
-  const conteo = () => sql.find((s) => s.texto.includes('COUNT(*)') && !s.texto.includes('GROUP BY'))!;
-  const resumen = () => sql.find((s) => s.texto.includes('GROUP BY'));
-  return { service, prisma, sql, pagina, conteo, resumen };
-}
+describe('InventarioService.listDespachos (base real)', () => {
+  let env: Entorno;
+  let service: InventarioService;
+  let a1: any;
+  let a2: any;
+  let a3: any;
+  let bodR1: any;
+  let jabon: any;
+  const ids: Record<string, string> = {};
+  const d: Record<string, string> = {}; // despachos por nombre
+  const actores: Record<string, any> = {};
 
-const fila = (extra: Record<string, unknown> = {}) => ({
-  id: 'm1',
-  numeroGuia: 'G-001',
-  tipo: 'DESPACHO_AGENCIA',
-  estadoDespacho: 'EN_TRANSITO',
-  origenUbicacion: 'Bodega Central',
-  destinoUbicacion: 'Agencia Centro [ag-1]',
-  fechaDespacho: new Date('2026-09-20T10:00:00Z'),
-  fechaRecepcion: null,
-  observaciones: null,
-  usuarioDespachaId: 'u9',
-  usuarioRecibeId: null,
-  destinoAgenciaId: null,
-  destinoBodegaId: null,
-  destinoPulidorId: null,
-  ...extra,
-});
+  const nombres = (r: any) => (Array.isArray(r) ? r : r.items).map((x: any) => Object.entries(d).find(([, id]) => id === x.id)?.[0]);
+  const lista = (dto: Record<string, unknown>, usuarioId?: string) =>
+    service.listDespachos({ numeroGuia: env.marca, ...dto } as any, usuarioId);
 
-describe('InventarioService.listDespachos — formato y compatibilidad', () => {
-  it('sin página ni tamaño (app móvil) devuelve un ARREGLO con hasta 100 (antes 500)', async () => {
-    const { service, pagina } = construir({ filas: [fila()] });
-    const r = await service.listDespachos({} as any);
-    expect(Array.isArray(r)).toBe(true);
-    expect(r).toHaveLength(1);
-    const params = pagina().params;
-    expect(params.slice(-2)).toEqual([100, 0]);
-  });
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new InventarioService(env.prisma as never);
 
-  it('con página responde el formato estándar y recorta a 100', async () => {
-    const { service, pagina } = construir({ filas: [fila()], total: 230 });
-    const r: any = await service.listDespachos({ page: 3, pageSize: 25 } as any);
-    expect(pagina().params.slice(-2)).toEqual([25, 50]);
-    expect(r).toMatchObject({ total: 230, page: 3, pageSize: 25, totalPages: 10, hasNextPage: true, hasPrevPage: true });
-    expect(r.items).toHaveLength(1);
-    expect(r.data).toBe(r.items);
+    const r1 = await env.region('R1');
+    const r2 = await env.region('R2');
+    a1 = await env.agencia('A1', { regionId: r1.id });
+    a2 = await env.agencia('A2', { regionId: r1.id });
+    a3 = await env.agencia('A3', { regionId: r2.id });
+    bodR1 = await env.bodega('R1', { regionId: r1.id });
 
-    const otra = construir({ total: 5 });
-    await otra.service.listDespachos({ pageSize: 200 } as any);
-    expect(otra.pagina().params.slice(-2)).toEqual([100, 0]);
+    const crear = async (clave: string, rol: string, opts: Record<string, unknown> = {}) => {
+      const u = await env.usuario(clave, rol, { name: clave, ...opts });
+      ids[clave] = u.id;
+      actores[clave] = await env.actor(u.id);
+    };
+    await crear('admin', 'ADMIN');
+    await crear('superAdmin', 'SUPER_ADMIN');
+    await crear('coord', 'COORD_BODEGA');
+    await crear('lia', 'LIDER', { agenciaId: a1.id });
+    await crear('paco', 'PULIDOR');
+    await crear('otroPulidor', 'PULIDOR');
+    await crear('asistente', 'ASISTENTE_BODEGA', { bodegaId: bodR1.id, regionId: r1.id });
+
+    jabon = await env.insumo('JABON');
+    const mov = async (clave: string, extra: Record<string, unknown>, dias: number) => {
+      d[clave] = (
+        await env.movimiento({
+          numeroGuia: `${env.marca}-${clave}`,
+          usuarioDespachaId: ids.coord,
+          fechaDespacho: hace(dias),
+          ...extra,
+        } as never)
+      ).id;
+    };
+    await mov('D1', { tipo: 'DESPACHO_AGENCIA', estadoDespacho: 'EN_TRANSITO', destinoAgenciaId: a1.id, destinoUbicacion: `Agencia Centro [${a1.id}]`, detalle: { insumoId: jabon.id, cantidadEnviada: 3 } }, 7);
+    await mov('D2', { tipo: 'DESPACHO_AGENCIA', estadoDespacho: 'RECIBIDO', destinoAgenciaId: a1.id, destinoUbicacion: `Agencia Centro [${a1.id}]`, usuarioRecibeId: ids.lia }, 6);
+    await mov('D3', { tipo: 'DESPACHO_AGENCIA', estadoDespacho: 'RECHAZADO', destinoUbicacion: `Agencia Dos [${a2.id}]`, observaciones: 'Envío RECHAZADO. RECHAZO: derrame en tránsito' }, 5);
+    await mov('D4', { tipo: 'DESPACHO_PULIDOR', estadoDespacho: 'EN_TRANSITO', destinoPulidorId: ids.paco, usuarioRecibeId: ids.paco, destinoUbicacion: 'Pulidor móvil' }, 4);
+    await mov('D5', { tipo: 'DESPACHO_BODEGA', estadoDespacho: 'EN_TRANSITO', destinoBodegaId: bodR1.id, destinoUbicacion: `Bodega Regional [${bodR1.id}]` }, 3);
+    await mov('D6', { tipo: 'DESPACHO_AGENCIA', estadoDespacho: 'EN_TRANSITO', origenAgenciaId: a1.id, origenUbicacion: `Agencia Centro [${a1.id}]`, destinoAgenciaId: a3.id, destinoUbicacion: `Agencia Tres [${a3.id}]` }, 2);
+    await mov('D7', { tipo: 'DESPACHO_AGENCIA', estadoDespacho: 'EN_TRANSITO', destinoAgenciaId: a3.id, destinoUbicacion: `Agencia Tres [${a3.id}]` }, 1);
+    await env.movimiento({ numeroGuia: `${env.marca}-COMPRA`, tipo: 'COMPRA_PROVEEDOR', estadoDespacho: 'RECIBIDO', usuarioDespachaId: ids.coord });
   });
 
-  it('solo con pageSize también es paginado (objeto, no arreglo)', async () => {
-    const { service } = construir({ total: 0 });
-    const r: any = await service.listDespachos({ pageSize: 50 } as any);
-    expect(Array.isArray(r)).toBe(false);
-    expect(r).toMatchObject({ total: 0, page: 1, pageSize: 50, items: [] });
+  afterAll(async () => {
+    await env.cerrar();
   });
 
-  it('el DTO no fija page/pageSize/sortField y conserva agenciaId y agenciaDestinoId (el validador global los descartaba)', async () => {
-    const vacio: any = plainToInstance(ListDespachosDto, {});
-    expect(vacio.page).toBeUndefined();
-    expect(vacio.pageSize).toBeUndefined();
-    expect(vacio.sortField).toBeUndefined();
-    expect(await validate(vacio)).toHaveLength(0);
-
-    const con: any = plainToInstance(ListDespachosDto, { agenciaId: 'a1', agenciaDestinoId: 'a2', pageSize: 200, page: '2', incluirResumen: true });
-    expect(await validate(con)).toHaveLength(0);
-    expect(con).toMatchObject({ agenciaId: 'a1', agenciaDestinoId: 'a2', page: 2 });
-  });
-
-  it('obtenerDespachosPendientes sigue devolviendo un arreglo', async () => {
-    const { service } = construir({ rol: 'SUPER_ADMIN', filas: [fila()] });
-    const r = await service.obtenerDespachosPendientes('u1');
-    expect(Array.isArray(r)).toBe(true);
-  });
-});
-
-describe('InventarioService.listDespachos — orden', () => {
-  it('por defecto lo más reciente primero, con desempate por id', async () => {
-    const { service, pagina } = construir();
-    await service.listDespachos({ page: 1 } as any);
-    expect(pagina().texto).toContain('ORDER BY m."fechaDespacho" DESC NULLS LAST, m."id" DESC');
-  });
-
-  it('ordena por columnas permitidas', async () => {
-    const { service, pagina } = construir();
-    await service.listDespachos({ sortField: 'guia', sortOrder: 'asc' } as any);
-    expect(pagina().texto).toContain('ORDER BY m."numeroGuia" ASC NULLS LAST, m."id" ASC');
-    await service.listDespachos({ sortField: 'estado', sortOrder: 'desc' } as any);
-  });
-
-  it('un campo no permitido o malicioso no llega al SQL', async () => {
-    const { service, pagina } = construir();
-    await service.listDespachos({ sortField: 'numeroGuia; DROP TABLE "User"--', sortOrder: 'asc' } as any);
-    expect(pagina().texto).toContain('ORDER BY m."fechaDespacho" DESC NULLS LAST');
-    expect(pagina().texto).not.toContain('DROP');
-  });
-});
-
-describe('InventarioService.listDespachos — filtros y búsqueda', () => {
-  it('solo lista despachos y enlaza el estado, la guía y las fechas como parámetros', async () => {
-    const { service, pagina } = construir();
-    await service.listDespachos({
-      estadoDespacho: 'recibido',
-      numeroGuia: 'G-0',
-      fechaDesde: '2026-09-01T05:00:00.000Z',
-      fechaHasta: '2026-09-30',
-      page: 1,
-    } as any);
-    const { texto, params } = pagina();
-    expect(params[0]).toEqual(['DESPACHO_AGENCIA', 'DESPACHO_PULIDOR', 'DESPACHO_BODEGA']);
-    expect(params).toContain('RECIBIDO');
-    expect(params).toContain('%G-0%');
-    expect(params).toContain('2026-09-01T05:00:00.000Z');
-    expect(params).toContain('2026-09-30T23:59:59.999Z');
-    expect(texto).toContain('::text::timestamp');
-    expect(texto).not.toContain('RECIBIDO');
-    expect(texto).not.toContain('G-0');
-  });
-
-  it('una fecha inválida se ignora en vez de romper la consulta', async () => {
-    const { service, pagina } = construir();
-    await service.listDespachos({ fechaDesde: 'no-es-fecha' } as any);
-    expect(pagina().texto).not.toContain('fechaDespacho" >=');
-  });
-
-  it('busca por palabras (cada una en guía, ruta, responsables o insumos)', async () => {
-    const { service, pagina } = construir();
-    await service.listDespachos({ search: 'jabon centro' } as any);
-    const { texto, params } = pagina();
-    expect(params).toContain('%jabon%');
-    expect(params).toContain('%centro%');
-    expect(texto.match(/"numeroGuia" ILIKE/g)).toHaveLength(2);
-    expect(texto).toContain('FROM "MovimientoDetalle"');
-    expect(texto).toContain('u."lastname" ILIKE');
-  });
-
-  it('una búsqueda de una sola letra se ignora y los comodines del cliente se escapan', async () => {
-    const corta = construir();
-    await corta.service.listDespachos({ search: 'a' } as any);
-    expect(corta.pagina().texto).not.toContain('ILIKE');
-
-    const comodin = construir();
-    await comodin.service.listDespachos({ search: '50%_x' } as any);
-    expect(comodin.pagina().params).toContain('%50\\%\\_x%');
-  });
-
-  it('el conteo usa exactamente los mismos filtros que la página', async () => {
-    const { service, pagina, conteo } = construir();
-    await service.listDespachos({ estadoDespacho: 'RECHAZADO', search: 'ab' } as any);
-    const filtroPagina = pagina().texto.split('WHERE')[1].split('ORDER BY')[0].trim();
-    const filtroConteo = conteo().texto.split('WHERE')[1].trim();
-    expect(filtroConteo).toBe(filtroPagina);
-    expect(conteo().params).toEqual(pagina().params.slice(0, -2));
-  });
-
-  it('filtra por agencia destino con el id, el nombre y el código de la agencia', async () => {
-    const { service, pagina } = construir();
-    await service.listDespachos({ agenciaId: 'ag-1' } as any);
-    const { texto, params } = pagina();
-    expect(texto).toContain('"destinoAgenciaId" = ANY(');
-    expect(params).toContainEqual(['ag-1']);
-    expect(params).toContainEqual(['%ag-1%', '%Agencia Centro%', '%AC%']);
-  });
-});
-
-describe('InventarioService.listDespachos — resumen', () => {
-  it('sin incluirResumen no consulta los contadores', async () => {
-    const { service, resumen } = construir();
-    const r: any = await service.listDespachos({ page: 1 } as any);
-    expect(resumen()).toBeUndefined();
-    expect(r.resumen).toBeUndefined();
-  });
-
-  it('cuenta por estado con los mismos filtros pero sin el de estado', async () => {
-    const { service, resumen } = construir({
-      total: 12,
-      porEstado: [
-        { estado: 'EN_TRANSITO', total: 3 },
-        { estado: 'PENDIENTE', total: 1 },
-        { estado: 'RECIBIDO', total: 6 },
-        { estado: 'RECHAZADO', total: 2 },
-      ],
+  describe('formato y compatibilidad', () => {
+    it('sin página ni tamaño (app móvil) devuelve un ARREGLO con hasta 100 (antes 500), solo despachos', async () => {
+      const r: any = await lista({});
+      expect(Array.isArray(r)).toBe(true);
+      expect(nombres(r)).toHaveLength(7); // la compra no es un despacho
+      expect(r.length).toBeLessThanOrEqual(100);
+      const sinFiltro: any = await service.listDespachos({} as any);
+      expect(sinFiltro.length).toBeLessThanOrEqual(100);
     });
-    const r: any = await service.listDespachos({ page: 1, incluirResumen: true, estadoDespacho: 'RECIBIDO', search: 'ab' } as any);
-    expect(r.resumen).toEqual({ enTransito: 4, recibidos: 6, rechazados: 2, total: 12 });
-    expect(resumen()!.params).not.toContain('RECIBIDO');
-    expect(resumen()!.params).toContain('%ab%');
-  });
-});
 
-describe('InventarioService.listDespachos — alcance por rol en el servidor', () => {
-  it('un rol global (admin) no recibe ningún filtro de alcance', async () => {
-    const { service, pagina } = construir({ rol: 'ADMIN' });
-    await service.listDespachos({ page: 1 } as any, 'u1');
-    expect(pagina().params).toHaveLength(3); // tipos + limit + offset
-    const where = pagina().texto.split('WHERE')[1].split('ORDER BY')[0];
-    expect(where.trim()).toBe('m."tipo"::text = ANY($1::text[])');
-  });
-
-  it('el pulidor solo ve lo suyo aunque pida el pulidorId de otra persona', async () => {
-    const { service, pagina } = construir({ rol: 'PULIDOR' });
-    await service.listDespachos({ pulidorId: 'otro-pulidor' } as any, 'u1');
-    expect(pagina().params).toContain('u1');
-    expect(pagina().params).not.toContain('otro-pulidor');
-    expect(pagina().texto).toContain('"destinoPulidorId" =');
-  });
-
-  it('otros roles pueden filtrar por pulidor', async () => {
-    const { service, pagina } = construir({ rol: 'COORD_BODEGA' });
-    await service.listDespachos({ pulidorId: 'p7' } as any, 'u1');
-    expect(pagina().params).toContain('p7');
-  });
-
-  it('el líder solo ve su agencia aunque pida otra', async () => {
-    const { service, pagina, prisma } = construir({ rol: 'LIDER_OPERADOR', usuario: { agenciaId: 'ag-1' } });
-    await service.listDespachos({ agenciaId: 'agencia-ajena' } as any, 'u1');
-    expect(prisma.agencia.findFirst.mock.calls[0][0].where.OR[0]).toEqual({ id: 'ag-1' });
-    expect(pagina().params).toContainEqual(['ag-1']);
-    expect(JSON.stringify(pagina().params)).not.toContain('agencia-ajena');
-  });
-
-  it('el líder también ve los despachos que SALEN de su agencia, no solo los que llegan', async () => {
-    const { service, pagina } = construir({ rol: 'LIDER_OPERADOR', usuario: { agenciaId: 'ag-1' } });
-    await service.listDespachos({ page: 1 } as any, 'u1');
-    const { texto } = pagina();
-    expect(texto).toContain('"destinoAgenciaId" = ANY(');
-    expect(texto).toContain('"origenAgenciaId" = ANY(');
-    expect(texto).toContain('"origenUbicacion" ILIKE ANY(');
-  });
-
-  it('el asistente de bodega ve sus envíos, los de su bodega y los de su región (antes lanzaba error)', async () => {
-    const { service, pagina } = construir({
-      rol: 'ASISTENTE_BODEGA',
-      usuario: { bodegaId: 'bod-1', regionId: 'reg-1', region: { nombre: 'Norte' } },
-      filas: [fila()],
+    it('con página responde el formato estándar y recorta a 100', async () => {
+      const r: any = await lista({ page: 2, pageSize: 3 });
+      expect(r).toMatchObject({ total: 7, page: 2, pageSize: 3, totalPages: 3, hasNextPage: true, hasPrevPage: true });
+      expect(r.items).toHaveLength(3);
+      expect(r.data).toBe(r.items);
+      expect(((await lista({ pageSize: 200 })) as any).pageSize).toBe(100);
     });
-    const r: any = await service.listDespachos({ page: 1 } as any, 'u1');
-    const { texto, params } = pagina();
-    expect(texto).toContain('"usuarioDespachaId" =');
-    expect(texto).toContain('"destinoBodegaId" =');
-    expect(texto).toContain('"origenBodegaId" =');
-    expect(texto).toContain('"origenUbicacion" ILIKE ANY(');
-    expect(params).toContain('bod-1');
-    const patrones = params.find((p) => Array.isArray(p) && (p as string[]).some((x) => x.includes('Bodega Norte'))) as string[];
-    expect(patrones).toEqual(expect.arrayContaining(['%Agencia Regional%', '%Bodega Norte%', '%Norte%']));
-    expect(r.items).toHaveLength(1);
-  });
-});
 
-describe('InventarioService.listDespachos — datos de cada fila', () => {
-  it('agrega detalles y responsables sin una consulta por fila', async () => {
-    const { service, prisma } = construir({
-      filas: [fila({ id: 'm1', usuarioRecibeId: 'u9' }), fila({ id: 'm2', numeroGuia: 'G-002' })],
-      detalles: [{ id: 'd1', movimientoId: 'm1', insumoId: 'i1', cantidadEnviada: 3, insumo: { nombre: 'Jabón' } }],
+    it('solo con pageSize también es paginado (objeto, no arreglo)', async () => {
+      const r: any = await lista({ pageSize: 50, estadoDespacho: 'CANCELADO' });
+      expect(Array.isArray(r)).toBe(false);
+      expect(r).toMatchObject({ total: 0, page: 1, pageSize: 50, items: [] });
     });
-    const r: any[] = (await service.listDespachos({} as any)) as any[];
-    expect(prisma.movimientoDetalle.findMany).toHaveBeenCalledTimes(1);
-    expect(prisma.user.findMany).toHaveBeenCalledTimes(1);
-    expect(r[0].detalles).toHaveLength(1);
-    expect(r[1].detalles).toEqual([]);
-    expect(r[0].usuarioDespacha).toMatchObject({ name: 'Ana' });
-    expect(r[0].usuarioRecibe).toMatchObject({ name: 'Ana' });
-    expect(r[1].usuarioRecibe).toBeNull();
-  });
 
-  it('deduce la agencia destino del texto "[id]" y extrae el motivo del rechazo', async () => {
-    const { service } = construir({
-      filas: [fila({ estadoDespacho: 'RECHAZADO', observaciones: 'Envío RECHAZADO. RECHAZO: derrame en tránsito' })],
+    it('el DTO no fija page/pageSize/sortField y conserva agenciaId y agenciaDestinoId (el validador global los descartaba)', async () => {
+      const vacio: any = plainToInstance(ListDespachosDto, {});
+      expect(vacio.page).toBeUndefined();
+      expect(vacio.pageSize).toBeUndefined();
+      expect(vacio.sortField).toBeUndefined();
+      expect(await validate(vacio)).toHaveLength(0);
+      const con: any = plainToInstance(ListDespachosDto, { agenciaId: 'a1', agenciaDestinoId: 'a2', pageSize: 200, page: '2', incluirResumen: true });
+      expect(await validate(con)).toHaveLength(0);
+      expect(con).toMatchObject({ agenciaId: 'a1', agenciaDestinoId: 'a2', page: 2 });
     });
-    const [m] = (await service.listDespachos({} as any)) as any[];
-    expect(m.destinoAgenciaId).toBe('ag-1');
-    expect(m.motivoRechazo).toBe('derrame en tránsito');
+
+    it('obtenerDespachosPendientes sigue devolviendo un arreglo', async () => {
+      expect(Array.isArray(await service.obtenerDespachosPendientes(ids.superAdmin))).toBe(true);
+    });
   });
 
-  it('puedeConfirmar: el líder de la agencia destino sí; un envío ya recibido no; el admin no', async () => {
-    const enTransito = fila({ destinoAgenciaId: 'ag-1' });
-    const lider = construir({ rol: 'LIDER_OPERADOR', usuario: { agenciaId: 'ag-1' }, filas: [enTransito] });
-    expect(((await lider.service.listDespachos({} as any, 'u1')) as any[])[0].puedeConfirmar).toBe(true);
+  describe('orden', () => {
+    it('por defecto lo más reciente primero, con desempate por id', async () => {
+      expect(nombres(await lista({ page: 1 }))).toEqual(['D7', 'D6', 'D5', 'D4', 'D3', 'D2', 'D1']);
+    });
 
-    const recibido = construir({ rol: 'LIDER_OPERADOR', usuario: { agenciaId: 'ag-1' }, filas: [fila({ estadoDespacho: 'RECIBIDO', destinoAgenciaId: 'ag-1' })] });
-    expect(((await recibido.service.listDespachos({} as any, 'u1')) as any[])[0].puedeConfirmar).toBe(false);
+    it('ordena por columnas permitidas', async () => {
+      expect(nombres(await lista({ page: 1, sortField: 'guia', sortOrder: 'asc' }))).toEqual(['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7']);
+      expect(nombres(await lista({ page: 1, sortField: 'guia', sortOrder: 'desc' }))).toEqual(['D7', 'D6', 'D5', 'D4', 'D3', 'D2', 'D1']);
+      expect(nombres(await lista({ page: 1, sortField: 'estado', sortOrder: 'desc' }))).toHaveLength(7);
+    });
 
-    const admin = construir({ rol: 'ADMIN', filas: [enTransito] });
-    expect(((await admin.service.listDespachos({} as any, 'u1')) as any[])[0].puedeConfirmar).toBe(false);
-
-    const sa = construir({ rol: 'SUPER_ADMIN', filas: [enTransito] });
-    expect(((await sa.service.listDespachos({} as any, 'u1')) as any[])[0].puedeConfirmar).toBe(true);
+    it('un campo no permitido o malicioso no llega al SQL', async () => {
+      const r = await lista({ page: 1, sortField: 'numeroGuia; DROP TABLE "User"--', sortOrder: 'asc' });
+      expect(nombres(r)).toEqual(['D7', 'D6', 'D5', 'D4', 'D3', 'D2', 'D1']); // cae al orden por defecto
+      expect(await env.prisma.user.count({ where: { id: ids.admin } })).toBe(1); // la tabla sigue ahí
+    });
   });
 
-  it('sin filas no consulta detalles ni usuarios', async () => {
-    const { service, prisma } = construir({ filas: [] });
-    expect(await service.listDespachos({} as any)).toEqual([]);
-    expect(prisma.movimientoDetalle.findMany).not.toHaveBeenCalled();
-    expect(prisma.user.findMany).not.toHaveBeenCalled();
+  describe('filtros y búsqueda', () => {
+    it('solo lista despachos y aplica el estado, la guía y las fechas', async () => {
+      expect(nombres(await lista({ estadoDespacho: 'recibido' }))).toEqual(['D2']); // sin importar mayúsculas
+      expect(nombres(await service.listDespachos({ numeroGuia: `${env.marca}-D3` } as any))).toEqual(['D3']);
+      // Del día -6 al día -4: D2, D3 y D4. Con un "hasta" de solo día, ese día entra completo.
+      const filtradas = await lista({
+        fechaDesde: new Date(hace(6).getTime() - 1000).toISOString(),
+        fechaHasta: hace(4).toISOString().slice(0, 10),
+      });
+      expect(nombres(filtradas).sort()).toEqual(['D2', 'D3', 'D4']);
+    });
+
+    it('una fecha inválida se ignora en vez de romper la consulta', async () => {
+      expect(nombres(await lista({ fechaDesde: 'no-es-fecha' }))).toHaveLength(7);
+    });
+
+    it('busca por palabras (cada una en guía, ruta, responsables o insumos)', async () => {
+      expect(nombres(await lista({ search: 'jabon' }))).toEqual(['D1']); // por el insumo del detalle
+      expect(nombres(await lista({ search: `${env.marca}-D4` }))).toEqual(['D4']); // por la guía
+      expect(nombres(await lista({ search: 'pulidor móvil' }))).toEqual(['D4']); // por la ruta: cada palabra en alguna parte
+      expect(nombres(await lista({ search: 'lia' }))).toEqual(['D2']); // por el responsable que recibe
+      expect(nombres(await lista({ search: 'jabon tres' }))).toEqual([]); // todas las palabras tienen que aparecer
+    });
+
+    it('una búsqueda de una sola letra se ignora y los comodines del cliente se escapan', async () => {
+      expect(nombres(await lista({ search: 'a' }))).toHaveLength(7);
+      expect(nombres(await lista({ search: '50%_x' }))).toEqual([]); // "%" y "_" son texto, no comodines
+    });
+
+    it('el total usa los mismos filtros que la página', async () => {
+      const r: any = await lista({ page: 1, pageSize: 2, estadoDespacho: 'EN_TRANSITO', search: 'tres' });
+      expect(r.total).toBe(2); // D6 y D7 llegan o salen "Agencia Tres"
+      const ids2 = nombres(r);
+      expect(ids2.sort()).toEqual(['D6', 'D7']);
+    });
+
+    it('filtra por agencia con el id, el nombre y el código de la agencia', async () => {
+      for (const clave of [a1.id, a1.nombre, a1.codigo]) {
+        expect(nombres(await lista({ agenciaId: clave })).sort()).toEqual(['D1', 'D2', 'D6']); // llegan a A1 y sale el traslado D6
+      }
+    });
+  });
+
+  describe('resumen', () => {
+    it('sin incluirResumen no devuelve los contadores', async () => {
+      expect(((await lista({ page: 1 })) as any).resumen).toBeUndefined();
+    });
+
+    it('cuenta por estado con los mismos filtros pero sin el de estado', async () => {
+      const r: any = await lista({ page: 1, incluirResumen: true, estadoDespacho: 'RECIBIDO' });
+      expect(nombres(r)).toEqual(['D2']); // la página sí respeta el estado…
+      expect(r.resumen).toEqual({ enTransito: 5, recibidos: 1, rechazados: 1, total: 7 }); // …el resumen no
+    });
+  });
+
+  describe('alcance por rol en el servidor', () => {
+    it('un rol global (admin) no recibe ningún filtro de alcance', async () => {
+      expect(nombres(await lista({ page: 1 }, ids.admin))).toHaveLength(7);
+    });
+
+    it('el pulidor solo ve lo suyo aunque pida el pulidorId de otra persona', async () => {
+      expect(nombres(await lista({ pulidorId: ids.otroPulidor }, ids.paco))).toEqual(['D4']);
+      expect(nombres(await lista({}, ids.otroPulidor))).toEqual([]);
+    });
+
+    it('otros roles pueden filtrar por pulidor', async () => {
+      expect(nombres(await lista({ pulidorId: ids.paco }, ids.coord))).toEqual(['D4']);
+    });
+
+    it('el líder solo ve su agencia aunque pida otra', async () => {
+      expect(nombres(await lista({ agenciaId: a3.id }, ids.lia)).sort()).toEqual(['D1', 'D2', 'D6']);
+    });
+
+    it('el líder también ve los despachos que SALEN de su agencia, no solo los que llegan', async () => {
+      expect(nombres(await lista({}, ids.lia))).toContain('D6'); // sale de A1 hacia A3
+    });
+
+    it('el asistente de bodega ve sus envíos, los de su bodega y los de su región (antes lanzaba error)', async () => {
+      // Su región R1 incluye A1, A2 y la bodega B-R1: D1, D2, D3, D5 y D6 (sale de A1). D4 (pulidor) y D7 (A3, R2) no.
+      expect(nombres(await lista({ page: 1 }, ids.asistente)).sort()).toEqual(['D1', 'D2', 'D3', 'D5', 'D6']);
+    });
+  });
+
+  describe('datos de cada fila', () => {
+    it('agrega detalles y responsables', async () => {
+      const r: any[] = (await lista({})) as any[];
+      const d1 = r.find((x) => x.id === d.D1);
+      expect(d1.detalles).toHaveLength(1);
+      expect(d1.detalles[0].insumo.nombre).toBe(jabon.nombre);
+      expect(d1.usuarioDespacha).toMatchObject({ id: ids.coord, name: 'coord' });
+      expect(d1.usuarioRecibe).toBeNull();
+      const d2 = r.find((x) => x.id === d.D2);
+      expect(d2.detalles).toEqual([]);
+      expect(d2.usuarioRecibe).toMatchObject({ id: ids.lia });
+    });
+
+    it('deduce la agencia destino del texto "[id]" y extrae el motivo del rechazo', async () => {
+      const [m] = (await service.listDespachos({ numeroGuia: `${env.marca}-D3` } as any)) as any[];
+      expect(m.destinoAgenciaId).toBe(a2.id); // en la base es null: sale del texto "[id]"
+      expect(m.motivoRechazo).toBe('derrame en tránsito');
+    });
+
+    it('puedeConfirmar: quien recibe sí; un envío ya recibido no; el admin no; el super admin sí', async () => {
+      const confirmar = async (usuarioId: string, clave: string) =>
+        ((await lista({}, usuarioId)) as any[]).find((x) => x.id === d[clave])?.puedeConfirmar;
+      expect(await confirmar(ids.lia, 'D1')).toBe(true); // líder de la agencia destino
+      expect(await confirmar(ids.lia, 'D2')).toBe(false); // ya recibido
+      expect(await confirmar(ids.admin, 'D1')).toBe(false);
+      expect(await confirmar(ids.superAdmin, 'D1')).toBe(true);
+      expect(await confirmar(ids.asistente, 'D5')).toBe(true); // su bodega es el destino
+      expect(await confirmar(ids.paco, 'D4')).toBe(true); // el pulidor al que va dirigido
+    });
+
+    it('sin filas devuelve un arreglo vacío', async () => {
+      expect(await service.listDespachos({ numeroGuia: `${env.marca}-no-existe` } as any)).toEqual([]);
+    });
   });
 });

@@ -1,271 +1,324 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { InventarioService } from './inventario.service.js';
 import { ListAlertasDto } from './dto/alertas.dto.js';
 import { ListStockBajoDto } from './dto/movimiento-operacion.dto.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
-interface Opciones {
-  rol?: string;
-  usuario?: Record<string, unknown>;
-  alertas?: any[];
-  total?: number;
-  resueltas?: number;
-  insumosStockBajo?: any[];
-  totalStockBajo?: number;
-}
+/**
+ * Integración con la base real (sin mocks).
+ *
+ * Una sola excepción, deliberada: `sincronizarNecesidadesAsignadas` se reemplaza por una función que solo anota que la
+ * llamaron. Esa tarea de fondo recorre TODAS las agencias y pulidores reales y escribiría stock en cero y alertas en
+ * ellos; lo que importa de ella aquí es CUÁNDO se dispara (roles, ventana de 2 minutos), no lo que escribe.
+ *
+ * Mundo de la prueba:
+ *  Región R1 ── Agencia A1 (Lía LIDER · pulidor Paco) · Agencia A2 · Bodega B-R1 (asistente)
+ *  Región R2 ── Agencia A3
+ *  Alertas (insumo JABON salvo indicación): al1 A1 CRITICO pendiente · al2 A1 BAJO resuelta (CERA) · al3 A2 AGOTADO en proceso
+ *               al4 A3 BAJO pendiente (CERA) · al5 kit de Paco CRITICO pendiente
+ */
+describe('InventarioService: alertas y stock bajo (base real)', () => {
+  let env: Entorno;
+  let r1: any;
+  let r2: any;
+  let a1: any;
+  let a2: any;
+  let a3: any;
+  let jabon: any;
+  let cera: any;
+  const al: Record<string, string> = {};
+  const ids: Record<string, string> = {};
 
-function construir(op: Opciones = {}) {
-  const usuario = op.rol
-    ? { id: 'u1', role: { namerol: op.rol }, regionId: 'reg1', bodega: null, agenciaId: null, ...op.usuario }
-    : null;
-  const count = vi.fn(async (args: any) => {
-    const txt = JSON.stringify(args?.where ?? {});
-    if (txt.includes('"estado":"RESUELTO"') && !txt.includes('"not"')) return op.resueltas ?? 0;
-    if (txt.includes('"not":"RESUELTO"') && txt.includes('AGOTADO')) return 2;
-    return op.total ?? 0;
-  });
-  const prisma = {
-    alertaStock: { findMany: vi.fn().mockResolvedValue(op.alertas ?? []), count },
-    user: {
-      findUnique: vi.fn().mockResolvedValue(usuario),
-      findMany: vi.fn().mockResolvedValue([{ id: 'pul1' }]),
-    },
-    agencia: { findMany: vi.fn().mockResolvedValue([{ id: 'ag1', nombre: 'A', servicioIds: [] }]) },
-    recetaInsumo: { findMany: vi.fn().mockResolvedValue([]) },
-    insumo: { findMany: vi.fn(async (a: any) => (op.insumosStockBajo ?? []).filter((i) => a.where.id.in.includes(i.id))) },
-    $queryRawUnsafe: vi.fn(async (texto: string, ..._p: unknown[]) => {
-      if (texto.includes('COUNT(*)')) return [{ total: op.totalStockBajo ?? (op.insumosStockBajo?.length ?? 0) }];
-      return (op.insumosStockBajo ?? []).map((i) => ({ id: i.id }));
-    }),
-  };
-  const service = new InventarioService(prisma as never);
-  const sync = vi.spyOn(service as any, 'sincronizarNecesidadesAsignadas').mockResolvedValue(undefined);
-  return { service, prisma, sync };
-}
-
-describe('listAlertas — modo heredado (sin página)', () => {
-  it('arreglo con tope de 100, el orden de siempre, y sincroniza para roles de varias sedes', async () => {
-    const { service, prisma, sync } = construir({ rol: 'ADMIN', alertas: [{ id: 'a1' }] });
-    const r = await service.listAlertas({} as any, 'u1');
-    expect(Array.isArray(r)).toBe(true);
-    expect(prisma.alertaStock.findMany.mock.calls[0][0]).toMatchObject({
-      take: 100,
-      orderBy: [{ nivel: 'asc' }, { createdAt: 'desc' }],
-    });
-    expect(sync).toHaveBeenCalledTimes(1);
-  });
-
-  it('la sincronización se limita a una vez cada 2 minutos', async () => {
-    const { service, sync } = construir({ rol: 'ADMIN' });
-    await service.listAlertas({} as any, 'u1');
-    await service.listAlertas({} as any, 'u1');
-    await service.listAlertas({} as any, 'u1');
-    expect(sync).toHaveBeenCalledTimes(1);
-  });
-
-  it('un líder solo ve su sede y no dispara la sincronización', async () => {
-    const { service, prisma, sync } = construir({ rol: 'LIDER_OPERADOR', usuario: { agenciaId: 'ag9' } });
-    await service.listAlertas({ sucursalId: 'otra' } as any, 'u1');
-    expect(JSON.stringify(prisma.alertaStock.findMany.mock.calls[0][0].where)).toContain('"agenciaId":"ag9"');
-    expect(sync).not.toHaveBeenCalled();
-  });
-});
-
-describe('listAlertas — modo paginado (no escribe)', () => {
-  it('no sincroniza al listar y responde el formato estándar', async () => {
-    const { service, prisma, sync } = construir({ rol: 'ADMIN', alertas: [{ id: 'a1' }], total: 80 });
-    const r: any = await service.listAlertas({ page: 2, pageSize: 25 } as any, 'u1');
-    expect(sync).not.toHaveBeenCalled();
-    expect(prisma.alertaStock.findMany.mock.calls[0][0]).toMatchObject({ skip: 25, take: 25, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
-    expect(r).toMatchObject({ total: 80, page: 2, pageSize: 25, totalPages: 4, hasNextPage: true });
-    expect(r.resumen).toBeUndefined();
-  });
-
-  it('ordena solo por columnas permitidas', async () => {
-    const { service, prisma } = construir({ rol: 'ADMIN' });
-    await service.listAlertas({ page: 1, sortField: 'agencia', sortOrder: 'asc' } as any, 'u1');
-    expect(prisma.alertaStock.findMany.mock.calls[0][0].orderBy[0]).toEqual({ agencia: { nombre: 'asc' } });
-    await service.listAlertas({ page: 1, sortField: 'usuarioEmisorId; x' } as any, 'u1');
-    expect(prisma.alertaStock.findMany.mock.calls[1][0].orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
-  });
-
-  it('filtros: grupo de nivel (crítico incluye agotado), estado y solo activas; el conteo usa los mismos', async () => {
-    const { service, prisma } = construir({ rol: 'ADMIN' });
-    await service.listAlertas({ page: 1, grupoNivel: 'CRITICO', estado: 'PENDIENTE', soloActivas: true } as any, 'u1');
-    const where = prisma.alertaStock.findMany.mock.calls[0][0].where;
-    const txt = JSON.stringify(where);
-    expect(txt).toContain('"nivel":{"in":["CRITICO","AGOTADO"]}');
-    expect(txt).toContain('"estado":"PENDIENTE"');
-    expect(txt).toContain('"estado":{"not":"RESUELTO"}');
-    expect(prisma.alertaStock.count.mock.calls[0][0].where).toEqual(where);
-    await service.listAlertas({ page: 1, grupoNivel: 'BAJO' } as any, 'u1');
-    expect(JSON.stringify(prisma.alertaStock.findMany.mock.calls[1][0].where)).toContain('"nivel":{"in":["BAJO"]}');
-  });
-
-  it('busca por palabras en insumo, sede, región, kit del pulidor y mensaje', async () => {
-    const { service, prisma } = construir({ rol: 'ADMIN' });
-    await service.listAlertas({ page: 1, search: 'jabon norte' } as any, 'u1');
-    const txt = JSON.stringify(prisma.alertaStock.findMany.mock.calls[0][0].where);
-    expect(txt).toContain('"insumo":{"nombre":{"contains":"jabon"');
-    expect(txt).toContain('"agencia":{"region":{"contains":"norte"');
-    expect(txt).toContain('"pulidor":{"name"');
-    expect(txt).toContain('"mensaje"');
-  });
-
-  it('el alcance de un asistente sigue aplicándose junto con los filtros', async () => {
-    const { service, prisma } = construir({ rol: 'ASISTENTE_BODEGA' });
-    await service.listAlertas({ page: 1, grupoNivel: 'BAJO', search: 'ab' } as any, 'u1');
-    const txt = JSON.stringify(prisma.alertaStock.findMany.mock.calls[0][0].where);
-    expect(txt).toContain('"agenciaId":{"in":["ag1"]}');
-    expect(txt).toContain('"pulidorId":{"in":["pul1"]}');
-    expect(txt).toContain('"nivel":{"in":["BAJO"]}');
-  });
-
-  it('el resumen cuenta activas y críticas con el alcance y la búsqueda, sin filtros de nivel ni de estado', async () => {
-    const { service, prisma } = construir({ rol: 'ADMIN', total: 10, resueltas: 4 });
-    const r: any = await service.listAlertas({ page: 1, incluirResumen: true, estado: 'RESUELTO', grupoNivel: 'BAJO' } as any, 'u1');
-    expect(r.resumen).toEqual({ total: 10, resueltas: 4, activas: 6, criticas: 2 });
-    const donde = prisma.alertaStock.count.mock.calls.slice(1).map((c) => JSON.stringify(c[0].where));
-    expect(donde.join(' ')).not.toContain('"nivel":{"in":["BAJO"]}');
-  });
-});
-
-describe('sincronizarAlertas', () => {
-  it('solo lo ejecutan los roles con vista de varias sedes; el líder no', async () => {
-    const lider = construir({ rol: 'LIDER_OPERADOR', usuario: { agenciaId: 'ag1' } });
-    expect(await lider.service.sincronizarAlertas('u1')).toEqual({ sincronizado: false });
-    expect(lider.sync).not.toHaveBeenCalled();
-    const admin = construir({ rol: 'COORD_BODEGA' });
-    expect(await admin.service.sincronizarAlertas('u1')).toEqual({ sincronizado: true });
-    expect(admin.sync).toHaveBeenCalledWith('u1');
-  });
-
-  it('respeta el límite de 2 minutos salvo con forzar', async () => {
-    const { service, sync } = construir({ rol: 'ADMIN' });
-    expect((await service.sincronizarAlertas('u1')).sincronizado).toBe(true);
-    expect((await service.sincronizarAlertas('u1')).sincronizado).toBe(false);
-    expect((await service.sincronizarAlertas('u1', true)).sincronizado).toBe(true);
-    expect(sync).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('listStockBajo (SQL)', () => {
-  const insumos = [
-    { id: 'i1', nombre: 'Jabón', stockActual: 1, stockMinimoBodega: 10 },
-    { id: 'i2', nombre: 'Cera', stockActual: 3, stockMinimoBodega: 10 },
-  ];
-
-  it('filtra y cuenta en la base de datos y devuelve la página en el orden del SQL', async () => {
-    const { service, prisma } = construir({ insumosStockBajo: insumos, totalStockBajo: 57 });
-    const r: any = await service.listStockBajo({ page: 2, pageSize: 25 } as any);
-    const [sqlPagina, ...params] = prisma.$queryRawUnsafe.mock.calls[0] as [string, ...unknown[]];
-    expect(sqlPagina).toContain('i."stockActual" <= i."stockMinimoBodega"');
-    expect(sqlPagina).toContain('i."estado" = 1');
-    expect(sqlPagina).toContain('ORDER BY i."stockActual" ASC NULLS LAST, i."id" ASC');
-    expect(params.slice(-2)).toEqual([25, 25]);
-    expect(r).toMatchObject({ total: 57, page: 2, pageSize: 25, totalPages: 3 });
-    expect(r.items.map((i: any) => i.id)).toEqual(['i1', 'i2']);
-    const sqlConteo = prisma.$queryRawUnsafe.mock.calls[1][0] as string;
-    expect(sqlConteo).toContain('COUNT(*)');
-    // el conteo usa exactamente los mismos filtros que la página
-    expect(sqlConteo.split('WHERE')[1].trim()).toBe(sqlPagina.split('WHERE')[1].split('ORDER BY')[0].trim());
-  });
-
-  it('sin página devuelve la primera de 100 (antes 20) y el mismo formato', async () => {
-    const { service, prisma } = construir({ insumosStockBajo: insumos });
-    const r: any = await service.listStockBajo({} as any);
-    expect((prisma.$queryRawUnsafe.mock.calls[0] as unknown[]).slice(-2)).toEqual([100, 0]);
-    expect(r).toMatchObject({ page: 1, pageSize: 100, total: 2 });
-    expect(Array.isArray(r.items)).toBe(true);
-  });
-
-  it('ordena solo por columnas permitidas y enlaza tipo y búsqueda como parámetros', async () => {
-    const { service, prisma } = construir();
-    await service.listStockBajo({ page: 1, sortField: 'deficit', sortOrder: 'desc', tipoProductoId: 't1', search: 'jabon cera' } as any);
-    const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0] as [string, ...unknown[]];
-    expect(sql).toContain('ORDER BY (i."stockMinimoBodega" - i."stockActual") DESC NULLS LAST');
-    expect(params).toEqual(expect.arrayContaining(['t1', '%jabon%', '%cera%']));
-    expect(sql).not.toContain('jabon');
-    await service.listStockBajo({ page: 1, sortField: 'nombre; DROP TABLE "Insumo"' } as any);
-    const [sql2] = prisma.$queryRawUnsafe.mock.calls[2] as [string];
-    expect(sql2).toContain('ORDER BY i."stockActual" ASC');
-    expect(sql2).not.toContain('DROP');
-  });
-
-  it('una página sin resultados no consulta los insumos', async () => {
-    const { service, prisma } = construir({ insumosStockBajo: [] });
-    const r: any = await service.listStockBajo({ page: 1 } as any);
-    expect(r).toMatchObject({ total: 0, items: [] });
-    expect(prisma.insumo.findMany).not.toHaveBeenCalled();
-  });
-});
-
-describe('DTO de alertas y stock bajo', () => {
-  it('no fijan page/pageSize y validan los nuevos campos', async () => {
-    for (const Clase of [ListAlertasDto, ListStockBajoDto]) {
-      const vacio: any = plainToInstance(Clase as any, {});
-      expect(vacio.page).toBeUndefined();
-      expect(vacio.pageSize).toBeUndefined();
-      expect(await validate(vacio)).toHaveLength(0);
-    }
-    expect(await validate(plainToInstance(ListAlertasDto, { page: 1, grupoNivel: 'CRITICO', soloActivas: true, agenciaId: 'a', incluirResumen: true }))).toHaveLength(0);
-    expect((await validate(plainToInstance(ListAlertasDto, { grupoNivel: 'otro' }))).length).toBeGreaterThan(0);
-  });
-});
-
-describe('alertas resueltas al recibir un despacho', () => {
-  function recepcion(stockPrevio: number, alertas: any[] = [{ id: 'al1', mensaje: 'Me falta shampoo' }]) {
-    const prisma: any = {
-      stockUbicacion: {
-        findFirst: vi.fn().mockResolvedValue({ id: 's1', cantidadActual: stockPrevio }),
-        update: vi.fn().mockResolvedValue({}),
-      },
-      kardexMovimiento: { create: vi.fn().mockResolvedValue({}) },
-      insumo: { findUnique: vi.fn().mockResolvedValue({ stockMinimoAgencia: 2 }) },
-      alertaStock: { findMany: vi.fn().mockResolvedValue(alertas), update: vi.fn().mockResolvedValue({}) },
-      user: { findUnique: vi.fn().mockResolvedValue({ agenciaId: null }) },
+  /** Servicio nuevo (cada uno con su propia ventana de 2 minutos) y la lista de veces que se pidió sincronizar. */
+  const servicio = () => {
+    const service = new InventarioService(env.prisma as never);
+    const sincronizaciones: string[] = [];
+    (service as any).sincronizarNecesidadesAsignadas = async (usuarioId: string) => {
+      sincronizaciones.push(usuarioId);
     };
-    const service = new InventarioService(prisma as never);
-    const sumar = (destino: Record<string, string>, cantidad: number) =>
-      (service as any).sumarStockDestino({ insumoId: 'i1', cantidad, guia: 'G-1', usuarioId: 'u1', ...destino });
-    return { prisma, sumar };
-  }
+    return { service, sincronizaciones };
+  };
+  const mias = (r: any) => (Array.isArray(r) ? r : r.items).map((a: any) => Object.entries(al).find(([, id]) => id === a.id)?.[0]).filter(Boolean);
 
-  it('la agencia: resuelve sus alertas abiertas (también DESPACHADO) con fecha y nota, sin tocar las del kit de un pulidor', async () => {
-    const { prisma, sumar } = recepcion(1);
-    await sumar({ destinoAgenciaId: 'a1' }, 5);
-    expect(prisma.alertaStock.findMany.mock.calls[0][0].where).toEqual({
-      insumoId: 'i1',
-      agenciaId: 'a1',
-      pulidorId: null,
-      estado: { in: ['PENDIENTE', 'EN_PROCESO', 'DESPACHADO'] },
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    r1 = await env.region('R1');
+    r2 = await env.region('R2');
+    a1 = await env.agencia('A1', { regionId: r1.id });
+    a2 = await env.agencia('A2', { regionId: r1.id });
+    a3 = await env.agencia('A3', { regionId: r2.id });
+    await env.prisma.agencia.update({ where: { id: a1.id }, data: { region: `Norte-${env.marca}` } });
+    const bodR1 = await env.bodega('R1', { regionId: r1.id });
+
+    const crear = async (clave: string, rol: string, opts: Record<string, unknown> = {}) => {
+      ids[clave] = (await env.usuario(clave, rol, opts)).id;
+    };
+    await crear('admin', 'ADMIN');
+    await crear('coordBodega', 'COORD_BODEGA');
+    await crear('lia', 'LIDER', { agenciaId: a1.id });
+    await crear('paco', 'PULIDOR', { agenciaId: a1.id });
+    await crear('asistente', 'ASISTENTE_BODEGA', { bodegaId: bodR1.id });
+
+    jabon = await env.insumo('JABON');
+    cera = await env.insumo('CERA');
+    const alerta = async (clave: string, data: Record<string, unknown>) => {
+      al[clave] = (await env.prisma.alertaStock.create({ data: { usuarioEmisorId: ids.admin, ...data } as never })).id;
+    };
+    await alerta('al1', { insumoId: jabon.id, agenciaId: a1.id, nivel: 'CRITICO', estado: 'PENDIENTE', mensaje: 'poco jabon' });
+    await alerta('al2', { insumoId: cera.id, agenciaId: a1.id, nivel: 'BAJO', estado: 'RESUELTO' });
+    await alerta('al3', { insumoId: jabon.id, agenciaId: a2.id, nivel: 'AGOTADO', estado: 'EN_PROCESO' });
+    await alerta('al4', { insumoId: cera.id, agenciaId: a3.id, nivel: 'BAJO', estado: 'PENDIENTE' });
+    await alerta('al5', { insumoId: jabon.id, agenciaId: a1.id, pulidorId: ids.paco, nivel: 'CRITICO', estado: 'PENDIENTE', mensaje: 'kit casi vacío' });
+  });
+
+  afterAll(async () => {
+    await env.cerrar();
+  });
+
+  describe('listAlertas — modo heredado (sin página)', () => {
+    it('arreglo con tope de 100, el orden de siempre, y sincroniza para roles de varias sedes', async () => {
+      const { service, sincronizaciones } = servicio();
+      const r = await service.listAlertas({} as any, ids.admin);
+      expect(Array.isArray(r)).toBe(true);
+      expect((r as any[]).length).toBeLessThanOrEqual(100);
+      expect(sincronizaciones).toEqual([ids.admin]);
     });
-    const { where, data } = prisma.alertaStock.update.mock.calls[0][0];
-    expect(where).toEqual({ id: 'al1' });
-    expect(data.estado).toBe('RESUELTO');
-    expect(data.fechaAtencion).toBeInstanceOf(Date);
-    expect(data.mensaje).toBe('Me falta shampoo | Reabastecido mediante despacho guía G-1. Stock actual: 6');
+
+    it('la sincronización se limita a una vez cada 2 minutos', async () => {
+      const { service, sincronizaciones } = servicio();
+      await service.listAlertas({} as any, ids.admin);
+      await service.listAlertas({} as any, ids.admin);
+      await service.listAlertas({} as any, ids.admin);
+      expect(sincronizaciones).toHaveLength(1);
+    });
+
+    it('un líder solo ve su sede, en el orden de siempre (nivel y luego lo más reciente), y no dispara la sincronización', async () => {
+      const { service, sincronizaciones } = servicio();
+      const r = await service.listAlertas({ sucursalId: a2.id } as any, ids.lia); // pide otra sede: se ignora
+      // De la sede A1: BAJO (al2) primero; luego los CRITICO, el más reciente primero (al5 se creó después que al1).
+      expect(mias(r)).toEqual(['al2', 'al5', 'al1']);
+      expect(sincronizaciones).toEqual([]);
+    });
   });
 
-  it('el pulidor: busca por su kit (pulidorId), no por quién emitió la alerta', async () => {
-    const { prisma, sumar } = recepcion(0, [{ id: 'al2', mensaje: null }]);
-    await sumar({ destinoPulidorId: 'p1' }, 3);
-    expect(prisma.alertaStock.findMany.mock.calls[0][0].where).toMatchObject({ insumoId: 'i1', pulidorId: 'p1' });
-    expect(prisma.alertaStock.update.mock.calls[0][0].data.mensaje).toBe('Reabastecido mediante despacho guía G-1. Stock actual: 3');
+  describe('listAlertas — modo paginado (no escribe)', () => {
+    it('no sincroniza al listar y responde el formato estándar', async () => {
+      const { service, sincronizaciones } = servicio();
+      const r: any = await service.listAlertas({ page: 1, pageSize: 2, search: env.marca } as any, ids.admin);
+      expect(sincronizaciones).toEqual([]);
+      expect(r).toMatchObject({ total: 5, page: 1, pageSize: 2, totalPages: 3, hasNextPage: true });
+      expect(r.items).toHaveLength(2);
+      expect(r.resumen).toBeUndefined();
+    });
+
+    it('ordena solo por columnas permitidas', async () => {
+      const { service } = servicio();
+      const r: any = await service.listAlertas({ page: 1, search: env.marca, sortField: 'agencia', sortOrder: 'desc' } as any, ids.admin);
+      expect(r.items[0].agencia.nombre).toBe(a3.nombre); // la agencia A3 es la última alfabéticamente
+      const hostil: any = await service.listAlertas({ page: 1, search: env.marca, sortField: 'usuarioEmisorId; x' } as any, ids.admin);
+      expect(hostil.items).toHaveLength(5); // no falla: cae al orden por defecto
+    });
+
+    it('filtros: grupo de nivel (crítico incluye agotado), estado y solo activas; el conteo usa los mismos', async () => {
+      const { service } = servicio();
+      const critico: any = await service.listAlertas({ page: 1, search: env.marca, grupoNivel: 'CRITICO' } as any, ids.admin);
+      expect(mias(critico).sort()).toEqual(['al1', 'al3', 'al5']); // CRITICO y AGOTADO
+      expect(critico.total).toBe(3);
+
+      const pendientesActivas: any = await service.listAlertas(
+        { page: 1, search: env.marca, grupoNivel: 'CRITICO', estado: 'PENDIENTE', soloActivas: true } as any,
+        ids.admin,
+      );
+      expect(mias(pendientesActivas).sort()).toEqual(['al1', 'al5']);
+      expect(pendientesActivas.total).toBe(2);
+
+      const bajo: any = await service.listAlertas({ page: 1, search: env.marca, grupoNivel: 'BAJO' } as any, ids.admin);
+      expect(mias(bajo).sort()).toEqual(['al2', 'al4']);
+    });
+
+    it('busca por palabras en insumo, sede, región, kit del pulidor y mensaje', async () => {
+      const { service } = servicio();
+      const porInsumo: any = await service.listAlertas({ page: 1, search: `${env.marca} jabon` } as any, ids.admin);
+      expect(mias(porInsumo).sort()).toEqual(['al1', 'al3', 'al5']);
+      const porRegion: any = await service.listAlertas({ page: 1, search: `norte-${env.marca}` } as any, ids.admin);
+      expect(mias(porRegion).sort()).toEqual(['al1', 'al2', 'al5']); // la región (texto) de A1
+      const porMensaje: any = await service.listAlertas({ page: 1, search: `${env.marca} vacío` } as any, ids.admin);
+      expect(mias(porMensaje)).toEqual(['al5']);
+      const porPulidor: any = await service.listAlertas({ page: 1, search: `${env.marca} ${env.marca}paco` } as any, ids.admin);
+      expect(mias(porPulidor)).toEqual(['al5']); // por el nombre del pulidor del kit
+    });
+
+    it('el alcance de un asistente sigue aplicándose junto con los filtros', async () => {
+      const { service } = servicio();
+      const r: any = await service.listAlertas({ page: 1, search: env.marca, grupoNivel: 'BAJO' } as any, ids.asistente);
+      // La región R1 incluye A1 y A2 y a Paco; A3 (R2) queda fuera aunque su alerta sea de nivel BAJO.
+      expect(mias(r)).toEqual(['al2']);
+      const todo: any = await service.listAlertas({ page: 1, search: env.marca } as any, ids.asistente);
+      expect(mias(todo).sort()).toEqual(['al1', 'al2', 'al3', 'al5']);
+    });
+
+    it('el resumen cuenta activas y críticas con el alcance y la búsqueda, sin filtros de nivel ni de estado', async () => {
+      const { service } = servicio();
+      const r: any = await service.listAlertas(
+        { page: 1, search: env.marca, incluirResumen: true, estado: 'RESUELTO', grupoNivel: 'BAJO' } as any,
+        ids.admin,
+      );
+      expect(mias(r)).toEqual(['al2']); // la página sí respeta los filtros…
+      expect(r.resumen).toEqual({ total: 5, resueltas: 1, activas: 4, criticas: 3 }); // …el resumen no
+    });
   });
 
-  it('si el stock sigue en el mínimo o por debajo, la alerta queda abierta', async () => {
-    const { prisma, sumar } = recepcion(0);
-    await sumar({ destinoAgenciaId: 'a1' }, 2);
-    expect(prisma.alertaStock.findMany).not.toHaveBeenCalled();
-    expect(prisma.alertaStock.update).not.toHaveBeenCalled();
+  describe('sincronizarAlertas', () => {
+    it('solo lo ejecutan los roles con vista de varias sedes; el líder no', async () => {
+      const lider = servicio();
+      expect(await lider.service.sincronizarAlertas(ids.lia)).toEqual({ sincronizado: false });
+      expect(lider.sincronizaciones).toEqual([]);
+      const coord = servicio();
+      expect(await coord.service.sincronizarAlertas(ids.coordBodega)).toEqual({ sincronizado: true });
+      expect(coord.sincronizaciones).toEqual([ids.coordBodega]);
+    });
+
+    it('respeta el límite de 2 minutos salvo con forzar', async () => {
+      const { service, sincronizaciones } = servicio();
+      expect((await service.sincronizarAlertas(ids.admin)).sincronizado).toBe(true);
+      expect((await service.sincronizarAlertas(ids.admin)).sincronizado).toBe(false);
+      expect((await service.sincronizarAlertas(ids.admin, true)).sincronizado).toBe(true);
+      expect(sincronizaciones).toHaveLength(2);
+    });
   });
 
-  it('un fallo al resolver alertas no rompe la recepción', async () => {
-    const { prisma, sumar } = recepcion(1);
-    prisma.alertaStock.findMany.mockRejectedValue(new Error('db caída'));
-    await expect(sumar({ destinoAgenciaId: 'a1' }, 5)).resolves.toBeUndefined();
-    expect(prisma.stockUbicacion.update).toHaveBeenCalled();
+  describe('listStockBajo (SQL)', () => {
+    let service: InventarioService;
+    let tipo: any;
+    let bajo1: any;
+    let bajo2: any;
+    let muyBajo: any;
+    let normal: any;
+
+    beforeAll(async () => {
+      service = servicio().service;
+      tipo = await env.tipoProducto('SB');
+      const insumo = async (s: string, stock: number, minimo: number, opts: Record<string, unknown> = {}) => {
+        const i = await env.insumo(s, { tipoProductoId: tipo.id, ...opts });
+        await env.prisma.insumo.update({ where: { id: i.id }, data: { stockActual: stock, stockMinimoBodega: minimo } });
+        return i;
+      };
+      bajo1 = await insumo('SB-JABON', 1, 10); // déficit 9
+      bajo2 = await insumo('SB-CERA', 3, 10); // déficit 7
+      muyBajo = await insumo('SB-ESPUMA', 2, 20); // déficit 18
+      normal = await insumo('SB-NORMAL', 50, 10); // no está bajo
+      await insumo('SB-VIEJO', 0, 10, { estado: 0 }); // inactivo: no cuenta
+    });
+
+    const idsDe = (r: any) => r.items.map((i: any) => i.id);
+
+    it('filtra y cuenta en la base de datos y devuelve la página en el orden del SQL', async () => {
+      const r: any = await service.listStockBajo({ page: 1, pageSize: 2, search: env.marca, tipoProductoId: tipo.id } as any);
+      // Más bajo primero (stockActual ascendente): bajo1 (1), muyBajo (2), bajo2 (3)…
+      expect(r).toMatchObject({ total: 3, page: 1, pageSize: 2, totalPages: 2 });
+      expect(idsDe(r)).toEqual([bajo1.id, muyBajo.id]);
+      const p2: any = await service.listStockBajo({ page: 2, pageSize: 2, search: env.marca, tipoProductoId: tipo.id } as any);
+      expect(idsDe(p2)).toEqual([bajo2.id]);
+      expect([...idsDe(r), ...idsDe(p2)]).not.toContain(normal.id);
+    });
+
+    it('sin página devuelve la primera de 100 (antes 20) y el mismo formato', async () => {
+      const r: any = await service.listStockBajo({ search: env.marca, tipoProductoId: tipo.id } as any);
+      expect(r).toMatchObject({ page: 1, pageSize: 100, total: 3 });
+      expect(Array.isArray(r.items)).toBe(true);
+    });
+
+    it('ordena solo por columnas permitidas y enlaza tipo y búsqueda como parámetros', async () => {
+      const porDeficit: any = await service.listStockBajo({ page: 1, search: env.marca, sortField: 'deficit', sortOrder: 'desc', tipoProductoId: tipo.id } as any);
+      expect(idsDe(porDeficit)).toEqual([muyBajo.id, bajo1.id, bajo2.id]); // déficit 18, 9 y 7
+      const palabras: any = await service.listStockBajo({ page: 1, search: `${env.marca} jabon cera`, tipoProductoId: tipo.id } as any);
+      expect(palabras.total).toBe(0); // "jabon" Y "cera" no están en el mismo insumo
+      const unaPalabra: any = await service.listStockBajo({ page: 1, search: `${env.marca} jabon`, tipoProductoId: tipo.id } as any);
+      expect(idsDe(unaPalabra)).toEqual([bajo1.id]);
+      // Una columna ajena o un intento de inyección no rompe nada ni se ejecuta.
+      const hostil: any = await service.listStockBajo({ page: 1, search: env.marca, tipoProductoId: tipo.id, sortField: 'nombre; DROP TABLE "Insumo"' } as any);
+      expect(idsDe(hostil)).toEqual([bajo1.id, muyBajo.id, bajo2.id]);
+      expect(await env.prisma.insumo.count({ where: { id: bajo1.id } })).toBe(1);
+    });
+
+    it('una página sin resultados devuelve vacío', async () => {
+      const r: any = await service.listStockBajo({ page: 1, search: `${env.marca} zzqq`, tipoProductoId: tipo.id } as any);
+      expect(r).toMatchObject({ total: 0, items: [] });
+    });
+  });
+
+  describe('DTO de alertas y stock bajo', () => {
+    it('no fijan page/pageSize y validan los nuevos campos', async () => {
+      for (const Clase of [ListAlertasDto, ListStockBajoDto]) {
+        const vacio: any = plainToInstance(Clase as any, {});
+        expect(vacio.page).toBeUndefined();
+        expect(vacio.pageSize).toBeUndefined();
+        expect(await validate(vacio)).toHaveLength(0);
+      }
+      expect(await validate(plainToInstance(ListAlertasDto, { page: 1, grupoNivel: 'CRITICO', soloActivas: true, agenciaId: 'a', incluirResumen: true }))).toHaveLength(0);
+      expect((await validate(plainToInstance(ListAlertasDto, { grupoNivel: 'otro' }))).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('alertas resueltas al recibir un despacho', () => {
+    /** Una agencia con su insumo en stock y una alerta abierta; devuelve cómo "recibir" cantidad en ella. */
+    async function recepcion(stockPrevio: number, mensaje: string | null = 'Me falta shampoo') {
+      const insumo = await env.insumo(`REC-${Math.random().toString(36).slice(2, 6)}`);
+      const agencia = await env.agencia(`REC-${Math.random().toString(36).slice(2, 6)}`, { regionId: r1.id });
+      await env.stock({ insumoId: insumo.id, tipoUbicacion: 'AGENCIA', agenciaId: agencia.id, cantidad: stockPrevio });
+      const alerta = await env.prisma.alertaStock.create({
+        data: { insumoId: insumo.id, agenciaId: agencia.id, usuarioEmisorId: ids.admin, mensaje, estado: 'PENDIENTE' },
+      });
+      const { service } = servicio();
+      const sumar = (destino: Record<string, string>, cantidad: number) =>
+        (service as any).sumarStockDestino({ insumoId: insumo.id, cantidad, guia: 'G-1', usuarioId: ids.admin, ...destino });
+      return { insumo, agencia, alerta, sumar };
+    }
+
+    it('la agencia: resuelve sus alertas abiertas con fecha y nota, sin tocar las del kit de un pulidor', async () => {
+      const { insumo, agencia, alerta, sumar } = await recepcion(1);
+      // Una alerta del kit de un pulidor del mismo insumo y agencia: no debe resolverse.
+      const delKit = await env.prisma.alertaStock.create({
+        data: { insumoId: insumo.id, agenciaId: agencia.id, pulidorId: ids.paco, usuarioEmisorId: ids.admin, estado: 'PENDIENTE' },
+      });
+
+      await sumar({ destinoAgenciaId: agencia.id }, 5);
+
+      const resuelta = await env.prisma.alertaStock.findUniqueOrThrow({ where: { id: alerta.id } });
+      expect(resuelta.estado).toBe('RESUELTO');
+      expect(resuelta.fechaAtencion).toBeInstanceOf(Date);
+      expect(resuelta.mensaje).toBe('Me falta shampoo | Reabastecido mediante despacho guía G-1. Stock actual: 6');
+      expect((await env.prisma.alertaStock.findUniqueOrThrow({ where: { id: delKit.id } })).estado).toBe('PENDIENTE');
+    });
+
+    it('también resuelve las que ya iban DESPACHADO', async () => {
+      const { alerta, sumar } = await recepcion(1);
+      await env.prisma.alertaStock.update({ where: { id: alerta.id }, data: { estado: 'DESPACHADO' } });
+      await sumar({ destinoAgenciaId: (await env.prisma.alertaStock.findUniqueOrThrow({ where: { id: alerta.id } })).agenciaId! }, 5);
+      expect((await env.prisma.alertaStock.findUniqueOrThrow({ where: { id: alerta.id } })).estado).toBe('RESUELTO');
+    });
+
+    it('el pulidor: busca por su kit (pulidorId), no por quién emitió la alerta', async () => {
+      const insumo = await env.insumo(`KIT-${Math.random().toString(36).slice(2, 6)}`);
+      await env.stock({ insumoId: insumo.id, tipoUbicacion: 'PULIDOR_FIJO', pulidorId: ids.paco, cantidad: 0 });
+      const alerta = await env.prisma.alertaStock.create({
+        data: { insumoId: insumo.id, pulidorId: ids.paco, usuarioEmisorId: ids.admin, mensaje: null, estado: 'PENDIENTE' },
+      });
+      const { service } = servicio();
+      await (service as any).sumarStockDestino({ insumoId: insumo.id, cantidad: 3, guia: 'G-1', usuarioId: ids.admin, destinoPulidorId: ids.paco });
+      const resuelta = await env.prisma.alertaStock.findUniqueOrThrow({ where: { id: alerta.id } });
+      expect(resuelta.estado).toBe('RESUELTO');
+      expect(resuelta.mensaje).toBe('Reabastecido mediante despacho guía G-1. Stock actual: 3');
+    });
+
+    it('si el stock sigue en el mínimo o por debajo, la alerta queda abierta', async () => {
+      const { alerta, agencia, sumar } = await recepcion(0);
+      await sumar({ destinoAgenciaId: agencia.id }, 2); // 0 + 2 = 2, y el mínimo de agencia es 2: sigue sin superarlo
+      const sigue = await env.prisma.alertaStock.findUniqueOrThrow({ where: { id: alerta.id } });
+      expect(sigue.estado).toBe('PENDIENTE');
+      expect(sigue.fechaAtencion).toBeNull();
+    });
   });
 });

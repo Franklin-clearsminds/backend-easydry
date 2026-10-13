@@ -1,23 +1,21 @@
 /**
- * Nombres antiguos de rol que aún pueden llegar (datos viejos o clientes desactualizados) y el rol oficial al que
- * equivalen. Toda comparación de roles en el backend pasa por `normalizarRol`, para no repetir listas de alias.
+ * No hay alias de rol: cada nombre de la tabla `roles` es un rol distinto. `normalizarRol` solo limpia el texto
+ * (espacios, mayúsculas, guion bajo) para poder comparar nombres sin depender de cómo llegaron escritos.
  */
-const ALIAS: Record<string, string> = {
-  GERENTE: 'APROBADOR',
-  GERENTE_REGIONAL: 'SUPERVISOR',
-  LIDER_AGENCIA: 'LIDER',
-  LIDER_OPERADOR: 'LIDER',
-  BACKUP: 'LIDER',
-  OPERADOR: 'LAVADOR',
-  PULIDOR_FIJO: 'PULIDOR',
-  PULIDOR_MOVIL: 'PULIDOR',
-  DISTRIBUIDOR: 'COORD_BODEGA',
-  ADMINISTRADOR: 'ADMIN',
-};
-
 export function normalizarRol(nombre: unknown): string {
-  const limpio = String(nombre ?? '').trim().toUpperCase().replace(/\s+/g, '_');
-  return ALIAS[limpio] ?? limpio;
+  return String(nombre ?? '').trim().toUpperCase().replace(/\s+/g, '_');
+}
+
+/**
+ * BACKUP es un rol propio (reemplazo temporal de un líder, con sus reglas de gestión de usuarios) que tiene las mismas
+ * capacidades que LIDER. Todo lo que hoy se pregunta como "¿es líder de agencia?" debe incluir a ambos: usa esta lista
+ * (o `esLiderDeAgencia`) en vez de repetir `['LIDER', 'BACKUP']` a mano.
+ */
+export const ROLES_LIDER_AGENCIA: readonly string[] = ['LIDER', 'BACKUP'];
+
+/** `rol` ya normalizado (`normalizarRol` / `rolDeUsuario`). */
+export function esLiderDeAgencia(rol: string): boolean {
+  return ROLES_LIDER_AGENCIA.includes(rol);
 }
 
 /** Nombre del rol de un usuario ya autenticado (`req.user`), normalizado. */

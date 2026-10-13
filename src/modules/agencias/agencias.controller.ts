@@ -1,3 +1,4 @@
+import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
 import {
   AgenciasOpcionesDto,
   BahiasOpcionesDto,
@@ -12,8 +13,7 @@ import {
   Body,
   HttpCode,
   HttpStatus,
-  ForbiddenException,
-} from '@nestjs/common';
+  ForbiddenException, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AgenciasService } from './agencias.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -67,6 +67,7 @@ import {
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Agencias, Bahías, Regiones y Marcas (100% POST)')
+@UseInterceptors(OcultarPreciosInterceptor)
 @Controller('agencias')
 @ApiBearerAuth()
 export class AgenciasController {
@@ -92,7 +93,7 @@ export class AgenciasController {
     return this.agenciasService.listRegionesOpciones(dto);
   }
 
-  @Permiso('regiones.gestionar')
+  @Permiso('agencias.regiones.crear')
   @Post('regiones/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva región operativa (SUPER_ADMIN, ADMIN)' })
@@ -100,7 +101,7 @@ export class AgenciasController {
     return this.agenciasService.createRegion(dto);
   }
 
-  @Permiso('regiones.gestionar')
+  @Permiso('agencias.regiones.editar')
   @Post('regiones/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar región existente (SUPER_ADMIN, ADMIN)' })
@@ -108,7 +109,7 @@ export class AgenciasController {
     return this.agenciasService.updateRegion(dto);
   }
 
-  @Permiso('regiones.gestionar')
+  @Permiso('agencias.regiones.estado')
   @Post('regiones/toggle-estado')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activar o desactivar región (1/0) (SUPER_ADMIN, ADMIN)' })
@@ -144,7 +145,7 @@ export class AgenciasController {
     return this.agenciasService.listClientesOpciones(dto);
   }
 
-  @Permiso('clientes.gestionar')
+  @Permiso('agencias.clientes.crear')
   @Post('clientes/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo cliente corporativo (SUPER_ADMIN, ADMIN)' })
@@ -152,7 +153,7 @@ export class AgenciasController {
     return this.agenciasService.createCliente(dto);
   }
 
-  @Permiso('clientes.gestionar')
+  @Permiso('agencias.clientes.editar')
   @Post('clientes/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar cliente corporativo existente (SUPER_ADMIN, ADMIN)' })
@@ -160,7 +161,7 @@ export class AgenciasController {
     return this.agenciasService.updateCliente(dto);
   }
 
-  @Permiso('clientes.gestionar')
+  @Permiso('agencias.clientes.estado')
   @Post('clientes/toggle-estado')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activar o desactivar cliente corporativo (0/1) (SUPER_ADMIN, ADMIN)' })
@@ -177,7 +178,7 @@ export class AgenciasController {
     return this.agenciasService.listClientes(dto);
   }
 
-  @Permiso('clientes.gestionar')
+  @Permiso('agencias.clientes.crear')
   @Post('marcas/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva marca (alias de clientes) (SUPER_ADMIN, ADMIN)' })
@@ -185,7 +186,7 @@ export class AgenciasController {
     return this.agenciasService.createCliente(dto);
   }
 
-  @Permiso('clientes.gestionar')
+  @Permiso('agencias.clientes.editar')
   @Post('marcas/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar marca (alias de clientes) (SUPER_ADMIN, ADMIN)' })
@@ -193,7 +194,7 @@ export class AgenciasController {
     return this.agenciasService.updateCliente(dto);
   }
 
-  @Permiso('clientes.gestionar')
+  @Permiso('agencias.clientes.estado')
   @Post('marcas/toggle-estado')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activar o desactivar marca (alias de clientes) (SUPER_ADMIN, ADMIN)' })
@@ -313,7 +314,7 @@ export class AgenciasController {
     return this.agenciasService.updateBahia(dto, user);
   }
 
-  @Permiso('bahias.editar')
+  @Permiso('agencias.bahias.estado', 'servicios.generales.bahias')
   @Post('bahias/toggle-activa')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Habilitar o inhabilitar bahía de lavado (ADMIN, SUPERVISOR, LIDER_AGENCIA)' })
@@ -321,7 +322,7 @@ export class AgenciasController {
     return this.agenciasService.toggleActivaBahia(dto, user);
   }
 
-  @Permiso('bahias.asignar')
+  @Permiso('mapa.bahia.asignar', 'agencias.bahias.asignar', 'operadores.bahia.asignar')
   @Post('bahias/asignar-operador')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Asignar operador dinámico a una bahía con registro en historial (SUPER_ADMIN, ADMIN)' })
@@ -352,7 +353,7 @@ export class AgenciasController {
     return this.agenciasService.listarOperadoresDeBahia(body.bahiaId, user);
   }
 
-  @Permiso('bahias.asignar')
+  @Permiso('mapa.bahia.quitar', 'agencias.bahias.asignar', 'operadores.bahia.quitar')
   @Post('bahias/desasignar-operador')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Desasignar un operador específico de una bahía (SUPER_ADMIN, ADMIN)' })
@@ -369,7 +370,7 @@ export class AgenciasController {
   // 5. ASIGNACIÓN DE USUARIOS A AGENCIAS Y REGIONES
   // =========================================================================
 
-  @Permiso('usuarios.gestionar')
+  @Permiso('usuarios.usuarios.editar')
   @Post('usuarios/asignar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Asignar o reasignar usuario a una agencia o región (SUPER_ADMIN, ADMIN)' })
@@ -393,7 +394,7 @@ export class AgenciasController {
     return this.agenciasService.listUsuariosOpciones(dto, user);
   }
 
-  @Permiso('usuarios.gestionar')
+  @Permiso('usuarios.usuarios.estado')
   @Post('usuarios/toggle-estado')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activar o desactivar usuario (1/0) (SUPER_ADMIN, ADMIN)' })
@@ -401,7 +402,7 @@ export class AgenciasController {
     return this.agenciasService.toggleEstadoUsuario(dto);
   }
 
-  @Permiso('usuarios.gestionar', 'backup.gestionar')
+  @Permiso('usuarios.usuarios.editar', 'usuarios.usuarios.password', 'backup.gestionar')
   @Post('usuarios/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar datos de usuario; Supervisor regional solo puede modificar Backups de su región' })
@@ -409,7 +410,7 @@ export class AgenciasController {
     return this.agenciasService.updateUsuario(dto, user);
   }
 
-  @Permiso('usuarios.gestionar', 'backup.gestionar')
+  @Permiso('usuarios.usuarios.crear', 'backup.gestionar')
   @Post('usuarios/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear usuarios; Supervisor regional solo puede crear Backups de su región' })
@@ -417,7 +418,7 @@ export class AgenciasController {
     return this.agenciasService.createUsuario(dto, user);
   }
 
-  @Permiso('usuarios.gestionar')
+  @Permiso('usuarios.usuarios.eliminar')
   @Post('usuarios/delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar usuario de la base de datos (SUPER_ADMIN, ADMIN)' })
@@ -429,7 +430,7 @@ export class AgenciasController {
   // 6. GESTIÓN OFICIAL DE OPERADORES DE BAHÍA (100% BASE DE DATOS)
   // =========================================================================
 
-  @Permiso('usuarios.ver')
+  @Permiso('usuarios.ver', 'operadores.ver')
   @Post('operadores/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar operadores registrados en base de datos' })
@@ -437,7 +438,7 @@ export class AgenciasController {
     return this.agenciasService.listOperadores(dto, user);
   }
 
-  @Permiso('usuarios.ver')
+  @Permiso('usuarios.ver', 'operadores.ver')
   @Post('operadores/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Operadores para un desplegable con buscador (mismo alcance por rol que list): { value, label, sublabel } paginado' })
@@ -445,7 +446,7 @@ export class AgenciasController {
     return this.agenciasService.listOperadoresOpciones(dto, user);
   }
 
-  @Permiso('operadores.gestionar')
+  @Permiso('operadores.registrar')
   @Post('operadores/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Registrar nuevo operador y asignarlo a agencia y bahía en BD (SUPER_ADMIN, ADMIN)' })
@@ -453,7 +454,7 @@ export class AgenciasController {
     return this.agenciasService.createOperador(dto, user?.id);
   }
 
-  @Permiso('operadores.gestionar')
+  @Permiso('operadores.editar', 'operadores.rol')
   @Post('operadores/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar operador y su asignación de bahía en BD (SUPER_ADMIN, ADMIN)' })

@@ -1,177 +1,209 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MaquinariaService } from './maquinaria.service.js';
 import type { Actor } from './maquinaria.permisos.js';
-
-const admin: Actor = { id: 'adm', rol: 'ADMIN', regionId: null, agenciaId: null };
-const coordCosta: Actor = { id: 'coord', rol: 'COORD_MANTENIMIENTO', regionId: 'costa', agenciaId: null };
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
 /**
- * Prisma simulado que reparte las filas en tres grupos según la condición recibida:
- * A (sin atender / vencidos), B (en proceso / pendientes) y C (cerradas / ejecutados).
+ * Integración con la base real (sin mocks): los listados de incidencias y mantenimientos, con su orden por grupos.
+ *
+ * Mundo de la prueba, todo creado aquí. Región R1 (cliente EasyDry), agencia A1, máquinas M1 y M2. Todo se consulta
+ * como administrador con `regionId: R1`, así la base real (88 incidencias, ~600 mantenimientos) no se mezcla.
+ *
+ *  Incidencias, de la más reciente a la más antigua dentro de cada grupo:
+ *    sin atender : a1, a2 (ABIERTO, sin técnico)
+ *    en proceso  : b1, b2 (técnico T1) y b3 (técnico T2)
+ *    cerradas    : c1 (RESUELTO) y c2 (CANCELADO)
+ *  Mantenimientos:
+ *    vencidos    : v1 (PENDIENTE, hace 10 días) y v2 (EN_PROCESO, hace 5)
+ *    pendientes  : p1 (dentro de 5 días)
+ *    ejecutados  : e1, e2, e3 (FINALIZADOS; e1 el más reciente)
  */
-function fingirGrupos(A: any[], B: any[], C: any[], marcas: { A: RegExp; B: RegExp; C: RegExp }) {
-  const grupoDe = (where: unknown): any[] => {
-    const w = JSON.stringify(where);
-    // La condición de las cerradas menciona los mismos estados que las otras: se comprueba primero.
-    if (marcas.C.test(w)) return C;
-    if (marcas.A.test(w)) return A;
-    if (marcas.B.test(w)) return B;
-    return [...A, ...B, ...C];
-  };
-  const count = vi.fn(async ({ where }: any) => grupoDe(where).length);
-  const findMany = vi.fn(async ({ where, skip, take }: any) => grupoDe(where).slice(skip, skip + take));
-  return { count, findMany };
-}
+const DIA = 24 * 60 * 60 * 1000;
+const hace = (dias: number) => new Date(Date.now() - dias * DIA);
 
-function servicioCon(modelo: 'incidenteTecnico' | 'mantenimientoMaquinaria', mocks: { count: any; findMany: any }) {
-  const prisma = {
-    [modelo]: { count: mocks.count, findMany: mocks.findMany },
-  };
-  const service = new MaquinariaService(prisma as never, {} as never, {} as never);
-  return service;
-}
+describe('MaquinariaService: listados paginados (base real)', () => {
+  let env: Entorno;
+  let service: MaquinariaService;
+  let r1: any;
+  let cliente: any;
+  let admin: Actor;
+  let coord: Actor;
+  const ids: Record<string, string> = {};
+  const inc: Record<string, string> = {};
+  const man: Record<string, string> = {};
 
-const inc = (id: string, estado: string, tecnicoAsignadoId: string | null) => ({ id, estado, tecnicoAsignadoId, gravedad: 'MEDIA', fechaReporte: new Date() });
+  const claves = (r: any, mapa: Record<string, string>) => r.data.map((x: any) => Object.entries(mapa).find(([, id]) => id === x.id)?.[0]);
 
-describe('listIncidentes (paginación en el servidor)', () => {
-  const A = [inc('a1', 'ABIERTO', null), inc('a2', 'ABIERTO', null)];
-  const B = [inc('b1', 'EN_PROCESO', 't1'), inc('b2', 'EN_PROCESO', 't1'), inc('b3', 'EN_PROCESO', 't2')];
-  const C = [inc('c1', 'RESUELTO', 't1'), inc('c2', 'CANCELADO', null)];
-  const marcas = { A: /"tecnicoAsignadoId":null(?!.*NOT)/s, B: /"EN_PROCESO"/, C: /"NOT"/ };
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new MaquinariaService(env.prisma as never, env.storage(), env.notificaciones());
 
-  it('no trae 2.000 filas: pide solo la ventana de la página, sin atender primero', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const r: any = await servicioCon('incidenteTecnico', m).listIncidentes({ page: 1, pageSize: 3 } as never, admin);
+    r1 = await env.region('R1');
+    cliente = await env.cliente('EASYDRY');
+    const a1 = await env.agencia('A1', { regionId: r1.id, clienteId: cliente.id });
+    const m1 = await env.maquinaria('M1', { agenciaId: a1.id });
+    const m2 = await env.maquinaria('M2', { agenciaId: a1.id });
 
-    expect(r.data.map((i: any) => i.id)).toEqual(['a1', 'a2', 'b1']);
-    expect(r.total).toBe(7);
-    expect(r).toMatchObject({ page: 1, pageSize: 3, totalPages: 3, hasNextPage: true });
-    // Nunca se pide más de la ventana
-    const pedidas = m.findMany.mock.calls.map(([a]: any) => a.take);
-    expect(pedidas.every((t: number) => t <= 3)).toBe(true);
-    expect(m.findMany.mock.calls[0][0].orderBy).toEqual([{ fechaReporte: 'desc' }, { id: 'desc' }]);
+    const crear = async (clave: string, rol: string, opts: Record<string, unknown> = {}) => {
+      ids[clave] = (await env.usuario(clave, rol, { name: clave, ...opts })).id;
+    };
+    await crear('admin', 'ADMIN');
+    await crear('coord', 'COORD_MANTENIMIENTO', { regionId: r1.id });
+    await crear('t1', 'TECNICO', { regionId: r1.id });
+    await crear('t2', 'TECNICO', { regionId: r1.id });
+    admin = { id: ids.admin, rol: 'ADMIN', regionId: null, agenciaId: null };
+    coord = { id: ids.coord, rol: 'COORD_MANTENIMIENTO', regionId: r1.id, agenciaId: null };
+
+    const incidente = async (clave: string, maquina: any, estado: string, tecnico: string | null, dias: number) => {
+      inc[clave] = (
+        await env.prisma.incidenteTecnico.create({
+          data: {
+            maquinariaId: maquina.id,
+            reportadoPorId: ids.admin,
+            titulo: `${env.marca} hidro ${clave}`,
+            descripcion: 'prueba',
+            estado,
+            tecnicoAsignadoId: tecnico ? ids[tecnico] : null,
+            fechaReporte: hace(dias),
+          },
+        })
+      ).id;
+    };
+    await incidente('a1', m2, 'ABIERTO', null, 1);
+    await incidente('a2', m1, 'ABIERTO', null, 2);
+    await incidente('b1', m1, 'EN_PROCESO', 't1', 3);
+    await incidente('b2', m1, 'EN_PROCESO', 't1', 4);
+    await incidente('b3', m1, 'EN_PROCESO', 't2', 5);
+    await incidente('c1', m1, 'RESUELTO', 't1', 6);
+    await incidente('c2', m1, 'CANCELADO', null, 7);
+
+    const mantenimiento = async (clave: string, estado: string, programada: Date, ejecucion: Date | null = null) => {
+      man[clave] = (
+        await env.prisma.mantenimientoMaquinaria.create({
+          data: { maquinariaId: m1.id, tecnicoId: ids.t1, estado, fechaProgramada: programada, fechaEjecucion: ejecucion, fechaMantenimiento: ejecucion ?? programada },
+        })
+      ).id;
+    };
+    await mantenimiento('v1', 'PENDIENTE', hace(10));
+    await mantenimiento('v2', 'EN_PROCESO', hace(5));
+    await mantenimiento('p1', 'PENDIENTE', new Date(Date.now() + 5 * DIA));
+    await mantenimiento('e1', 'FINALIZADO', hace(20), hace(1));
+    await mantenimiento('e2', 'FINALIZADO', hace(21), hace(2));
+    await mantenimiento('e3', 'FINALIZADO', hace(22), hace(3));
   });
 
-  it('las páginas siguientes continúan sin repetir ni saltar filas', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const service = servicioCon('incidenteTecnico', m);
-    const todas: string[] = [];
-    for (let page = 1; page <= 3; page++) {
-      const r: any = await service.listIncidentes({ page, pageSize: 3 } as never, admin);
-      todas.push(...r.data.map((i: any) => i.id));
-    }
-    expect(todas).toEqual(['a1', 'a2', 'b1', 'b2', 'b3', 'c1', 'c2']);
+  afterAll(async () => {
+    await env.cerrar();
   });
 
-  it('marca como no atendida solo lo abierto y sin técnico', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const r: any = await servicioCon('incidenteTecnico', m).listIncidentes({ pageSize: 10 } as never, admin);
-    const banderas = Object.fromEntries(r.data.map((i: any) => [i.id, i.noAtendida]));
-    expect(banderas).toMatchObject({ a1: true, a2: true, b1: false, c1: false, c2: false });
+  describe('listIncidentes (paginación en el servidor)', () => {
+    const lista = (dto: Record<string, unknown>, actor: Actor = admin) =>
+      service.listIncidentes({ regionId: r1.id, ...dto } as never, actor) as Promise<any>;
+
+    it('pagina por grupos: primero lo sin atender, luego lo que está en proceso, luego lo cerrado', async () => {
+      const r = await lista({ page: 1, pageSize: 3 });
+      expect(claves(r, inc)).toEqual(['a1', 'a2', 'b1']);
+      expect(r.total).toBe(7);
+      expect(r).toMatchObject({ page: 1, pageSize: 3, totalPages: 3, hasNextPage: true });
+    });
+
+    it('las páginas siguientes continúan sin repetir ni saltar filas', async () => {
+      const todas: string[] = [];
+      for (let page = 1; page <= 3; page++) todas.push(...claves(await lista({ page, pageSize: 3 }), inc));
+      expect(todas).toEqual(['a1', 'a2', 'b1', 'b2', 'b3', 'c1', 'c2']);
+    });
+
+    it('marca como no atendida solo lo abierto y sin técnico', async () => {
+      const r = await lista({ pageSize: 10 });
+      const banderas = Object.fromEntries(r.data.map((i: any) => [Object.entries(inc).find(([, id]) => id === i.id)![0], i.noAtendida]));
+      expect(banderas).toMatchObject({ a1: true, a2: true, b1: false, c1: false, c2: false });
+    });
+
+    it('con una columna elegida ordena por ella (whitelist)', async () => {
+      const r = await lista({ sortField: 'maquina', sortOrder: 'asc', pageSize: 10 });
+      const codigos = r.data.map((i: any) => i.maquinaria.codigo);
+      expect(codigos).toEqual([...codigos].sort()); // M1 antes que M2
+      expect(r.data[r.data.length - 1].id).toBe(inc.a1); // la única de M2 queda al final
+    });
+
+    it('un campo de orden no permitido se ignora y se usan los grupos', async () => {
+      const r = await lista({ sortField: 'passwordHash', pageSize: 10 });
+      expect(claves(r, inc)).toEqual(['a1', 'a2', 'b1', 'b2', 'b3', 'c1', 'c2']);
+    });
+
+    it('recorta a 100 y un cliente sin tamaño recibe hasta 100 (antes 200)', async () => {
+      expect((await lista({})).pageSize).toBe(100);
+      expect((await lista({ pageSize: 200 })).pageSize).toBe(100);
+    });
+
+    it('busca por texto, cliente, técnico y fechas en el servidor y respeta el alcance por rol', async () => {
+      expect(claves(await lista({ search: `${env.marca} hidro b2` }), inc)).toEqual(['b2']); // una letra suelta no cuenta, dos sí
+      expect(claves(await lista({ clienteId: cliente.id }), inc)).toHaveLength(7);
+      expect(claves(await lista({ clienteId: '00000000-0000-4000-8000-000000000000' }), inc)).toEqual([]);
+      expect(claves(await lista({ tecnicoId: ids.t1 }), inc).sort()).toEqual(['b1', 'b2', 'c1']);
+      // Del día -5.5 al día -2.5: b1, b2 y b3. Con un "hasta" de solo día, ese día entra completo.
+      const r = await lista({ fechaDesde: hace(5.5).toISOString(), fechaHasta: hace(2.5).toISOString() });
+      expect(claves(r, inc).sort()).toEqual(['b1', 'b2', 'b3']);
+      // El coordinador de la región ve lo mismo (todo está en su región); el de otra región, nada.
+      expect(claves(await lista({}, coord), inc)).toHaveLength(7);
+      const ajeno: Actor = { id: ids.coord, rol: 'COORD_MANTENIMIENTO', regionId: 'region-ajena', agenciaId: null };
+      expect(claves(await lista({}, ajeno), inc)).toEqual([]);
+    });
+
+    it('el resumen cuenta cada grupo con los filtros pero sin el de estado', async () => {
+      const r = await lista({ estado: 'RESUELTO', incluirResumen: true, pageSize: 10 });
+      expect(claves(r, inc)).toEqual(['c1']); // la página sí respeta el estado…
+      expect(r.resumen).toEqual({ noAtendidas: 2, enProceso: 3, cerradas: 2, total: 7 }); // …el resumen no
+    });
+
+    it('entrega el formato estándar con el alias data', async () => {
+      const r = await lista({ pageSize: 10 });
+      expect(r.success).toBe(true);
+      expect(r.items).toEqual(r.data);
+    });
   });
 
-  it('con una columna elegida ordena por ella (whitelist) en una sola consulta', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    await servicioCon('incidenteTecnico', m).listIncidentes({ sortField: 'maquina', sortOrder: 'asc', pageSize: 5 } as never, admin);
-    expect(m.findMany).toHaveBeenCalledTimes(1);
-    expect(m.findMany.mock.calls[0][0].orderBy).toEqual([{ maquinaria: { codigo: 'asc' } }, { id: 'asc' }]);
-  });
+  describe('listMantenimientos (paginación en el servidor)', () => {
+    const lista = (dto: Record<string, unknown>, actor: Actor = admin) =>
+      service.listMantenimientos({ regionId: r1.id, ...dto } as never, actor) as Promise<any>;
 
-  it('un campo de orden no permitido se ignora y se usan los grupos', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    await servicioCon('incidenteTecnico', m).listIncidentes({ sortField: 'passwordHash', pageSize: 10 } as never, admin);
-    expect(m.findMany.mock.calls.length).toBeGreaterThan(1);
-    expect(JSON.stringify(m.findMany.mock.calls.map(([a]: any) => a.orderBy))).not.toContain('passwordHash');
-  });
+    it('vencidos primero, luego pendientes y luego ejecutados, paginados sin repetir', async () => {
+      const todos: string[] = [];
+      for (let page = 1; page <= 3; page++) {
+        const r = await lista({ page, pageSize: 2 });
+        todos.push(...claves(r, man));
+        expect(r.total).toBe(6);
+      }
+      // Los vencidos más recientes primero; los ejecutados, por fecha de ejecución (el último ejecutado primero).
+      expect(todos).toEqual(['v2', 'v1', 'p1', 'e1', 'e2', 'e3']);
+    });
 
-  it('recorta a 100 y un cliente sin tamaño recibe hasta 100 (antes 200)', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const service = servicioCon('incidenteTecnico', m);
-    const r1: any = await service.listIncidentes({} as never, admin);
-    expect(r1.pageSize).toBe(100);
-    const r2: any = await service.listIncidentes({ pageSize: 200 } as never, admin);
-    expect(r2.pageSize).toBe(100);
-  });
+    it('marca como no atendido solo lo pendiente cuya fecha ya pasó', async () => {
+      const r = await lista({ pageSize: 10 });
+      const banderas = Object.fromEntries(r.data.map((m: any) => [Object.entries(man).find(([, id]) => id === m.id)![0], m.noAtendido]));
+      expect(banderas).toEqual({ v1: true, v2: true, p1: false, e1: false, e2: false, e3: false });
+    });
 
-  it('busca por texto, región, cliente y fechas en el servidor y respeta el alcance por rol', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    await servicioCon('incidenteTecnico', m).listIncidentes({
-      search: 'hidro', regionId: 'costa', clienteId: 'cli1', tecnicoId: 't1', fechaDesde: '2026-09-01', fechaHasta: '2026-09-30',
-    } as never, coordCosta);
-    const donde = JSON.stringify(m.findMany.mock.calls[0][0].where);
-    expect(donde).toContain('"contains":"hidro"');
-    expect(donde).toContain('"regionId":"costa"');
-    expect(donde).toContain('"clienteId":"cli1"');
-    expect(donde).toContain('"tecnicoAsignadoId":"t1"');
-    expect(donde).toContain('2026-09-30T23:59:59.999Z');
-  });
+    it('el resumen cuenta vencidos, pendientes y ejecutados', async () => {
+      const r = await lista({ incluirResumen: true, pageSize: 10 });
+      expect(r.resumen).toEqual({ vencidos: 2, pendientes: 1, ejecutados: 3, total: 6 });
+    });
 
-  it('el resumen cuenta cada grupo con los filtros pero sin el de estado', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const r: any = await servicioCon('incidenteTecnico', m).listIncidentes(
-      { estado: 'RESUELTO', incluirResumen: true, pageSize: 10 } as never, admin,
-    );
-    expect(r.resumen).toEqual({ noAtendidas: 2, enProceso: 3, cerradas: 2, total: 7 });
-    const filtrosDelResumen = m.count.mock.calls.slice(-3).map(([a]: any) => JSON.stringify(a.where));
-    expect(filtrosDelResumen.some((w: string) => w.includes('"estado":"RESUELTO"'))).toBe(false);
-  });
+    it('solo no atendidos agrega la condición de vencido a todas las consultas', async () => {
+      const r = await lista({ soloNoAtendidos: true, pageSize: 10, incluirResumen: true });
+      expect(claves(r, man).sort()).toEqual(['v1', 'v2']);
+      expect(r.total).toBe(2);
+    });
 
-  it('entrega el formato estándar con el alias data', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const r: any = await servicioCon('incidenteTecnico', m).listIncidentes({ pageSize: 10 } as never, admin);
-    expect(r.success).toBe(true);
-    expect(r.items).toEqual(r.data);
-  });
-});
-
-describe('listMantenimientos (paginación en el servidor)', () => {
-  const mant = (id: string, estado: string) => ({ id, estado, fechaProgramada: new Date('2026-09-01'), fechaMantenimiento: new Date('2026-09-01') });
-  const A = [mant('v1', 'PENDIENTE'), mant('v2', 'EN_PROCESO')];
-  const B = [mant('p1', 'PENDIENTE')];
-  const C = [mant('e1', 'FINALIZADO'), mant('e2', 'FINALIZADO'), mant('e3', 'FINALIZADO')];
-  const marcas = { A: /"lt":/, B: /"gte":/, C: /"NOT"/ };
-
-  it('vencidos primero, luego pendientes y luego ejecutados, paginados sin repetir', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const service = servicioCon('mantenimientoMaquinaria', m);
-    const todos: string[] = [];
-    for (let page = 1; page <= 3; page++) {
-      const r: any = await service.listMantenimientos({ page, pageSize: 2 } as never, admin);
-      todos.push(...r.data.map((x: any) => x.id));
-      expect(r.total).toBe(6);
-    }
-    expect(todos).toEqual(['v1', 'v2', 'p1', 'e1', 'e2', 'e3']);
-  });
-
-  it('los sin fecha van al final de su grupo y los ejecutados ordenan por ejecución', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    await servicioCon('mantenimientoMaquinaria', m).listMantenimientos({ pageSize: 10 } as never, admin);
-    const ordenes = m.findMany.mock.calls.map(([a]: any) => JSON.stringify(a.orderBy));
-    expect(ordenes[0]).toContain('"nulls":"last"');
-    expect(ordenes.some((o: string) => o.includes('fechaEjecucion'))).toBe(true);
-  });
-
-  it('el resumen cuenta vencidos, pendientes y ejecutados', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const r: any = await servicioCon('mantenimientoMaquinaria', m).listMantenimientos({ incluirResumen: true, pageSize: 10 } as never, admin);
-    expect(r.resumen).toEqual({ vencidos: 2, pendientes: 1, ejecutados: 3, total: 6 });
-  });
-
-  it('solo no atendidos agrega la condición de vencido a todas las consultas', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    await servicioCon('mantenimientoMaquinaria', m).listMantenimientos({ soloNoAtendidos: true, pageSize: 10 } as never, admin);
-    const condiciones = [...m.count.mock.calls, ...m.findMany.mock.calls].map(([a]: any) => JSON.stringify(a.where));
-    expect(condiciones.length).toBeGreaterThan(0);
-    expect(condiciones.every((w: string) => w.includes('"lt":'))).toBe(true);
-  });
-
-  it('ordena por una columna permitida y rechaza las demás', async () => {
-    const m = fingirGrupos(A, B, C, marcas);
-    const service = servicioCon('mantenimientoMaquinaria', m);
-    await service.listMantenimientos({ sortField: 'tecnico', sortOrder: 'asc', pageSize: 5 } as never, admin);
-    expect(m.findMany.mock.calls[0][0].orderBy).toEqual([{ tecnico: { name: 'asc' } }, { id: 'asc' }]);
-    m.findMany.mockClear();
-    await service.listMantenimientos({ sortField: 'costoTotal', pageSize: 5 } as never, admin);
-    expect(JSON.stringify(m.findMany.mock.calls.map(([a]: any) => a.orderBy))).not.toContain('costoTotal');
+    it('ordena por una columna permitida y rechaza las demás', async () => {
+      const tecnicoNuevo = await env.usuario('t-zeta', 'TECNICO', { regionId: r1.id, name: 'zeta' });
+      const unico = await env.prisma.mantenimientoMaquinaria.create({
+        data: { maquinariaId: (await env.prisma.maquinaria.findFirstOrThrow({ where: { codigo: `${env.marca}-M-M1` } })).id, tecnicoId: tecnicoNuevo.id, estado: 'PENDIENTE', fechaProgramada: new Date(Date.now() + 9 * DIA) },
+      });
+      const asc = await lista({ sortField: 'tecnico', sortOrder: 'asc', pageSize: 10 });
+      expect(asc.data[asc.data.length - 1].id).toBe(unico.id); // técnico "zeta" va al final en ascendente
+      const hostil = await lista({ sortField: 'costoTotal', pageSize: 10 });
+      expect(hostil.total).toBe(7); // no falla: se ignora la columna y quedan los grupos
+    });
   });
 });

@@ -1,54 +1,75 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service.js';
-import { ROLES_BASE } from '../../common/permisos/roles-base.js';
+import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
-function armar(marcadas: string[]) {
-  const prisma: any = {
-    moduloSistema: {
-      findMany: vi.fn().mockImplementation(async (a: any) =>
-        a.where.codigo.in.filter((c: string) => marcadas.includes(c)).map((codigo: string) => ({ codigo }))),
-    },
+/**
+ * Integración con la base real (sin mocks): qué pantallas ve cada rol en la app móvil.
+ * Las pantallas "marcadas para la app" se leen de la tabla `modulos_sistema` tal como la dejó el seed.
+ * `infoApp` no usa el almacenamiento S3, por eso el cuarto argumento del constructor no se instancia.
+ */
+describe('acceso y pantallas de la app (infoApp, base real)', () => {
+  let env: Entorno;
+  let service: AuthService;
+  let marcadas: string[]; // módulos activos y disponibles en la app
+  let noMarcadas: string[]; // módulos de la web que NO están en la app
+  const rolDeBase = async (namerol: string) => {
+    const r = await env.prisma.role.findUniqueOrThrow({ where: { namerol } });
+    return { namerol: r.namerol, capacidades: r.capacidades };
   };
-  return { prisma, service: new AuthService(prisma, {} as never, {} as never, {} as never) };
-}
-const rol = (namerol: string) => {
-  const r = ROLES_BASE.find((x) => x.namerol === namerol)!;
-  return { namerol, capacidades: r.capacidades };
-};
-const MARCADAS = ['dashboard', 'notificaciones', 'servicios', 'aprobaciones', 'operadores', 'maquinaria', 'taller-tecnico', 'inventario', 'envios', 'perfil'];
+  const infoApp = (rol: any) => (service as any).infoApp(rol);
 
-describe('acceso y pantallas de la app (infoApp)', () => {
-  it('el líder entra a la app y ve solo sus pantallas marcadas para la app', async () => {
-    const { service } = armar(MARCADAS);
-    const info = await (service as any).infoApp(rol('LIDER'));
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new AuthService(env.prisma as never, new JwtService({}), new ConfigService(), undefined as never);
+    const modulos = await env.prisma.moduloSistema.findMany({ where: { estado: 1 }, select: { codigo: true, disponibleEnApp: true } });
+    marcadas = modulos.filter((m) => m.disponibleEnApp).map((m) => m.codigo);
+    noMarcadas = modulos.filter((m) => !m.disponibleEnApp).map((m) => m.codigo);
+  });
+
+  afterAll(async () => {
+    await env.cerrar();
+  });
+
+  it('la base tiene pantallas marcadas y no marcadas para la app (el seed está cargado)', () => {
+    expect(marcadas.length).toBeGreaterThan(0);
+    expect(noMarcadas.length).toBeGreaterThan(0);
+  });
+
+  it('el líder entra a la app y ve solo pantallas de su rol que estén marcadas para la app', async () => {
+    const lider = await rolDeBase('LIDER');
+    const info = await infoApp(lider);
     expect(info.puedeUsarApp).toBe(true);
-    expect(info.pantallasApp).toEqual(expect.arrayContaining(['servicios', 'inventario', 'operadores', 'perfil']));
-    expect(info.pantallasApp).not.toContain('mapa-operativo');
+    expect(info.pantallasApp.length).toBeGreaterThan(0);
+    // Cada pantalla está marcada para la app Y su rol tiene permiso para ella.
+    for (const p of info.pantallasApp) {
+      expect(marcadas).toContain(p);
+      expect(modulosDeRol(lider)).toContain(p);
+    }
+    // Y no falta ninguna que cumpla las dos condiciones.
+    expect([...info.pantallasApp].sort()).toEqual(modulosDeRol(lider).filter((m) => marcadas.includes(m)).sort());
   });
 
   it('una pantalla de la web que no está marcada para la app nunca aparece en el celular', async () => {
-    const { service } = armar(['servicios']);
-    const info = await (service as any).infoApp(rol('LIDER'));
-    expect(info.pantallasApp).toEqual(['servicios']);
+    const info = await infoApp({ namerol: 'SUPER_ADMIN', capacidades: [] });
+    for (const p of noMarcadas) expect(info.pantallasApp).not.toContain(p);
   });
 
   it('sin el permiso sync.usar no se entra a la app, aunque tenga pantallas', async () => {
-    const { service } = armar(MARCADAS);
-    const info = await (service as any).infoApp({ namerol: 'REPORTEROCUSTOM', capacidades: ['servicios.ver', 'inventario.ver'] });
+    const info = await infoApp({ namerol: 'REPORTEROCUSTOM', capacidades: ['servicios.ver', 'inventario.ver'] });
     expect(info).toEqual({ puedeUsarApp: false, pantallasApp: [] });
   });
 
-  it('el lavador (sin permisos) no entra y no consulta la base', async () => {
-    const { prisma, service } = armar(MARCADAS);
-    const info = await (service as any).infoApp(rol('LAVADOR'));
+  it('el lavador (sin permisos) no entra', async () => {
+    const info = await infoApp(await rolDeBase('LAVADOR'));
     expect(info).toEqual({ puedeUsarApp: false, pantallasApp: [] });
-    expect(prisma.moduloSistema.findMany).not.toHaveBeenCalled();
   });
 
   it('el super admin entra y ve todas las pantallas marcadas', async () => {
-    const { service } = armar(MARCADAS);
-    const info = await (service as any).infoApp({ namerol: 'SUPER_ADMIN', capacidades: [] });
+    const info = await infoApp({ namerol: 'SUPER_ADMIN', capacidades: [] });
     expect(info.puedeUsarApp).toBe(true);
-    expect(info.pantallasApp.sort()).toEqual([...MARCADAS].sort());
+    expect([...info.pantallasApp].sort()).toEqual([...marcadas].filter((m) => modulosDeRol({ namerol: 'SUPER_ADMIN' }).includes(m)).sort());
   });
 });

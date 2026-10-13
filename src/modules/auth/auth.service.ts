@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { BadRequestException, HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
 import { secretoObligatorio } from '../../common/config/secretos.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -8,6 +9,14 @@ import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { StorageService } from '../storage/storage.service.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
+import { JWT_ACCESS_DEFAULT, JWT_REFRESH_DEFAULT, JWT_SIGN_OPTIONS, JWT_VERIFY_OPTIONS } from './jwt.config.js';
+
+/** Hash descartable (mismo costo que los reales) para comparar cuando el correo no existe. */
+const HASH_SIN_USUARIO = bcrypt.hashSync(randomUUID(), 10);
+const MAX_INTENTOS_FALLIDOS = 5;
+const VENTANA_INTENTOS_MS = 15 * 60 * 1000;
+/** Dos refresh simultáneos con el mismo token (p. ej. app móvil con varias peticiones) no son un robo: se tolera esta ventana. */
+const GRACIA_REUSO_MS = 30 * 1000;
 
 @Injectable()
 export class AuthService {
@@ -34,12 +43,12 @@ export class AuthService {
     return { puedeUsarApp, pantallasApp: pantallas.filter((p) => marcadas.has(p)) };
   }
 
-  private generateTokens(user: { id: string; email: string; roleId: string }) {
+  private async generateTokens(user: { id: string; email: string; roleId: string }, familyId: string = randomUUID()) {
     const accessSecret = secretoObligatorio(this.configService.get<string>('JWT_SECRET'), 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync');
-    const accessExpiresIn = this.configService.get<string>('JWT_ACCESS_EXPIRATION') || '1h';
+    const accessExpiresIn = this.configService.get<string>('JWT_ACCESS_EXPIRATION') || JWT_ACCESS_DEFAULT;
 
     const refreshSecret = secretoObligatorio(this.configService.get<string>('JWT_REFRESH_SECRET'), 'JWT_REFRESH_SECRET', 'EasyDryRefreshSecretKey2026*OfflineSync');
-    const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_EXPIRATION') || '15d';
+    const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_EXPIRATION') || JWT_REFRESH_DEFAULT;
 
     const accessPayload = {
       sub: user.id,
@@ -56,23 +65,94 @@ export class AuthService {
     };
 
     const accessToken = this.jwtService.sign(accessPayload, {
+      ...JWT_SIGN_OPTIONS,
       secret: accessSecret,
       expiresIn: accessExpiresIn as any,
     });
 
+    const sesionId = randomUUID();
     const refreshToken = this.jwtService.sign(refreshPayload, {
+      ...JWT_SIGN_OPTIONS,
       secret: refreshSecret,
       expiresIn: refreshExpiresIn as any,
+      jwtid: sesionId,
+    });
+
+    const { exp } = this.jwtService.decode(refreshToken) as { exp: number };
+    await this.prisma.refreshSession.create({
+      data: { id: sesionId, userId: user.id, familyId, expiresAt: new Date(exp * 1000) },
     });
 
     return { accessToken, refreshToken };
   }
 
+  /**
+   * Intentos fallidos por correo, guardados en la base: frenan la fuerza bruta aunque el atacante cambie de IP o de dispositivo,
+   * y el contador sobrevive a reinicios y se comparte entre instancias del servidor.
+   */
+  private async verificarBloqueo(email: string): Promise<void> {
+    const registro = await this.prisma.loginIntento.findUnique({ where: { email } });
+    if (!registro || Date.now() - registro.desde.getTime() > VENTANA_INTENTOS_MS) return;
+    if (registro.intentos >= MAX_INTENTOS_FALLIDOS) {
+      throw new HttpException(
+        'Demasiados intentos fallidos. Espere unos minutos antes de volver a intentarlo.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  private async registrarFallo(email: string): Promise<void> {
+    const ahora = new Date();
+    const limite = new Date(ahora.getTime() - VENTANA_INTENTOS_MS);
+    const sumado = await this.prisma.loginIntento.updateMany({
+      where: { email, desde: { gte: limite } },
+      data: { intentos: { increment: 1 } },
+    });
+    if (sumado.count === 0) {
+      await this.prisma.loginIntento.upsert({
+        where: { email },
+        create: { email, intentos: 1, desde: ahora },
+        update: { intentos: 1, desde: ahora },
+      });
+    }
+  }
+
+  /** Cierra todas las sesiones del usuario (cambio de contraseña) e invalida también los access tokens ya emitidos. */
+  async revocarSesionesDeUsuario(userId: string): Promise<void> {
+    const ahora = new Date();
+    await this.prisma.$transaction([
+      this.prisma.refreshSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: ahora } }),
+      this.prisma.user.update({ where: { id: userId }, data: { sesionesRevocadasAt: ahora } }),
+    ]);
+  }
+
+  /** Cierra la sesión (y toda su cadena de rotaciones) a la que pertenece este refresh token. Nunca falla: un token inválido ya no sirve. */
+  async logout(token?: string): Promise<{ success: true }> {
+    if (!token) return { success: true };
+    try {
+      const refreshSecret = secretoObligatorio(this.configService.get<string>('JWT_REFRESH_SECRET'), 'JWT_REFRESH_SECRET', 'EasyDryRefreshSecretKey2026*OfflineSync');
+      const payload: any = this.jwtService.verify(token, { ...JWT_VERIFY_OPTIONS, secret: refreshSecret, ignoreExpiration: true });
+      if (payload?.type !== 'refresh' || !payload.jti) return { success: true };
+      const sesion = await this.prisma.refreshSession.findUnique({ where: { id: payload.jti } });
+      if (sesion && sesion.userId === payload.sub) {
+        await this.prisma.refreshSession.updateMany({
+          where: { familyId: sesion.familyId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+    } catch {
+      // token inválido: no hay sesión que cerrar
+    }
+    return { success: true };
+  }
+
   async login(loginDto: LoginDto) {
-    const { email, password } = loginDto;
+    const { password } = loginDto;
+    const email = loginDto.email.toLowerCase().trim();
+    await this.verificarBloqueo(email);
 
     const user = await this.prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() },
+      where: { email },
       include: {
         role: {
           select: { id: true, namerol: true, permisos: true, acciones: true, capacidades: true, ambito: true, estado: true },
@@ -89,9 +169,13 @@ export class AuthService {
       },
     });
 
-    if (!user) {
+    // Siempre se calcula un bcrypt, exista o no el correo: así el tiempo de respuesta no revela qué cuentas existen.
+    const isMatch = await bcrypt.compare(password, user?.passwordHash ?? HASH_SIN_USUARIO);
+    if (!user || !isMatch) {
+      await this.registrarFallo(email);
       throw new UnauthorizedException('Credenciales inválidas');
     }
+    await this.prisma.loginIntento.deleteMany({ where: { email } });
 
     if (user.estado !== 1) {
       throw new UnauthorizedException('Usuario deshabilitado o inactivo. Contacte a su administrador.');
@@ -101,12 +185,11 @@ export class AuthService {
       throw new UnauthorizedException('El rol asignado al usuario se encuentra deshabilitado.');
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    const { accessToken, refreshToken } = this.generateTokens(user);
+    void Promise.all([
+      this.prisma.refreshSession.deleteMany({ where: { expiresAt: { lt: new Date() } } }),
+      this.prisma.loginIntento.deleteMany({ where: { desde: { lt: new Date(Date.now() - VENTANA_INTENTOS_MS) } } }),
+    ]).catch(() => undefined);
+    const { accessToken, refreshToken } = await this.generateTokens(user);
 
     const bahiaAsignada = await this.prisma.bahiaOperador.findFirst({
       where: { operadorId: user.id, activo: true },
@@ -171,13 +254,28 @@ export class AuthService {
 
     let payload: any;
     try {
-      payload = this.jwtService.verify(token, { secret: refreshSecret });
+      payload = this.jwtService.verify(token, { ...JWT_VERIFY_OPTIONS, secret: refreshSecret });
     } catch (err: any) {
       throw new UnauthorizedException('Refresh token inválido o expirado');
     }
 
-    if (!payload || payload.type !== 'refresh') {
+    if (!payload || payload.type !== 'refresh' || !payload.jti) {
       throw new UnauthorizedException('Tipo de token inválido para refresco');
+    }
+
+    const sesion = await this.prisma.refreshSession.findUnique({ where: { id: payload.jti } });
+    if (!sesion || sesion.userId !== payload.sub) {
+      throw new UnauthorizedException('Sesión no válida');
+    }
+    if (sesion.revokedAt) {
+      // Un token ya rotado que vuelve a aparecer fuera de la ventana de gracia: se asume robo y se cierra toda la cadena.
+      if (Date.now() - sesion.revokedAt.getTime() > GRACIA_REUSO_MS) {
+        await this.prisma.refreshSession.updateMany({
+          where: { familyId: sesion.familyId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+      throw new UnauthorizedException('Sesión no válida');
     }
 
     const user = await this.prisma.user.findUnique({
@@ -206,7 +304,15 @@ export class AuthService {
       throw new UnauthorizedException('El rol asignado al usuario se encuentra deshabilitado.');
     }
 
-    const tokens = this.generateTokens(user);
+    // Rotación: el token usado deja de valer. Si dos peticiones llegan a la vez, solo una gana la revocación.
+    const revocada = await this.prisma.refreshSession.updateMany({
+      where: { id: sesion.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (revocada.count === 0) {
+      throw new UnauthorizedException('Sesión no válida');
+    }
+    const tokens = await this.generateTokens(user, sesion.familyId);
 
     const bahiaAsignada = await this.prisma.bahiaOperador.findFirst({
       where: { operadorId: user.id, activo: true },

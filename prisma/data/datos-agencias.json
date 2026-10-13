@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-28T18:13:56.837Z",
+  "generatedAt": "2026-10-02T18:16:23.517Z",
   "reglas": {
     "marcasComoClientes": true,
     "pulidorEnLavados": "solo_pulidor_fijo",
@@ -101,12 +101,6 @@
     {
       "nombre": "GUERRERO PINARGOTE EDISON ANDRES",
       "cedula": "1309322590",
-      "ciudad": "QUITO",
-      "region": "Sierra"
-    },
-    {
-      "nombre": "LEMA IMACAÑA JULIO CESAR",
-      "cedula": "1723785547",
       "ciudad": "QUITO",
       "region": "Sierra"
     },
@@ -214,7 +208,6 @@
     "1758628141",
     "1752691442",
     "1309322590",
-    "1723785547",
     "0952114031",
     "1726025867",
     "0150938876",
@@ -676,7 +669,7 @@
           "cedula": "1723785547",
           "nota": "",
           "row": 46,
-          "esPulidor": true
+          "esPulidor": false
         },
         {
           "nombre": "MONTALUIZA GUZMAN PABLO SEGUNDO",

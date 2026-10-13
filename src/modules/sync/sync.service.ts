@@ -20,7 +20,7 @@ import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
 
 import { tienePermiso } from '../../common/permisos/capacidades.js';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { esLiderDeAgencia, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 import {
   resolverAlcance,
@@ -265,6 +265,9 @@ export class SyncService {
               throw new BadRequestException(
                 'No se pudo resolver el servicio en el catálogo offline.',
               );
+            }
+            if (esLiderDeAgencia(rolDeUsuario(currentUser)) && catalogo.categoria !== 'GENERAL') {
+              throw new BadRequestException('Tu rol solo puede registrar servicios generales.');
             }
 
             const placa = String(

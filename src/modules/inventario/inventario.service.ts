@@ -123,6 +123,7 @@ const COLUMNAS_INSUMO_RESUMEN: ColumnasFila<any> = {
   minimo: (i) => i.stockMinimo,
   optimo: (i) => i.stockOptimo,
   deficit: (i) => i.deficit,
+  transito: (i) => i.enTransitoUnidades ?? 0,
   estado: (i) => GRAVEDAD_ESTADO_INSUMO[normalizarTexto(i.estado)] ?? 9,
 };
 
@@ -236,7 +237,7 @@ function fechaFiltro(valor: unknown, finDeDia = false): Date | null {
 import { randomUUID } from 'crypto';
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
-import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { esLiderDeAgencia, normalizarRol, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 @Injectable()
 export class InventarioService {
   private readonly logger = new Logger(InventarioService.name);
@@ -258,7 +259,7 @@ export class InventarioService {
     }
     if (params.tipo === 'DESPACHO_AGENCIA' && params.destinoAgenciaId) {
       const lideres = await this.prisma.user.findMany({
-        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
+        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } },
         select: { id: true },
       });
       return lideres.map((u) => u.id);
@@ -431,13 +432,13 @@ export class InventarioService {
    *  - el resto: el stock físico de UNA bodega (la del asistente, la pedida o la Central).
    */
   private async alcanceInsumos(dto: ListInsumosDto, user?: any) {
-    const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'APROBADOR', 'LAVADOR'];
-    const userRole = (
+    const ROLES_SCOPED = [...ROLES_LIDER_AGENCIA, 'APROBADOR', 'LAVADOR'];
+    const userRole = normalizarRol(
       user?.roleDetails?.namerol ||
       user?.role?.namerol ||
       (typeof user?.role === 'string' ? user.role : '') ||
-      ''
-    ).toString().toUpperCase();
+      '',
+    );
     const isScopedRole = ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r));
     // Igual que el asistente de bodega con su `bodegaId`: un rol de sede nunca amplía su alcance con
     // un `agenciaId` que mande el cliente — siempre es la suya, tomada del token.
@@ -816,7 +817,7 @@ export class InventarioService {
       (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
     const isSupervisor = userRole.includes('SUPERVISOR');
     const isPulidorRole = userRole.includes('PULIDOR');
-    const isAgencia = userRole.includes('LIDER') || (isPulidorRole && !!agenciaIdUsuario);
+    const isAgencia = userRole.includes('LIDER') || esLiderDeAgencia(userRole) || (isPulidorRole && !!agenciaIdUsuario);
     const isPulidor = isPulidorRole && !agenciaIdUsuario;
 
     if (isGlobal) {
@@ -1352,7 +1353,7 @@ export class InventarioService {
         const alc = resolverAlcance(usuario);
         if (alc.tipo === 'REGION') {
           whereAgencia.regionId = alc.regionId;
-        } else if (rol === 'LIDER' && usuario.agencia?.regionId) {
+        } else if (esLiderDeAgencia(rol) && usuario.agencia?.regionId) {
           // El líder puede consultar agencias de su región para seleccionar destinos de despacho.
           whereAgencia.regionId = usuario.agencia.regionId;
         } else if (alc.tipo === 'AGENCIA') {
@@ -1412,6 +1413,8 @@ export class InventarioService {
       }
     }
 
+    const enTransito = await this.enTransitoPorDestino('agencia');
+
     let agenciasEnAlerta = 0;
     let insumosCriticosTotal = 0;
 
@@ -1428,11 +1431,12 @@ export class InventarioService {
       const insumosDeEstaAgencia = insumos.filter((ins) => {
         const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
         const perteneceAServicios = ins.recetas?.some((r: any) => sIds.has(Number(r.catalogoServicioId)));
-        return perteneceAServicios || actual > 0;
+        return perteneceAServicios || actual > 0 || enTransito.has(`${ag.id}_${ins.id}`);
       });
 
       const insumosAgencia = insumosDeEstaAgencia.map((ins) => {
         const actual = stockMap.get(`${ag.id}_${ins.id}`) ?? 0;
+        const transito = enTransito.get(`${ag.id}_${ins.id}`);
         const cNeto = Number(ins.contenidoNeto) || 1;
         const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
         const rawMinimo = Number(ins.stockMinimoAgencia) || 2;
@@ -1470,6 +1474,8 @@ export class InventarioService {
           stockMinimo: minimo,
           deficit,
           estado,
+          enTransitoUnidades: transito?.unidades ?? 0,
+          enTransitoDespachos: transito?.despachos ?? 0,
           requeridoPorServicios: ins.recetas?.some((r: any) => sIds.has(Number(r.catalogoServicioId))) || false,
         };
       });
@@ -2111,7 +2117,7 @@ export class InventarioService {
 
   private async calcularStockPulidores(dto: { pulidorId?: string; regionId?: string }, usuarioId?: string) {
     const wherePulidor: any = {
-      role: { namerol: { in: ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'] } },
+      role: { namerol: { in: ['PULIDOR'] } },
       estado: 1,
     };
 
@@ -2207,6 +2213,8 @@ export class InventarioService {
       }
     }
 
+    const enTransito = await this.enTransitoPorDestino('pulidor');
+
     let pulidoresEnAlerta = 0;
     let insumosCriticosTotal = 0;
 
@@ -2218,13 +2226,14 @@ export class InventarioService {
       const insumosDelPulidor = insumos.filter((ins) => {
         const actual = stockMap.get(`${pul.id}_${ins.id}`) ?? 0;
         const esInsumoEspecial = insumoIdsEspeciales.has(ins.id);
-        return esInsumoEspecial || actual > 0;
+        return esInsumoEspecial || actual > 0 || enTransito.has(`${pul.id}_${ins.id}`);
       });
 
       const insumosList = (insumosDelPulidor.length > 0 ? insumosDelPulidor : insumos.slice(0, 10)).map((ins) => {
         const actual = stockMap.get(`${pul.id}_${ins.id}`) ?? 0;
         const cNeto = Number(ins.contenidoNeto) || 1;
         const unidadesActuales = Math.floor(actual / cNeto + 1e-9);
+        const transito = enTransito.get(`${pul.id}_${ins.id}`);
         const isLiquidOrPowder = ins.unidadMedida?.simbolo === 'ml' || ins.unidadMedida?.simbolo === 'g';
         const rawMinimo = Number(ins.stockMinimoAgencia) || 1;
         const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
@@ -2265,12 +2274,14 @@ export class InventarioService {
           stockMinimoUnidades: Math.floor(minimo / cNeto + 1e-9) || 1,
           deficit,
           estado,
+          enTransitoUnidades: transito?.unidades ?? 0,
+          enTransitoDespachos: transito?.despachos ?? 0,
         };
       });
 
       if (alertaPulidor) pulidoresEnAlerta++;
 
-      const esFijo = !!pul.agenciaId || pul.role?.namerol === 'PULIDOR_FIJO';
+      const esFijo = !!pul.agenciaId;
 
       return {
         id: pul.id,
@@ -2468,6 +2479,32 @@ export class InventarioService {
       );
     }
     return Math.round(n);
+  }
+
+  /**
+   * Unidades despachadas que siguen en camino (EN_TRANSITO o PENDIENTE de confirmar) hacia cada agencia o kit de pulidor,
+   * por insumo. Clave: `${destinoId}_${insumoId}`. Un despacho a un pulidor cuenta solo para su kit, no para la agencia.
+   */
+  private async enTransitoPorDestino(tipo: 'agencia' | 'pulidor'): Promise<Map<string, { unidades: number; despachos: number }>> {
+    const mapa = new Map<string, { unidades: number; despachos: number }>();
+    const columna = tipo === 'agencia' ? 'destinoAgenciaId' : 'destinoPulidorId';
+    const soloAgencia = tipo === 'agencia' ? `AND m."destinoPulidorId" IS NULL` : '';
+    try {
+      const rows: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT m."${columna}" AS destino, d."insumoId" AS "insumoId",
+                COALESCE(SUM(d."cantidadEnviada"), 0)::float AS unidades,
+                COUNT(DISTINCT m."id")::int AS despachos
+         FROM "MovimientoDetalle" d
+         INNER JOIN "MovimientoInventario" m ON m."id" = d."movimientoId"
+         WHERE m."estadoDespacho" IN ('EN_TRANSITO', 'PENDIENTE')
+           AND m."${columna}" IS NOT NULL ${soloAgencia}
+         GROUP BY m."${columna}", d."insumoId"`,
+      );
+      for (const r of rows) mapa.set(`${r.destino}_${r.insumoId}`, { unidades: Number(r.unidades) || 0, despachos: Number(r.despachos) || 0 });
+    } catch {
+      // Sin la marca de tránsito la tabla sigue siendo útil.
+    }
+    return mapa;
   }
 
   private async cantidadReservadaEnTransito(
@@ -2754,7 +2791,8 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, bodega: true },
     });
-    const role = (usuario?.role?.namerol || '').toUpperCase();
+    // Backup opera como líder de la agencia a la que está asignado: se normaliza el alias antes de comparar.
+    const role = normalizarRol(usuario?.role?.namerol);
     const isSuperAdmin =
       role === 'SUPER_ADMIN' || (role.includes('SUPER') && role.includes('ADMIN'));
 
@@ -2764,7 +2802,7 @@ export class InventarioService {
       );
     }
 
-    const isLider = role === 'LIDER' || role === 'LIDER_AGENCIA' || role === 'LIDER_OPERADOR';
+    const isLider = esLiderDeAgencia(role);
     const isAsistente =
       role === 'ASISTENTE_BODEGA' || (role.includes('ASISTENTE') && role.includes('BODEGA'));
 
@@ -2850,7 +2888,7 @@ export class InventarioService {
     const isCoord = rol === 'COORD_BODEGA' || (rol.includes('COORD') && rol.includes('BODEGA'));
     const isAsistente =
       rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
-    const isLider = rol === 'LIDER';
+    const isLider = esLiderDeAgencia(rol);
 
     if (!isCoord && !isAsistente && !isLider && !isDirector) {
       throw new ForbiddenException('Tu rol no está autorizado para crear despachos.');
@@ -3520,12 +3558,12 @@ export class InventarioService {
     const viewer: any = usuarioId
       ? await this.prisma.user.findUnique({ where: { id: usuarioId }, include: { role: true, region: true } })
       : null;
-    const rol = (viewer?.role?.namerol || '').toUpperCase();
+    const rol = normalizarRol(viewer?.role?.namerol);
     const esSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
     const esAdmin = rol === 'ADMIN' && !esSuperAdmin;
     const esPulidor = rol.includes('PULIDOR');
     const esAsistente = (rol.includes('ASISTENTE') && rol.includes('BODEGA')) || rol === 'ASISTENTE_BODEGA';
-    const esLider = !esSuperAdmin && !esAdmin && !esAsistente && !esPulidor && rol.includes('LIDER') && !!viewer?.agenciaId;
+    const esLider = !esSuperAdmin && !esAdmin && !esAsistente && !esPulidor && (rol.includes('LIDER') || esLiderDeAgencia(rol)) && !!viewer?.agenciaId;
 
     // Agencia destino: un líder solo ve la suya (aunque el cliente pida otra); los demás pueden filtrar por la que elijan.
     const filtroAgencia = esLider
@@ -3683,7 +3721,7 @@ export class InventarioService {
     }
 
     const { viewer, rol, esSuperAdmin, esAdmin } = ctx;
-    const esLiderRol = rol === 'LIDER' || rol === 'LIDER_AGENCIA' || rol === 'LIDER_OPERADOR';
+    const esLiderRol = esLiderDeAgencia(rol);
     const esAsistenteRol = rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
 
     return filas.map((h) => {
@@ -3799,7 +3837,7 @@ export class InventarioService {
     const isSuperAdmin = rol.includes('SUPER') && rol.includes('ADMIN');
     const isCoord = rol.includes('COORD') || rol === 'ADMIN';
     const isAsistente = rol.includes('ASISTENTE') && rol.includes('BODEGA');
-    const isLider = rol.includes('LIDER') || rol.includes('OPERADOR');
+    const isLider = rol.includes('LIDER') || esLiderDeAgencia(rol);
     const isPulidor = rol.includes('PULIDOR');
 
     const todos = await this.listarDespachosPlano({ estadoDespacho: 'EN_TRANSITO' }, usuarioId);
@@ -3892,7 +3930,7 @@ export class InventarioService {
       this.prisma.user.findMany({
         where: {
           estado: 1,
-          role: { namerol: { in: ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'] } },
+          role: { namerol: { in: ['PULIDOR'] } },
         },
         select: {
           id: true,
@@ -3985,7 +4023,7 @@ export class InventarioService {
         const alertaExistente = await this.prisma.alertaStock.findFirst({
           where: {
             insumoId,
-            estado: 'PENDIENTE',
+            estado: { not: 'RESUELTO' },
             ...(params.pulidorId
               ? { pulidorId: params.pulidorId }
               : { agenciaId: params.agenciaId || null, pulidorId: null }),
@@ -4097,7 +4135,7 @@ export class InventarioService {
         userRole === 'ASISTENTE_BODEGA' ||
         (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
       const isLiderSede =
-        userRole === 'LIDER' ||
+        esLiderDeAgencia(userRole) ||
         userRole.includes('LIDER') ||
         userRole === 'APROBADOR';
       const isSupervisorRegional =
@@ -4124,7 +4162,7 @@ export class InventarioService {
           const pulidoresRegion = await this.prisma.user.findMany({
             where: {
               regionId,
-              role: { namerol: { in: ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'] } },
+              role: { namerol: { in: ['PULIDOR'] } },
             },
             select: { id: true },
           });
@@ -4201,6 +4239,7 @@ export class InventarioService {
       !sinEstadoNiNivel && dto.grupoNivel ? { nivel: { in: dto.grupoNivel === 'CRITICO' ? ['CRITICO', 'AGOTADO'] : ['BAJO'] } } : undefined,
       !sinEstadoNiNivel && dto.estado ? { estado: dto.estado } : undefined,
       !sinEstadoNiNivel && dto.soloActivas ? { estado: { not: 'RESUELTO' } } : undefined,
+      !sinEstadoNiNivel && dto.pulidorId ? { pulidorId: dto.pulidorId } : undefined,
     );
 
     if (!paginado) {
@@ -5021,7 +5060,7 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, bodega: true },
     });
-    const role = (usuario?.role?.namerol || '').toUpperCase();
+    const role = normalizarRol(usuario?.role?.namerol);
 
     const isAdmin =
       role === 'SUPER_ADMIN' ||
@@ -6078,7 +6117,21 @@ export class InventarioService {
         });
 
         const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
-        if (stockPosterior <= 0 && finalUsuarioId) {
+        
+        // Evitar duplicados revisando si ya existe una alerta activa para este insumo y agencia
+        let alertaExistente = null;
+        if (finalUsuarioId && stockPosterior <= stockMinimo) {
+          alertaExistente = await tx.alertaStock.findFirst({
+            where: {
+              insumoId: insumo.id,
+              agenciaId: targetAgenciaId,
+              estado: { not: 'RESUELTO' },
+            },
+            select: { id: true }
+          });
+        }
+
+        if (stockPosterior <= 0 && finalUsuarioId && !alertaExistente) {
           alertasGeneradas.push(`¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
           await tx.alertaStock.create({
             data: {
@@ -6090,7 +6143,7 @@ export class InventarioService {
               stockReportado: stockPosterior,
             },
           });
-        } else if (stockPosterior <= stockMinimo && finalUsuarioId) {
+        } else if (stockPosterior <= stockMinimo && finalUsuarioId && !alertaExistente) {
           alertasGeneradas.push(`Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
           await tx.alertaStock.create({
             data: {

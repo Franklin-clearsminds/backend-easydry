@@ -31,10 +31,10 @@ describe('pantallas derivadas de los permisos', () => {
     expect(m).not.toContain('usuarios');
   });
 
-  it('el coordinador de mantenimiento ve Inventario en cuanto se le da inventario.ver', () => {
+  it('el coordinador de mantenimiento ve Inventario en cuanto se le da la página Inventario', () => {
     const r = ROLES_BASE.find((x) => x.namerol === 'COORD_MANTENIMIENTO')!;
     expect(pantallas('COORD_MANTENIMIENTO')).not.toContain('inventario');
-    expect(modulosDeCapacidades([...r.capacidades, 'inventario.ver'], r.namerol)).toContain('inventario');
+    expect(modulosDeCapacidades([...r.capacidades, 'pagina.inventario'], r.namerol)).toContain('inventario');
   });
 
   it('pantallas de los roles oficiales', () => {
@@ -42,7 +42,8 @@ describe('pantallas derivadas de los permisos', () => {
     expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'perfil']);
     expect(pantallas('SUPERVISOR')).toContain('usuarios');
     expect(pantallas('SUPERVISOR')).toContain('reportes');
-    expect(pantallas('LIDER')).toContain('mapa-operativo');
+    expect(pantallas('LIDER')).not.toContain('mapa-operativo');
+    expect(pantallas('LIDER')).toContain('operadores');
     expect(pantallas('LIDER')).not.toContain('agencias');
     expect(pantallas('ASISTENTE_BODEGA')).not.toContain('reportes');
   });

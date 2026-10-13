@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { PATH_METADATA } from '@nestjs/common/constants';
 import { PERMISO_KEY, PUBLICO_KEY, SOLO_AUTENTICADO_KEY } from './permisos.decorators.js';
-import { CODIGOS_PERMISOS } from './catalogo-permisos.js';
+import { esCodigoPermiso } from './catalogo-permisos.js';
 import { AuthController } from '../../modules/auth/auth.controller.js';
 import { AgenciasController } from '../../modules/agencias/agencias.controller.js';
 import { AnalyticsController } from '../../modules/analytics/analytics.controller.js';
@@ -43,7 +43,7 @@ describe('todos los endpoints declaran su permiso (falla cerrado)', () => {
       const publico = Reflect.getMetadata(PUBLICO_KEY, handler);
       const solo = Reflect.getMetadata(SOLO_AUTENTICADO_KEY, handler);
       expect(Boolean(permisos?.length || publico || solo), `${controlador.name}.${nombre} no declara permiso`).toBe(true);
-      for (const p of permisos ?? []) expect(CODIGOS_PERMISOS, `${controlador.name}.${nombre}: permiso ${p} fuera del catálogo`).toContain(p);
+      for (const p of permisos ?? []) expect(esCodigoPermiso(p), `${controlador.name}.${nombre}: permiso ${p} fuera del catálogo`).toBe(true);
     }
   });
 
@@ -52,7 +52,7 @@ describe('todos los endpoints declaran su permiso (falla cerrado)', () => {
     for (const [, c] of CONTROLADORES) {
       for (const { nombre, handler } of rutas(c)) if (Reflect.getMetadata(PUBLICO_KEY, handler)) publicos.push(`${c.name}.${nombre}`);
     }
-    expect(publicos.sort()).toEqual(['AuthController.login', 'AuthController.refresh', 'StorageController.getFile', 'SyncController.ping']);
+    expect(publicos.sort()).toEqual(['AuthController.login', 'AuthController.logout', 'AuthController.refresh', 'StorageController.getFile', 'SyncController.ping']);
   });
 
   it('exigen solo sesión únicamente la cuenta propia y el almacenamiento (con chequeo interno)', () => {
