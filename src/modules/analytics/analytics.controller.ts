@@ -81,7 +81,7 @@ export class AnalyticsController {
     return this.analyticsService.getDashboardTaller(dto, user);
   }
 
-  @Permiso('inventario.ver', 'maquinaria.ver')
+  @Permiso('inventario.ver', 'maquinaria.ver', 'catalogo.ver')
   @Post('dashboard-bodega')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard para Coordinador y Asistente de Bodega: alertas de stock, despachos en tránsito y consumo por categoría' })
