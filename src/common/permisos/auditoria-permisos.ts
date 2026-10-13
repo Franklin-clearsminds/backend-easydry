@@ -16,6 +16,8 @@ export interface Casilla {
   tipo: 'accion' | 'sub-pagina';
   pagina: string;
   nombre: string;
+  /** Solo en sub-páginas: permisos clásicos que su activación concede (con ellos las exigen los endpoints). */
+  otorga?: string[];
 }
 
 export interface ResultadoAuditoria extends Casilla {
@@ -35,7 +37,7 @@ export function listarCasillas(): Casilla[] {
   for (const p of PAGINAS) {
     for (const a of p.acciones) agregar({ codigo: a.codigo, tipo: 'accion', pagina: p.id, nombre: a.nombre });
     for (const s of p.subs) {
-      agregar({ codigo: s.codigo, tipo: 'sub-pagina', pagina: p.id, nombre: s.nombre });
+      agregar({ codigo: s.codigo, tipo: 'sub-pagina', pagina: p.id, nombre: s.nombre, otorga: s.otorga });
       for (const a of s.acciones) agregar({ codigo: a.codigo, tipo: 'accion', pagina: p.id, nombre: a.nombre });
     }
   }
@@ -100,9 +102,11 @@ export function auditar(raiz?: string): { resultados: ResultadoAuditoria[]; hayP
   const servicios = contarComprobacionesEnServicios();
   const { web, app } = cargarPantallas(raiz);
   const hayPantallas = web !== null && app !== null;
+  // Una sub-página se exige en el servidor por los permisos que concede: apagarla los retira del rol y los endpoints que los piden se cierran.
+  const exigidoPorLoQueOtorga = (c: Casilla) => (c.tipo === 'sub-pagina' ? (c.otorga ?? []).reduce((n, o) => n + (servidor.get(o) ?? 0), 0) : 0);
   const resultados = listarCasillas().map((c) => ({
     ...c,
-    servidor: (servidor.get(c.codigo) ?? 0) + apariciones(servicios, c.codigo),
+    servidor: (servidor.get(c.codigo) ?? 0) + apariciones(servicios, c.codigo) + exigidoPorLoQueOtorga(c),
     pantalla: (web ? apariciones(web, c.codigo) : 0) + (app ? apariciones(app, c.codigo) : 0),
   }));
   return { resultados, hayPantallas };
