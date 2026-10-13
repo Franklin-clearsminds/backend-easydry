@@ -69,7 +69,16 @@ export class AuthService {
       secret: accessSecret,
       expiresIn: accessExpiresIn as any,
     });
+    return { accessToken, ...(await this.emitirRefresh(user, familyId, refreshSecret, refreshExpiresIn, refreshPayload)) };
+  }
 
+  private async emitirRefresh(
+    user: { id: string },
+    familyId: string,
+    refreshSecret: string,
+    refreshExpiresIn: string,
+    refreshPayload: Record<string, unknown>,
+  ) {
     const sesionId = randomUUID();
     const refreshToken = this.jwtService.sign(refreshPayload, {
       ...JWT_SIGN_OPTIONS,
@@ -83,7 +92,17 @@ export class AuthService {
       data: { id: sesionId, userId: user.id, familyId, expiresAt: new Date(exp * 1000) },
     });
 
-    return { accessToken, refreshToken };
+    return { refreshToken };
+  }
+
+  /** Solo el access token, sin tocar el refresh token (renovación dentro de la ventana de gracia). */
+  private emitirAccessToken(user: { id: string; email: string; roleId: string }): string {
+    const accessSecret = secretoObligatorio(this.configService.get<string>('JWT_SECRET'), 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync');
+    const accessExpiresIn = this.configService.get<string>('JWT_ACCESS_EXPIRATION') || JWT_ACCESS_DEFAULT;
+    return this.jwtService.sign(
+      { sub: user.id, email: user.email, roleId: user.roleId, type: 'access' },
+      { ...JWT_SIGN_OPTIONS, secret: accessSecret, expiresIn: accessExpiresIn as any },
+    );
   }
 
   /**
@@ -245,7 +264,11 @@ export class AuthService {
     };
   }
 
-  async refreshToken(token: string) {
+  /**
+   * `soloAcceso` (cliente web): si el token ya fue rotado hace instantes por otra pestaña, se entrega solo un access token nuevo y se
+   * deja intacta la cookie (la pestaña que ganó la rotación ya la actualizó). Sin esto, dos pestañas renovando a la vez cerraban la sesión.
+   */
+  async refreshToken(token: string, soloAcceso = false) {
     if (!token) {
       throw new UnauthorizedException('Refresh token requerido');
     }
@@ -267,15 +290,25 @@ export class AuthService {
     if (!sesion || sesion.userId !== payload.sub) {
       throw new UnauthorizedException('Sesión no válida');
     }
+    let rotadaHaceInstantes = false;
     if (sesion.revokedAt) {
-      // Un token ya rotado que vuelve a aparecer fuera de la ventana de gracia: se asume robo y se cierra toda la cadena.
-      if (Date.now() - sesion.revokedAt.getTime() > GRACIA_REUSO_MS) {
-        await this.prisma.refreshSession.updateMany({
-          where: { familyId: sesion.familyId, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
+      const dentroDeGracia = Date.now() - sesion.revokedAt.getTime() <= GRACIA_REUSO_MS;
+      // Rotación reciente = la cadena sigue viva con una sesión sucesora. Una revocación por logout o cambio de contraseña no la deja.
+      const sucesora = dentroDeGracia
+        ? await this.prisma.refreshSession.findFirst({ where: { familyId: sesion.familyId, revokedAt: null }, select: { id: true } })
+        : null;
+      if (dentroDeGracia && sucesora && soloAcceso) {
+        rotadaHaceInstantes = true;
+      } else {
+        // Un token ya rotado que vuelve a aparecer fuera de la ventana de gracia: se asume robo y se cierra toda la cadena.
+        if (!dentroDeGracia) {
+          await this.prisma.refreshSession.updateMany({
+            where: { familyId: sesion.familyId, revokedAt: null },
+            data: { revokedAt: new Date() },
+          });
+        }
+        throw new UnauthorizedException('Sesión no válida');
       }
-      throw new UnauthorizedException('Sesión no válida');
     }
 
     const user = await this.prisma.user.findUnique({
@@ -304,15 +337,23 @@ export class AuthService {
       throw new UnauthorizedException('El rol asignado al usuario se encuentra deshabilitado.');
     }
 
-    // Rotación: el token usado deja de valer. Si dos peticiones llegan a la vez, solo una gana la revocación.
-    const revocada = await this.prisma.refreshSession.updateMany({
-      where: { id: sesion.id, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-    if (revocada.count === 0) {
-      throw new UnauthorizedException('Sesión no válida');
+    let tokens: { accessToken: string; refreshToken: string };
+    if (rotadaHaceInstantes) {
+      tokens = { accessToken: this.emitirAccessToken(user), refreshToken: '' };
+    } else {
+      // Rotación: el token usado deja de valer. Si dos peticiones llegan a la vez, solo una gana la revocación.
+      const revocada = await this.prisma.refreshSession.updateMany({
+        where: { id: sesion.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      if (revocada.count === 0) {
+        // Otra petición acaba de rotar este mismo token (dos pestañas renovando a la vez). La web recibe solo acceso; el resto, 401.
+        if (!soloAcceso) throw new UnauthorizedException('Sesión no válida');
+        tokens = { accessToken: this.emitirAccessToken(user), refreshToken: '' };
+      } else {
+        tokens = await this.generateTokens(user, sesion.familyId);
+      }
     }
-    const tokens = await this.generateTokens(user, sesion.familyId);
 
     const bahiaAsignada = await this.prisma.bahiaOperador.findFirst({
       where: { operadorId: user.id, activo: true },

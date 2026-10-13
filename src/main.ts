@@ -38,6 +38,8 @@ async function bootstrap() {
       'Content-Type',
       'Authorization',
       'X-Client',
+      'X-Skip-Auth-Refresh',
+      'x-skip-auth-refresh',
       'x-device-id',
       'X-Request-Id',
       'x-request-id',

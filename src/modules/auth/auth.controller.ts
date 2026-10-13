@@ -41,7 +41,7 @@ export class AuthController {
   async refresh(@Body() refreshDto: RefreshTokenDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = this.esWeb(req) ? this.leerCookie(req, REFRESH_COOKIE) : refreshDto?.refreshToken;
     try {
-      return this.entregarSesion(await this.authService.refreshToken(token ?? ''), req, res);
+      return this.entregarSesion(await this.authService.refreshToken(token ?? '', this.esWeb(req)), req, res);
     } catch (err) {
       if (this.esWeb(req)) this.borrarCookie(res);
       throw err;
@@ -122,6 +122,8 @@ export class AuthController {
    */
   private entregarSesion<T extends { refreshToken: string }>(sesion: T, req: Request, res: Response): T {
     if (!this.esWeb(req)) return sesion;
+    // Renovación dentro de la ventana de gracia: no hay refresh token nuevo y la cookie que dejó la otra pestaña se conserva.
+    if (!sesion.refreshToken) return sesion;
     let maxAge: number | undefined;
     try {
       const exp = JSON.parse(Buffer.from(sesion.refreshToken.split('.')[1], 'base64url').toString()).exp;
