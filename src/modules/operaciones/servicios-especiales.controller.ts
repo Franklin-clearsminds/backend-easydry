@@ -48,7 +48,7 @@ export class ServiciosEspecialesController {
     return this.service.historialDecisiones(body.id, user);
   }
 
-  @Permiso('especiales.crear')
+  @Permiso('servicios.especiales.crear')
   @Post('crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo servicio especial de detailing' })
@@ -60,7 +60,7 @@ export class ServiciosEspecialesController {
     return this.service.create(dto, user?.id, user);
   }
 
-  @Permiso('especiales.operar')
+  @Permiso('servicios.especiales.operar')
   @Post('iniciar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Marcar inicio de trabajo en servicio especial con video inicial' })
@@ -76,7 +76,7 @@ export class ServiciosEspecialesController {
     }, user);
   }
 
-  @Permiso('especiales.operar')
+  @Permiso('servicios.especiales.operar')
   @Post('pausar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Pausar servicio especial con motivo y video de pausa' })
@@ -88,7 +88,7 @@ export class ServiciosEspecialesController {
     return this.service.pausar(dto, user);
   }
 
-  @Permiso('especiales.operar')
+  @Permiso('servicios.especiales.operar')
   @Post('reanudar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reanudar servicio especial con video de reanudación' })
@@ -100,7 +100,7 @@ export class ServiciosEspecialesController {
     return this.service.reanudar(dto, user);
   }
 
-  @Permiso('especiales.operar')
+  @Permiso('servicios.especiales.operar')
   @Post('completar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Finalizar servicio especial con video final y calificación' })
@@ -112,7 +112,7 @@ export class ServiciosEspecialesController {
     return this.service.completar(dto, user);
   }
 
-  @Permiso('especiales.reasignar')
+  @Permiso('servicios.especiales.reasignar')
   @Post('reasignar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reasignar servicio especial a otro pulidor' })
@@ -124,7 +124,7 @@ export class ServiciosEspecialesController {
     return this.service.reasignar(dto, user);
   }
 
-  @Permiso('especiales.anular')
+  @Permiso('servicios.especiales.anular')
   @Post('delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Anular o cancelar servicio especial (soft delete)' })

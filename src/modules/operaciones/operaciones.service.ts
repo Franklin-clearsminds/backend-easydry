@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
+import { tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -482,6 +483,22 @@ export class OperacionesService {
   }
 
   async create(createDto: CreateServicioDto, operadorId: string, actor?: any) {
+    // Registrar una OT nueva y agregar un servicio a una OT que ya existe son dos botones con dos permisos: el servidor mira cuál es.
+    if (actor) {
+      const ot = createDto.ordenTrabajoOT?.trim().toUpperCase();
+      const yaExiste = ot
+        ? !!(await this.prisma.servicioLavado.findFirst({
+            where: { ordenTrabajoOT: { equals: ot, mode: 'insensitive' }, deletedAt: null, estado: { not: ServiceStatus.CANCELADO } },
+            select: { id: true },
+          }))
+        : false;
+      if (yaExiste && !tieneAlgunPermiso(actor, ['servicios.generales.agregar'])) {
+        throw new ForbiddenException('Tu rol no puede agregar servicios a una OT que ya existe.');
+      }
+      if (!yaExiste && !tieneAlgunPermiso(actor, ['servicios.generales.crear'])) {
+        throw new ForbiddenException('Tu rol no puede registrar órdenes de servicio nuevas.');
+      }
+    }
     const clientUuid = createDto.clientUuid || randomUUID();
     const now = new Date();
 

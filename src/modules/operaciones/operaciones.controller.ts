@@ -70,7 +70,7 @@ export class OperacionesController {
     return this.operacionesService.historialDecisiones(detailDto.id, user);
   }
 
-  @Permiso('servicios.crear')
+  @Permiso('servicios.generales.crear', 'servicios.generales.agregar')
   @Post('servicios/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -85,7 +85,7 @@ export class OperacionesController {
     return this.operacionesService.createMultiple(createDto, user.id, user);
   }
 
-  @Permiso('servicios.editar')
+  @Permiso('servicios.generales.editar')
   @Post('servicios/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -100,7 +100,7 @@ export class OperacionesController {
     return this.operacionesService.update(updateDto.id, updateDto, false, user);
   }
 
-  @Permiso('servicios.anular')
+  @Permiso('servicios.generales.anular', 'aprobaciones.anular')
   @Post('servicios/delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -217,7 +217,7 @@ export class OperacionesController {
     return this.operacionesService.listConsumosPorServicio(dto);
   }
 
-  @Permiso('servicios.crear')
+  @Permiso('servicios.generales.crear', 'servicios.generales.agregar')
   @Post('servicios/simular-consumo')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
