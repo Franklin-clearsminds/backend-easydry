@@ -41,7 +41,7 @@ describe('todos los endpoints declaran su permiso (falla cerrado)', () => {
   });
 
   it('protege por separado la subida de evidencias de maquinaria y limpieza', () => {
-    expect(Reflect.getMetadata(PERMISO_KEY, MaquinariaController.prototype.agregarEvidencia)).toEqual(['maquinaria.evidencias']);
-    expect(Reflect.getMetadata(PERMISO_KEY, MaquinariaController.prototype.registrarLimpieza)).toEqual(['limpiezas.evidencias']);
+    expect(Reflect.getMetadata(PERMISO_KEY, MaquinariaController.prototype.agregarEvidencia)).toEqual(['taller.incidentes.evidencias', 'taller.mantenimientos.evidencias']);
+    expect(Reflect.getMetadata(PERMISO_KEY, MaquinariaController.prototype.registrarLimpieza)).toEqual(['taller.limpiezas.registrar']);
   });
 });
