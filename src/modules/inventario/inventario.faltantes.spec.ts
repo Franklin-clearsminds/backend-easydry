@@ -113,4 +113,67 @@ describe('Faltantes de envíos recibidos de forma parcial (base real)', () => {
     expect(destinatarios.has(ajeno.id)).toBe(false);
     expect(filas[0].tipo).toBe('DESPACHO_FALTANTE');
   });
+
+  describe('flujo real de recepción', () => {
+    let superAdmin: any, agenciaDestino: any, insumoFlujo: any, stockOrigen: any;
+    const enBase = async (id: string) => Number((await env.prisma.stockUbicacion.findUniqueOrThrow({ where: { id } })).cantidadActual);
+
+    /** Despacho en tránsito: el stock del origen ya está descontado (100) y el kardex guarda lo reservado (10). */
+    const despacho = async () => {
+      const m = await env.movimiento({
+        usuarioDespachaId: admin.id,
+        origenBodegaId: bodegaOrigen.id,
+        destinoAgenciaId: agenciaDestino.id,
+        detalle: { insumoId: insumoFlujo.id, cantidadEnviada: 10 },
+      });
+      await env.prisma.kardexMovimiento.create({
+        data: { insumoId: insumoFlujo.id, ubicacionId: bodegaOrigen.id, tipoMovimiento: 'DESPACHO_SALIDA', cantidad: -10, stockAnterior: 110, stockPosterior: 100, referenciaId: m.numeroGuia },
+      });
+      return m;
+    };
+    const faltantesDe = (movimientoId: string) =>
+      env.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM "FaltanteDespacho" WHERE "movimientoId" = $1`, movimientoId);
+
+    beforeAll(async () => {
+      superAdmin = await env.usuario('superflujo', 'SUPER_ADMIN');
+      agenciaDestino = await env.agencia('DEST', { regionId: regionOrigen.id });
+      insumoFlujo = await env.insumo('FLUJO');
+      stockOrigen = await env.stock({ insumoId: insumoFlujo.id, tipoUbicacion: 'BODEGA_CENTRAL', bodegaId: bodegaOrigen.id, cantidad: 100 });
+    });
+
+    it('rechazar un envío no devuelve el stock: queda retenido para que la bodega de origen decida', async () => {
+      const m = await despacho();
+
+      await service.confirmarRecepcion({ movimientoId: m.numeroGuia, accion: 'RECHAZADO', motivo: 'Llegó mojado' }, superAdmin.id);
+
+      expect(await enBase(stockOrigen.id)).toBe(100);
+      const f = await faltantesDe(m.id);
+      faltantesCreados.push(...f.map((x) => x.id));
+      expect(f).toHaveLength(1);
+      expect(Number(f[0].cantidadBase)).toBe(10);
+      expect(f[0].estado).toBe('PENDIENTE');
+      expect(f[0].motivoRecepcion).toContain('Llegó mojado');
+
+      await service.resolverFaltanteDespacho({ id: f[0].id, resolucion: 'DEVOLVER', observacion: 'Estaba sano, vuelve a bodega' }, con(admin, 'GLOBAL'));
+      expect(await enBase(stockOrigen.id)).toBe(110);
+    });
+
+    it('recibir de forma parcial suma lo recibido al destino y retiene lo que faltó', async () => {
+      const m = await despacho();
+      const detalle = await env.prisma.movimientoDetalle.findFirstOrThrow({ where: { movimientoId: m.id } });
+
+      await service.confirmarRecepcion(
+        { movimientoId: m.numeroGuia, accion: 'RECIBIDO', observaciones: 'Llegaron 7 de 10', cantidadesRecibidas: [{ detalleId: detalle.id, cantidadRecibida: 7 }] },
+        superAdmin.id,
+      );
+
+      const f = await faltantesDe(m.id);
+      faltantesCreados.push(...f.map((x) => x.id));
+      expect(f).toHaveLength(1);
+      expect(Number(f[0].cantidadUnd)).toBe(3);
+      expect(f[0].estado).toBe('PENDIENTE');
+      const destino = await env.prisma.stockUbicacion.findFirst({ where: { insumoId: insumoFlujo.id, agenciaId: agenciaDestino.id } });
+      expect(Number(destino?.cantidadActual)).toBe(7);
+    });
+  });
 });

@@ -3392,17 +3392,25 @@ export class InventarioService {
         }
       }
     } else {
-      // Rechazo: devolver stock base reservado + alerta
+      // Rechazo: lo reservado NO vuelve solo al origen. Queda retenido hasta que la bodega de origen decida (devolverlo o darlo de baja).
       for (const det of movimiento.detalles) {
         const baseReservado = await baseReservadoKardex(det.insumoId);
         if (baseReservado > 0) {
-          await this.devolverStockOrigen(
-            det.insumoId,
-            baseReservado,
-            origenStockConfirm,
+          await this.prisma.$executeRawUnsafe(
+            `INSERT INTO "FaltanteDespacho" ("id", "movimientoId", "numeroGuia", "insumoId", "cantidadUnd", "cantidadBase",
+                                             "origenBodegaId", "origenAgenciaId", "motivoRecepcion")
+             VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7, $8, $9)`,
+            randomUUID(),
+            movimiento.id,
             movimiento.numeroGuia,
-            usuarioId,
+            det.insumoId,
+            Number(det.cantidadEnviada),
+            baseReservado,
+            origenBodegaId,
+            origenAgenciaId,
+            `Rechazado: ${motivoRechazo}`,
           );
+          hayFaltantes = true;
         }
         try {
           await this.prisma.alertaStock.create({
@@ -3419,11 +3427,19 @@ export class InventarioService {
       }
     }
 
-    if (this.notifications && movimiento.usuarioDespachaId) {
+    const rechazoConStockRetenido = nuevoEstado === 'RECHAZADO' && hayFaltantes;
+    if (this.notifications && movimiento.usuarioDespachaId && !rechazoConStockRetenido) {
       void this.notificarConfirmacionDespacho(movimiento, nuevoEstado, origenAgenciaId, origenBodegaId, motivoRechazo);
     }
     if (hayFaltantes) {
-      void this.notificarFaltantesDespacho(movimiento, origenAgenciaId, origenBodegaId, (dto.observaciones || '').toString().trim());
+      // Un solo aviso: dice qué pasó (recepción incompleta o rechazo) y que hay que decidir qué hacer con el producto.
+      void this.notificarFaltantesDespacho(
+        movimiento,
+        origenAgenciaId,
+        origenBodegaId,
+        nuevoEstado === 'RECHAZADO' ? motivoRechazo : (dto.observaciones || '').toString().trim(),
+        nuevoEstado === 'RECHAZADO',
+      );
     }
 
     return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado, faltantes: hayFaltantes };
@@ -3435,6 +3451,7 @@ export class InventarioService {
     origenAgenciaId: string | null,
     origenBodegaId: string | null,
     observacion: string,
+    rechazado = false,
   ): Promise<void> {
     if (!this.notifications) return;
     let regionOrigenId: string | null = null;
@@ -3453,8 +3470,10 @@ export class InventarioService {
     const ids = [...new Set([movimiento.usuarioDespachaId, ...porRol].filter(Boolean))] as string[];
     void this.notifications.notificarUsuarios(
       ids,
-      'Faltante en un envío por resolver',
-      `La guía ${movimiento.numeroGuia} se recibió incompleta${observacion ? `: ${observacion}` : ''}. Decide qué hacer con lo que no llegó: devolverlo al stock o darlo de baja.`,
+      rechazado ? 'Envío rechazado: decide qué hacer con el producto' : 'Faltante en un envío por resolver',
+      rechazado
+        ? `La guía ${movimiento.numeroGuia} fue rechazada${observacion ? `: ${observacion}` : ''}. El producto quedó retenido: decide si regresa al stock o se da de baja.`
+        : `La guía ${movimiento.numeroGuia} se recibió incompleta${observacion ? `: ${observacion}` : ''}. Decide qué hacer con lo que no llegó: devolverlo al stock o darlo de baja.`,
       { type: 'DESPACHO_FALTANTE', movimientoId: movimiento.id },
       { tipo: 'DESPACHO_FALTANTE', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: movimiento.id },
     );
