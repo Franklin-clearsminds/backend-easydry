@@ -96,7 +96,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('agencias.agencias.servicios', 'Habilitar servicios de la agencia', ['agencias.editar']),
       accion('agencias.agencias.estado', 'Activar o desactivar agencia', ['agencias.estado']),
       accion('agencias.bahias.crear', 'Crear bahía', ['bahias.crear']),
-      accion('agencias.bahias.editar', 'Editar bahía', ['bahias.editar']),
       accion('agencias.bahias.estado', 'Activar o desactivar bahía', ['bahias.editar']),
       accion('agencias.bahias.asignar', 'Asignar lavadores a bahía', ['bahias.asignar']),
       accion('agencias.personal.ver', 'Ver personal de la agencia', ['usuarios.ver']),
@@ -135,10 +134,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('servicios.generales.agregar', 'Agregar servicios a una OT', ['servicios.crear']),
       accion('servicios.generales.editar', 'Editar OT', ['servicios.editar']),
       accion('servicios.generales.anular', 'Anular OT', ['servicios.anular']),
-      accion('servicios.generales.consumos', 'Ver consumo de insumos', ['consumos.ver']),
-      accion('servicios.generales.bahias', 'Habilitar o inhabilitar bahías', ['bahias.editar']),
-      accion('servicios.generales.solicitudes', 'Ver solicitudes de aprobación', ['solicitudes.ver']),
-      accion('servicios.generales.solicitar', 'Solicitar aprobación de una OT', ['solicitudes.crear']),
       EVID_VER, EVID_SUBIR, PRECIOS,
     ]),
     sub('servicios', 'especiales', 'Servicios especiales', ['especiales.ver'], [
@@ -171,13 +166,11 @@ export const PAGINAS: readonly PaginaDef[] = [
     ], ['catalogo.ver']),
   ]),
 
-  pagina('aprobaciones', 'Aprobaciones del Día', '/aprobaciones', 'aprobaciones', ['servicios.ver', 'agencias.ver', 'usuarios.ver'], [], [
-    accion('aprobaciones.aprobar', 'Aprobar servicio', ['servicios.decidir']),
+  pagina('aprobaciones', 'Aprobaciones del Día', '/aprobaciones', 'aprobaciones', ['servicios.ver', 'agencias.ver', 'usuarios.ver', 'solicitudes.ver'], [], [
+    accion('aprobaciones.aprobar', 'Aprobar servicio', ['servicios.decidir', 'solicitudes.crear']),
     accion('aprobaciones.rechazar', 'Rechazar servicio', ['servicios.decidir']),
     accion('aprobaciones.aprobar.todos', 'Aprobar todos', ['servicios.decidir']),
     accion('aprobaciones.anular', 'Anular servicio', ['servicios.anular']),
-    accion('aprobaciones.solicitudes.ver', 'Ver solicitudes de aprobación', ['solicitudes.ver']),
-    accion('aprobaciones.solicitudes.crear', 'Crear solicitud de aprobación', ['solicitudes.crear']),
   ]),
 
   pagina('productividad', 'Productividad & Retos', '/productividad', 'productividad', ['agencias.ver'], [

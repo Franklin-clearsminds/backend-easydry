@@ -247,7 +247,7 @@ describe('matriz acordada de permisos por rol', () => {
     ).toBe('Subir evidencias de servicios');
   });
 
-  it('agencias y bahías: supervisor edita agencias; líder edita bahías; aprobador ya no', () => {
+  it('agencias y bahías: supervisor edita agencias y bahías; el líder ya no (no tiene la página Agencias); aprobador ya no', () => {
     expect(rolesCon('agencias.crear')).toEqual(['ADMIN', 'SUPER_ADMIN']);
     expect(rolesCon('agencias.editar')).toEqual([
       'ADMIN',
@@ -256,8 +256,6 @@ describe('matriz acordada de permisos por rol', () => {
     ]);
     expect(rolesCon('bahias.editar')).toEqual([
       'ADMIN',
-      'BACKUP',
-      'LIDER',
       'SUPERVISOR',
       'SUPER_ADMIN',
     ]);

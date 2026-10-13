@@ -306,7 +306,7 @@ export class AgenciasController {
     return this.agenciasService.createBahia(dto);
   }
 
-  @Permiso('agencias.bahias.editar')
+  @Permiso('agencias.bahias.estado')
   @Post('bahias/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar bahía operativa (ADMIN, SUPERVISOR, LIDER_AGENCIA)' })
@@ -314,7 +314,7 @@ export class AgenciasController {
     return this.agenciasService.updateBahia(dto, user);
   }
 
-  @Permiso('agencias.bahias.estado', 'servicios.generales.bahias')
+  @Permiso('agencias.bahias.estado')
   @Post('bahias/toggle-activa')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Habilitar o inhabilitar bahía de lavado (ADMIN, SUPERVISOR, LIDER_AGENCIA)' })

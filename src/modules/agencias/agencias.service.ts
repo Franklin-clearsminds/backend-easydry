@@ -1764,6 +1764,11 @@ export class AgenciasService {
     }
     await this.bahiaEnAlcance(user, dto.id);
 
+    // Este endpoint lo abre "Activar o desactivar bahia". Cambiar el nombre no tiene casilla ni pantalla: solo el Super Admin.
+    if (user && dto.nombre && dto.nombre.trim() !== bahia.nombre && !tienePermiso(user, 'agencias.bahias.editar')) {
+      throw new ForbiddenException('Tu rol no puede cambiar el nombre de una bahía: solo activarla o desactivarla.');
+    }
+
     const actualizada = await this.prisma.bahia.update({
       where: { id: dto.id },
       data: {
