@@ -54,6 +54,24 @@ export function contarEndpointsPorCodigo(): Map<string, number> {
   return cuenta;
 }
 
+/**
+ * Comprobaciones hechas DENTRO de los servicios (`tienePermiso(user, 'código')`), por ejemplo ocultar cédula o precios en una
+ * respuesta. Cuentan como «exigida por el servidor» igual que un `@Permiso`. Se excluyen los archivos que solo DEFINEN códigos.
+ */
+export function contarComprobacionesEnServicios(raiz = resolve(process.cwd(), 'src')): string {
+  const excluidos = /catalogo-paginas|catalogo-permisos|migracion-paginas|acciones-legacy|roles-base|auditoria-|modulos-navegacion|sync-permisos/;
+  const partes: string[] = [];
+  const recorrer = (dir: string) => {
+    for (const nombre of readdirSync(dir)) {
+      const ruta = join(dir, nombre);
+      if (statSync(ruta).isDirectory()) recorrer(ruta);
+      else if (/\.ts$/.test(nombre) && !/\.spec\.ts$/.test(nombre) && !/\.controller\.ts$/.test(nombre) && !excluidos.test(ruta)) partes.push(readFileSync(ruta, 'utf8'));
+    }
+  };
+  recorrer(raiz);
+  return partes.join('\n');
+}
+
 function leerFuentes(dir: string, acumulado: string[] = []): string[] {
   if (!existsSync(dir)) return acumulado;
   for (const nombre of readdirSync(dir)) {
@@ -79,11 +97,12 @@ const apariciones = (texto: string, codigo: string) => texto.split(`'${codigo}'`
 
 export function auditar(raiz?: string): { resultados: ResultadoAuditoria[]; hayPantallas: boolean } {
   const servidor = contarEndpointsPorCodigo();
+  const servicios = contarComprobacionesEnServicios();
   const { web, app } = cargarPantallas(raiz);
   const hayPantallas = web !== null && app !== null;
   const resultados = listarCasillas().map((c) => ({
     ...c,
-    servidor: servidor.get(c.codigo) ?? 0,
+    servidor: (servidor.get(c.codigo) ?? 0) + apariciones(servicios, c.codigo),
     pantalla: (web ? apariciones(web, c.codigo) : 0) + (app ? apariciones(app, c.codigo) : 0),
   }));
   return { resultados, hayPantallas };
