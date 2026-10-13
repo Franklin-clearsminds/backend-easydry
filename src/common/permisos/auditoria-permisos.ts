@@ -1,0 +1,90 @@
+import 'reflect-metadata';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { PAGINAS } from './catalogo-paginas.js';
+import { CONTROLADORES, rutas } from './controladores.js';
+import { PERMISO_KEY } from './permisos.decorators.js';
+
+/**
+ * Auditoría de las casillas del editor de roles: para cada acción y sub-página del catálogo comprueba
+ *  - SERVIDOR: algún endpoint la exige (`@Permiso('código')`), o sea que apagarla de verdad bloquea;
+ *  - PANTALLA: alguna pantalla de la web o de la app la usa (`puede('código')`), o sea que apagarla oculta el botón.
+ * Es una búsqueda por texto del código entre comillas: basta para detectar casillas que no hacen nada.
+ */
+export interface Casilla {
+  codigo: string;
+  tipo: 'accion' | 'sub-pagina';
+  pagina: string;
+  nombre: string;
+}
+
+export interface ResultadoAuditoria extends Casilla {
+  servidor: number;
+  pantalla: number;
+}
+
+/** Todas las acciones (sin repetir las compartidas) y sub-páginas del catálogo. */
+export function listarCasillas(): Casilla[] {
+  const vistos = new Set<string>();
+  const salida: Casilla[] = [];
+  const agregar = (c: Casilla) => {
+    if (vistos.has(c.codigo)) return;
+    vistos.add(c.codigo);
+    salida.push(c);
+  };
+  for (const p of PAGINAS) {
+    for (const a of p.acciones) agregar({ codigo: a.codigo, tipo: 'accion', pagina: p.id, nombre: a.nombre });
+    for (const s of p.subs) {
+      agregar({ codigo: s.codigo, tipo: 'sub-pagina', pagina: p.id, nombre: s.nombre });
+      for (const a of s.acciones) agregar({ codigo: a.codigo, tipo: 'accion', pagina: p.id, nombre: a.nombre });
+    }
+  }
+  return salida;
+}
+
+/** Cuántos endpoints exigen cada código con `@Permiso(...)` (cualquiera de los de la lista basta). */
+export function contarEndpointsPorCodigo(): Map<string, number> {
+  const cuenta = new Map<string, number>();
+  for (const [, controlador] of CONTROLADORES) {
+    for (const { handler } of rutas(controlador)) {
+      const codigos: string[] | undefined = Reflect.getMetadata(PERMISO_KEY, handler);
+      for (const c of codigos ?? []) cuenta.set(c, (cuenta.get(c) ?? 0) + 1);
+    }
+  }
+  return cuenta;
+}
+
+function leerFuentes(dir: string, acumulado: string[] = []): string[] {
+  if (!existsSync(dir)) return acumulado;
+  for (const nombre of readdirSync(dir)) {
+    if (nombre === 'node_modules' || nombre === 'dist' || nombre === 'android' || nombre === 'testing') continue;
+    const ruta = join(dir, nombre);
+    if (statSync(ruta).isDirectory()) leerFuentes(ruta, acumulado);
+    else if (/\.(ts|tsx|html)$/.test(nombre) && !/\.spec\.ts$/.test(nombre) && !/\.d\.ts$/.test(nombre)) acumulado.push(readFileSync(ruta, 'utf8'));
+  }
+  return acumulado;
+}
+
+/** Texto de todas las pantallas (web y app). Si el repositorio hermano no está, devuelve null (la auditoría de pantallas se omite). */
+export function cargarPantallas(raiz = resolve(process.cwd(), '..')): { web: string | null; app: string | null } {
+  const web = join(raiz, 'frontend-easy-dry', 'src');
+  const app = join(raiz, 'app-easy-dry', 'src');
+  return {
+    web: existsSync(web) ? leerFuentes(web).join('\n') : null,
+    app: existsSync(app) ? leerFuentes(app).join('\n') : null,
+  };
+}
+
+const apariciones = (texto: string, codigo: string) => texto.split(`'${codigo}'`).length - 1 + texto.split(`"${codigo}"`).length - 1;
+
+export function auditar(raiz?: string): { resultados: ResultadoAuditoria[]; hayPantallas: boolean } {
+  const servidor = contarEndpointsPorCodigo();
+  const { web, app } = cargarPantallas(raiz);
+  const hayPantallas = web !== null && app !== null;
+  const resultados = listarCasillas().map((c) => ({
+    ...c,
+    servidor: servidor.get(c.codigo) ?? 0,
+    pantalla: (web ? apariciones(web, c.codigo) : 0) + (app ? apariciones(app, c.codigo) : 0),
+  }));
+  return { resultados, hayPantallas };
+}
