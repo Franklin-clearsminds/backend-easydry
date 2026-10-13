@@ -24,7 +24,7 @@ import {
   type TipoServicioReto,
 } from './retos.reglas.js';
 
-const ROLES_PULIDOR = ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'];
+const ROLES_PULIDOR = ['PULIDOR'];
 const ROLES_LAVADOR = ['LAVADOR'];
 
 /** "Todas" (o nada) significa sin filtro. */
@@ -550,7 +550,7 @@ export class RetosService {
     return cerrados;
   }
 
-  private async finalizar(reto: any, cerradoPorId: string | null, resultado: string | null) {
+  protected async finalizar(reto: any, cerradoPorId: string | null, resultado: string | null) {
     const ganadores = (await this.calcularRankingReto(reto))
       .filter((f) => f.gana)
       .map(({ participanteId, nombre, valor, posicion }) => ({ participanteId, nombre, valor, posicion }));

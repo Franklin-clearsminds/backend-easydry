@@ -23,7 +23,7 @@ import {
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { Alcance, puedeSobreAgencia, resolverAlcance } from '../../common/permisos/alcance.js';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { esLiderDeAgencia, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 
 /** Columnas por las que se puede ordenar la lista de servicios (nombre público → campo de la base). */
 const ORDEN_SERVICIOS = columnasSimples({
@@ -575,8 +575,8 @@ export class OperacionesService {
     if (catalogo.estado === 'Inactivo') {
       throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar en una nueva OT.`);
     }
-    // El líder (y Backup, que opera como líder) solo registra servicios generales; los especiales los gestiona su coordinación.
-    if (rolDeUsuario(actor) === 'LIDER' && catalogo.categoria !== 'GENERAL') {
+    // El líder (y Backup, que tiene sus mismos permisos) solo registra servicios generales; los especiales los gestiona su coordinación.
+    if (esLiderDeAgencia(rolDeUsuario(actor)) && catalogo.categoria !== 'GENERAL') {
       throw new ForbiddenException('Tu rol solo puede registrar servicios generales.');
     }
     const resolvedCatalogoId = catalogo.id;
@@ -1061,7 +1061,7 @@ export class OperacionesService {
   ): Promise<void> {
     if (!this.notifications) return;
     const [lideres, porRol] = await Promise.all([
-      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: ['LIDER', 'BACKUP'] } } }, select: { id: true } }),
+      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } }, select: { id: true } }),
       this.notifications.resolverDestinatariosPorRol({
         global: ['ADMIN', 'SUPER_ADMIN'],
         regionales: ['SUPERVISOR'],
@@ -1961,7 +1961,7 @@ export class OperacionesService {
 
       if (this.notifications) {
         const [lideres, porRol] = await Promise.all([
-          this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: ['LIDER', 'BACKUP'] } } }, select: { id: true } }),
+          this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } }, select: { id: true } }),
           this.notifications.resolverDestinatariosPorRol({
             global: ['ADMIN', 'SUPER_ADMIN'],
             regionales: ['SUPERVISOR'],

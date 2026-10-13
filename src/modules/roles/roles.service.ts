@@ -242,9 +242,6 @@ export class RolesService implements OnModuleInit {
     if (nombre === ROL_SUPER_ADMIN) {
       throw new ForbiddenException('El rol SUPER_ADMIN es un rol de sistema reservado.');
     }
-    if (normalizarRol(nombre) !== nombre) {
-      throw new BadRequestException(`El nombre '${nombre}' es un alias antiguo de '${normalizarRol(nombre)}'; usa otro nombre.`);
-    }
     return nombre;
   }
 

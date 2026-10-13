@@ -72,7 +72,7 @@ import {
 } from './dto/usuarios-agencia.dto.js';
 
 import { Alcance, SIN_RESULTADOS, puedeSobreAgencia, resolverAlcance, whereAgencias, whereSobreAgencia } from '../../common/permisos/alcance.js';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { esLiderDeAgencia, normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { generarPasswordTemporal } from '../../common/utils/password-temporal.js';
 @Injectable()
@@ -204,7 +204,7 @@ export class AgenciasService {
     else if (norm.includes('SUPERVISOR')) code = 'SUPERVISOR';
     else if (norm.includes('JEFE') && norm.includes('COMERCIAL')) code = 'JEFE_COMERCIAL';
     else if (norm.includes('COORD') && norm.includes('COMERCIAL')) code = 'COORD_COMERCIAL';
-    else if (norm.includes('APROBADOR') || norm.includes('GERENTE')) code = 'APROBADOR';
+    else if (norm.includes('APROBADOR')) code = 'APROBADOR';
     else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER';
     else if (norm.includes('ESPECIALES')) code = 'COORD_SERVICIOS_ESPECIALES';
     else if (norm.includes('PULIDOR')) code = 'PULIDOR';
@@ -212,7 +212,7 @@ export class AgenciasService {
     else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
     else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
     else if (norm.includes('BODEGA') || norm.includes('INVENTARIO') || norm.includes('GESTOR')) code = 'COORD_BODEGA';
-    else if (norm.includes('LAVADOR') || norm === 'OPERADOR') code = 'LAVADOR';
+    else if (norm.includes('LAVADOR')) code = 'LAVADOR';
 
     const roleFound = await this.prisma.role.findFirst({
       where: {
@@ -649,7 +649,7 @@ export class AgenciasService {
     return list.map((a: any) => {
       const ger = a.usuarios?.find((u: any) => {
         const r = (u.role?.namerol || '').toUpperCase();
-        return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+        return r === 'APROBADOR' || r.includes('APROBADOR');
       });
       const lider = a.usuarios?.find((u: any) => {
         const r = (u.role?.namerol || '').toUpperCase();
@@ -835,7 +835,7 @@ export class AgenciasService {
 
     const ger = agencia.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+      return r === 'APROBADOR' || r.includes('APROBADOR');
     });
     const lider = agencia.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
@@ -1227,11 +1227,11 @@ export class AgenciasService {
 
     const ger = finalCreated?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+      return r === 'APROBADOR' || r.includes('APROBADOR');
     });
     const lider = finalCreated?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
+      return r === 'LIDER' || r.includes('LIDER') || r.includes('LÍDER');
     });
 
     const sIdsCreacion = Array.isArray(created.servicioIds) ? (created.servicioIds as number[]) : [];
@@ -1378,7 +1378,7 @@ export class AgenciasService {
     if (dto.gerenteId !== undefined) {
       if (dto.gerenteId && dto.gerenteId !== '0' && dto.gerenteId !== 'null' && dto.gerenteId !== 'undefined') {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['APROBADOR'] } } },
           data: { agenciaId: null },
         });
         await this.prisma.user.update({
@@ -1387,7 +1387,7 @@ export class AgenciasService {
         }).catch((e) => console.warn('No se pudo asignar gerente en updateAgencia', e));
       } else {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['APROBADOR'] } } },
           data: { agenciaId: null },
         });
       }
@@ -1396,7 +1396,7 @@ export class AgenciasService {
     if (dto.liderOperadorId !== undefined) {
       if (dto.liderOperadorId && dto.liderOperadorId !== '0' && dto.liderOperadorId !== 'null' && dto.liderOperadorId !== 'undefined') {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER'] } } },
           data: { agenciaId: null },
         });
         await this.prisma.user.update({
@@ -1405,7 +1405,7 @@ export class AgenciasService {
         }).catch((e) => console.warn('No se pudo asignar líder operador en updateAgencia', e));
       } else {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER'] } } },
           data: { agenciaId: null },
         });
       }
@@ -1456,11 +1456,11 @@ export class AgenciasService {
 
     const ger = finalAgencia?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+      return r === 'APROBADOR' || r.includes('APROBADOR');
     });
     const lider = finalAgencia?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
+      return r === 'LIDER' || r.includes('LIDER') || r.includes('LÍDER');
     });
 
     const serviciosParaSincronizar = Array.isArray(finalServicioIds)
@@ -1643,7 +1643,7 @@ export class AgenciasService {
       return r.includes('PULIDOR');
     });
     const lideres = agencia.usuarios.filter((u) =>
-      ['LIDER_AGENCIA', 'LIDER', 'APROBADOR'].includes(u.role?.namerol || ''),
+      ['LIDER', 'APROBADOR'].includes(u.role?.namerol || ''),
     );
 
     return {
@@ -1797,10 +1797,10 @@ export class AgenciasService {
     return this.limpiarContactoBahia(actualizada, user);
   }
 
-  /** Solo el rol Lavador (y su alias heredado Operador) trabaja en bahía. */
+  /** Solo el rol Lavador trabaja en bahía. */
   private esRolLavador(namerol?: string | null): boolean {
     const r = (namerol || '').trim().toUpperCase();
-    return r === 'LAVADOR' || r === 'OPERADOR' || r.startsWith('LAVADOR ');
+    return r === 'LAVADOR' || r.startsWith('LAVADOR ');
   }
 
   /** Quita al usuario de todas sus bahías activas y cierra su historial de asignación. */
@@ -2313,37 +2313,19 @@ export class AgenciasService {
         'El Supervisor solo puede gestionar usuarios Backup de su propia región.',
       );
     }
-    if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (
-      userRoleCode === 'COORD_BODEGA' ||
-      userRoleCode === 'DISTRIBUIDOR' ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
+    const rolNormalizadoUpdate = normalizarRol(userRoleCode);
+    if (
+      ambitoRolUpdate === 'GLOBAL' ||
+      rolNormalizadoUpdate === 'SUPER_ADMIN' ||
+      rolNormalizadoUpdate === 'ADMIN' ||
+      rolNormalizadoUpdate === 'COORD_BODEGA'
     ) {
-      // Coord Bodega: acceso total nacional (sin agencia ni región fija)
+      // Alcance nacional: sin agencia ni región fija. Solo Coord Bodega conserva bodega (opcional, central).
       agenciaIdToSet = null;
       regionIdToSet = null;
-      if (dto.bodegaId !== undefined) bodegaIdToSet = dto.bodegaId || null;
-    } else if (userRoleCode.includes('SUPERVISOR')) {
-      agenciaIdToSet = null;
-      bodegaIdToSet = null;
-      if (!regionIdToSet) {
-        regionIdToSet = user.regionId;
-      }
-      if (!regionIdToSet) {
-        throw new BadRequestException('El supervisor debe tener una región asignada.');
-      }
-    } else if (
-      userRoleCode === 'ASISTENTE_BODEGA' ||
-      (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
-    ) {
+      if (rolNormalizadoUpdate !== 'COORD_BODEGA') bodegaIdToSet = null;
+      else if (dto.bodegaId !== undefined) bodegaIdToSet = dto.bodegaId || null;
+    } else if (rolNormalizadoUpdate === 'ASISTENTE_BODEGA') {
       // Asistente de Bodega: vinculado a bodega regional
       agenciaIdToSet = null;
       if (dto.bodegaId !== undefined) {
@@ -2395,8 +2377,8 @@ export class AgenciasService {
           'El Supervisor solo puede asignar agencias dentro de su propia región.',
         );
       }
-    } else if (ambitoRolUpdate === 'REGION') {
-      // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
+    } else if (ambitoRolUpdate === 'REGION' || rolNormalizadoUpdate === 'SUPERVISOR') {
+      // Ámbito regional (supervisor, técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
       agenciaIdToSet = null;
       bodegaIdToSet = null;
       if (!regionIdToSet) regionIdToSet = user.regionId;
@@ -2638,33 +2620,18 @@ export class AgenciasService {
         'El Supervisor solo puede crear usuarios Backup para su propia región.',
       );
     }
-    if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (
-      userRoleCode === 'COORD_BODEGA' ||
-      userRoleCode === 'DISTRIBUIDOR' ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
+    const rolNormalizadoCreate = normalizarRol(userRoleCode);
+    if (
+      ambitoRolCreate === 'GLOBAL' ||
+      rolNormalizadoCreate === 'SUPER_ADMIN' ||
+      rolNormalizadoCreate === 'ADMIN' ||
+      rolNormalizadoCreate === 'COORD_BODEGA'
     ) {
-      // Coord Bodega: alcance nacional sin agencia/región; bodega opcional (central)
+      // Alcance nacional: sin agencia ni región fija. Solo Coord Bodega conserva bodega (opcional, central).
       agenciaIdToSet = null;
       regionIdToSet = null;
-    } else if (userRoleCode.includes('SUPERVISOR')) {
-      agenciaIdToSet = null;
-      bodegaIdToSet = null;
-      if (!regionIdToSet) {
-        throw new BadRequestException('El supervisor debe tener una región asignada.');
-      }
-    } else if (
-      userRoleCode === 'ASISTENTE_BODEGA' ||
-      (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
-    ) {
+      if (rolNormalizadoCreate !== 'COORD_BODEGA') bodegaIdToSet = null;
+    } else if (rolNormalizadoCreate === 'ASISTENTE_BODEGA') {
       agenciaIdToSet = null;
       if (!bodegaIdToSet) {
         throw new BadRequestException('El Asistente de Bodega debe estar asignado a una bodega regional (bodegaId).');
@@ -2677,7 +2644,7 @@ export class AgenciasService {
       if (!regionIdToSet) {
         throw new BadRequestException('La bodega asignada al asistente debe tener región.');
       }
-    } else if (userRoleCode === 'LIDER' || userRoleCode.includes('LIDER')) {
+    } else if (rolNormalizadoCreate === 'LIDER') {
       if (!agenciaIdToSet) {
         throw new BadRequestException('El Líder Operador debe tener una agencia asignada.');
       }
@@ -2720,8 +2687,8 @@ export class AgenciasService {
           );
         }
       }
-    } else if (ambitoRolCreate === 'REGION') {
-      // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
+    } else if (ambitoRolCreate === 'REGION' || rolNormalizadoCreate === 'SUPERVISOR') {
+      // Ámbito regional (supervisor, técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
       agenciaIdToSet = null;
       bodegaIdToSet = null;
       if (!regionIdToSet) {
@@ -2891,10 +2858,10 @@ export class AgenciasService {
 
   /** Condiciones sobre el rol de cada segmento rápido (la pantalla los llama píldoras). */
   private static readonly SEGMENTOS_USUARIO: Record<string, string[]> = {
-    lavadores: ['LAVADOR', 'PULIDOR', 'OPERADOR'],
+    lavadores: ['LAVADOR', 'PULIDOR'],
     supervisores: ['SUPERVISOR', 'COORD'],
-    bodega: ['BODEGA', 'DISTRIBUIDOR', 'INVENTARIO'],
-    admins: ['ADMIN', 'GERENTE', 'AUDITOR'],
+    bodega: ['BODEGA', 'INVENTARIO'],
+    admins: ['ADMIN', 'AUDITOR'],
   };
 
   private whereSegmentoUsuario(segmento?: string): Record<string, unknown> | undefined {
@@ -3014,13 +2981,13 @@ export class AgenciasService {
     currentUser?: any,
   ): any {
     const rolUsuario = currentUser ? (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || (typeof currentUser?.role === 'string' ? currentUser.role : '')) : '';
-    const isLider = ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA', 'BACKUP'].includes(rolUsuario);
+    const isLider = esLiderDeAgencia(normalizarRol(rolUsuario));
     const isCoordEspeciales = !isLider && (rolUsuario === 'COORD_SERVICIOS_ESPECIALES' || dto.categoriaRol === 'PULIDOR' || dto.rol === 'PULIDOR');
 
-    const rolesPulidor = ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
-    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía', 'OPERADOR'];
+    const rolesPulidor = ['PULIDOR', 'Pulidor'];
+    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía'];
 
-    let targetRoles: string[] = ['LAVADOR', 'PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
+    let targetRoles: string[] = ['LAVADOR', 'PULIDOR', 'TECNICO', 'Pulidor'];
 
     if (isLider) {
       // El líder ve a quien tiene asignado en su agencia: sus lavadores y su pulidor fijo (el móvil no tiene agencia).

@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Global, Injectable, Module } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../modules/prisma/prisma.service.js';
-import { rolDeUsuario } from './alias-roles.js';
+import { esLiderDeAgencia, rolDeUsuario } from './alias-roles.js';
 import { resolverAlcance, puedeSobreAgencia } from './alcance.js';
 
 export type ReglaDecision = 'TITULAR' | 'RESPALDO' | 'ADMIN';
@@ -31,7 +31,7 @@ export class DecisionesService {
   /** Usuario activo con rol APROBADOR asignado a esa agencia. */
   async tieneAprobadorDesignado(agenciaId: string): Promise<boolean> {
     const n = await this.prisma.user.count({
-      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR', 'GERENTE'] }, estado: 1 } },
+      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR'] }, estado: 1 } },
     });
     return n > 0;
   }
@@ -41,7 +41,7 @@ export class DecisionesService {
     const ids = Array.from(new Set(agenciaIds.filter(Boolean)));
     if (!ids.length) return new Set();
     const filas = await this.prisma.user.findMany({
-      where: { agenciaId: { in: ids }, estado: 1, role: { namerol: { in: ['APROBADOR', 'GERENTE'] }, estado: 1 } },
+      where: { agenciaId: { in: ids }, estado: 1, role: { namerol: { in: ['APROBADOR'] }, estado: 1 } },
       select: { agenciaId: true },
     });
     return new Set(filas.map((f) => String(f.agenciaId)));
@@ -88,7 +88,7 @@ export class DecisionesService {
     if (aprobado) {
       throw new ForbiddenException('Un servicio aprobado solo lo puede anular un administrador.');
     }
-    if (rol === 'LIDER' || rol === 'APROBADOR') {
+    if (esLiderDeAgencia(rol) || rol === 'APROBADOR') {
       if (user?.agenciaId && user.agenciaId === agencia.id) return 'TITULAR';
       throw new ForbiddenException('Solo puedes anular servicios de tu agencia.');
     }

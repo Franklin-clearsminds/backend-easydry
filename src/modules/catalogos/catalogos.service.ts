@@ -1,6 +1,6 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { normalizarRol } from '../../common/permisos/alias-roles.js';
+import { normalizarRol, ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
 import { listarOpciones } from '../../common/utils/opciones.js';
@@ -12,7 +12,7 @@ import {
 } from './dto/servicios.dto.js';
 
 // Roles cuyo catálogo se acota a Agencia.servicioIds aunque no tengan sede (entonces no ven nada)
-const ROLES_SCOPED = ['LIDER', 'APROBADOR'];
+const ROLES_SCOPED = [...ROLES_LIDER_AGENCIA, 'APROBADOR'];
 // Estos roles ven todo el catálogo: no se atan a región, agencia ni marca.
 const ROLES_SIN_ALCANCE = ['SUPER_ADMIN', 'ADMIN'];
 

@@ -237,7 +237,7 @@ function fechaFiltro(valor: unknown, finDeDia = false): Date | null {
 import { randomUUID } from 'crypto';
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
-import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { esLiderDeAgencia, normalizarRol, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 @Injectable()
 export class InventarioService {
   private readonly logger = new Logger(InventarioService.name);
@@ -259,7 +259,7 @@ export class InventarioService {
     }
     if (params.tipo === 'DESPACHO_AGENCIA' && params.destinoAgenciaId) {
       const lideres = await this.prisma.user.findMany({
-        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
+        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } },
         select: { id: true },
       });
       return lideres.map((u) => u.id);
@@ -432,7 +432,7 @@ export class InventarioService {
    *  - el resto: el stock físico de UNA bodega (la del asistente, la pedida o la Central).
    */
   private async alcanceInsumos(dto: ListInsumosDto, user?: any) {
-    const ROLES_SCOPED = ['LIDER', 'LIDER_AGENCIA', 'APROBADOR', 'LAVADOR'];
+    const ROLES_SCOPED = [...ROLES_LIDER_AGENCIA, 'APROBADOR', 'LAVADOR'];
     const userRole = normalizarRol(
       user?.roleDetails?.namerol ||
       user?.role?.namerol ||
@@ -817,7 +817,7 @@ export class InventarioService {
       (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
     const isSupervisor = userRole.includes('SUPERVISOR');
     const isPulidorRole = userRole.includes('PULIDOR');
-    const isAgencia = userRole.includes('LIDER') || (isPulidorRole && !!agenciaIdUsuario);
+    const isAgencia = userRole.includes('LIDER') || esLiderDeAgencia(userRole) || (isPulidorRole && !!agenciaIdUsuario);
     const isPulidor = isPulidorRole && !agenciaIdUsuario;
 
     if (isGlobal) {
@@ -1353,7 +1353,7 @@ export class InventarioService {
         const alc = resolverAlcance(usuario);
         if (alc.tipo === 'REGION') {
           whereAgencia.regionId = alc.regionId;
-        } else if (rol === 'LIDER' && usuario.agencia?.regionId) {
+        } else if (esLiderDeAgencia(rol) && usuario.agencia?.regionId) {
           // El líder puede consultar agencias de su región para seleccionar destinos de despacho.
           whereAgencia.regionId = usuario.agencia.regionId;
         } else if (alc.tipo === 'AGENCIA') {
@@ -2117,7 +2117,7 @@ export class InventarioService {
 
   private async calcularStockPulidores(dto: { pulidorId?: string; regionId?: string }, usuarioId?: string) {
     const wherePulidor: any = {
-      role: { namerol: { in: ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'] } },
+      role: { namerol: { in: ['PULIDOR'] } },
       estado: 1,
     };
 
@@ -2281,7 +2281,7 @@ export class InventarioService {
 
       if (alertaPulidor) pulidoresEnAlerta++;
 
-      const esFijo = !!pul.agenciaId || pul.role?.namerol === 'PULIDOR_FIJO';
+      const esFijo = !!pul.agenciaId;
 
       return {
         id: pul.id,
@@ -2802,7 +2802,7 @@ export class InventarioService {
       );
     }
 
-    const isLider = role === 'LIDER' || role === 'LIDER_AGENCIA' || role === 'LIDER_OPERADOR';
+    const isLider = esLiderDeAgencia(role);
     const isAsistente =
       role === 'ASISTENTE_BODEGA' || (role.includes('ASISTENTE') && role.includes('BODEGA'));
 
@@ -2888,7 +2888,7 @@ export class InventarioService {
     const isCoord = rol === 'COORD_BODEGA' || (rol.includes('COORD') && rol.includes('BODEGA'));
     const isAsistente =
       rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
-    const isLider = rol === 'LIDER';
+    const isLider = esLiderDeAgencia(rol);
 
     if (!isCoord && !isAsistente && !isLider && !isDirector) {
       throw new ForbiddenException('Tu rol no está autorizado para crear despachos.');
@@ -3563,7 +3563,7 @@ export class InventarioService {
     const esAdmin = rol === 'ADMIN' && !esSuperAdmin;
     const esPulidor = rol.includes('PULIDOR');
     const esAsistente = (rol.includes('ASISTENTE') && rol.includes('BODEGA')) || rol === 'ASISTENTE_BODEGA';
-    const esLider = !esSuperAdmin && !esAdmin && !esAsistente && !esPulidor && rol.includes('LIDER') && !!viewer?.agenciaId;
+    const esLider = !esSuperAdmin && !esAdmin && !esAsistente && !esPulidor && (rol.includes('LIDER') || esLiderDeAgencia(rol)) && !!viewer?.agenciaId;
 
     // Agencia destino: un líder solo ve la suya (aunque el cliente pida otra); los demás pueden filtrar por la que elijan.
     const filtroAgencia = esLider
@@ -3721,7 +3721,7 @@ export class InventarioService {
     }
 
     const { viewer, rol, esSuperAdmin, esAdmin } = ctx;
-    const esLiderRol = rol === 'LIDER' || rol === 'LIDER_AGENCIA' || rol === 'LIDER_OPERADOR';
+    const esLiderRol = esLiderDeAgencia(rol);
     const esAsistenteRol = rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
 
     return filas.map((h) => {
@@ -3837,7 +3837,7 @@ export class InventarioService {
     const isSuperAdmin = rol.includes('SUPER') && rol.includes('ADMIN');
     const isCoord = rol.includes('COORD') || rol === 'ADMIN';
     const isAsistente = rol.includes('ASISTENTE') && rol.includes('BODEGA');
-    const isLider = rol.includes('LIDER') || rol.includes('OPERADOR');
+    const isLider = rol.includes('LIDER') || esLiderDeAgencia(rol);
     const isPulidor = rol.includes('PULIDOR');
 
     const todos = await this.listarDespachosPlano({ estadoDespacho: 'EN_TRANSITO' }, usuarioId);
@@ -3930,7 +3930,7 @@ export class InventarioService {
       this.prisma.user.findMany({
         where: {
           estado: 1,
-          role: { namerol: { in: ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'] } },
+          role: { namerol: { in: ['PULIDOR'] } },
         },
         select: {
           id: true,
@@ -4135,7 +4135,7 @@ export class InventarioService {
         userRole === 'ASISTENTE_BODEGA' ||
         (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
       const isLiderSede =
-        userRole === 'LIDER' ||
+        esLiderDeAgencia(userRole) ||
         userRole.includes('LIDER') ||
         userRole === 'APROBADOR';
       const isSupervisorRegional =
@@ -4162,7 +4162,7 @@ export class InventarioService {
           const pulidoresRegion = await this.prisma.user.findMany({
             where: {
               regionId,
-              role: { namerol: { in: ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'] } },
+              role: { namerol: { in: ['PULIDOR'] } },
             },
             select: { id: true },
           });
