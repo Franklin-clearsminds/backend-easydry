@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { auditar } from './auditoria-permisos.js';
 import { SIN_PANTALLA, SIN_SERVIDOR } from './auditoria-acciones.baseline.js';
+import { EXCEPCIONES_SERVIDOR } from './auditoria-acciones.excepciones.js';
 
 /**
  * Cada casilla del editor de roles debe hacer algo cuando se enciende y cuando se apaga:
@@ -13,13 +14,26 @@ describe('auditoría de las casillas del editor de roles', () => {
   const { resultados, hayPantallas } = auditar();
 
   it('toda casilla nueva que se agrega al catálogo nace exigida por el servidor', () => {
-    const sinCablear = resultados.filter((r) => r.servidor === 0 && !SIN_SERVIDOR.includes(r.codigo)).map((r) => r.codigo);
+    const sinCablear = resultados.filter((r) => r.servidor === 0 && !SIN_SERVIDOR.includes(r.codigo) && !(r.codigo in EXCEPCIONES_SERVIDOR)).map((r) => r.codigo);
     expect(sinCablear, 'casillas que ningún endpoint exige (agrega @Permiso en el endpoint o, si es deuda conocida, a la línea base)').toEqual([]);
   });
 
   it('la línea base de servidor no conserva casillas que ya están exigidas', () => {
     const resueltas = SIN_SERVIDOR.filter((c) => (resultados.find((r) => r.codigo === c)?.servidor ?? 0) > 0);
     expect(resueltas, 'ya las exige un endpoint: bórralas de SIN_SERVIDOR').toEqual([]);
+  });
+
+  it('cada excepción existe en el catálogo, trae su motivo y no está ya exigida por el servidor', () => {
+    for (const [codigo, motivo] of Object.entries(EXCEPCIONES_SERVIDOR)) {
+      const r = resultados.find((x) => x.codigo === codigo);
+      expect(r, `la excepción ${codigo} ya no existe en el catálogo`).toBeDefined();
+      expect(motivo.length, `la excepción ${codigo} necesita un motivo`).toBeGreaterThan(30);
+      expect(r!.servidor, `${codigo} ya la exige un endpoint: bórrala de las excepciones`).toBe(0);
+    }
+  });
+
+  it('una casilla no puede estar a la vez en la línea base y en las excepciones', () => {
+    expect(SIN_SERVIDOR.filter((c) => c in EXCEPCIONES_SERVIDOR)).toEqual([]);
   });
 
   it('la línea base de servidor no conserva códigos que ya no existen en el catálogo', () => {
