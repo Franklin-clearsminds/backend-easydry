@@ -237,6 +237,7 @@ function fechaFiltro(valor: unknown, finDeDia = false): Date | null {
 import { randomUUID } from 'crypto';
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { esLiderDeAgencia, normalizarRol, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 @Injectable()
 export class InventarioService {
@@ -1022,17 +1023,9 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, bodega: { select: { id: true, nombre: true, regionId: true } } },
     });
-    const role = normalizarRol(usuario?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '');
-    const isSuper = role === 'SUPER_ADMIN' || (role.includes('SUPER') && role.includes('ADMIN'));
-    const isAdmin = role === 'ADMIN';
-    const isCoord = role === 'COORD_BODEGA' || (role.includes('COORD') && role.includes('BODEGA'));
-    const isAsistente = role === 'ASISTENTE_BODEGA' || (role.includes('ASISTENTE') && role.includes('BODEGA'));
-
-    if (!isSuper && !isAdmin && !isCoord && !isAsistente) {
-      throw new ForbiddenException(
-        'Solo Super Admin, Admin, Coordinador de Bodega o Asistente de Bodega pueden reajustar stock.',
-      );
-    }
+    // Quien reajusta lo decide su casilla (bodegas, agencias o kits de pulidores) y su ámbito, no el nombre del rol.
+    const ambitoGlobal = resolverAlcance(currentUser).tipo === 'GLOBAL';
+    const isAsistente = !ambitoGlobal;
 
     const cantidadContada = Number(dto.cantidadContada);
     if (!Number.isFinite(cantidadContada) || cantidadContada < 0) {
@@ -1095,6 +1088,10 @@ export class InventarioService {
     const pulidorId = stock?.pulidorId || dto.pulidorId || null;
     if (!insumoId || (!bodegaId && !agenciaId && !pulidorId)) {
       throw new BadRequestException('Indica el insumo y la ubicación (bodega, agencia o pulidor) a reajustar.');
+    }
+    const casillaReajuste = pulidorId ? 'inventario.pulidores.reajustar' : agenciaId ? 'inventario.agencias.reajustar' : 'inventario.bodegas.reajustar';
+    if (!tienePermiso(currentUser, casillaReajuste)) {
+      throw new ForbiddenException('Tu rol no puede reajustar el stock de ' + (pulidorId ? 'los kits de pulidores.' : agenciaId ? 'las agencias.' : 'las bodegas.'));
     }
 
     // Alcance del asistente: su bodega asignada, o agencias y pulidores de su región.
