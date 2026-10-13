@@ -3330,6 +3330,7 @@ export class InventarioService {
       return this.unidadesABase(unidades, Number(ins?.contenidoNeto ?? 1));
     };
 
+    let hayFaltantes = false;
     if (dto.accion === 'RECIBIDO') {
       const detallesActualizados = await this.prisma.movimientoDetalle.findMany({
         where: { movimientoId: movimiento.id },
@@ -3360,14 +3361,22 @@ export class InventarioService {
             usuarioId,
           );
         } else if (reservadoAlCrear && baseSobrante > 0) {
-          // Parcial: devolver al origen lo no recibido (en base)
-          await this.devolverStockOrigen(
-            det.insumoId,
-            baseSobrante,
-            origenStockConfirm,
+          // Parcial: lo no recibido queda retenido como faltante hasta que la bodega de origen decida (devolverlo o darlo de baja).
+          await this.prisma.$executeRawUnsafe(
+            `INSERT INTO "FaltanteDespacho" ("id", "movimientoId", "numeroGuia", "insumoId", "cantidadUnd", "cantidadBase",
+                                             "origenBodegaId", "origenAgenciaId", "motivoRecepcion")
+             VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7, $8, $9)`,
+            randomUUID(),
+            movimiento.id,
             movimiento.numeroGuia,
-            usuarioId,
+            det.insumoId,
+            Math.max(0, enviadaUnd - recibidaUnd),
+            baseSobrante,
+            origenBodegaId,
+            origenAgenciaId,
+            (dto.observaciones || '').toString().trim() || null,
           );
+          hayFaltantes = true;
         }
 
         if (baseRecibida > 0) {
@@ -3413,8 +3422,136 @@ export class InventarioService {
     if (this.notifications && movimiento.usuarioDespachaId) {
       void this.notificarConfirmacionDespacho(movimiento, nuevoEstado, origenAgenciaId, origenBodegaId, motivoRechazo);
     }
+    if (hayFaltantes) {
+      void this.notificarFaltantesDespacho(movimiento, origenAgenciaId, origenBodegaId, (dto.observaciones || '').toString().trim());
+    }
 
-    return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado };
+    return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado, faltantes: hayFaltantes };
+  }
+
+  /** Avisa a la bodega de origen que una recepción parcial dejó producto por resolver (devolver al stock o dar de baja). */
+  private async notificarFaltantesDespacho(
+    movimiento: { id: string; numeroGuia: string; usuarioDespachaId: string | null },
+    origenAgenciaId: string | null,
+    origenBodegaId: string | null,
+    observacion: string,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    let regionOrigenId: string | null = null;
+    if (origenAgenciaId) {
+      const ag = await this.prisma.agencia.findUnique({ where: { id: origenAgenciaId }, select: { regionId: true } });
+      regionOrigenId = ag?.regionId || null;
+    } else if (origenBodegaId) {
+      const bod = await this.prisma.bodega.findUnique({ where: { id: origenBodegaId }, select: { regionId: true } });
+      regionOrigenId = bod?.regionId || null;
+    }
+    const porRol = await this.notifications.resolverDestinatariosPorRol({
+      global: ['ADMIN', 'SUPER_ADMIN', 'COORD_BODEGA'],
+      regionales: ['ASISTENTE_BODEGA', 'SUPERVISOR'],
+      regionId: regionOrigenId,
+    });
+    const ids = [...new Set([movimiento.usuarioDespachaId, ...porRol].filter(Boolean))] as string[];
+    void this.notifications.notificarUsuarios(
+      ids,
+      'Faltante en un envío por resolver',
+      `La guía ${movimiento.numeroGuia} se recibió incompleta${observacion ? `: ${observacion}` : ''}. Decide qué hacer con lo que no llegó: devolverlo al stock o darlo de baja.`,
+      { type: 'DESPACHO_FALTANTE', movimientoId: movimiento.id },
+      { tipo: 'DESPACHO_FALTANTE', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: movimiento.id },
+    );
+  }
+
+  /** Alcance de quien resuelve: faltantes cuyo origen está en su país, región o agencia. */
+  private condicionAlcanceFaltantes(user: any, params: unknown[]): string {
+    const a = resolverAlcance(user);
+    if (a.tipo === 'GLOBAL') return 'TRUE';
+    if (a.tipo === 'REGION') {
+      params.push(a.regionId);
+      return `COALESCE(b."regionId", ag."regionId") = $${params.length}`;
+    }
+    if (a.tipo === 'AGENCIA') {
+      params.push(a.agenciaId);
+      return `f."origenAgenciaId" = $${params.length}`;
+    }
+    return 'FALSE';
+  }
+
+  async listFaltantesDespacho(dto: { estado?: string }, user: any) {
+    const params: unknown[] = [dto?.estado === 'RESUELTO' ? 'RESUELTO' : 'PENDIENTE'];
+    const alcance = this.condicionAlcanceFaltantes(user, params);
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT f."id", f."movimientoId", f."numeroGuia", f."insumoId", f."cantidadUnd", f."motivoRecepcion", f."estado",
+              f."resolucion", f."observacionResolucion", f."resueltoEn", f."createdAt",
+              i."nombre" AS "insumoNombre", i."codigoSKU" AS "insumoSku",
+              COALESCE(b."nombre", ag."nombre") AS "origenNombre"
+       FROM "FaltanteDespacho" f
+       JOIN "Insumo" i ON i."id" = f."insumoId"
+       LEFT JOIN "bodegas" b ON b."id" = f."origenBodegaId"
+       LEFT JOIN "Agencia" ag ON ag."id" = f."origenAgenciaId"
+       WHERE f."estado" = $1 AND ${alcance}
+       ORDER BY f."createdAt" DESC
+       LIMIT 200`,
+      ...params,
+    );
+    return rows.map((r) => ({ ...r, cantidadUnd: Number(r.cantidadUnd) }));
+  }
+
+  /** Decide qué pasa con lo que no llegó: DEVOLVER lo regresa al stock del origen; BAJA lo registra como merma (dañado o perdido). */
+  async resolverFaltanteDespacho(dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string }, user: any) {
+    if (dto.resolucion !== 'DEVOLVER' && dto.resolucion !== 'BAJA') {
+      throw new BadRequestException('La resolución debe ser DEVOLVER o BAJA.');
+    }
+    const observacion = String(dto.observacion || '').trim();
+    if (observacion.length < 10) {
+      throw new BadRequestException('Explica qué pasó con el producto (mínimo 10 caracteres).');
+    }
+    const params: unknown[] = [dto.id];
+    const alcance = this.condicionAlcanceFaltantes(user, params);
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT f.* FROM "FaltanteDespacho" f
+       LEFT JOIN "bodegas" b ON b."id" = f."origenBodegaId"
+       LEFT JOIN "Agencia" ag ON ag."id" = f."origenAgenciaId"
+       WHERE f."id" = $1 AND ${alcance}
+       LIMIT 1`,
+      ...params,
+    );
+    const f = rows[0];
+    if (!f) throw new NotFoundException('Faltante no encontrado o fuera de tu alcance.');
+    if (f.estado !== 'PENDIENTE') throw new BadRequestException('Este faltante ya fue resuelto.');
+
+    // Se marca primero (solo si sigue pendiente) para que dos clics seguidos no devuelvan el stock dos veces.
+    const marcado = await this.prisma.$executeRawUnsafe(
+      `UPDATE "FaltanteDespacho"
+       SET "estado" = 'RESUELTO', "resolucion" = $2, "observacionResolucion" = $3, "resueltoPorId" = $4, "resueltoEn" = NOW()
+       WHERE "id" = $1 AND "estado" = 'PENDIENTE'`,
+      f.id,
+      dto.resolucion,
+      observacion,
+      user.id,
+    );
+    if (!marcado) throw new BadRequestException('Este faltante ya fue resuelto.');
+
+    const base = Number(f.cantidadBase);
+    const origen = { bodegaId: f.origenBodegaId, agenciaId: f.origenAgenciaId };
+    if (dto.resolucion === 'DEVOLVER') {
+      await this.devolverStockOrigen(f.insumoId, base, origen, f.numeroGuia, user.id);
+    } else {
+      const stock = await this.obtenerStockOrigen(f.insumoId, origen);
+      const actual = Number(stock?.cantidadActual ?? 0);
+      await this.prisma.kardexMovimiento.create({
+        data: {
+          insumoId: f.insumoId,
+          ubicacionId: origen.agenciaId || origen.bodegaId || 'BODEGA_CENTRAL',
+          tipoMovimiento: 'AJUSTE_MERMA',
+          cantidad: -base,
+          // El producto ya salió del stock al despachar: la baja no mueve el saldo, solo deja constancia de dónde terminó.
+          stockAnterior: actual,
+          stockPosterior: actual,
+          referenciaId: f.numeroGuia,
+          usuarioId: user.id,
+        },
+      });
+    }
+    return { ok: true, resolucion: dto.resolucion };
   }
 
   /** Avisa a quien despachó, admin/super admin, coordinador de bodega (nacional), asistente de bodega

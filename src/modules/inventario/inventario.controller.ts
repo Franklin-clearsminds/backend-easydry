@@ -323,6 +323,22 @@ export class InventarioController {
     return this.inventarioService.rechazarDespacho(dto, user.id);
   }
 
+  @Permiso('envios.faltantes')
+  @Post('despachos/faltantes/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Faltantes de envíos recibidos de forma parcial, por resolver por la bodega de origen' })
+  async listFaltantes(@Body() dto: { estado?: string }, @CurrentUser() user: any) {
+    return this.inventarioService.listFaltantesDespacho(dto, user);
+  }
+
+  @Permiso('envios.faltantes')
+  @Post('despachos/faltantes/resolver')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Devolver al stock o dar de baja lo que no llegó en un envío' })
+  async resolverFaltante(@Body() dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string }, @CurrentUser() user: any) {
+    return this.inventarioService.resolverFaltanteDespacho(dto, user);
+  }
+
   @Permiso('despachos.ver')
   @Post('despachos/list')
   @HttpCode(HttpStatus.OK)

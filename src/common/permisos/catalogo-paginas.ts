@@ -262,6 +262,7 @@ export const PAGINAS: readonly PaginaDef[] = [
   pagina('envios', 'Envíos & Confirmación', '/envios', 'envios', ['despachos.ver', 'agencias.ver'], [], [
     accion('envios.crear', 'Crear despacho', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
     accion('envios.confirmar', 'Confirmar recepción', ['despachos.recibir']),
+    accion('envios.faltantes', 'Resolver faltantes de envíos', ['despachos.ver'], { migrarSi: ['despachos.crear'] }),
     accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir']),
   ]),
 

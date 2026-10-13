@@ -680,6 +680,7 @@ model Insumo {
 
   stocks              StockUbicacion[]
   movimientos         MovimientoDetalle[]
+  faltantesDespacho   FaltanteDespacho[]
   alertas             AlertaStock[]
   recetas             RecetaInsumo[]
   consumos            ConsumoServicio[]
@@ -811,6 +812,7 @@ model MovimientoInventario {
   fechaRecepcion DateTime?
   observaciones  String?
   detalles       MovimientoDetalle[]
+  faltantes      FaltanteDespacho[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -823,6 +825,30 @@ model MovimientoInventario {
   @@index([destinoBodegaId])
   @@index([destinoAgenciaId])
   @@index([destinoPulidorId])
+}
+
+/// Lo que no llegó en una recepción parcial: queda retenido hasta que la bodega de origen lo devuelva o lo dé de baja.
+model FaltanteDespacho {
+  id                    String               @id @default(uuid())
+  movimientoId          String
+  movimiento            MovimientoInventario @relation(fields: [movimientoId], references: [id], onDelete: Cascade)
+  numeroGuia            String
+  insumoId              String
+  insumo                Insumo               @relation(fields: [insumoId], references: [id])
+  cantidadUnd           Decimal              @db.Decimal(10, 3)
+  cantidadBase          Decimal              @db.Decimal(12, 4)
+  origenBodegaId        String?
+  origenAgenciaId       String?
+  motivoRecepcion       String?
+  estado                String               @default("PENDIENTE")
+  resolucion            String?
+  observacionResolucion String?
+  resueltoPorId         String?
+  resueltoEn            DateTime?
+  createdAt             DateTime             @default(now())
+
+  @@index([estado])
+  @@index([movimientoId])
 }
 
 model MovimientoDetalle {
@@ -943,6 +969,7 @@ enum TipoNotificacion {
   MAQUINA_DADA_DE_BAJA
   USUARIO_ACTUALIZADO
   DESPACHO_CONFIRMADO
+  DESPACHO_FALTANTE
 }
 
 model Notification {
