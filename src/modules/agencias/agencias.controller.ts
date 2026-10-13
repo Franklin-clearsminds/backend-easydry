@@ -451,7 +451,7 @@ export class AgenciasController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Registrar nuevo operador y asignarlo a agencia y bahía en BD (SUPER_ADMIN, ADMIN)' })
   async createOperador(@Body() dto: CreateOperadorDto, @CurrentUser() user: any) {
-    return this.agenciasService.createOperador(dto, user?.id);
+    return this.agenciasService.createOperador(dto, user?.id, user);
   }
 
   @Permiso('operadores.editar', 'operadores.rol')
@@ -459,7 +459,7 @@ export class AgenciasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar operador y su asignación de bahía en BD (SUPER_ADMIN, ADMIN)' })
   async updateOperador(@Body() dto: UpdateOperadorDto, @CurrentUser() user: any) {
-    return this.agenciasService.updateOperador(dto, user?.id);
+    return this.agenciasService.updateOperador(dto, user?.id, user);
   }
 
   // =========================================================================

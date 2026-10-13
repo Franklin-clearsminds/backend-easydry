@@ -73,7 +73,7 @@ import {
 
 import { Alcance, SIN_RESULTADOS, puedeSobreAgencia, resolverAlcance, whereAgencias, whereSobreAgencia } from '../../common/permisos/alcance.js';
 import { esLiderDeAgencia, normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
-import { tienePermiso } from '../../common/permisos/capacidades.js';
+import { tieneAlgunPermiso, tienePermiso } from '../../common/permisos/capacidades.js';
 import { generarPasswordTemporal } from '../../common/utils/password-temporal.js';
 import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
 @Injectable()
@@ -3075,7 +3075,24 @@ export class AgenciasService {
     }), currentUser);
   }
 
-  async createOperador(dto: CreateOperadorDto, creatorId?: string) {
+  /**
+   * Cada botón de Gestión de Lavadores tiene su permiso: editar datos, cambiar el rol, asignar a una bahía y quitar de una bahía son
+   * cuatro casillas distintas aunque viajen en el mismo formulario. `actor` solo falta en llamadas internas (sin sesión web).
+   */
+  private exigirPermiso(actor: any, codigos: string[], accion: string): void {
+    if (!actor) return;
+    if (!tieneAlgunPermiso(actor, codigos)) throw new ForbiddenException(`Tu rol no puede ${accion}.`);
+  }
+
+  /** Asignar a una bahía lo permiten Gestión de Lavadores y Gestión de Agencias (la misma acción en dos pantallas). */
+  private static readonly PERMISOS_ASIGNAR_BAHIA = ['operadores.bahia.asignar', 'agencias.bahias.asignar'];
+  private static readonly PERMISOS_QUITAR_BAHIA = ['operadores.bahia.quitar', 'agencias.bahias.asignar'];
+
+  async createOperador(dto: CreateOperadorDto, creatorId?: string, actor?: any) {
+    // Registrar con una bahía ya asignada es asignar: exige además ese permiso.
+    const quiereBahia = !!dto.bahiaId && !!dto.bahiaId.trim() && !/sin bah[ií]a/i.test(dto.bahiaId);
+    if (quiereBahia) this.exigirPermiso(actor, AgenciasService.PERMISOS_ASIGNAR_BAHIA, 'asignar lavadores a una bahía');
+
     const agencia = await this.prisma.agencia.findFirst({
       where: {
         OR: [
@@ -3198,7 +3215,7 @@ export class AgenciasService {
     return { ...this.mapUserToOperador(created), passwordTemporal };
   }
 
-  async updateOperador(dto: UpdateOperadorDto, updaterId?: string) {
+  async updateOperador(dto: UpdateOperadorDto, updaterId?: string, actor?: any) {
     const user = await this.prisma.user.findUnique({
       where: { id: dto.id },
       include: { role: { select: { namerol: true } }, bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } } }
@@ -3246,6 +3263,24 @@ export class AgenciasService {
       if (role) {
         dataToUpdate.roleId = role.id;
         rolNombreFinal = role.namerol;
+      }
+    }
+
+    // Permisos por botón: solo se exige cada uno si ese cambio ocurre de verdad (el formulario manda todos los campos).
+    const cambiaRol = dataToUpdate.roleId !== undefined && dataToUpdate.roleId !== user.roleId;
+    const cambiaDatos =
+      (dataToUpdate.name !== undefined && dataToUpdate.name !== user.name) ||
+      (dataToUpdate.lastname !== undefined && dataToUpdate.lastname !== user.lastname) ||
+      (dataToUpdate.estado !== undefined && dataToUpdate.estado !== user.estado) ||
+      (dataToUpdate.agenciaId !== undefined && dataToUpdate.agenciaId !== user.agenciaId);
+    if (cambiaDatos) this.exigirPermiso(actor, ['operadores.editar'], 'editar los datos de lavadores y pulidores');
+    if (cambiaRol) this.exigirPermiso(actor, ['operadores.rol'], 'cambiar el rol de lavadores y pulidores');
+    if (dto.bahiaId !== undefined) {
+      const actual = user.bahiaOperadores?.[0]?.bahia;
+      const sinBahia = !dto.bahiaId || /sin bah[ií]a/i.test(dto.bahiaId);
+      if (sinBahia && actual) this.exigirPermiso(actor, AgenciasService.PERMISOS_QUITAR_BAHIA, 'dejar a un lavador sin bahía');
+      if (!sinBahia && (!actual || (actual.id !== dto.bahiaId && actual.nombre !== dto.bahiaId))) {
+        this.exigirPermiso(actor, AgenciasService.PERMISOS_ASIGNAR_BAHIA, 'asignar lavadores a una bahía');
       }
     }
 
