@@ -131,11 +131,12 @@ describe('opciones de agencias, regiones, clientes, bahías, operadores y usuari
 
   it('regiones y clientes: filtro de estado y orden alfabético', async () => {
     const reg: any = await svc.listRegionesOpciones({ estado: 1, search: env.marca } as any);
-    expect(reg.items).toEqual([{ value: norte.id, label: norte.nombre, sublabel: norte.codigo }]);
+    // Las opciones llevan el estado: los desplegables que piden la lista completa filtran por activas sin pedir la pestaña Regiones.
+    expect(reg.items).toEqual([{ value: norte.id, label: norte.nombre, sublabel: norte.codigo, estado: 1 }]);
     const sinResultados: any = await svc.listRegionesOpciones({ estado: 0, search: env.marca } as any);
     expect(sinResultados.items).toEqual([]);
     const cli: any = await svc.listClientesOpciones({ search: env.marca } as any);
-    expect(cli.items).toEqual([{ value: acme.id, label: acme.nombre }]);
+    expect(cli.items).toEqual([{ value: acme.id, label: acme.nombre, estado: 1 }]);
   });
 
   it('bahías: por agencia, con código y agencia en la subetiqueta', async () => {

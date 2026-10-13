@@ -139,7 +139,7 @@ describe('migración de roles existentes', () => {
   it('los roles comerciales ven en solo lectura; solo el Coordinador ve precios', () => {
     for (const nombre of ['COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
       const caps = ROLES_BASE.find((r) => r.namerol === nombre)!.capacidades;
-      expect(caps).toEqual(expect.arrayContaining(['pagina.agencias', 'pagina.operadores', 'pagina.mapa', 'pagina.inventario', 'pagina.envios']));
+      expect(caps).toEqual(expect.arrayContaining(['pagina.agencias', 'pagina.agencias.mapa', 'pagina.operadores', 'pagina.inventario', 'pagina.envios']));
       expect(caps).not.toContain('operadores.registrar');
       expect(caps).not.toContain('operadores.gestionar');
       expect(caps).not.toContain('envios.confirmar');
