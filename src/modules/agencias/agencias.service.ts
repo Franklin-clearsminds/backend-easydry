@@ -699,9 +699,9 @@ export class AgenciasService {
       camposBusqueda: ['nombre', 'codigo'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>
-        this.prisma.region.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, codigo: true } }),
+        this.prisma.region.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, codigo: true, estado: true } }),
       contar: (where) => this.prisma.region.count({ where }),
-      mapear: (r) => ({ value: r.id, label: r.nombre, sublabel: r.codigo || undefined }),
+      mapear: (r) => ({ value: r.id, label: r.nombre, sublabel: r.codigo || undefined, estado: r.estado }),
     });
   }
 
@@ -711,9 +711,9 @@ export class AgenciasService {
       camposBusqueda: ['nombre'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>
-        this.prisma.cliente.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true } }),
+        this.prisma.cliente.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, estado: true } }),
       contar: (where) => this.prisma.cliente.count({ where }),
-      mapear: (c) => ({ value: c.id, label: c.nombre }),
+      mapear: (c) => ({ value: c.id, label: c.nombre, estado: c.estado }),
     });
   }
 
