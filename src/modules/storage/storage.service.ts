@@ -51,6 +51,7 @@ export type StorageCategory =
   | 'MAQUINARIA_LIMPIEZA'
   | 'DOCUMENTO'
   | 'CATALOGO_INSUMOS'
+  | 'INVENTARIO_ENVIOS'
   | 'PERFIL_USUARIO';
 
 export type MediaEvidenceType =
@@ -74,6 +75,7 @@ export type MediaEvidenceType =
   | 'IMAGEN_PRODUCTO'
   | 'FOTO_AJUSTE_INVENTARIO'
   | 'FOTO_INGRESO_INVENTARIO'
+  | 'FOTO_ENVIO'
   | 'FOTO_PERFIL';
 
 export interface GenerateUploadTicketDto {
@@ -90,6 +92,9 @@ export interface GenerateUploadTicketDto {
   mantenimientoId?: string;
   insumoId?: string;
   insumoNombre?: string;
+  /** Evidencias de envíos: número de guía y etapa ('recepcion' | 'rechazo' | 'resolucion'). */
+  envioGuia?: string;
+  envioEtapa?: 'recepcion' | 'rechazo' | 'resolucion';
   category?: StorageCategory;
   type: MediaEvidenceType;
   fileName?: string;
@@ -129,6 +134,7 @@ const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'IMAGEN_PRODUCTO',
   'FOTO_AJUSTE_INVENTARIO',
   'FOTO_INGRESO_INVENTARIO',
+  'FOTO_ENVIO',
   'FOTO_PERFIL',
 ]);
 
@@ -393,6 +399,11 @@ export class StorageService implements OnModuleInit {
         key: `usuarios/${userId}/perfil/avatar.jpg`,
         contentType: 'image/jpeg',
       };
+    } else if (type === 'FOTO_ENVIO') {
+      // Todo lo de un envío vive junto, sin importar el origen o el destino: inventario/envios/{guia}/{etapa}/
+      const guia = this.safeSegment(dto.envioGuia, 'sin-guia');
+      const etapa = ['recepcion', 'rechazo', 'resolucion'].includes(String(dto.envioEtapa)) ? dto.envioEtapa : 'recepcion';
+      key = `inventario/envios/${guia}/${etapa}/${filename}`;
     } else if (
       type === 'FOTO_AJUSTE_INVENTARIO' ||
       type === 'FOTO_INGRESO_INVENTARIO'
@@ -1099,6 +1110,7 @@ export class StorageService implements OnModuleInit {
 
   private defaultCategory(type: MediaEvidenceType): StorageCategory {
     if (type === 'FOTO_PERFIL') return 'PERFIL_USUARIO';
+    if (type === 'FOTO_ENVIO') return 'INVENTARIO_ENVIOS';
     if (
       type === 'IMAGEN_PRODUCTO' ||
       type === 'FOTO_AJUSTE_INVENTARIO' ||
@@ -1126,6 +1138,7 @@ export class StorageService implements OnModuleInit {
     type: MediaEvidenceType,
   ): void {
     if (category === 'PERFIL_USUARIO' && type === 'FOTO_PERFIL') return;
+    if (category === 'INVENTARIO_ENVIOS' && type === 'FOTO_ENVIO') return;
     if (
       category === 'CATALOGO_INSUMOS' &&
       (type === 'IMAGEN_PRODUCTO' ||

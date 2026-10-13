@@ -813,6 +813,7 @@ model MovimientoInventario {
   observaciones  String?
   detalles       MovimientoDetalle[]
   faltantes      FaltanteDespacho[]
+  evidenciasEnvio EnvioEvidencia[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -849,6 +850,21 @@ model FaltanteDespacho {
 
   @@index([estado])
   @@index([movimientoId])
+}
+
+/// Fotos opcionales de la recepción, el rechazo o la resolución de un faltante de envío.
+model EnvioEvidencia {
+  id           String               @id @default(uuid())
+  movimientoId String
+  movimiento   MovimientoInventario @relation(fields: [movimientoId], references: [id], onDelete: Cascade)
+  faltanteId   String?
+  etapa        String
+  url          String
+  usuarioId    String?
+  createdAt    DateTime             @default(now())
+
+  @@index([movimientoId])
+  @@index([faltanteId])
 }
 
 model MovimientoDetalle {

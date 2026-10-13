@@ -2836,19 +2836,17 @@ export class InventarioService {
       return { destinoBodegaId, destinoAgenciaId, destinoPulidorId };
     }
 
-    // Agencia destino → solo el LÍDER de esa sede
+    // El destino decide quién recibe: quien pertenece a esa agencia o a esa bodega, o el propio pulidor.
+    // El permiso (confirmar o rechazar) lo exige el controlador; aquí solo se valida que el envío sea suyo.
     if (destinoAgenciaId) {
-      if (!isLider || usuario?.agenciaId !== destinoAgenciaId) {
-        throw new ForbiddenException('Solo el Líder de la sucursal destino puede confirmar este envío.');
+      if (usuario?.agenciaId !== destinoAgenciaId) {
+        throw new ForbiddenException('Solo quien pertenece a la sucursal destino puede recibir o rechazar este envío.');
       }
       return { destinoBodegaId, destinoAgenciaId, destinoPulidorId };
     }
-    // Bodega destino → solo el ASISTENTE de esa bodega
     if (destinoBodegaId) {
-      if (!isAsistente || usuario?.bodegaId !== destinoBodegaId) {
-        throw new ForbiddenException(
-          'Solo el Asistente de la bodega destino puede confirmar este envío.',
-        );
+      if (usuario?.bodegaId !== destinoBodegaId) {
+        throw new ForbiddenException('Solo quien pertenece a la bodega destino puede recibir o rechazar este envío.');
       }
       return { destinoBodegaId, destinoAgenciaId, destinoPulidorId };
     }
@@ -3228,6 +3226,7 @@ export class InventarioService {
     }
 
     const nuevoEstado = dto.accion === 'RECIBIDO' ? 'RECIBIDO' : 'RECHAZADO';
+    const evidenciasEnvio = this.validarEvidenciasEnvio(dto.evidencias);
 
     if (dto.cantidadesRecibidas?.length) {
       for (const cr of dto.cantidadesRecibidas) {
@@ -3289,6 +3288,8 @@ export class InventarioService {
       observacionesActualizadas,
       movimiento.id,
     );
+
+    await this.guardarEvidenciasEnvio(movimiento.id, null, nuevoEstado === 'RECHAZADO' ? 'RECHAZO' : 'RECEPCION', evidenciasEnvio, usuarioId);
 
     // Origen tipado
     let origenBodegaId: string | null = null;
@@ -3479,6 +3480,27 @@ export class InventarioService {
     );
   }
 
+  /** Fotos opcionales de un envío: hasta 5, ya subidas con el tipo FOTO_ENVIO (carpeta inventario/envios/{guía}/…). */
+  private validarEvidenciasEnvio(urls?: string[]): string[] {
+    const lista = (Array.isArray(urls) ? urls : []).map((u) => String(u || '').trim()).filter(Boolean);
+    if (lista.length > 5) throw new BadRequestException('Puedes adjuntar hasta 5 fotos.');
+    for (const u of lista) {
+      if (!/^https?:\/\//i.test(u) || !u.includes('/inventario/envios/')) {
+        throw new BadRequestException('Las fotos de evidencia deben subirse desde la pantalla de Envíos.');
+      }
+    }
+    return lista;
+  }
+
+  private async guardarEvidenciasEnvio(movimientoId: string, faltanteId: string | null, etapa: 'RECEPCION' | 'RECHAZO' | 'RESOLUCION', urls: string[], usuarioId: string) {
+    for (const url of urls) {
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO "EnvioEvidencia" ("id", "movimientoId", "faltanteId", "etapa", "url", "usuarioId") VALUES ($1, $2, $3, $4, $5, $6)`,
+        randomUUID(), movimientoId, faltanteId, etapa, url, usuarioId,
+      );
+    }
+  }
+
   /** Alcance de quien resuelve: faltantes cuyo origen está en su país, región o agencia. */
   private condicionAlcanceFaltantes(user: any, params: unknown[]): string {
     const a = resolverAlcance(user);
@@ -3495,27 +3517,41 @@ export class InventarioService {
   }
 
   async listFaltantesDespacho(dto: { estado?: string }, user: any) {
-    const params: unknown[] = [dto?.estado === 'RESUELTO' ? 'RESUELTO' : 'PENDIENTE'];
+    const resuelto = dto?.estado === 'RESUELTO';
+    const params: unknown[] = [resuelto ? 'RESUELTO' : 'PENDIENTE'];
     const alcance = this.condicionAlcanceFaltantes(user, params);
     const rows: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT f."id", f."movimientoId", f."numeroGuia", f."insumoId", f."cantidadUnd", f."motivoRecepcion", f."estado",
               f."resolucion", f."observacionResolucion", f."resueltoEn", f."createdAt",
               i."nombre" AS "insumoNombre", i."codigoSKU" AS "insumoSku",
-              COALESCE(b."nombre", ag."nombre") AS "origenNombre"
+              COALESCE(b."nombre", ag."nombre") AS "origenNombre",
+              TRIM(CONCAT(u."name", ' ', u."lastname")) AS "resueltoPorNombre"
        FROM "FaltanteDespacho" f
        JOIN "Insumo" i ON i."id" = f."insumoId"
        LEFT JOIN "bodegas" b ON b."id" = f."origenBodegaId"
        LEFT JOIN "Agencia" ag ON ag."id" = f."origenAgenciaId"
+       LEFT JOIN "User" u ON u."id" = f."resueltoPorId"
        WHERE f."estado" = $1 AND ${alcance}
-       ORDER BY f."createdAt" DESC
+       ORDER BY ${resuelto ? 'f."resueltoEn"' : 'f."createdAt"'} DESC
        LIMIT 200`,
       ...params,
     );
-    return rows.map((r) => ({ ...r, cantidadUnd: Number(r.cantidadUnd) }));
+    const evid: any[] = rows.length
+      ? await this.prisma.$queryRawUnsafe(
+          `SELECT "movimientoId", "faltanteId", "etapa", "url" FROM "EnvioEvidencia" WHERE "movimientoId" = ANY($1::text[]) ORDER BY "createdAt"`,
+          rows.map((r) => r.movimientoId),
+        )
+      : [];
+    return rows.map((r) => ({
+      ...r,
+      cantidadUnd: Number(r.cantidadUnd),
+      evidenciasRecepcion: evid.filter((e) => e.movimientoId === r.movimientoId && !e.faltanteId).map((e) => e.url),
+      evidenciasResolucion: evid.filter((e) => e.faltanteId === r.id).map((e) => e.url),
+    }));
   }
 
   /** Decide qué pasa con lo que no llegó: DEVOLVER lo regresa al stock del origen; BAJA lo registra como merma (dañado o perdido). */
-  async resolverFaltanteDespacho(dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string }, user: any) {
+  async resolverFaltanteDespacho(dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, user: any) {
     if (dto.resolucion !== 'DEVOLVER' && dto.resolucion !== 'BAJA') {
       throw new BadRequestException('La resolución debe ser DEVOLVER o BAJA.');
     }
@@ -3523,6 +3559,7 @@ export class InventarioService {
     if (observacion.length < 10) {
       throw new BadRequestException('Explica qué pasó con el producto (mínimo 10 caracteres).');
     }
+    const evidenciasResolucion = this.validarEvidenciasEnvio(dto.evidencias);
     const params: unknown[] = [dto.id];
     const alcance = this.condicionAlcanceFaltantes(user, params);
     const rows: any[] = await this.prisma.$queryRawUnsafe(
@@ -3570,6 +3607,19 @@ export class InventarioService {
         },
       });
     }
+    await this.guardarEvidenciasEnvio(f.movimientoId, f.id, 'RESOLUCION', evidenciasResolucion, user.id);
+
+    // Si ya no queda nada pendiente de esa guía, la alerta crítica de incidencia deja de mostrarse.
+    const pendientes: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT COUNT(*)::int AS "n" FROM "FaltanteDespacho" WHERE "movimientoId" = $1 AND "estado" = 'PENDIENTE'`,
+      f.movimientoId,
+    );
+    if (!Number(pendientes[0]?.n)) {
+      await this.prisma.alertaStock.updateMany({
+        where: { mensaje: { startsWith: `Incidencia envío ${f.numeroGuia}` }, estado: { not: 'RESUELTO' } },
+        data: { estado: 'RESUELTO', fechaAtencion: new Date() },
+      });
+    }
     return { ok: true, resolucion: dto.resolucion };
   }
 
@@ -3610,7 +3660,7 @@ export class InventarioService {
   }
 
   async rechazarDespacho(
-    dto: { movimientoId: string; motivo?: string; observaciones?: string; agenciaId?: string },
+    dto: { movimientoId: string; motivo?: string; observaciones?: string; agenciaId?: string; evidencias?: string[] },
     usuarioId: string,
   ) {
     const motivoFinal = (dto.motivo || dto.observaciones || '').toString().trim();
@@ -3624,6 +3674,7 @@ export class InventarioService {
         motivo: motivoFinal,
         observaciones: motivoFinal,
         agenciaId: dto.agenciaId,
+        evidencias: dto.evidencias,
       },
       usuarioId,
     );

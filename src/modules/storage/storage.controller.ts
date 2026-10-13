@@ -43,6 +43,7 @@ const CLAVE_AGENCIA = /^(?:thumbs\/|view\/)?agencias\/([^/]+)\//i;
  * solo se entrega con sesión iniciada y a los roles que pueden ver la trazabilidad.
  */
 
+const CLAVE_ENVIO = /^(thumbs\/|view\/)?inventario\/envios\//i;
 const CLAVE_MAQUINARIA = /^(thumbs\/|view\/)?(agencias\/)?maquinaria\//i;
 
 @ApiTags('Almacenamiento S3')
@@ -138,6 +139,11 @@ export class StorageController {
         throw new ForbiddenException(
           'No tienes permiso para ver la evidencia de maquinaria.',
         );
+      }
+    } else if (CLAVE_ENVIO.test(key)) {
+      // Fotos de recepción, rechazo y resolución de un envío: quien ve envíos o los resuelve.
+      if (!tieneAlgunPermiso(user, ['despachos.ver', 'envios.confirmar', 'envios.rechazar', 'envios.faltantes'])) {
+        throw new ForbiddenException('No tienes permiso para ver la evidencia de envíos.');
       }
     } else if (CLAVE_PUBLICA.test(key)) {
       // avatares e imágenes de catálogo: cualquier usuario con sesión

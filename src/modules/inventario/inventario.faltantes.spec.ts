@@ -158,6 +158,53 @@ describe('Faltantes de envíos recibidos de forma parcial (base real)', () => {
       expect(await enBase(stockOrigen.id)).toBe(110);
     });
 
+    it('recibe o rechaza quien pertenece a la agencia destino; el de otra agencia no puede', async () => {
+      const m = await despacho();
+      const otraAgencia = await env.agencia('OTRA', { regionId: regionOrigen.id });
+      const intruso = await env.usuario('intruso', 'LIDER', { agenciaId: otraAgencia.id });
+
+      await expect(service.confirmarRecepcion({ movimientoId: m.numeroGuia, accion: 'RECHAZADO', motivo: 'No me corresponde' }, intruso.id)).rejects.toBeInstanceOf(ForbiddenException);
+      const lider = await env.usuario('lider-dest', 'LIDER', { agenciaId: agenciaDestino.id });
+      await service.confirmarRecepcion({ movimientoId: m.numeroGuia, accion: 'RECHAZADO', motivo: 'Llegó averiado' }, lider.id);
+      const f = await faltantesDe(m.id);
+      faltantesCreados.push(...f.map((x) => x.id));
+      expect(f).toHaveLength(1);
+    });
+
+    it('guarda las fotos opcionales del rechazo, las muestra en el listado y rechaza fotos que no son de envíos', async () => {
+      const m = await despacho();
+      const foto = `https://bucket.s3.amazonaws.com/inventario/envios/${m.numeroGuia}/rechazo/1_foto_envio_a.jpg`;
+
+      await expect(service.confirmarRecepcion({ movimientoId: m.numeroGuia, accion: 'RECHAZADO', motivo: 'Roto', evidencias: ['https://otro.com/foto.jpg'] }, superAdmin.id)).rejects.toBeInstanceOf(BadRequestException);
+      await service.confirmarRecepcion({ movimientoId: m.numeroGuia, accion: 'RECHAZADO', motivo: 'Roto', evidencias: [foto] }, superAdmin.id);
+
+      const f = await faltantesDe(m.id);
+      faltantesCreados.push(...f.map((x) => x.id));
+      const lista = await service.listFaltantesDespacho({}, con(admin, 'GLOBAL'));
+      expect(lista.find((x: any) => x.id === f[0].id).evidenciasRecepcion).toEqual([foto]);
+    });
+
+    it('al resolver, el faltante pasa al historial con quién, cuándo y qué decidió, y la alerta de incidencia desaparece', async () => {
+      const m = await despacho();
+      await service.confirmarRecepcion({ movimientoId: m.numeroGuia, accion: 'RECHAZADO', motivo: 'Derrame en tránsito' }, superAdmin.id);
+      const f = (await faltantesDe(m.id))[0];
+      faltantesCreados.push(f.id);
+      const alertaAntes = await env.prisma.alertaStock.findMany({ where: { mensaje: { startsWith: `Incidencia envío ${m.numeroGuia}` } } });
+      expect(alertaAntes.length).toBeGreaterThan(0);
+      const fotoResolucion = `https://bucket.s3.amazonaws.com/inventario/envios/${m.numeroGuia}/resolucion/2_foto_envio_b.jpg`;
+
+      await service.resolverFaltanteDespacho({ id: f.id, resolucion: 'BAJA', observacion: 'Se derramó, se da de baja', evidencias: [fotoResolucion] }, con(admin, 'GLOBAL'));
+
+      expect((await service.listFaltantesDespacho({}, con(admin, 'GLOBAL'))).some((x: any) => x.id === f.id)).toBe(false); // ya no está pendiente
+      const historial = (await service.listFaltantesDespacho({ estado: 'RESUELTO' }, con(admin, 'GLOBAL'))).find((x: any) => x.id === f.id);
+      expect(historial.resolucion).toBe('BAJA');
+      expect(historial.observacionResolucion).toBe('Se derramó, se da de baja');
+      expect(historial.resueltoPorNombre).toBeTruthy();
+      expect(historial.evidenciasResolucion).toEqual([fotoResolucion]);
+      const alertaDespues = await env.prisma.alertaStock.findMany({ where: { mensaje: { startsWith: `Incidencia envío ${m.numeroGuia}` } } });
+      expect(alertaDespues.every((a) => a.estado === 'RESUELTO')).toBe(true);
+    });
+
     it('recibir de forma parcial suma lo recibido al destino y retiene lo que faltó', async () => {
       const m = await despacho();
       const detalle = await env.prisma.movimientoDetalle.findFirstOrThrow({ where: { movimientoId: m.id } });

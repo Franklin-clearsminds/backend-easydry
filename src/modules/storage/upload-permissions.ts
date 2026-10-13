@@ -13,6 +13,14 @@ const PERMISOS_SUBIDA_GENERAL = [
 export function exigirPermisoSubida(user: any, dto: Pick<GenerateUploadTicketDto, 'category' | 'type'>): void {
   if (dto.type === 'FOTO_PERFIL' || dto.category === 'PERFIL_USUARIO') return;
 
+  // Evidencias de un envío (recepción, rechazo o resolución de faltantes): quien confirma, rechaza o resuelve.
+  if (dto.type === 'FOTO_ENVIO' || dto.category === 'INVENTARIO_ENVIOS') {
+    if (!tieneAlgunPermiso(user, ['envios.confirmar', 'envios.rechazar', 'envios.faltantes'])) {
+      throw new ForbiddenException('Tu rol no puede subir evidencias de envíos.');
+    }
+    return;
+  }
+
   const limpieza = dto.category === 'MAQUINARIA_LIMPIEZA' || dto.type === 'FOTO_LIMPIEZA';
   if (limpieza) {
     if (!tienePermiso(user, 'limpiezas.evidencias')) {
