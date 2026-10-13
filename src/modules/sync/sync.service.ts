@@ -19,7 +19,8 @@ import { ServiceStatus } from '@prisma/client';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
 
-import { tienePermiso } from '../../common/permisos/capacidades.js';
+import { tienePermiso, tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
+import { mensajeSinPermiso, permisoRequeridoPorMutacion, SinPermisoMutacionException } from './sync-permisos.js';
 import { esLiderDeAgencia, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 import {
@@ -190,6 +191,13 @@ export class SyncService {
           continue;
         }
         const entity = String(mut.entity || '').toLowerCase();
+
+        // Cada acción exige su permiso por botón: lo hecho sin conexión no se salta lo que el rol ya no puede hacer.
+        const requerido = permisoRequeridoPorMutacion(entity, String(mut.action || 'CREATE'));
+        if (requerido && !tieneAlgunPermiso(currentUser, requerido.codigos)) {
+          throw new SinPermisoMutacionException(mensajeSinPermiso(requerido));
+        }
+
         const isServicio =
           entity === 'servicio_lavado' || entity === 'work_order';
 
@@ -969,7 +977,10 @@ export class SyncService {
           `Error procesando mutación ${mut.mutationId}: ${err.message}`,
         );
         const intentos = Number(mut.attempts || mut.data?.attempts || 1);
+        // Sin permiso no se arregla reintentando: va a la bandeja de errores con su motivo, y la app lo muestra como fallido.
+        const sinPermiso = err instanceof SinPermisoMutacionException;
         const isPoisonPill =
+          sinPermiso ||
           intentos >= 5 ||
           err.message?.includes('no existe') ||
           err.message?.includes('inválido');
@@ -979,13 +990,13 @@ export class SyncService {
           try {
             await this.prisma.syncDeadLetterQueue.upsert({
               where: { mutationId: mut.mutationId },
-              update: { intentos: { increment: 1 }, errorMotivo: err.message },
+              update: { intentos: { increment: 1 }, errorMotivo: sinPermiso ? `SIN_PERMISO: ${err.message}` : err.message },
               create: {
                 mutationId: mut.mutationId,
                 clientUuid: mut.clientUuid || `dlq-${Date.now()}`,
                 entityType: mut.entity || 'WORK_ORDER',
                 payload: mut.data || mut,
-                errorMotivo: err.message,
+                errorMotivo: sinPermiso ? `SIN_PERMISO: ${err.message}` : err.message,
                 intentos,
                 usuarioId: userId,
               },
@@ -1000,7 +1011,7 @@ export class SyncService {
             serverAssignedId: '',
             status: 'DEAD_LETTER',
             syncedAt: now.toISOString(),
-            error: `Movido a DLQ (Superó umbral o error irrecuperable): ${err.message}`,
+            error: sinPermiso ? err.message : `Movido a DLQ (Superó umbral o error irrecuperable): ${err.message}`,
           });
         } else {
           results.push({
