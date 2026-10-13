@@ -11,6 +11,7 @@ import {
 import { ServiceStatus } from '@prisma/client';
 import { SIN_RESULTADOS, resolverAlcance } from '../../common/permisos/alcance.js';
 import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
 
 /** % máximo de descuento permitido sin autorización: por encima se considera "fuera de rango". */
 const UMBRAL_DESCUENTO_PCT = 15;
@@ -972,51 +973,107 @@ export class AnalyticsService {
       incidentesPorTipo: Object.keys(incidentesPorTipo).map(k => ({ nombre: k, cantidad: incidentesPorTipo[k] })),
       incidentesPorGravedad,
       // Alertas operativas unificadas: stock + mantenimiento (incidentes abiertos y preventivos vencidos).
-      alertasOperativas: [
-        ...alertasPendientes.map(a => ({
-          grupo: 'stock' as const,
-          severidad: (a.nivel === 'CRITICO' || a.nivel === 'AGOTADO') ? 'critica' : (a.nivel === 'BAJO' ? 'advertencia' : 'info'),
-          titulo: `Stock ${a.nivel}`,
-          detalle: a.insumo?.nombre || 'Insumo',
-          origen: a.agencia?.nombre || (a.pulidor ? `${a.pulidor.name} ${a.pulidor.lastname}` : null),
-          agencia: a.agencia?.nombre ?? null,
-          pulidor: a.pulidor ? `${a.pulidor.name} ${a.pulidor.lastname}` : null,
-          region: a.agencia?.region || null,
-          nivel: a.nivel as string,
-          estado: a.estado as string,
-          fecha: a.createdAt,
-        })),
-        ...incidentesActivosList.map(i => ({
-          grupo: 'mantenimiento' as const,
-          severidad: (i.gravedad === 'CRITICA' || i.gravedad === 'ALTA') ? 'critica' : (i.gravedad === 'MEDIA' ? 'advertencia' : 'info'),
-          titulo: `Incidente ${i.gravedad}`,
-          detalle: i.titulo,
-          origen: i.maquinaria ? `${i.maquinaria.codigo} · ${i.maquinaria.nombre}` : null,
-          agencia: i.maquinaria?.agencia?.nombre ?? null,
-          pulidor: i.reportadoPor ? `${i.reportadoPor.name} ${i.reportadoPor.lastname}` : null,
-          region: i.maquinaria?.agencia?.region || null,
-          nivel: 'INCIDENTE',
-          estado: 'ABIERTO',
-          fecha: i.createdAt,
-        })),
-        ...mantenimientosVencidos.map(m => ({
-          grupo: 'mantenimiento' as const,
-          severidad: 'advertencia' as const,
-          titulo: 'Mantenimiento vencido',
-          detalle: `${m.maquinaria?.nombre ?? 'Máquina'} (${m.tipo})`,
-          origen: m.maquinaria ? `${m.maquinaria.codigo} · ${m.maquinaria.nombre}` : null,
-          agencia: m.maquinaria?.agencia?.nombre ?? null,
-          pulidor: null,
-          region: m.maquinaria?.agencia?.region || null,
-          nivel: 'VENCIDO',
-          estado: 'PENDIENTE',
-          fecha: m.fechaProgramada,
-        })),
-      ],
+      alertasOperativas: this.armarAlertasOperativas(alertasPendientes, incidentesActivosList, mantenimientosVencidos),
       alertasRecientes: alertasPendientes.map(a => ({ id: a.id, mensaje: a.mensaje, nivel: a.nivel, createdAt: a.createdAt, agencia: a.agencia?.nombre, pulidor: a.pulidor ? `${a.pulidor.name} ${a.pulidor.lastname}` : null })),
       distribucionEstados: estadosCount,
       maquinariasPorEstado: maquinariasStats.reduce((acc, curr) => { acc[curr.estadoOperativo] = curr._count.id; return acc; }, {} as Record<string, number>),
     };
+  }
+
+  /**
+   * Alertas operativas unificadas: stock + mantenimiento (incidentes abiertos y preventivos vencidos).
+   * Las usan el panel «Alertas Operativas» del dashboard y la pestaña «Pendientes» de Notificaciones: una sola forma de armarlas.
+   */
+  private armarAlertasOperativas(alertasPendientes: any[], incidentesActivosList: any[], mantenimientosVencidos: any[]) {
+    return [
+      ...alertasPendientes.map(a => ({
+        id: a.id as string,
+        grupo: 'stock' as const,
+        severidad: (a.nivel === 'CRITICO' || a.nivel === 'AGOTADO') ? 'critica' : (a.nivel === 'BAJO' ? 'advertencia' : 'info'),
+        titulo: `Stock ${a.nivel}`,
+        detalle: a.insumo?.nombre || 'Insumo',
+        origen: a.agencia?.nombre || (a.pulidor ? `${a.pulidor.name} ${a.pulidor.lastname}` : null),
+        agencia: a.agencia?.nombre ?? null,
+        pulidor: a.pulidor ? `${a.pulidor.name} ${a.pulidor.lastname}` : null,
+        region: a.agencia?.region || null,
+        nivel: a.nivel as string,
+        estado: a.estado as string,
+        fecha: a.createdAt,
+      })),
+      ...incidentesActivosList.map(i => ({
+        id: i.id as string,
+        grupo: 'mantenimiento' as const,
+        severidad: (i.gravedad === 'CRITICA' || i.gravedad === 'ALTA') ? 'critica' : (i.gravedad === 'MEDIA' ? 'advertencia' : 'info'),
+        titulo: `Incidente ${i.gravedad}`,
+        detalle: i.titulo,
+        origen: i.maquinaria ? `${i.maquinaria.codigo} · ${i.maquinaria.nombre}` : null,
+        agencia: i.maquinaria?.agencia?.nombre ?? null,
+        pulidor: i.reportadoPor ? `${i.reportadoPor.name} ${i.reportadoPor.lastname}` : null,
+        region: i.maquinaria?.agencia?.region || null,
+        nivel: 'INCIDENTE',
+        estado: 'ABIERTO',
+        fecha: i.createdAt,
+      })),
+      ...mantenimientosVencidos.map(m => ({
+        id: m.id as string,
+        grupo: 'mantenimiento' as const,
+        severidad: 'advertencia' as const,
+        titulo: 'Mantenimiento vencido',
+        detalle: `${m.maquinaria?.nombre ?? 'Máquina'} (${m.tipo})`,
+        origen: m.maquinaria ? `${m.maquinaria.codigo} · ${m.maquinaria.nombre}` : null,
+        agencia: m.maquinaria?.agencia?.nombre ?? null,
+        pulidor: null,
+        region: m.maquinaria?.agencia?.region || null,
+        nivel: 'VENCIDO',
+        estado: 'PENDIENTE',
+        fecha: m.fechaProgramada,
+      })),
+    ];
+  }
+
+  /**
+   * Pendientes del usuario para la bandeja de Notificaciones: lo que sigue mal ahora mismo (stock bajo o crítico,
+   * incidentes abiertos, preventivos vencidos) dentro de su alcance. No son avisos: no se «leen», desaparecen cuando
+   * se resuelve el problema. Cada origen se incluye solo si el rol tiene el permiso de verlo.
+   */
+  async getPendientes(user: any) {
+    const filtro = this.filtroAgencia(user, {});
+    const hayFiltro = Object.keys(filtro).length > 0;
+    const LIMITE = 50;
+
+    const [alertas, incidentes, mantenimientos] = await Promise.all([
+      tienePermiso(user, 'alertas.ver')
+        ? this.prisma.alertaStock.findMany({
+            where: { estado: { notIn: ['RESUELTO', 'DESPACHADO'] }, ...(hayFiltro ? { agencia: filtro } : {}) },
+            orderBy: { createdAt: 'desc' }, take: LIMITE,
+            include: { agencia: { select: { nombre: true, region: true } }, pulidor: { select: { name: true, lastname: true } }, insumo: { select: { nombre: true } } },
+          })
+        : [],
+      tienePermiso(user, 'incidentes.ver')
+        ? this.prisma.incidenteTecnico.findMany({
+            where: { estado: { in: ['ABIERTO', 'EN_PROCESO'] }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
+            orderBy: { createdAt: 'desc' }, take: LIMITE,
+            select: {
+              id: true, titulo: true, gravedad: true, createdAt: true,
+              reportadoPor: { select: { name: true, lastname: true } },
+              maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } },
+            },
+          })
+        : [],
+      tienePermiso(user, 'mantenimientos.ver')
+        ? this.prisma.mantenimientoMaquinaria.findMany({
+            where: { estado: 'PENDIENTE', fechaProgramada: { lt: new Date() }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
+            orderBy: { fechaProgramada: 'asc' }, take: LIMITE,
+            select: { id: true, tipo: true, fechaProgramada: true, maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } } },
+          })
+        : [],
+    ]);
+
+    const orden: Record<string, number> = { critica: 0, advertencia: 1, info: 2 };
+    const pendientes = this.armarAlertasOperativas(alertas, incidentes, mantenimientos).sort(
+      (a, b) => (orden[a.severidad] ?? 3) - (orden[b.severidad] ?? 3) || new Date(b.fecha).getTime() - new Date(a.fecha).getTime(),
+    );
+    return { success: true, total: pendientes.length, pendientes };
   }
 
   async getConsumoQuimicos(dto: ConsumoQuimicosAnalyticsDto, user: any) {
@@ -1073,7 +1130,7 @@ export class AnalyticsService {
     }
     const serie = Object.keys(costoPorPeriodo).sort().map((periodo) => ({ periodo, costoUSD: Number(costoPorPeriodo[periodo].toFixed(2)) }));
 
-    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
+    return { success: true, rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].toFixed(2)) })).sort((a, b) => b.costo - a.costo).slice(0, 5), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
   }
 
   /** Clave de agrupación temporal (día, semana ISO o mes) para las series de analítica. */
@@ -1128,7 +1185,7 @@ export class AnalyticsService {
       if (s.horaSalida) { acumulado[s.operadorId].tiempoTotalMin += Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime()) / 60000)); acumulado[s.operadorId].serviciosConTiempo++; }
     }
     const ranking = Object.values(acumulado).map(a => ({ operadorId: a.operadorId, nombre: a.nombre, agencia: a.agencia, bahia: a.bahia, cantidadServicios: a.cantidadServicios, tiempoPromedioMin: a.serviciosConTiempo > 0 ? Math.round(a.tiempoTotalMin / a.serviciosConTiempo) : 0 })).sort((a, b) => b.cantidadServicios - a.cantidadServicios || a.tiempoPromedioMin - b.tiempoPromedioMin).slice(0, 10);
-    return { success: true, rango: { desde: fechaDesde.toISOString().split('T')[0], hasta: fechaHasta.toISOString().split('T')[0] }, ranking };
+    return { success: true, rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) }, ranking };
   }
 
   async getRankingPulidores(dto: RankingLavadoresDto, user: any) {
