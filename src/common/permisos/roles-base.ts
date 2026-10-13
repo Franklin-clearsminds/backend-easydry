@@ -39,8 +39,10 @@ const LECTURA_COMERCIAL: CodigoPermiso[] = p(
   'despachos.ver',
 );
 
-/** Roles que no ven precios ni costos. */
-const ROLES_SIN_PRECIOS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
+/** Roles que no ven precios ni costos. El Coordinador Comercial sí los ve (en su región); el Jefe Comercial no. */
+const ROLES_SIN_PRECIOS = ['JEFE_COMERCIAL'];
+/** Roles comerciales que ven bodegas y agencias pero no el stock de los kits. */
+const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
 
 const CAPACIDADES_LIDER = p(
   ...LECTURA_RED,
@@ -145,7 +147,7 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'COORD_COMERCIAL',
     descripcion:
-      'Coordinador comercial: consulta (solo lectura, sin precios) su región, y asigna y monitorea retos, productividad y reportes.',
+      'Coordinador comercial: consulta (solo lectura, con precios) su región, y asigna y monitorea retos, productividad y reportes.',
     ambito: 'REGION',
     capacidades: p(
       ...LECTURA_RED,
@@ -355,12 +357,13 @@ export const ROLES_BASE: RolBase[] = [
   },
 ];
 
-// `precios.ver` lo tienen todos los roles que usan la plataforma salvo los comerciales, e `inventario.kits.ver` todos los que ven
+// `precios.ver` lo tienen todos los roles que usan la plataforma salvo el Jefe Comercial, e `inventario.kits.ver` todos los que ven
 // inventario salvo los comerciales (que ven bodegas y agencias, no el stock de los kits).
 for (const rol of ROLES_BASE) {
-  if (rol.capacidades.length === 0 || ROLES_SIN_PRECIOS.includes(rol.namerol)) continue;
-  const extra: CodigoPermiso[] = ['precios.ver'];
-  if (rol.capacidades.includes('inventario.ver')) extra.push('inventario.kits.ver');
+  if (rol.capacidades.length === 0) continue;
+  const extra: CodigoPermiso[] = [];
+  if (!ROLES_SIN_PRECIOS.includes(rol.namerol)) extra.push('precios.ver');
+  if (rol.capacidades.includes('inventario.ver') && !ROLES_SIN_KITS.includes(rol.namerol)) extra.push('inventario.kits.ver');
   rol.capacidades = [...new Set([...rol.capacidades, ...extra])];
 }
 // Y cada rol oficial trae también sus páginas, sub-páginas y acciones equivalentes (sin perder ningún permiso clásico).
