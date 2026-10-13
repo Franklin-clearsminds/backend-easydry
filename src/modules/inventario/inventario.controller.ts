@@ -1,4 +1,5 @@
 import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ForbiddenException, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { InventarioService } from './inventario.service.js';
@@ -26,6 +27,14 @@ import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiBearerAuth()
 export class InventarioController {
   constructor(private readonly inventarioService: InventarioService) {}
+
+  /** Aceptar y rechazar un envío son dos casillas sobre el mismo endpoint: se mira cuál se pidió. */
+  private exigirCasillaRecepcion(accion: string | undefined, user: any) {
+    const rechaza = accion === 'RECHAZADO';
+    if (!tienePermiso(user, rechaza ? 'envios.rechazar' : 'envios.confirmar')) {
+      throw new ForbiddenException(rechaza ? 'Tu rol no puede rechazar envíos.' : 'Tu rol no puede confirmar la recepción de envíos.');
+    }
+  }
 
   // ==============================================================
   // TIPOS DE ENVASE
@@ -283,7 +292,7 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
-  @Permiso('envios.confirmar')
+  @Permiso('envios.confirmar', 'envios.rechazar')
   @Post('movimientos/despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -292,15 +301,18 @@ export class InventarioController {
       'Si accion=RECIBIDO: incrementa stock en destino. Si accion=RECHAZADO: devuelve las unidades a Bodega Central.',
   })
   async confirmarRecepcion(@Body() dto: ConfirmarRecepcionDto, @CurrentUser() user: any) {
+    this.exigirCasillaRecepcion(dto.accion, user);
     return this.inventarioService.confirmarRecepcion(dto, user.id);
   }
 
-  @Permiso('envios.confirmar')
+  @Permiso('envios.confirmar', 'envios.rechazar')
   @Post('despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Confirmar recepción física de químicos en agencia (Ruta canónica frontend)' })
   async confirmarRecepcionDirecto(@Body() dto: ConfirmarRecepcionDto, @CurrentUser() user: any) {
-    return this.inventarioService.confirmarRecepcion({ ...dto, accion: dto.accion || 'RECIBIDO' }, user.id);
+    const accion = dto.accion || 'RECIBIDO';
+    this.exigirCasillaRecepcion(accion, user);
+    return this.inventarioService.confirmarRecepcion({ ...dto, accion }, user.id);
   }
 
   @Permiso('envios.rechazar')
