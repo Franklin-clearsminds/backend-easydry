@@ -9,7 +9,7 @@ export class ListPreciosAgenciaDto {
 }
 
 export class PrecioServicioItemDto {
-  @ApiProperty({ example: 1, description: 'ID del servicio del catálogo (debe ser GENERAL y estar activo en la agencia)' })
+  @ApiProperty({ example: 1, description: 'ID del servicio del catálogo (general o especial, habilitado en la agencia)' })
   @Type(() => Number)
   @IsInt()
   catalogoServicioId: number;

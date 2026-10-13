@@ -1483,7 +1483,7 @@ export class AgenciasService {
   }
 
   // =========================================================================
-  // PRECIOS POR AGENCIA (override de CatalogoServicio.precio, solo servicios GENERAL)
+  // PRECIOS POR AGENCIA (cada agencia tiene su propio valor de los servicios generales y especiales; el catálogo no tiene precio base)
   // =========================================================================
 
   /**
@@ -1504,8 +1504,8 @@ export class AgenciasService {
 
     const [servicios, overrides] = await Promise.all([
       this.prisma.catalogoServicio.findMany({
-        where: { id: { in: ids }, categoria: 'GENERAL' },
-        select: { id: true, codigo: true, nombre: true, precio: true, estado: true },
+        where: { id: { in: ids }, categoria: { in: ['GENERAL', 'ESPECIAL'] } },
+        select: { id: true, codigo: true, nombre: true, categoria: true, precio: true, estado: true },
         orderBy: { nombre: 'asc' },
       }),
       this.prisma.precioAgenciaServicio.findMany({
@@ -1521,6 +1521,7 @@ export class AgenciasService {
         catalogoServicioId: s.id,
         codigo: s.codigo,
         nombre: s.nombre,
+        categoria: s.categoria,
         estado: s.estado,
         precioCatalogo: Number(s.precio),
         precioAgencia,
@@ -1554,10 +1555,10 @@ export class AgenciasService {
       select: { id: true, categoria: true },
     });
     const servicioPorId = new Map(servicios.map((s) => [s.id, s]));
-    const invalidos = idsSolicitados.filter((id) => servicioPorId.get(id)?.categoria !== 'GENERAL');
+    const invalidos = idsSolicitados.filter((id) => !['GENERAL', 'ESPECIAL'].includes(servicioPorId.get(id)?.categoria as string));
     if (invalidos.length > 0) {
       throw new BadRequestException(
-        `Los servicios con ID ${invalidos.join(', ')} no existen o no son servicios GENERALES: el precio por agencia solo aplica a servicios generales.`,
+        `Los servicios con ID ${invalidos.join(', ')} no existen o no son servicios generales ni especiales.`,
       );
     }
 

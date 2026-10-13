@@ -663,8 +663,7 @@ export class ServiciosEspecialesService {
         : null;
     }
 
-    // Precio: se toma del catálogo (servicio ESPECIAL elegido, o si no se resuelve por el nombre de
-    // tipoServicio) y se congela en la OT; no hay override por agencia para especiales.
+    // Precio: el que la agencia tiene fijado para ese servicio especial (el catálogo no tiene precio base); se congela en la OT.
     let catalogoEspecial: { id: number; precio: any } | null = null;
     if (dto.servicioCatalogoId) {
       catalogoEspecial = await this.prisma.catalogoServicio.findUnique({
@@ -686,6 +685,15 @@ export class ServiciosEspecialesService {
       });
     }
 
+    let precioEspecial: number | null = catalogoEspecial ? Number(catalogoEspecial.precio) : null;
+    if (catalogoEspecial && finalAgenciaId) {
+      const delaAgencia = await this.prisma.precioAgenciaServicio.findUnique({
+        where: { agenciaId_catalogoServicioId: { agenciaId: finalAgenciaId, catalogoServicioId: catalogoEspecial.id } },
+        select: { precio: true },
+      });
+      if (delaAgencia) precioEspecial = Number(delaAgencia.precio);
+    }
+
     const created = await this.prisma.servicioEspecial.create({
       data: {
         id: rawOT,
@@ -694,7 +702,7 @@ export class ServiciosEspecialesService {
         ordenTrabajoOT: codigoSE,
         tipoServicio: dto.tipoServicio.trim(),
         servicioCatalogoId: catalogoEspecial?.id ?? null,
-        precio: catalogoEspecial ? Number(catalogoEspecial.precio) : null,
+        precio: precioEspecial,
         placa,
         marca,
         modelo,
