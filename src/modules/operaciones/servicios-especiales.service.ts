@@ -478,9 +478,10 @@ export class ServiciosEspecialesService {
     creatorId?: string,
     currentUser?: any,
   ) {
-    if (rolDeUsuario(currentUser) !== 'COORD_SERVICIOS_ESPECIALES') {
+    // Quien crea lo decide su casilla («Crear OT especial»), no el nombre del rol.
+    if (!tienePermiso(currentUser, 'servicios.especiales.crear')) {
       throw new ForbiddenException(
-        'Solo el coordinador de servicios especiales puede crear estas órdenes.',
+        'Tu rol no puede crear órdenes de servicios especiales.',
       );
     }
 
