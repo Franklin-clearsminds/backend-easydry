@@ -182,34 +182,9 @@ export const PAGINAS: readonly PaginaDef[] = [
     ]),
   ]),
 
-  pagina('reportes', 'Reportes Operativos', '/reportes', 'reportes', ['reportes.ver', 'agencias.ver'], [
-    sub('reportes', 'servicios', 'Servicios y aprobaciones', [], [
-      exportar('reportes.servicios.generales', 'Exportar servicios generales (OT)'),
-      exportar('reportes.servicios.especiales', 'Exportar servicios especiales'),
-      exportar('reportes.servicios.aprobaciones', 'Exportar aprobaciones del día'),
-      exportar('reportes.servicios.catalogo', 'Exportar catálogo de servicios'),
-    ], ['reportes.ver']),
-    sub('reportes', 'inventario', 'Inventario y envíos', [], [
-      exportar('reportes.inventario.productos', 'Exportar productos y stock'),
-      exportar('reportes.inventario.movimientos', 'Exportar movimientos (kardex)'),
-      exportar('reportes.inventario.consumo', 'Exportar consumo por servicios'),
-      exportar('reportes.inventario.envios', 'Exportar envíos'),
-    ], ['reportes.ver']),
-    sub('reportes', 'agencias', 'Agencias y personal', [], [
-      exportar('reportes.agencias.agencias', 'Exportar agencias'),
-      exportar('reportes.agencias.operadores', 'Exportar lavadores y pulidores'),
-      exportar('reportes.agencias.usuarios', 'Exportar usuarios'),
-    ], ['reportes.ver']),
-    sub('reportes', 'maquinaria', 'Maquinaria y taller', [], [
-      exportar('reportes.maquinaria.maquinas', 'Exportar maquinaria'),
-      exportar('reportes.maquinaria.incidentes', 'Exportar incidentes'),
-      exportar('reportes.maquinaria.mantenimientos', 'Exportar mantenimientos'),
-      exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
-    ], ['reportes.ver']),
-    sub('reportes', 'productividad', 'Productividad y dashboard', [], [
-      exportar('reportes.productividad.ranking', 'Exportar productividad y ranking'),
-      exportar('reportes.productividad.dashboard', 'Exportar datos del dashboard'),
-    ], ['reportes.ver']),
+  pagina('reportes', 'Reportes Operativos', '/reportes', 'reportes', ['reportes.ver', 'agencias.ver'], [], [
+    exportar('reportes.excel', 'Exportar reporte a Excel'),
+    exportar('reportes.pdf', 'Exportar reporte a PDF'),
   ]),
 
   pagina('maquinaria', 'Maquinaria & Equipos', '/maquinaria', 'maquinaria', ['maquinaria.ver'], [], [
@@ -241,6 +216,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('taller', 'limpiezas', 'Limpiezas', ['limpiezas.ver'], [
       accion('taller.limpiezas.registrar', 'Registrar limpieza', ['limpiezas.evidencias']),
       accion('taller.limpiezas.editar', 'Editar o eliminar limpieza', ['limpiezas.editar']),
+      exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
     ]),
     sub('taller', 'checklist', 'Checklist', ['mantenimientos.ver', 'maquinaria.ver'], [
       accion('taller.checklist.gestionar', 'Gestionar plantillas de checklist', ['checklist.gestionar']),

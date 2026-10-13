@@ -27,7 +27,7 @@ export class RetosController {
     return this.retosService.ranking(dto.id, user);
   }
 
-  @Permiso('retos.crear')
+  @Permiso('productividad.retos.crear')
   @Post('pulidores')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar pulidores disponibles para retos' })
@@ -35,7 +35,7 @@ export class RetosController {
     return this.retosService.pulidores(user);
   }
 
-  @Permiso('retos.crear')
+  @Permiso('productividad.retos.crear')
   @Post('personas')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Lavadores o pulidores que se pueden elegir como participantes (los del alcance de quien crea)' })
@@ -43,7 +43,7 @@ export class RetosController {
     return this.retosService.personas(dto.tipo, user);
   }
 
-  @Permiso('retos.crear')
+  @Permiso('productividad.retos.crear')
   @Post('create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear un reto de productividad' })
@@ -51,7 +51,7 @@ export class RetosController {
     return this.retosService.create(dto, user);
   }
 
-  @Permiso('retos.eliminar')
+  @Permiso('productividad.retos.eliminar')
   @Post('delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar un reto' })
@@ -59,7 +59,7 @@ export class RetosController {
     return this.retosService.delete(dto.id, user);
   }
 
-  @Permiso('retos.cerrar')
+  @Permiso('productividad.retos.cerrar')
   @Post('cerrar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cerrar un reto registrando ganador y resultado' })

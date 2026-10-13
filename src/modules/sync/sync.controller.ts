@@ -28,7 +28,7 @@ export class SyncController {
     return this.syncService.ping();
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post(['push', 'operations'])
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -43,7 +43,7 @@ export class SyncController {
     return this.syncService.processPush(body, userId, headerOpId || headerIdempotencyKey);
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post(['pull', 'delta'])
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -53,7 +53,7 @@ export class SyncController {
     return this.syncService.processPull(query, userId);
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post('bootstrap')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -63,7 +63,7 @@ export class SyncController {
     return this.syncService.getBootstrapData(userId);
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post(['media/presigned-url', 'media/ticket'])
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -96,7 +96,7 @@ export class SyncController {
     } as any);
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post('media/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -122,7 +122,7 @@ export class SyncController {
     return this.syncService.confirmMediaUpload(body, user);
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post('media/pending')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -137,7 +137,7 @@ export class SyncController {
     return this.syncService.getPendingMedia(dto.clientUuids);
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post('dlq/list')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -147,7 +147,7 @@ export class SyncController {
     return this.syncService.listDeadLetterQueue(body?.resuelto, user);
   }
 
-  @Permiso('sync.dlq.gestionar')
+  @Permiso('sistema.sync.errores')
   @Post('dlq/resolve')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -157,7 +157,7 @@ export class SyncController {
     return this.syncService.resolveDeadLetterItem(body.id, body.resuelto !== false, user);
   }
 
-  @Permiso('sync.dlq.gestionar')
+  @Permiso('sistema.sync.errores')
   @Post('dlq/replay')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -173,7 +173,7 @@ export class SyncController {
     return this.syncService.replayDeadLetterItem(dto.dlqId, dto.payloadCorregido, user?.id, user);
   }
 
-  @Permiso('sync.usar')
+  @Permiso('sistema.sync.usar')
   @Post('devices/register-push-token')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
