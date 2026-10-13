@@ -1,105 +1,86 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AgenciasService } from './agencias.service.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
 /**
- * Un técnico (o coordinador de mantenimiento) con trabajo abierto no se puede mover de región sin
- * reasignarlo antes: si no, ese mantenimiento o incidente queda con un tecnicoId que ya nadie ve
- * (scopeMantenimientos/scopeIncidentes solo protegen la visibilidad del propio técnico, no la del
- * resto del equipo de su región anterior). Ver conversación con el usuario del 2026-09-30.
+ * Integración con la base real (sin mocks).
+ *
+ * Un técnico (o coordinador de mantenimiento) con trabajo abierto no se puede mover de región sin reasignarlo
+ * antes: si no, ese mantenimiento o incidente queda con un tecnicoId que ya nadie ve (scopeMantenimientos /
+ * scopeIncidentes solo protegen la visibilidad del propio técnico, no la del resto del equipo de su región
+ * anterior). Ver conversación con el usuario del 2026-09-30.
  */
-function armarPrisma(overrides: Record<string, any> = {}) {
-  const prisma: any = {
-    bahiaOperador: { findMany: vi.fn().mockResolvedValue([]) },
-    user: {
-      findUnique: vi.fn().mockResolvedValue({
-        id: 'tecnico-1',
-        regionId: 'region-costa',
-        roleId: 'role-tecnico',
-        role: { namerol: 'TECNICO' },
-      }),
-      update: vi.fn().mockImplementation(async (a: any) => ({ id: a.where.id, ...a.data, role: { namerol: 'TECNICO' }, servicioIds: [] })),
-    },
-    role: {
-      findUnique: vi.fn().mockResolvedValue({ id: 'role-tecnico', namerol: 'TECNICO', ambito: 'REGION' }),
-      findFirst: vi.fn(),
-    },
-    region: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'region-sierra' }),
-    },
-    mantenimientoMaquinaria: {
-      count: vi.fn().mockResolvedValue(0),
-    },
-    incidenteTecnico: {
-      count: vi.fn().mockResolvedValue(0),
-    },
-    catalogoServicio: {
-      findMany: vi.fn().mockResolvedValue([]),
-    },
-    ...overrides,
-  };
-  return { prisma, service: new AgenciasService(prisma) };
-}
+describe('cambio de región de un técnico con trabajo abierto (base real)', () => {
+  let env: Entorno;
+  let service: AgenciasService;
+  let costa: any;
+  let sierra: any;
+  let maquina: any;
 
-describe('cambio de región de un técnico con trabajo abierto', () => {
-  it('rechaza el cambio si tiene mantenimientos e incidentes sin terminar', async () => {
-    const { prisma, service } = armarPrisma({
-      mantenimientoMaquinaria: { count: vi.fn().mockResolvedValue(3) },
-      incidenteTecnico: { count: vi.fn().mockResolvedValue(1) },
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new AgenciasService(env.prisma as never);
+    costa = await env.region('COSTA');
+    sierra = await env.region('SIERRA');
+    maquina = await env.maquinaria('M1');
+  });
+
+  afterAll(async () => {
+    await env.cerrar();
+  });
+
+  const regionDe = async (id: string) => (await env.prisma.user.findUniqueOrThrow({ where: { id } })).regionId;
+  const mantenimiento = (tecnicoId: string, estado: string) =>
+    env.prisma.mantenimientoMaquinaria.create({ data: { maquinariaId: maquina.id, tecnicoId, estado } });
+  const incidente = (reportadoPorId: string, tecnicoAsignadoId: string, estado: string) =>
+    env.prisma.incidenteTecnico.create({
+      data: { maquinariaId: maquina.id, reportadoPorId, tecnicoAsignadoId, estado, titulo: `${env.marca} falla`, descripcion: 'prueba' },
     });
-    await expect(
-      service.updateUsuario({ id: 'tecnico-1', regionId: 'region-sierra' } as any),
-    ).rejects.toThrow(/3 mantenimientos y 1 incidente.*Reasígnalos antes de cambiarlo de región/);
-    expect(prisma.user.update).not.toHaveBeenCalled();
+
+  it('rechaza el cambio si tiene mantenimientos e incidentes sin terminar', async () => {
+    const tecnico = await env.usuario('tec-varios', 'TECNICO', { regionId: costa.id });
+    await mantenimiento(tecnico.id, 'PENDIENTE');
+    await mantenimiento(tecnico.id, 'EN_PROCESO');
+    await mantenimiento(tecnico.id, 'PENDIENTE');
+    await mantenimiento(tecnico.id, 'FINALIZADO'); // lo terminado no cuenta
+    await incidente(tecnico.id, tecnico.id, 'ABIERTO');
+    await incidente(tecnico.id, tecnico.id, 'RESUELTO'); // tampoco
+
+    await expect(service.updateUsuario({ id: tecnico.id, regionId: sierra.id } as any)).rejects.toThrow(
+      /3 mantenimientos y 1 incidente.*Reasígnalos antes de cambiarlo de región/,
+    );
+    expect(await regionDe(tecnico.id)).toBe(costa.id);
   });
 
   it('rechaza el cambio con un solo mantenimiento abierto (singular correcto en el mensaje)', async () => {
-    const { prisma, service } = armarPrisma({
-      mantenimientoMaquinaria: { count: vi.fn().mockResolvedValue(1) },
-    });
-    await expect(
-      service.updateUsuario({ id: 'tecnico-1', regionId: 'region-sierra' } as any),
-    ).rejects.toThrow(/tiene 1 mantenimiento sin terminar/);
-    expect(prisma.user.update).not.toHaveBeenCalled();
+    const tecnico = await env.usuario('tec-uno', 'TECNICO', { regionId: costa.id });
+    await mantenimiento(tecnico.id, 'EN_PROCESO');
+    await expect(service.updateUsuario({ id: tecnico.id, regionId: sierra.id } as any)).rejects.toThrow(/tiene 1 mantenimiento sin terminar/);
+    expect(await regionDe(tecnico.id)).toBe(costa.id);
   });
 
   it('permite el cambio de región cuando no tiene trabajo abierto', async () => {
-    const { prisma, service } = armarPrisma();
-    await expect(service.updateUsuario({ id: 'tecnico-1', regionId: 'region-sierra' } as any)).resolves.toBeDefined();
-    expect(prisma.user.update).toHaveBeenCalled();
-    const data = prisma.user.update.mock.calls[0][0].data;
-    expect(data.regionId).toBe('region-sierra');
+    const tecnico = await env.usuario('tec-libre', 'TECNICO', { regionId: costa.id });
+    await mantenimiento(tecnico.id, 'FINALIZADO');
+    await expect(service.updateUsuario({ id: tecnico.id, regionId: sierra.id } as any)).resolves.toBeDefined();
+    expect(await regionDe(tecnico.id)).toBe(sierra.id);
   });
 
   it('no bloquea guardar al técnico si la región no cambia (solo se le edita el nombre)', async () => {
-    const { prisma, service } = armarPrisma({
-      mantenimientoMaquinaria: { count: vi.fn().mockResolvedValue(5) }, // aunque tenga trabajo abierto...
-    });
-    // ...no importa: no se está tocando la región, así que ni se consulta.
-    await expect(service.updateUsuario({ id: 'tecnico-1', name: 'Nuevo Nombre' } as any)).resolves.toBeDefined();
-    expect(prisma.mantenimientoMaquinaria.count).not.toHaveBeenCalled();
-    expect(prisma.user.update).toHaveBeenCalled();
+    const tecnico = await env.usuario('tec-nombre', 'TECNICO', { regionId: costa.id });
+    for (let i = 0; i < 5; i++) await mantenimiento(tecnico.id, 'PENDIENTE'); // aunque tenga trabajo abierto...
+    // ...no importa: no se está tocando la región.
+    await expect(service.updateUsuario({ id: tecnico.id, name: 'Nuevo Nombre' } as any)).resolves.toBeDefined();
+    const enBase = await env.prisma.user.findUniqueOrThrow({ where: { id: tecnico.id } });
+    expect(enBase.name).toBe('Nuevo Nombre');
+    expect(enBase.regionId).toBe(costa.id);
   });
 
   it('un COORD_MANTENIMIENTO con trabajo abierto tampoco puede cambiarse de región', async () => {
-    const { prisma, service } = armarPrisma({
-      user: {
-        findUnique: vi.fn().mockResolvedValue({
-          id: 'coord-1',
-          regionId: 'region-costa',
-          roleId: 'role-coord',
-          role: { namerol: 'COORD_MANTENIMIENTO' },
-        }),
-        update: vi.fn(),
-      },
-      role: {
-        findUnique: vi.fn().mockResolvedValue({ id: 'role-coord', namerol: 'COORD_MANTENIMIENTO', ambito: 'REGION' }),
-        findFirst: vi.fn(),
-      },
-      incidenteTecnico: { count: vi.fn().mockResolvedValue(2) },
-    });
-    await expect(
-      service.updateUsuario({ id: 'coord-1', regionId: 'region-sierra' } as any),
-    ).rejects.toThrow(/2 incidentes sin terminar/);
-    expect(prisma.user.update).not.toHaveBeenCalled();
+    const coord = await env.usuario('coord', 'COORD_MANTENIMIENTO', { regionId: costa.id });
+    await incidente(coord.id, coord.id, 'ABIERTO');
+    await incidente(coord.id, coord.id, 'EN_PROCESO');
+    await expect(service.updateUsuario({ id: coord.id, regionId: sierra.id } as any)).rejects.toThrow(/2 incidentes sin terminar/);
+    expect(await regionDe(coord.id)).toBe(costa.id);
   });
 });

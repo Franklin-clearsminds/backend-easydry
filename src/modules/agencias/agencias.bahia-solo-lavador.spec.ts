@@ -1,45 +1,57 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { AgenciasService } from './agencias.service.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
-function armar(rol: string) {
-  const prisma: any = {
-    bahia: {
-      findUnique: vi.fn().mockResolvedValue({ id: 'b1', nombre: 'Bahía 1', agenciaId: 'a1', agencia: { id: 'a1', maxLavadoresPorBahia: 1 }, operadorActualId: null }),
-      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-    },
-    user: {
-      findUnique: vi.fn().mockResolvedValue({ id: 'u1', name: 'Ana', agenciaId: 'a1', role: { namerol: rol }, bahiaOperadores: [] }),
-      update: vi.fn().mockResolvedValue({}),
-    },
-    role: { findFirst: vi.fn().mockResolvedValue({ id: 'r-pulidor', namerol: 'PULIDOR' }) },
-    bahiaOperador: {
-      findMany: vi.fn().mockResolvedValue([{ bahiaId: 'b1' }]),
-      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-    },
-    historialAsignacionBahia: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
-  };
-  const service = new AgenciasService(prisma, { notificarUsuarios: vi.fn() } as any);
-  return { prisma, service };
-}
+/** Integración con la base real (sin mocks): la bahía es solo para el rol LAVADOR. */
+describe('La bahía es solo para lavadores (base real)', () => {
+  let env: Entorno;
+  let service: AgenciasService;
+  let agencia: any;
+  let bahia: any;
+  let admin: any;
 
-describe('La bahía es solo para lavadores', () => {
-  it('asignarOperadorABahia rechaza a un pulidor', async () => {
-    const { service } = armar('PULIDOR');
-    await expect(service.asignarOperadorABahia({ bahiaId: 'b1', operadorId: 'u1' } as any, 'admin')).rejects.toBeInstanceOf(BadRequestException);
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new AgenciasService(env.prisma as never);
+    agencia = await env.agencia('A1', { numeroBahias: 1, maxLavadoresPorBahia: 1 });
+    bahia = await env.bahia('B1', agencia.id);
+    admin = await env.usuario('admin', 'ADMIN');
+  });
+
+  afterAll(async () => {
+    await env.cerrar();
+  });
+
+  it('asignarOperadorABahia rechaza a un pulidor y no deja ninguna asignación', async () => {
+    const pulidor = await env.usuario('pulidor', 'PULIDOR', { agenciaId: agencia.id });
+    await expect(
+      service.asignarOperadorABahia({ bahiaId: bahia.id, operadorId: pulidor.id } as any, admin.id),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(await env.prisma.bahiaOperador.count({ where: { bahiaId: bahia.id } })).toBe(0);
+    expect((await env.prisma.bahia.findUniqueOrThrow({ where: { id: bahia.id } })).operadorActualId).toBeNull();
+  });
+
+  it('asignarOperadorABahia sí asigna a un lavador', async () => {
+    const lavador = await env.usuario('lavador-ok', 'LAVADOR', { agenciaId: agencia.id });
+    await service.asignarOperadorABahia({ bahiaId: bahia.id, operadorId: lavador.id } as any, admin.id);
+    expect(await env.prisma.bahiaOperador.count({ where: { bahiaId: bahia.id, operadorId: lavador.id, activo: true } })).toBe(1);
+    // Se libera para no afectar a las siguientes pruebas.
+    await service.asignarOperadorABahia({ bahiaId: bahia.id, operadorId: null } as any, admin.id);
   });
 
   it('updateOperador libera la bahía cuando el rol deja de ser lavador', async () => {
-    const { prisma, service } = armar('LAVADOR');
-    prisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'u1', name: 'Ana', agenciaId: 'a1', role: { namerol: 'LAVADOR' }, bahiaOperadores: [] })
-      .mockResolvedValue({ id: 'u1', name: 'Ana', agenciaId: 'a1', role: { namerol: 'PULIDOR' }, bahiaOperadores: [] });
+    const otra = await env.bahia('B2', agencia.id);
+    const lavador = await env.usuario('lavador-cambia', 'LAVADOR', { agenciaId: agencia.id });
+    await service.asignarOperadorABahia({ bahiaId: otra.id, operadorId: lavador.id } as any, admin.id);
+    expect(await env.prisma.bahiaOperador.count({ where: { operadorId: lavador.id, activo: true } })).toBe(1);
 
-    await service.updateOperador({ id: 'u1', rol: 'PULIDOR', bahiaId: 'b1' } as any, 'admin');
+    await service.updateOperador({ id: lavador.id, rol: 'PULIDOR', bahiaId: otra.id } as any, admin.id);
 
-    expect(prisma.bahiaOperador.updateMany).toHaveBeenCalledWith({ where: { operadorId: 'u1', activo: true }, data: { activo: false } });
-    expect(prisma.bahia.updateMany).toHaveBeenCalledWith({ where: { id: { in: ['b1'] }, operadorActualId: 'u1' }, data: { operadorActualId: null } });
-    // No se le asigna la bahía que venía en el formulario.
-    expect(prisma.bahia.findUnique).not.toHaveBeenCalled();
+    const usuario = await env.prisma.user.findUniqueOrThrow({ where: { id: lavador.id }, include: { role: true } });
+    expect(usuario.role.namerol).toBe('PULIDOR');
+    // Ya no tiene bahía asignada, ni la que venía en el formulario ni la que tenía antes.
+    expect(await env.prisma.bahiaOperador.count({ where: { operadorId: lavador.id, activo: true } })).toBe(0);
+    expect((await env.prisma.bahia.findUniqueOrThrow({ where: { id: otra.id } })).operadorActualId).toBeNull();
   });
 });

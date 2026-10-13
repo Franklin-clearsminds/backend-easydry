@@ -41,7 +41,7 @@ describe('catálogo de permisos', () => {
 
   it('los nombres oficiales no son alias de otro rol', () => {
     for (const r of ROLES_BASE)
-      expect(normalizarRol(r.namerol)).toBe(r.namerol === 'BACKUP' ? 'LIDER' : r.namerol);
+      expect(normalizarRol(r.namerol)).toBe(r.namerol);
   });
 });
 
@@ -299,13 +299,13 @@ describe('comprobación de permisos', () => {
     expect(tienePermiso(sa, 'roles.gestionar')).toBe(true);
   });
 
-  it('un alias antiguo del rol se trata como el rol oficial', () => {
+  it('los permisos salen de las capacidades del rol, no del nombre', () => {
     const u = {
-      roleDetails: { namerol: 'GERENTE', capacidades: ['servicios.decidir'] },
+      roleDetails: { namerol: 'APROBADOR', capacidades: ['servicios.decidir'] },
     };
     expect(tienePermiso(u, 'servicios.decidir')).toBe(true);
-    const admin = { role: 'ADMINISTRADOR', roleDetails: { capacidades: [] } };
-    expect(tienePermiso(admin, 'servicios.decidir')).toBe(false);
+    const sinCapacidades = { role: 'ADMIN', roleDetails: { capacidades: [] } };
+    expect(tienePermiso(sinCapacidades, 'servicios.decidir')).toBe(false);
   });
 
   it('basta uno de varios permisos', () => {

@@ -136,13 +136,24 @@ describe('migración de roles existentes', () => {
     expect(lider).not.toContain('mapa.bahia.asignar');
   });
 
-  it('los roles comerciales ven en solo lectura y sin precios', () => {
+  it('los roles comerciales ven en solo lectura; solo el Coordinador ve precios', () => {
     for (const nombre of ['COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
       const caps = ROLES_BASE.find((r) => r.namerol === nombre)!.capacidades;
       expect(caps).toEqual(expect.arrayContaining(['pagina.agencias', 'pagina.operadores', 'pagina.mapa', 'pagina.inventario', 'pagina.envios']));
-      expect(caps).not.toContain('precios.ver');
       expect(caps).not.toContain('operadores.registrar');
+      expect(caps).not.toContain('operadores.gestionar');
       expect(caps).not.toContain('envios.confirmar');
+      expect(caps).not.toContain('inventario.kits.ver');
     }
+    const coord = ROLES_BASE.find((r) => r.namerol === 'COORD_COMERCIAL')!.capacidades;
+    const jefe = ROLES_BASE.find((r) => r.namerol === 'JEFE_COMERCIAL')!.capacidades;
+    expect(coord).toContain('precios.ver');
+    expect(jefe).not.toContain('precios.ver');
+  });
+
+  it('el Coordinador Comercial ve servicios generales y especiales, agencias y lavadores, solo de su región', () => {
+    const coord = ROLES_BASE.find((r) => r.namerol === 'COORD_COMERCIAL')!;
+    expect(coord.ambito).toBe('REGION');
+    expect(coord.capacidades).toEqual(expect.arrayContaining(['servicios.ver', 'especiales.ver', 'agencias.ver', 'agencias.consultar', 'operadores.ver', 'catalogo.ver', 'precios.ver']));
   });
 });

@@ -306,20 +306,15 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       ).rejects.toThrow(/solo.*pulidor/i);
     });
 
-    it('acepta un pulidor con el rol legado PULIDOR_FIJO o PULIDOR_MOVIL (cuentas viejas sin normalizar en BD)', async () => {
-      const fijo = build({
-        user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-3', estado: 1, role: { namerol: 'PULIDOR_FIJO' } }) },
-      });
-      await expect(
-        fijo.service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-3' } as never, admin),
-      ).resolves.toBeDefined();
-
-      const movil = build({
-        user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-4', estado: 1, role: { namerol: 'PULIDOR_MOVIL' } }) },
-      });
-      await expect(
-        movil.service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-4' } as never, admin),
-      ).resolves.toBeDefined();
+    it('no acepta nombres de rol antiguos como PULIDOR_FIJO o PULIDOR_MOVIL: solo el rol PULIDOR', async () => {
+      for (const namerol of ['PULIDOR_FIJO', 'PULIDOR_MOVIL']) {
+        const { service } = build({
+          user: { findUnique: vi.fn().mockResolvedValue({ id: 'pul-3', estado: 1, role: { namerol } }) },
+        });
+        await expect(
+          service.asignarOperador({ maquinariaId: 'm1', operadorId: 'pul-3' } as never, admin),
+        ).rejects.toThrow(/solo.*pulidor/i);
+      }
     });
   });
 

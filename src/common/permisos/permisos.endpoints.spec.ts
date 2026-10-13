@@ -52,7 +52,7 @@ describe('todos los endpoints declaran su permiso (falla cerrado)', () => {
     for (const [, c] of CONTROLADORES) {
       for (const { nombre, handler } of rutas(c)) if (Reflect.getMetadata(PUBLICO_KEY, handler)) publicos.push(`${c.name}.${nombre}`);
     }
-    expect(publicos.sort()).toEqual(['AuthController.login', 'AuthController.refresh', 'StorageController.getFile', 'SyncController.ping']);
+    expect(publicos.sort()).toEqual(['AuthController.login', 'AuthController.logout', 'AuthController.refresh', 'StorageController.getFile', 'SyncController.ping']);
   });
 
   it('exigen solo sesión únicamente la cuenta propia y el almacenamiento (con chequeo interno)', () => {

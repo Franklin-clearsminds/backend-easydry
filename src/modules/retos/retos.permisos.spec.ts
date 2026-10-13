@@ -1,340 +1,380 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RetosService } from './retos.service.js';
-import { ROLES_BASE } from '../../common/permisos/roles-base.js';
+import { hoyEcuador } from './retos.reglas.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
-const usuario = (namerol: string, extra: Record<string, unknown> = {}) => {
-  const r = ROLES_BASE.find((x) => x.namerol === namerol)!;
-  return {
-    id: `id-${namerol}`,
-    name: 'Ana',
-    lastname: namerol,
-    roleDetails: { namerol, capacidades: r.capacidades, ambito: r.ambito },
-    ...extra,
+/**
+ * Integración con la base real (sin mocks). Mundo de la prueba, todo creado aquí:
+ *
+ *  Región COSTA ── Agencia A1 (Lía LIDER, Luis LAVADOR, Pedro LAVADOR, Paco PULIDOR fijo) · Agencia A2
+ *  Región SIERRA ─ Agencia A3 (Sara LAVADOR)
+ *  Pulidor móvil Ana (en COSTA, sin agencia) · Admin · Jefe comercial · Coordinador comercial de COSTA
+ *
+ * Las fechas son relativas a hoy (hora de Ecuador) para que la prueba no caduque. Los retos y servicios se
+ * acotan siempre a las agencias/personas de este mundo, así los datos reales de la base no entran en el ranking.
+ */
+const DIA = 24 * 60 * 60 * 1000;
+const fecha = (dias: number) => new Date(hoyEcuador().getTime() + dias * DIA).toISOString().slice(0, 10);
+/** Un instante a mediodía de Ecuador, `dias` días desde hoy. */
+const instante = (dias: number) => new Date(hoyEcuador().getTime() + dias * DIA + 17 * 60 * 60 * 1000);
+
+describe('RetosService (base real)', () => {
+  let env: Entorno;
+  let service: RetosService;
+  let costa: any;
+  let sierra: any;
+  let a1: any;
+  let a2: any;
+  let a3: any;
+  let bahiaA1: any;
+  let general: any;
+  let especial: any;
+  const ids: Record<string, string> = {};
+  const actores: Record<string, any> = {};
+  let n = 0;
+
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new RetosService(env.prisma as never, env.notificaciones());
+
+    costa = await env.region('COSTA');
+    sierra = await env.region('SIERRA');
+    a1 = await env.agencia('A1', { regionId: costa.id });
+    a2 = await env.agencia('A2', { regionId: costa.id });
+    a3 = await env.agencia('A3', { regionId: sierra.id });
+    bahiaA1 = await env.bahia('B1', a1.id);
+    general = await env.catalogo('GENERAL1');
+    especial = await env.catalogo('ESPECIAL1', { categoria: 'ESPECIAL' });
+
+    const crear = async (clave: string, rol: string, opts: Record<string, unknown> = {}) => {
+      const u = await env.usuario(clave, rol, { name: clave, ...opts });
+      ids[clave] = u.id;
+      actores[clave] = await env.actor(u.id);
+    };
+    await crear('lia', 'LIDER', { agenciaId: a1.id, regionId: costa.id });
+    await crear('luis', 'LAVADOR', { agenciaId: a1.id });
+    await crear('pedro', 'LAVADOR', { agenciaId: a1.id, lastname: 'Mora (CI: 1712345678)' });
+    await crear('paco', 'PULIDOR', { agenciaId: a1.id });
+    await crear('sara', 'LAVADOR', { agenciaId: a3.id });
+    await crear('ana', 'PULIDOR', { regionId: costa.id });
+    await crear('admin', 'ADMIN');
+    await crear('jefe', 'JEFE_COMERCIAL');
+    await crear('coord', 'COORD_COMERCIAL', { regionId: costa.id });
+    await crear('coordSinRegion', 'COORD_COMERCIAL');
+  });
+
+  afterAll(async () => {
+    await env.cerrar();
+  });
+
+  /** Cuerpo de un reto con título único por llamada. */
+  const dto = (extra: Record<string, unknown> = {}) =>
+    ({ titulo: `${env.marca} reto ${++n}`, fechaInicio: fecha(-10), fechaFin: fecha(20), ...extra }) as any;
+  const enBase = (id: string) => env.prisma.reto.findUniqueOrThrow({ where: { id } });
+  /** Crea un reto por el servicio y lo deja registrado para borrarlo al cerrar. */
+  const crearReto = async (extra: Record<string, unknown>, actor: any) => {
+    const r: any = await service.create(dto(extra), actor);
+    env.rastrear('Reto', r.id);
+    return enBase(r.id);
   };
-};
-
-function armar(existente: any = null, enRegion = 1) {
-  const prisma: any = {
-    reto: {
-      findMany: vi.fn().mockResolvedValue([]),
-      count: vi.fn().mockResolvedValue(0),
-      create: vi.fn().mockImplementation(async (a: any) => ({ id: 'r1', ...a.data })),
-      findUnique: vi.fn().mockResolvedValue(existente),
-      delete: vi.fn().mockResolvedValue({}),
-      update: vi.fn().mockImplementation(async (a: any) => ({ ...existente, ...a.data })),
-    },
-    agencia: { count: vi.fn().mockResolvedValue(enRegion), findMany: vi.fn().mockResolvedValue([]) },
-    bahia: { count: vi.fn().mockResolvedValue(enRegion), findMany: vi.fn().mockResolvedValue([]) },
-    catalogoServicio: {
-      count: vi.fn().mockImplementation(async ({ where }: any) => where.id.in.length),
-      findMany: vi.fn().mockResolvedValue([]),
-    },
-    user: { count: vi.fn().mockResolvedValue(enRegion), findMany: vi.fn().mockResolvedValue([]) },
-    servicioLavado: { findMany: vi.fn().mockResolvedValue([]) },
-    servicioEspecial: { findMany: vi.fn().mockResolvedValue([]) },
-    region: { findMany: vi.fn().mockResolvedValue([]) },
+  /** Un reto escrito directo en la base (para probar ranking/cierre/listado sin pasar por la validación de create). */
+  const retoDirecto = async (extra: Record<string, unknown> = {}) => {
+    const r = await env.prisma.reto.create({
+      data: {
+        titulo: `${env.marca} directo ${++n}`,
+        fechaInicio: new Date(fecha(-10)),
+        fechaFin: new Date(fecha(20)),
+        regiones: [costa.nombre],
+        sucursalesIds: [a1.id, a2.id],
+        creadoPorId: ids.coord,
+        ...extra,
+      } as never,
+    });
+    env.rastrear('Reto', r.id);
+    return r;
   };
-  return { prisma, service: new RetosService(prisma) };
-}
-const dto = (extra: Record<string, unknown> = {}) =>
-  ({ titulo: 'Reto', fechaInicio: '2026-10-01', fechaFin: '2026-10-31', ...extra }) as any;
-const creado = (prisma: any) => prisma.reto.create.mock.calls[0][0].data;
+  const lavado = (agenciaBahia: string, operadorId: string, dias: number, extra: Record<string, unknown> = {}) =>
+    env.servicioLavado({ bahiaId: agenciaBahia, operadorId, catalogoId: general.id, horaSalida: instante(dias), ...extra });
 
-describe('RetosService.create', () => {
-  it('administradores y jefe comercial crean retos nacionales o de cualquier región', async () => {
-    for (const rol of ['SUPER_ADMIN', 'ADMIN', 'JEFE_COMERCIAL']) {
-      const { prisma, service } = armar();
-      await service.create(dto({ regiones: ['Costa', 'Sierra'] }), usuario(rol));
-      expect(creado(prisma).regiones).toEqual(['Costa', 'Sierra']);
-    }
-  });
+  describe('create', () => {
+    it('administradores y jefe comercial crean retos nacionales o de cualquier región', async () => {
+      for (const rol of ['admin', 'jefe']) {
+        const r = await crearReto({ regiones: [costa.nombre, sierra.nombre] }, actores[rol]);
+        expect(r.regiones).toEqual([costa.nombre, sierra.nombre]);
+        expect(r.creadoPorId).toBe(ids[rol]);
+      }
+    });
 
-  it('valores por defecto: agencias, todos los servicios, cantidad de servicios, gana el primero', async () => {
-    const { prisma, service } = armar();
-    await service.create(dto(), usuario('ADMIN'));
-    expect(creado(prisma)).toMatchObject({
-      tipoReto: 'AGENCIA', tipoServicios: 'TODOS', metrica: 'SERVICIOS', modoGanador: 'RANKING', cantidadGanadores: 1, meta: null,
+    it('valores por defecto: agencias, todos los servicios, cantidad de servicios, gana el primero', async () => {
+      const r = await crearReto({}, actores.admin);
+      expect(r).toMatchObject({ tipoReto: 'AGENCIA', tipoServicios: 'TODOS', metrica: 'SERVICIOS', modoGanador: 'RANKING', cantidadGanadores: 1, meta: null });
+    });
+
+    it('el coordinador comercial solo crea retos para su región', async () => {
+      const ok = await crearReto({ regiones: [costa.nombre.toLowerCase()] }, actores.coord);
+      expect(ok.titulo).toContain(env.marca);
+      for (const regiones of [[sierra.nombre], [costa.nombre, sierra.nombre], [], ['Todas']]) {
+        const d = dto({ regiones });
+        await expect(service.create(d, actores.coord)).rejects.toThrow(/tu región/);
+        expect(await env.prisma.reto.count({ where: { titulo: d.titulo } })).toBe(0);
+      }
+    });
+
+    it('el coordinador solo elige agencias y personas de su región, y necesita tener región', async () => {
+      await expect(service.create(dto({ regiones: [costa.nombre], sucursalesIds: [a3.id] }), actores.coord)).rejects.toThrow(/no pertenecen a tu región/);
+      await expect(
+        service.create(dto({ regiones: [costa.nombre], tipoReto: 'LAVADOR', lavadoresIds: [ids.sara] }), actores.coord),
+      ).rejects.toThrow(/lavadores no pertenecen/);
+      await expect(service.create(dto({ regiones: [costa.nombre] }), actores.coordSinRegion)).rejects.toThrow(/región asignada/);
+      // Con agencias y personas de su región sí.
+      const ok = await crearReto({ regiones: [costa.nombre], sucursalesIds: [a1.id] }, actores.coord);
+      expect(ok.sucursalesIds).toEqual([a1.id]);
+    });
+
+    it('rechaza fechas al revés', async () => {
+      await expect(service.create(dto({ fechaInicio: fecha(10), fechaFin: fecha(-10) }), actores.admin)).rejects.toThrow(/fecha de fin/);
+    });
+
+    it('los lavadores solo compiten con servicios generales y los pulidores con especiales', async () => {
+      await expect(service.create(dto({ tipoReto: 'LAVADOR', tipoServicios: 'ESPECIALES' }), actores.admin)).rejects.toThrow(/generales/);
+      await expect(service.create(dto({ tipoReto: 'PULIDOR', tipoServicios: 'TODOS' }), actores.admin)).rejects.toThrow(/especiales/);
+      const r = await crearReto({ tipoReto: 'PULIDOR' }, actores.admin);
+      expect(r).toMatchObject({ tipoReto: 'PULIDOR', tipoServicios: 'ESPECIALES', pulidoresIds: [] });
+    });
+
+    it('servicios específicos: exige elegir y, para personas, que sean de su categoría', async () => {
+      await expect(service.create(dto({ tipoServicios: 'ESPECIFICOS' }), actores.admin)).rejects.toThrow(/uno o varios servicios/);
+      const r = await crearReto({ tipoReto: 'PULIDOR', tipoServicios: 'ESPECIFICOS', catalogoServicioIds: [especial.id] }, actores.admin);
+      expect(r.catalogoServicioIds).toEqual([especial.id]);
+      // Un servicio GENERAL no sirve para un reto de pulidores.
+      const d = dto({ tipoReto: 'PULIDOR', tipoServicios: 'ESPECIFICOS', catalogoServicioIds: [general.id] });
+      await expect(service.create(d, actores.admin)).rejects.toThrow();
+      expect(await env.prisma.reto.count({ where: { titulo: d.titulo } })).toBe(0);
+      // Sin "específicos" no se guardan servicios sueltos.
+      const otro = await crearReto({ tipoServicios: 'TODOS', catalogoServicioIds: [general.id] }, actores.admin);
+      expect(otro.catalogoServicioIds).toEqual([]);
+    });
+
+    it('meta: obligatoria con META, entera salvo para monto', async () => {
+      await expect(service.create(dto({ modoGanador: 'META' }), actores.admin)).rejects.toThrow(/meta/);
+      await expect(service.create(dto({ modoGanador: 'META', meta: 2.5 }), actores.admin)).rejects.toThrow(/entero/);
+      const r = await crearReto({ modoGanador: 'META', metrica: 'MONTO', meta: 1500.5 }, actores.admin);
+      expect(r).toMatchObject({ modoGanador: 'META', cantidadGanadores: 1 });
+      expect(Number(r.meta)).toBe(1500.5);
+    });
+
+    it('las listas de personas solo se guardan para su tipo de reto', async () => {
+      const r = await crearReto({ tipoReto: 'AGENCIA', pulidoresIds: [ids.paco], lavadoresIds: [ids.luis] }, actores.admin);
+      expect(r).toMatchObject({ pulidoresIds: [], lavadoresIds: [] });
     });
   });
 
-  it('el coordinador comercial solo crea retos para su región', async () => {
-    const yo = usuario('COORD_COMERCIAL', { regionId: 'r1', region: { nombre: 'Costa' } });
-    const { prisma, service } = armar();
-    await service.create(dto({ regiones: ['costa'] }), yo);
-    expect(prisma.reto.create).toHaveBeenCalled();
-    for (const regiones of [['Sierra'], ['Costa', 'Sierra'], [], ['Todas']]) {
-      await expect(armar().service.create(dto({ regiones }), yo)).rejects.toThrow(/tu región/);
-    }
-  });
+  describe('list', () => {
+    let nacional: any;
+    let deCosta: any;
+    let deSierra: any;
+    let deA1: any;
+    let privadoPulidor: any;
 
-  it('el coordinador solo elige agencias y personas de su región, y necesita tener región', async () => {
-    const yo = usuario('COORD_COMERCIAL', { regionId: 'r1', region: { nombre: 'Costa' } });
-    await expect(armar(null, 0).service.create(dto({ regiones: ['Costa'], sucursalesIds: ['a9'] }), yo)).rejects.toThrow(/no pertenecen a tu región/);
-    await expect(
-      armar(null, 0).service.create(dto({ regiones: ['Costa'], tipoReto: 'LAVADOR', lavadoresIds: ['l9'] }), yo),
-    ).rejects.toThrow(/lavadores no pertenecen/);
-    await expect(armar().service.create(dto({ regiones: ['Costa'] }), usuario('COORD_COMERCIAL'))).rejects.toThrow(/región asignada/);
-  });
+    beforeAll(async () => {
+      nacional = await retoDirecto({ titulo: `${env.marca} L nacional`, regiones: [], sucursalesIds: [] });
+      deCosta = await retoDirecto({ titulo: `${env.marca} L costa`, regiones: [costa.nombre], sucursalesIds: [] });
+      deSierra = await retoDirecto({ titulo: `${env.marca} L sierra`, regiones: [sierra.nombre], sucursalesIds: [] });
+      deA1 = await retoDirecto({ titulo: `${env.marca} L a1`, regiones: [], sucursalesIds: [a1.id] });
+      privadoPulidor = await retoDirecto({ titulo: `${env.marca} L privado`, regiones: [], sucursalesIds: [], tipoReto: 'PULIDOR', pulidoresIds: [ids.ana] });
+    });
 
-  it('rechaza fechas al revés', async () => {
-    await expect(
-      armar().service.create(dto({ fechaInicio: '2026-11-01', fechaFin: '2026-10-01' }), usuario('ADMIN')),
-    ).rejects.toThrow(/fecha de fin/);
-  });
+    const titulos = (r: any) => r.items.map((i: any) => i.titulo.replace(`${env.marca} `, '')).sort();
 
-  it('los lavadores solo compiten con servicios generales y los pulidores con especiales', async () => {
-    await expect(armar().service.create(dto({ tipoReto: 'LAVADOR', tipoServicios: 'ESPECIALES' }), usuario('ADMIN'))).rejects.toThrow(/generales/);
-    await expect(armar().service.create(dto({ tipoReto: 'PULIDOR', tipoServicios: 'TODOS' }), usuario('ADMIN'))).rejects.toThrow(/especiales/);
-    const { prisma, service } = armar();
-    await service.create(dto({ tipoReto: 'PULIDOR' }), usuario('ADMIN'));
-    expect(creado(prisma)).toMatchObject({ tipoReto: 'PULIDOR', tipoServicios: 'ESPECIALES', pulidoresIds: [] });
-  });
+    it('administradores y jefe comercial ven todos', async () => {
+      for (const rol of ['admin', 'jefe']) {
+        const r: any = await service.list({ page: 1, pageSize: 50, search: `${env.marca} L `, incluirTodos: true } as any, actores[rol]);
+        expect(titulos(r)).toEqual(['L a1', 'L costa', 'L nacional', 'L privado', 'L sierra']);
+      }
+    });
 
-  it('servicios específicos: exige elegir y, para personas, que sean de su categoría', async () => {
-    await expect(armar().service.create(dto({ tipoServicios: 'ESPECIFICOS' }), usuario('ADMIN'))).rejects.toThrow(/uno o varios servicios/);
-    const { prisma, service } = armar();
-    await service.create(dto({ tipoReto: 'PULIDOR', tipoServicios: 'ESPECIFICOS', catalogoServicioIds: [26, 27] }), usuario('ADMIN'));
-    expect(prisma.catalogoServicio.count.mock.calls[0][0].where).toMatchObject({ categoria: 'ESPECIAL' });
-    expect(creado(prisma).catalogoServicioIds).toEqual([26, 27]);
-    // Sin "específicos" no se guardan servicios sueltos.
-    const otro = armar();
-    await otro.service.create(dto({ tipoServicios: 'TODOS', catalogoServicioIds: [1] }), usuario('ADMIN'));
-    expect(creado(otro.prisma).catalogoServicioIds).toEqual([]);
-  });
+    it('el resto solo ve los de su región, su agencia o donde participa', async () => {
+      const lider: any = await service.list({ page: 1, pageSize: 50, search: `${env.marca} L `, incluirTodos: true } as any, actores.lia);
+      // Ve el de su agencia, el de su región y el nacional (sin regiones ni participantes); no el de Sierra ni el privado de pulidores.
+      expect(titulos(lider)).toEqual(['L a1', 'L costa', 'L nacional']);
 
-  it('meta: obligatoria con META, entera salvo para monto', async () => {
-    await expect(armar().service.create(dto({ modoGanador: 'META' }), usuario('ADMIN'))).rejects.toThrow(/meta/);
-    await expect(armar().service.create(dto({ modoGanador: 'META', meta: 2.5 }), usuario('ADMIN'))).rejects.toThrow(/entero/);
-    const { prisma, service } = armar();
-    await service.create(dto({ modoGanador: 'META', metrica: 'MONTO', meta: 1500.5 }), usuario('ADMIN'));
-    expect(creado(prisma)).toMatchObject({ modoGanador: 'META', meta: 1500.5, cantidadGanadores: 1 });
-  });
-
-  it('las listas de personas solo se guardan para su tipo de reto', async () => {
-    const { prisma, service } = armar();
-    await service.create(dto({ tipoReto: 'AGENCIA', pulidoresIds: ['p1'], lavadoresIds: ['l1'] }), usuario('ADMIN'));
-    expect(creado(prisma)).toMatchObject({ pulidoresIds: [], lavadoresIds: [] });
-  });
-});
-
-describe('RetosService.list', () => {
-  it('administradores y jefe comercial ven todos; el resto solo los de su región, agencia o donde participa', async () => {
-    for (const rol of ['ADMIN', 'JEFE_COMERCIAL']) {
-      const { prisma, service } = armar();
-      await service.list({} as any, usuario(rol));
-      expect(JSON.stringify(prisma.reto.findMany.mock.calls[0][0].where)).not.toContain('sucursalesIds');
-    }
-    const { prisma, service } = armar();
-    await service.list({} as any, usuario('LIDER', { agenciaId: 'a1', region: { nombre: 'Costa' } }));
-    const txt = JSON.stringify(prisma.reto.findMany.mock.calls[0][0].where);
-    expect(txt).toContain('"sucursalesIds":{"has":"a1"}');
-    expect(txt).toContain('"regiones":{"has":"Costa"}');
-    expect(txt).toContain('"lavadoresIds":{"has":"id-LIDER"}');
-  });
-});
-
-describe('RetosService.delete', () => {
-  it('lo elimina su creador o alguien con alcance nacional; nadie más', async () => {
-    const mio = { id: 'r1', creadoPorId: 'id-COORD_COMERCIAL' };
-    await expect(armar(mio).service.delete('r1', usuario('COORD_COMERCIAL'))).resolves.toMatchObject({ success: true });
-    await expect(armar(mio).service.delete('r1', usuario('ADMIN'))).resolves.toMatchObject({ success: true });
-    await expect(armar(mio).service.delete('r1', usuario('JEFE_COMERCIAL'))).resolves.toMatchObject({ success: true });
-    const ajeno = { id: 'r1', creadoPorId: 'otro' };
-    await expect(
-      armar(ajeno).service.delete('r1', usuario('COORD_COMERCIAL', { regionId: 'r1' })),
-    ).rejects.toThrow(/creador o alguien con alcance nacional/);
-  });
-});
-
-const retoBase = {
-  id: 'r1',
-  regiones: ['Todas'],
-  marcas: ['Todas'],
-  sucursalesIds: [],
-  bahiasIds: [],
-  pulidoresIds: [],
-  lavadoresIds: [],
-  fechaInicio: new Date('2026-10-01T00:00:00.000Z'),
-  fechaFin: new Date('2026-10-31T00:00:00.000Z'),
-  catalogoServicioIds: [],
-  tipoReto: 'AGENCIA',
-  tipoServicios: 'TODOS',
-  metrica: 'SERVICIOS',
-  modoGanador: 'RANKING',
-  cantidadGanadores: 1,
-  meta: null,
-  estado: 'ACTIVO',
-  creadoPorId: 'id-COORD_COMERCIAL',
-  titulo: 'Reto',
-};
-const lavado = (agenciaId: string, fin: string, extra: Record<string, unknown> = {}) => ({
-  placa: 'AAA-001', precio: 10, horaSalida: new Date(fin), operadorId: 'l1', bahiaId: `b-${agenciaId}`,
-  bahia: { agenciaId }, operadoresAsignados: [], ...extra,
-});
-
-describe('RetosService.ranking', () => {
-  it('agencias: suma generales y especiales, y desempata por quién llegó primero', async () => {
-    const { prisma, service } = armar(retoBase);
-    prisma.agencia.findMany.mockResolvedValue([
-      { id: 'a1', nombre: 'Agencia Uno', regionId: 'costa' },
-      { id: 'a2', nombre: 'Agencia Dos', regionId: 'sierra' },
-    ]);
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      lavado('a1', '2026-10-05T15:00:00Z'),
-      lavado('a2', '2026-10-03T15:00:00Z'),
-    ]);
-    prisma.servicioEspecial.findMany.mockResolvedValue([
-      { placa: 'X', precio: 0, fechaFin: new Date('2026-10-02T15:00:00Z'), operadorId: 'p1', bahiaId: 'b', agenciaId: 'a2', operadoresAsignados: [] },
-      { placa: 'Y', precio: 0, fechaFin: new Date('2026-10-04T15:00:00Z'), operadorId: 'p1', bahiaId: 'b', agenciaId: 'a1', operadoresAsignados: [] },
-    ]);
-
-    const r = await service.ranking('r1', usuario('ADMIN'));
-    expect(r.participantes.map((p: any) => [p.nombre, p.valor, p.posicion, p.gana])).toEqual([
-      ['Agencia Dos', 2, 1, true],
-      ['Agencia Uno', 2, 2, false],
-    ]);
-    expect(prisma.servicioLavado.findMany.mock.calls[0][0].where).toMatchObject({
-      estado: { in: ['FINALIZADO', 'APROBADO'] },
-      deletedAt: null,
-      horaSalida: { gte: new Date('2026-10-01T05:00:00.000Z'), lt: new Date('2026-11-01T05:00:00.000Z') },
+      const ana: any = await service.list({ page: 1, pageSize: 50, search: `${env.marca} L `, incluirTodos: true } as any, actores.ana);
+      expect(titulos(ana)).toEqual(['L costa', 'L nacional', 'L privado']); // el privado, porque participa como pulidora
     });
   });
 
-  it('quien ve por agencia solo ve su fila, con su posición real', async () => {
-    const { prisma, service } = armar({ ...retoBase, regiones: ['Costa'] });
-    prisma.agencia.findMany.mockResolvedValue([
-      { id: 'a1', nombre: 'Agencia Uno', regionId: 'costa' },
-      { id: 'a2', nombre: 'Agencia Dos', regionId: 'costa' },
-    ]);
-    prisma.servicioLavado.findMany.mockResolvedValue([lavado('a2', '2026-10-03T15:00:00Z')]);
-    const r = await service.ranking('r1', usuario('LIDER', { agenciaId: 'a1', region: { nombre: 'Costa' } }));
-    expect(r.participantes).toEqual([expect.objectContaining({ participanteId: 'a1', posicion: 2, valor: 0 })]);
-  });
+  describe('delete', () => {
+    it('lo elimina su creador o alguien con alcance nacional; nadie más', async () => {
+      const mio = await retoDirecto({ creadoPorId: ids.coord });
+      await expect(service.delete(mio.id, actores.coord)).resolves.toMatchObject({ success: true });
+      expect(await env.prisma.reto.count({ where: { id: mio.id } })).toBe(0);
 
-  it('servicios generales solamente: no lee especiales; servicios específicos filtra por catálogo', async () => {
-    const generales = armar({ ...retoBase, tipoServicios: 'GENERALES' });
-    await generales.service.ranking('r1', usuario('ADMIN'));
-    expect(generales.prisma.servicioEspecial.findMany).not.toHaveBeenCalled();
+      for (const rol of ['admin', 'jefe']) {
+        const r = await retoDirecto({ creadoPorId: ids.coord });
+        await expect(service.delete(r.id, actores[rol])).resolves.toMatchObject({ success: true });
+        expect(await env.prisma.reto.count({ where: { id: r.id } })).toBe(0);
+      }
 
-    const especificos = armar({ ...retoBase, tipoServicios: 'ESPECIFICOS', catalogoServicioIds: [3] });
-    await especificos.service.ranking('r1', usuario('ADMIN'));
-    expect(especificos.prisma.servicioLavado.findMany.mock.calls[0][0].where.servicioCatalogoId).toEqual({ in: [3] });
-    expect(especificos.prisma.servicioEspecial.findMany.mock.calls[0][0].where.servicioCatalogoId).toEqual({ in: [3] });
-  });
-
-  it('bahías: compiten todas las de las agencias elegidas, sin filtrar servicios por bahía', async () => {
-    const { prisma, service } = armar({ ...retoBase, tipoReto: 'BAHIA', sucursalesIds: ['a1'] });
-    prisma.bahia.findMany.mockResolvedValue([
-      { id: 'b1', nombre: 'Bahía 01', agenciaId: 'a1', agencia: { nombre: 'Agencia Uno', regionId: 'costa' } },
-      { id: 'b2', nombre: 'Bahía 02', agenciaId: 'a1', agencia: { nombre: 'Agencia Uno', regionId: 'costa' } },
-    ]);
-    prisma.servicioLavado.findMany.mockResolvedValue([lavado('a1', '2026-10-03T15:00:00Z', { bahiaId: 'b2' })]);
-    const r = await service.ranking('r1', usuario('ADMIN'));
-    expect(prisma.bahia.findMany.mock.calls[0][0].where).toEqual({ agencia: { AND: [{ id: { in: ['a1'] } }] } });
-    expect(prisma.servicioLavado.findMany.mock.calls[0][0].where).not.toHaveProperty('bahiaId');
-    expect(r.participantes.map((p: any) => [p.nombre, p.detalle, p.valor])).toEqual([
-      ['Bahía 02', 'Agencia Uno', 1],
-      ['Bahía 01', 'Agencia Uno', 0],
-    ]);
-  });
-
-  it('bahías: muestra quién hizo sus servicios (de más a menos) o, si no tiene, quién está asignado hoy', async () => {
-    const { prisma, service } = armar({ ...retoBase, tipoReto: 'BAHIA' });
-    prisma.bahia.findMany
-      .mockResolvedValueOnce([
-        { id: 'b1', nombre: 'Bahía 01', agenciaId: 'a1', agencia: { nombre: 'Agencia Uno', regionId: 'costa' } },
-        { id: 'b2', nombre: 'Bahía 02', agenciaId: 'a1', agencia: { nombre: 'Agencia Uno', regionId: 'costa' } },
-      ])
-      .mockResolvedValueOnce([{ id: 'b2', operadorActualId: 'l3', operadores: [{ operadorId: 'l3' }] }]);
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      lavado('a1', '2026-10-03T15:00:00Z', { bahiaId: 'b1', operadorId: 'l1' }),
-      lavado('a1', '2026-10-04T15:00:00Z', { bahiaId: 'b1', operadorId: 'l2' }),
-      lavado('a1', '2026-10-05T15:00:00Z', { bahiaId: 'b1', operadorId: 'l2' }),
-    ]);
-    prisma.user.findMany.mockResolvedValue([
-      { id: 'l1', name: 'Juan', lastname: 'Paz' },
-      { id: 'l2', name: 'Pedro', lastname: 'Mora (CI: 1712345678)' },
-      { id: 'l3', name: 'Luis', lastname: 'Vera' },
-    ]);
-    const r = await service.ranking('r1', usuario('ADMIN'));
-    expect(r.participantes[0].personas).toEqual([
-      { id: 'l2', nombre: 'Pedro Mora', servicios: 2 },
-      { id: 'l1', nombre: 'Juan Paz', servicios: 1 },
-    ]);
-    expect(r.participantes[1].personas).toEqual([{ id: 'l3', nombre: 'Luis Vera', servicios: null }]);
-  });
-
-  it('pulidores: solo especiales completados, y un servicio compartido cuenta para cada asignado', async () => {
-    const { prisma, service } = armar({ ...retoBase, tipoReto: 'PULIDOR', tipoServicios: 'ESPECIALES', pulidoresIds: ['p1', 'p2'] });
-    prisma.user.findMany.mockResolvedValue([
-      { id: 'p1', name: 'Ana', lastname: 'Paz', agenciaId: null, regionId: 'r1', agencia: null },
-      { id: 'p2', name: 'Luis', lastname: 'Mora', agenciaId: 'a1', regionId: 'r1', agencia: { nombre: 'Agencia Uno' } },
-    ]);
-    prisma.servicioEspecial.findMany.mockResolvedValue([
-      { placa: 'X', precio: 50, fechaFin: new Date('2026-10-02T15:00:00Z'), operadorId: 'p1', bahiaId: null, agenciaId: null, operadoresAsignados: [{ operadorId: 'p1' }, { operadorId: 'p2' }] },
-    ]);
-    const r = await service.ranking('r1', usuario('ADMIN'));
-    expect(prisma.servicioLavado.findMany).not.toHaveBeenCalled();
-    expect(prisma.servicioEspecial.findMany.mock.calls[0][0].where).toMatchObject({ estado: 'Completado', deletedAt: null });
-    expect(r.participantes.map((p: any) => [p.nombre, p.valor, p.detalle])).toEqual([
-      ['Ana Paz', 1, 'Pulidor móvil'],
-      ['Luis Mora', 1, 'Agencia Uno'],
-    ]);
-  });
-
-  it('no expone el ranking de un reto fuera del alcance del usuario', async () => {
-    const usuarioCosta = usuario('LIDER', { agenciaId: 'a1', region: { nombre: 'Costa' } });
-    await expect(armar({ ...retoBase, regiones: ['Sierra'] }).service.ranking('r1', usuarioCosta)).rejects.toThrow(/No tienes acceso/);
-    // Un reto privado de pulidores (sin región ni agencias) tampoco: antes su ranking lo podía abrir cualquiera.
-    const privado = { ...retoBase, regiones: [], tipoReto: 'PULIDOR', pulidoresIds: ['p1'] };
-    await expect(armar(privado).service.ranking('r1', usuarioCosta)).rejects.toThrow(/No tienes acceso/);
-    await expect(armar(privado).service.ranking('r1', usuario('PULIDOR', { id: 'p1' }))).resolves.toBeDefined();
-  });
-});
-
-describe('RetosService.cerrar', () => {
-  it('lo cierran su creador o alguien con alcance nacional; el ganador sale del ranking', async () => {
-    const { prisma, service } = armar(retoBase);
-    prisma.agencia.findMany.mockResolvedValue([{ id: 'a1', nombre: 'Agencia Uno', regionId: 'costa' }]);
-    prisma.servicioLavado.findMany.mockResolvedValue([lavado('a1', '2026-10-05T15:00:00Z')]);
-    const r = await service.cerrar({ id: 'r1', ganadorNombre: 'Otro', resultado: 'Bien' } as any, usuario('COORD_COMERCIAL'));
-    expect(r).toMatchObject({
-      estado: 'FINALIZADO',
-      ganadorNombre: 'Agencia Uno',
-      resultado: 'Bien',
-      ganadores: [{ participanteId: 'a1', nombre: 'Agencia Uno', valor: 1, posicion: 1 }],
+      const ajeno = await retoDirecto({ creadoPorId: ids.lia });
+      await expect(service.delete(ajeno.id, actores.coord)).rejects.toThrow(/creador o alguien con alcance nacional/);
+      expect(await env.prisma.reto.count({ where: { id: ajeno.id } })).toBe(1);
     });
-    await expect(armar(retoBase).service.cerrar({ id: 'r1' } as any, usuario('JEFE_COMERCIAL'))).resolves.toMatchObject({ estado: 'FINALIZADO' });
-    await expect(
-      armar({ ...retoBase, creadoPorId: 'otro' }).service.cerrar({ id: 'r1' } as any, usuario('COORD_COMERCIAL', { regionId: 'r1' })),
-    ).rejects.toThrow(/creador o alguien con alcance nacional/);
   });
 
-  it('sin servicios no hay ganador', async () => {
-    await expect(armar(retoBase).service.cerrar({ id: 'r1' } as any, usuario('ADMIN'))).resolves.toMatchObject({ ganadorNombre: null, ganadores: [] });
+  describe('ranking', () => {
+    it('agencias: suma generales y especiales, y desempata por quién llegó primero', async () => {
+      const bahiaA2 = await env.bahia('B2', a2.id);
+      const reto = await retoDirecto({});
+      await lavado(bahiaA1.id, ids.luis, -5); // A1
+      await lavado(bahiaA2.id, ids.luis, -7); // A2
+      await env.servicioEspecial({ agenciaId: a2.id, operadorId: ids.paco, fechaFin: instante(-8) }); // A2
+      await env.servicioEspecial({ agenciaId: a1.id, operadorId: ids.paco, fechaFin: instante(-6) }); // A1
+      // Estos no cuentan: fuera de fechas, sin terminar y borrado.
+      await lavado(bahiaA1.id, ids.luis, -40);
+      await lavado(bahiaA1.id, ids.luis, -4, { estado: 'EN_PROCESO' });
+      await lavado(bahiaA1.id, ids.luis, -4, { deletedAt: new Date() });
+
+      const r: any = await service.ranking(reto.id, actores.admin);
+      // Empatan en 2: A2 llegó al segundo servicio antes (-7 y -8) que A1 (-5 y -6).
+      expect(r.participantes.map((p: any) => [p.nombre, p.valor, p.posicion, p.gana])).toEqual([
+        [a2.nombre, 2, 1, true],
+        [a1.nombre, 2, 2, false],
+      ]);
+    });
+
+    it('quien ve por agencia solo ve su fila, con su posición real', async () => {
+      const a2Propia = await env.agencia('A2-PROPIA', { regionId: costa.id });
+      const a1Propia = await env.agencia('A1-PROPIA', { regionId: costa.id });
+      const liderPropio = await env.usuario('lider-propio', 'LIDER', { agenciaId: a1Propia.id, regionId: costa.id });
+      const bahia2 = await env.bahia('B-PROPIA', a2Propia.id);
+      const reto = await retoDirecto({ sucursalesIds: [a1Propia.id, a2Propia.id] });
+      await lavado(bahia2.id, ids.luis, -3); // solo A2 tiene servicios
+
+      const r: any = await service.ranking(reto.id, await env.actor(liderPropio.id));
+      expect(r.participantes).toEqual([expect.objectContaining({ participanteId: a1Propia.id, posicion: 2, valor: 0 })]);
+    });
+
+    it('servicios generales solamente: no cuenta los especiales; servicios específicos filtra por catálogo', async () => {
+      const otroGeneral = await env.catalogo('GENERAL2');
+      const bahia = await env.bahia('B-GEN', a1.id);
+      const solo = await env.agencia('A-SOLO', { regionId: costa.id });
+      const bahiaSolo = await env.bahia('B-SOLO', solo.id);
+      void bahia;
+      await env.servicioLavado({ bahiaId: bahiaSolo.id, operadorId: ids.luis, catalogoId: general.id, horaSalida: instante(-3) });
+      await env.servicioLavado({ bahiaId: bahiaSolo.id, operadorId: ids.luis, catalogoId: otroGeneral.id, horaSalida: instante(-3) });
+      await env.servicioEspecial({ agenciaId: solo.id, operadorId: ids.paco, fechaFin: instante(-3), catalogoId: especial.id });
+
+      const generales = await retoDirecto({ sucursalesIds: [solo.id], tipoServicios: 'GENERALES' });
+      expect(((await service.ranking(generales.id, actores.admin)) as any).participantes[0].valor).toBe(2);
+
+      const todos = await retoDirecto({ sucursalesIds: [solo.id], tipoServicios: 'TODOS' });
+      expect(((await service.ranking(todos.id, actores.admin)) as any).participantes[0].valor).toBe(3);
+
+      const especificos = await retoDirecto({ sucursalesIds: [solo.id], tipoServicios: 'ESPECIFICOS', catalogoServicioIds: [otroGeneral.id] });
+      expect(((await service.ranking(especificos.id, actores.admin)) as any).participantes[0].valor).toBe(1);
+    });
+
+    it('bahías: compiten todas las de las agencias elegidas', async () => {
+      const ag = await env.agencia('A-BAHIAS', { regionId: costa.id });
+      const b1 = await env.bahia('RB1', ag.id);
+      const b2 = await env.bahia('RB2', ag.id);
+      await lavado(b2.id, ids.luis, -3);
+      const reto = await retoDirecto({ tipoReto: 'BAHIA', sucursalesIds: [ag.id] });
+
+      const r: any = await service.ranking(reto.id, actores.admin);
+      expect(r.participantes.map((p: any) => [p.nombre, p.detalle, p.valor])).toEqual([
+        [b2.nombre, ag.nombre, 1],
+        [b1.nombre, ag.nombre, 0],
+      ]);
+    });
+
+    it('bahías: muestra quién hizo sus servicios (de más a menos) o, si no tiene, quién está asignado hoy', async () => {
+      const ag = await env.agencia('A-PERSONAS', { regionId: costa.id });
+      const conServicios = await env.bahia('PB1', ag.id);
+      const sinServicios = await env.bahia('PB2', ag.id);
+      await lavado(conServicios.id, ids.luis, -5);
+      await lavado(conServicios.id, ids.pedro, -4);
+      await lavado(conServicios.id, ids.pedro, -3);
+      await env.prisma.bahia.update({ where: { id: sinServicios.id }, data: { operadorActualId: ids.sara } });
+      await env.prisma.bahiaOperador.create({ data: { bahiaId: sinServicios.id, operadorId: ids.sara } });
+      const reto = await retoDirecto({ tipoReto: 'BAHIA', sucursalesIds: [ag.id] });
+
+      const r: any = await service.ranking(reto.id, actores.admin);
+      expect(r.participantes[0].personas).toEqual([
+        { id: ids.pedro, nombre: 'pedro Mora', servicios: 2 }, // la cédula pegada al apellido se quita
+        { id: ids.luis, nombre: 'luis Prueba', servicios: 1 },
+      ]);
+      expect(r.participantes[1].personas).toEqual([{ id: ids.sara, nombre: 'sara Prueba', servicios: null }]);
+    });
+
+    it('pulidores: solo especiales completados, y un servicio compartido cuenta para cada asignado', async () => {
+      // Pulidores propios de esta prueba: así no se mezclan con los servicios de las demás.
+      const movil = await env.usuario('pul-movil', 'PULIDOR', { name: 'Moni', regionId: costa.id });
+      const fijo = await env.usuario('pul-fijo', 'PULIDOR', { name: 'Fabi', agenciaId: a1.id });
+      await env.servicioEspecial({ operadorId: movil.id, asignados: [movil.id, fijo.id], fechaFin: instante(-3), precio: 50 });
+      await env.servicioEspecial({ operadorId: movil.id, estado: 'En Proceso', fechaFin: null }); // no cuenta
+      const reto = await retoDirecto({
+        tipoReto: 'PULIDOR',
+        tipoServicios: 'ESPECIALES',
+        pulidoresIds: [movil.id, fijo.id],
+        regiones: [],
+        sucursalesIds: [],
+      });
+
+      const r: any = await service.ranking(reto.id, actores.admin);
+      expect(r.participantes.map((p: any) => [p.nombre, p.valor, p.detalle]).sort()).toEqual(
+        [
+          ['Moni Prueba', 1, 'Pulidor móvil'],
+          ['Fabi Prueba', 1, a1.nombre],
+        ].sort(),
+      );
+    });
+
+    it('no expone el ranking de un reto fuera del alcance del usuario', async () => {
+      const deSierra = await retoDirecto({ regiones: [sierra.nombre], sucursalesIds: [] });
+      await expect(service.ranking(deSierra.id, actores.lia)).rejects.toThrow(/No tienes acceso/);
+      // Un reto privado de pulidores (sin región ni agencias) tampoco: antes su ranking lo podía abrir cualquiera.
+      const privado = await retoDirecto({ regiones: [], sucursalesIds: [], tipoReto: 'PULIDOR', tipoServicios: 'ESPECIALES', pulidoresIds: [ids.ana] });
+      await expect(service.ranking(privado.id, actores.lia)).rejects.toThrow(/No tienes acceso/);
+      await expect(service.ranking(privado.id, actores.ana)).resolves.toBeDefined();
+    });
   });
 
-  it('no permite cerrar un reto ya finalizado ni uno inexistente', async () => {
-    await expect(armar({ ...retoBase, estado: 'FINALIZADO' }).service.cerrar({ id: 'r1' } as any, usuario('ADMIN'))).rejects.toThrow(/ya fue cerrado/);
-    await expect(armar(null).service.cerrar({ id: 'r1' } as any, usuario('ADMIN'))).rejects.toThrow(/no encontrado/);
-  });
-});
+  describe('cerrar', () => {
+    it('lo cierran su creador o alguien con alcance nacional; el ganador sale del ranking', async () => {
+      const ag = await env.agencia('A-CIERRE', { regionId: costa.id });
+      const bahia = await env.bahia('B-CIERRE', ag.id);
+      await lavado(bahia.id, ids.luis, -3);
+      const reto = await retoDirecto({ sucursalesIds: [ag.id], creadoPorId: ids.coord });
 
-describe('RetosService.cerrarVencidos', () => {
-  it('cierra solo los activos cuya fecha fin ya pasó (hora de Ecuador), sin usuario que cierre', async () => {
-    const { prisma, service } = armar();
-    prisma.reto.findMany.mockResolvedValue([retoBase, { ...retoBase, id: 'r2' }]);
-    await expect(service.cerrarVencidos()).resolves.toBe(2);
-    const where = prisma.reto.findMany.mock.calls[0][0].where;
-    expect(where.estado).toBe('ACTIVO');
-    expect(where.fechaFin.lt).toBeInstanceOf(Date);
-    expect(prisma.reto.update.mock.calls[0][0].data).toMatchObject({ estado: 'FINALIZADO', cerradoPorId: null, resultado: 'Cerrado automáticamente al vencer.' });
-  });
+      const r: any = await service.cerrar({ id: reto.id, ganadorNombre: 'Otro', resultado: 'Bien' } as any, actores.coord);
+      expect(r).toMatchObject({
+        estado: 'FINALIZADO',
+        ganadorNombre: ag.nombre,
+        resultado: 'Bien',
+        cerradoPorId: ids.coord,
+        ganadores: [{ participanteId: ag.id, nombre: ag.nombre, valor: 1, posicion: 1 }],
+      });
+      expect((await enBase(reto.id)).estado).toBe('FINALIZADO');
 
-  it('si un reto falla, sigue con los demás', async () => {
-    const { prisma, service } = armar();
-    prisma.reto.findMany.mockResolvedValue([retoBase, { ...retoBase, id: 'r2' }]);
-    prisma.reto.update.mockRejectedValueOnce(new Error('db caída'));
-    await expect(service.cerrarVencidos()).resolves.toBe(1);
+      const delJefe = await retoDirecto({ creadoPorId: ids.coord });
+      await expect(service.cerrar({ id: delJefe.id } as any, actores.jefe)).resolves.toMatchObject({ estado: 'FINALIZADO' });
+
+      const ajeno = await retoDirecto({ creadoPorId: ids.lia });
+      await expect(service.cerrar({ id: ajeno.id } as any, actores.coord)).rejects.toThrow(/creador o alguien con alcance nacional/);
+      expect((await enBase(ajeno.id)).estado).toBe('ACTIVO');
+    });
+
+    it('sin servicios no hay ganador', async () => {
+      const ag = await env.agencia('A-VACIA', { regionId: costa.id });
+      const reto = await retoDirecto({ sucursalesIds: [ag.id] });
+      await expect(service.cerrar({ id: reto.id } as any, actores.admin)).resolves.toMatchObject({ ganadorNombre: null, ganadores: [] });
+    });
+
+    it('no permite cerrar un reto ya finalizado ni uno inexistente', async () => {
+      const cerrado = await retoDirecto({ estado: 'FINALIZADO' });
+      await expect(service.cerrar({ id: cerrado.id } as any, actores.admin)).rejects.toThrow(/ya fue cerrado/);
+      await expect(service.cerrar({ id: '00000000-0000-4000-8000-000000000000' } as any, actores.admin)).rejects.toThrow(/no encontrado/);
+    });
   });
 });
