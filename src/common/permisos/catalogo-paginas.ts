@@ -177,7 +177,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('productividad', 'productividad', 'Productividad', ['productividad.ver'], []),
     sub('productividad', 'retos', 'Retos', ['retos.ver'], [
       accion('productividad.retos.crear', 'Crear reto', ['retos.crear']),
-      accion('productividad.retos.editar', 'Editar reto', ['retos.crear']),
+      accion('productividad.retos.cerrar', 'Cerrar reto', ['retos.cerrar'], { migrarSi: ['retos.crear'] }),
       accion('productividad.retos.eliminar', 'Eliminar reto', ['retos.eliminar']),
     ]),
   ]),

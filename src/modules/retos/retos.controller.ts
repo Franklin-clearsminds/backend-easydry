@@ -59,7 +59,7 @@ export class RetosController {
     return this.retosService.delete(dto.id, user);
   }
 
-  @Permiso('retos.crear')
+  @Permiso('retos.cerrar')
   @Post('cerrar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cerrar un reto registrando ganador y resultado' })

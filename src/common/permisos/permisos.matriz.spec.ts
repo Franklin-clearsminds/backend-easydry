@@ -141,6 +141,10 @@ describe('matriz acordada de permisos por rol', () => {
     ]);
   });
 
+  it('retos: cierran los mismos que crean', () => {
+    expect(rolesCon('retos.cerrar')).toEqual(rolesCon('retos.crear'));
+  });
+
   it('retos: crean administradores, jefe comercial y coordinador comercial; no aprobador ni supervisor', () => {
     expect(rolesCon('retos.crear')).toEqual([
       'ADMIN',

@@ -69,6 +69,7 @@ export const CATALOGO_PERMISOS = [
 
   def('Retos', 'retos.ver', 'Ver retos', 'Consultar los retos visibles para su región o sede.'),
   def('Retos', 'retos.crear', 'Crear retos', 'Crear retos (un coordinador solo para su región).'),
+  def('Retos', 'retos.cerrar', 'Cerrar retos', 'Cerrar un reto registrando ganador y resultado.'),
   def('Retos', 'retos.eliminar', 'Eliminar retos', 'Eliminar retos propios (un administrador, cualquiera).'),
 
   def('Inventario', 'inventario.ver', 'Ver inventario', 'Stock, insumos, catálogos, movimientos y kardex dentro de su ámbito.'),
