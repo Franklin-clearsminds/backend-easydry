@@ -4120,83 +4120,61 @@ export class InventarioService {
    * de nivel, estado y búsqueda se combinan aparte. `sincroniza` indica si el rol es de los que ven alertas de varias sedes
    * (y por tanto se benefician de generar las de "insumo requerido sin stock").
    */
+  /**
+   * Qué alertas ve el usuario. Lo decide el ÁMBITO configurado en su rol (Nacional, Región, Agencia o Propio), no el nombre del rol:
+   * un rol propio creado desde «Roles y Permisos» se comporta igual que uno de fábrica con el mismo ámbito.
+   * Nunca se usa como respaldo una agencia que mande el cliente: para ámbito de agencia o región manda la del usuario.
+   */
   private async alcanceAlertas(dto: ListAlertasDto, usuarioId?: string): Promise<{ where: Record<string, unknown>; sincroniza: boolean }> {
     const where: Record<string, unknown> = {};
     const targetAgencia = dto.agenciaId || dto.sucursalId;
-    let sincroniza = false;
 
-    if (usuarioId) {
-      const usuario = await this.prisma.user.findUnique({
-        where: { id: usuarioId },
-        include: { role: true, region: true, bodega: true, agencia: true },
-      });
-      const userRole = normalizarRol(usuario?.role?.namerol);
-      const isAsistente =
-        userRole === 'ASISTENTE_BODEGA' ||
-        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
-      const isLiderSede =
-        esLiderDeAgencia(userRole) ||
-        userRole.includes('LIDER') ||
-        userRole === 'APROBADOR';
-      const isSupervisorRegional =
-        userRole.includes('SUPERVISOR') && !userRole.includes('NACIONAL');
-      const isGlobalAlertViewer =
-        userRole === 'SUPER_ADMIN' ||
-        userRole === 'ADMIN' ||
-        userRole === 'COORD_BODEGA';
+    // Sin usuario (llamadas internas): solo el filtro explícito.
+    if (!usuarioId) {
+      if (targetAgencia) where.agenciaId = targetAgencia;
+      return { where, sincroniza: false };
+    }
 
-      sincroniza = isGlobalAlertViewer || isAsistente || isSupervisorRegional;
+    const usuario = await this.prisma.user.findUnique({
+      where: { id: usuarioId },
+      include: { role: true, region: true, bodega: true, agencia: true },
+    });
+    const alcance = resolverAlcance(usuario);
+    // La sincronización de alertas de insumos sin stock recorre varias sedes: solo la inicia quien ve varias.
+    const sincroniza = alcance.tipo === 'GLOBAL' || alcance.tipo === 'REGION';
 
-      if (isGlobalAlertViewer) {
-        // Nacional: todo (opcional filtro por sucursal del DTO)
+    switch (alcance.tipo) {
+      case 'GLOBAL':
+        // Nacional: todo (con filtro opcional por agencia).
         if (targetAgencia) where.agenciaId = targetAgencia;
-      } else if (isAsistente || isSupervisorRegional) {
-        // Región: alertas de agencias de la región + kits de pulidores de la región
-        const regionId = usuario?.bodega?.regionId || usuario?.regionId;
-        if (regionId) {
-          const agenciasRegion = await this.prisma.agencia.findMany({
-            where: { regionId },
-            select: { id: true },
-          });
-          const agIds = agenciasRegion.map((a) => a.id);
-          const pulidoresRegion = await this.prisma.user.findMany({
-            where: {
-              regionId,
-              role: { namerol: { in: ['PULIDOR'] } },
-            },
-            select: { id: true },
-          });
-          const pulIds = pulidoresRegion.map((p) => p.id);
-
-          const orScope: any[] = [];
-          if (targetAgencia) {
-            if (agIds.includes(targetAgencia)) orScope.push({ agenciaId: targetAgencia });
-          } else if (agIds.length > 0) {
-            orScope.push({ agenciaId: { in: agIds } });
-          }
-          if (pulIds.length > 0) {
-            orScope.push({ pulidorId: { in: pulIds } });
-          }
-          if (orScope.length > 0) {
-            where.OR = orScope;
-          } else {
-            where.agenciaId = '__SIN_ALCANCE_REGION__';
-          }
-        } else {
-          where.agenciaId = '__SIN_REGION__';
+        break;
+      case 'REGION': {
+        // Alertas de las agencias de la región y de los kits de los pulidores de la región.
+        const agIds = (await this.prisma.agencia.findMany({ where: { regionId: alcance.regionId }, select: { id: true } })).map((a) => a.id);
+        const pulIds = (
+          await this.prisma.user.findMany({ where: { regionId: alcance.regionId, role: { namerol: { in: ['PULIDOR'] } } }, select: { id: true } })
+        ).map((p) => p.id);
+        const orScope: any[] = [];
+        if (targetAgencia) {
+          if (agIds.includes(targetAgencia)) orScope.push({ agenciaId: targetAgencia });
+        } else if (agIds.length > 0) {
+          orScope.push({ agenciaId: { in: agIds } });
         }
-      } else if (isLiderSede) {
-        // Solo alertas de SU sede (nunca Bodega Central / otras agencias)
-        const miAgencia = usuario?.agenciaId || targetAgencia;
-        where.agenciaId = miAgencia || '__SIN_AGENCIA_LIDER__';
-      } else if (targetAgencia) {
-        where.agenciaId = targetAgencia;
-      } else {
-        // Rol no reconocido: no exponer alertas ajenas
-        where.agenciaId = '__SIN_ALCANCE__';
+        if (pulIds.length > 0) orScope.push({ pulidorId: { in: pulIds } });
+        if (orScope.length > 0) where.OR = orScope;
+        else where.agenciaId = '__SIN_ALCANCE_REGION__';
+        break;
       }
-    } else if (targetAgencia) {
-      where.agenciaId = targetAgencia;
+      case 'AGENCIA':
+        where.agenciaId = alcance.agenciaId;
+        break;
+      case 'PROPIO':
+        // Solo lo suyo: las alertas de su propio kit.
+        where.pulidorId = alcance.userId;
+        break;
+      default:
+        // Le falta el dato de su ámbito (agencia o región): no ve alertas ajenas.
+        where.agenciaId = '__SIN_ALCANCE__';
     }
     return { where, sincroniza };
   }
