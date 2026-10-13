@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { auditar } from './auditoria-permisos.js';
 import { SIN_PANTALLA, SIN_SERVIDOR } from './auditoria-acciones.baseline.js';
-import { EXCEPCIONES_SERVIDOR } from './auditoria-acciones.excepciones.js';
+import { EXCEPCIONES_PANTALLA, EXCEPCIONES_SERVIDOR } from './auditoria-acciones.excepciones.js';
 
 /**
  * Cada casilla del editor de roles debe hacer algo cuando se enciende y cuando se apaga:
@@ -43,7 +43,7 @@ describe('auditoría de las casillas del editor de roles', () => {
 
   describe.skipIf(!hayPantallas)('pantallas (web y app)', () => {
     it('toda casilla nueva que se agrega al catálogo nace usada por alguna pantalla', () => {
-      const sinPantalla = resultados.filter((r) => r.pantalla === 0 && !SIN_PANTALLA.includes(r.codigo)).map((r) => r.codigo);
+      const sinPantalla = resultados.filter((r) => r.pantalla === 0 && !SIN_PANTALLA.includes(r.codigo) && !(r.codigo in EXCEPCIONES_PANTALLA)).map((r) => r.codigo);
       expect(sinPantalla, 'casillas que ninguna pantalla usa (usa puede(código) en la web o en la app)').toEqual([]);
     });
 

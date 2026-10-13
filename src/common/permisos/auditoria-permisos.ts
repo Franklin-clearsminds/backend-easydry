@@ -95,7 +95,33 @@ export function cargarPantallas(raiz = resolve(process.cwd(), '..')): { web: str
   };
 }
 
-const apariciones = (texto: string, codigo: string) => texto.split(`'${codigo}'`).length - 1 + texto.split(`"${codigo}"`).length - 1;
+const aparicionesLiterales = (texto: string, codigo: string) => texto.split(`'${codigo}'`).length - 1 + texto.split(`"${codigo}"`).length - 1;
+
+/**
+ * Códigos que la pantalla arma al vuelo, p. ej. `catalogo.${grupo}.recetas.ver`: cada plantilla con `${…}` se convierte en un patrón
+ * (la parte variable vale cualquier segmento) y cuenta como uso de todo código que encaje.
+ */
+const ESCAPAR = /[.*+?^${}()|[\]\\]/g;
+const PLANTILLA = /`([^`\n]*\$\{[^}`]*\}[^`\n]*)`/g;
+const VARIABLE = /\$\{[^}]*\}/;
+const patronesDinamicos = (texto: string): RegExp[] => {
+  const patrones: RegExp[] = [];
+  for (const m of texto.matchAll(PLANTILLA)) {
+    const partes = m[1].split(VARIABLE).map((p) => p.replace(ESCAPAR, '\\$&'));
+    if (partes.join('').length < 6) continue; // plantillas sin forma de código
+    patrones.push(new RegExp(`^${partes.join('[a-z0-9.-]+')}$`));
+  }
+  return patrones;
+};
+const patronesPorTexto = new Map<string, RegExp[]>();
+const apariciones = (texto: string, codigo: string) => {
+  let patrones = patronesPorTexto.get(texto);
+  if (!patrones) {
+    patrones = patronesDinamicos(texto);
+    patronesPorTexto.set(texto, patrones);
+  }
+  return aparicionesLiterales(texto, codigo) + (patrones.some((r) => r.test(codigo)) ? 1 : 0);
+};
 
 export function auditar(raiz?: string): { resultados: ResultadoAuditoria[]; hayPantallas: boolean } {
   const servidor = contarEndpointsPorCodigo();
@@ -107,7 +133,11 @@ export function auditar(raiz?: string): { resultados: ResultadoAuditoria[]; hayP
   const resultados = listarCasillas().map((c) => ({
     ...c,
     servidor: (servidor.get(c.codigo) ?? 0) + apariciones(servicios, c.codigo) + exigidoPorLoQueOtorga(c),
-    pantalla: (web ? apariciones(web, c.codigo) : 0) + (app ? apariciones(app, c.codigo) : 0),
+    pantalla:
+      (web ? apariciones(web, c.codigo) : 0) +
+      (app ? apariciones(app, c.codigo) : 0) +
+      // Una sub-página se ve en pantalla por los permisos que concede (pestañas y listados que los piden).
+      (c.tipo === 'sub-pagina' ? (c.otorga ?? []).reduce((n, o) => n + (web ? apariciones(web, o) : 0) + (app ? apariciones(app, o) : 0), 0) : 0),
   }));
   return { resultados, hayPantallas };
 }

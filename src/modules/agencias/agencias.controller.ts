@@ -402,7 +402,7 @@ export class AgenciasController {
     return this.agenciasService.toggleEstadoUsuario(dto);
   }
 
-  @Permiso('usuarios.usuarios.editar', 'usuarios.usuarios.password', 'backup.gestionar')
+  @Permiso('usuarios.usuarios.editar', 'usuarios.usuarios.password', 'usuarios.usuarios.backup')
   @Post('usuarios/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar datos de usuario; Supervisor regional solo puede modificar Backups de su región' })
@@ -410,7 +410,7 @@ export class AgenciasController {
     return this.agenciasService.updateUsuario(dto, user);
   }
 
-  @Permiso('usuarios.usuarios.crear', 'backup.gestionar')
+  @Permiso('usuarios.usuarios.crear', 'usuarios.usuarios.backup')
   @Post('usuarios/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear usuarios; Supervisor regional solo puede crear Backups de su región' })

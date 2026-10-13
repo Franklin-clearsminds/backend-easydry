@@ -6,11 +6,11 @@
  */
 import { writeFileSync } from 'node:fs';
 import { auditar } from '../src/common/permisos/auditoria-permisos.js';
-import { EXCEPCIONES_SERVIDOR } from '../src/common/permisos/auditoria-acciones.excepciones.js';
+import { EXCEPCIONES_PANTALLA, EXCEPCIONES_SERVIDOR } from '../src/common/permisos/auditoria-acciones.excepciones.js';
 
 const { resultados, hayPantallas } = auditar();
 const sinServidor = resultados.filter((r) => r.servidor === 0 && !(r.codigo in EXCEPCIONES_SERVIDOR));
-const sinPantalla = hayPantallas ? resultados.filter((r) => r.pantalla === 0) : [];
+const sinPantalla = hayPantallas ? resultados.filter((r) => r.pantalla === 0 && !(r.codigo in EXCEPCIONES_PANTALLA)) : [];
 
 if (process.argv.includes('--escribir-base')) {
   const lista = (xs: { codigo: string }[]) => xs.map((x) => `  '${x.codigo}',`).join('\n');
