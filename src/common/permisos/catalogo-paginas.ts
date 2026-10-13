@@ -82,13 +82,14 @@ export const PAGINAS: readonly PaginaDef[] = [
 
   pagina('notificaciones', 'Notificaciones', '/notificaciones', 'notificaciones', [], []),
 
-  pagina('mapa', 'Mapa Operativo', '/mapa-operativo', 'mapa-operativo', ['mapa.ver', 'agencias.ver'], [], [
-    accion('mapa.bahia.asignar', 'Asignar lavador a bahía', ['bahias.asignar']),
-    accion('mapa.bahia.quitar', 'Quitar lavador de bahía', ['bahias.asignar']),
-    CEDULA, CONTACTO,
-  ]),
-
-  pagina('agencias', 'Gestión de Agencias', '/agencias', 'agencias', ['agencias.consultar', 'agencias.ver', 'usuarios.ver', 'catalogo.ver'], [
+  // Una sola pantalla con pestañas (Mapa, Agencias, Regiones, Clientes, Aprobadores). Antes el mapa figuraba como página aparte.
+  pagina('agencias', 'Agencias & Mapa Red', '/agencias', 'agencias', ['agencias.consultar', 'agencias.ver', 'usuarios.ver', 'catalogo.ver'], [
+    // El mapa es de consulta: lo que muestra de cada bahía se enciende por bloques. Asignar o quitar lavadores se hace en Gestión de Lavadores.
+    sub('agencias', 'mapa', 'Mapa Operativo', ['mapa.ver'], [
+      accion('mapa.lavador.ver', 'Ver el lavador asignado a cada bahía', [], { migrarSi: ['mapa.ver'] }),
+      accion('mapa.maquinaria.ver', 'Ver la maquinaria de cada bahía', ['maquinaria.ver'], { migrarSi: ['maquinaria.ver'] }),
+      accion('mapa.vehiculo.ver', 'Ver el vehículo en servicio de cada bahía', [], { migrarSi: ['mapa.ver'] }),
+    ], ['mapa.ver']),
     sub('agencias', 'agencias', 'Agencias', [], [
       accion('agencias.agencias.crear', 'Crear agencia', ['agencias.crear']),
       accion('agencias.agencias.editar', 'Editar datos de la agencia', ['agencias.editar']),
@@ -112,6 +113,10 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('agencias.clientes.editar', 'Editar cliente', ['clientes.gestionar']),
       accion('agencias.clientes.estado', 'Activar o desactivar cliente', ['clientes.gestionar']),
     ], ['agencias.consultar', 'clientes.gestionar']),
+    // Aprobadores («gerentes» de la agencia): quién audita y aprueba los servicios de cada agencia.
+    sub('agencias', 'aprobadores', 'Aprobadores', ['usuarios.ver'], [
+      accion('agencias.aprobadores.asignar', 'Asignar o cambiar el aprobador de una agencia', [], { migrarSi: ['usuarios.gestionar'] }),
+    ], ['usuarios.ver']),
   ]),
 
   pagina('operadores', 'Gestión de Lavadores', '/operadores', 'operadores', ['operadores.ver', 'agencias.ver'], [], [

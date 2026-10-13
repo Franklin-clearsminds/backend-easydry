@@ -33,7 +33,6 @@ function credencial(nombre: string, valorPorDefecto?: string): string {
 /** Catálogo oficial de módulos — fuente de verdad sembrada en BD */
 const MODULOS_DATA = [
   { codigo: 'dashboard', nombre: 'Dashboard Principal', descripcion: 'Métricas clave, KPIs generales, gráficos de rendimiento y alertas de la red', icono: 'layout-dashboard', rutaPrincipal: '/dashboard', grupo: 'Panel Principal', disponibleEnApp: true, orden: 10 },
-  { codigo: 'mapa-operativo', nombre: 'Mapa Operativo en Vivo', descripcion: 'Trazabilidad visual jerárquica: Agencias, Bahías, Operadores y Maquinaria en tiempo real', icono: 'sliders', rutaPrincipal: '/mapa-operativo', grupo: 'Panel Principal', disponibleEnApp: false, orden: 20 },
   { codigo: 'notificaciones', nombre: 'Centro de Notificaciones', descripcion: 'Alertas operativas, aprobaciones pendientes, inventario y avisos del sistema', icono: 'bell', rutaPrincipal: '/notificaciones', grupo: 'Panel Principal', disponibleEnApp: true, orden: 30 },
   { codigo: 'agencias', nombre: 'Control de Agencias', descripcion: 'Gestión y estado operativo de las agencias de la red', icono: 'building-2', rutaPrincipal: '/agencias', grupo: 'Operación & Agencias', disponibleEnApp: false, orden: 40 },
   { codigo: 'operadores', nombre: 'Gestión de Lavadores', descripcion: 'Directorio, métricas y estado del personal de lavado', icono: 'user-check', rutaPrincipal: '/operadores', grupo: 'Operación & Agencias', disponibleEnApp: true, orden: 50 },
