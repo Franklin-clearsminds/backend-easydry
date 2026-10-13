@@ -73,7 +73,7 @@ backend-easydry/
 
    # Seguridad y Autenticación JWT
    JWT_SECRET="EasyDrySecretKey2026*OfflineSync"
-   JWT_ACCESS_EXPIRATION="1h"
+   JWT_ACCESS_EXPIRATION="15m"
    JWT_REFRESH_SECRET="EasyDryRefreshSecretKey2026*OfflineSync"
    JWT_REFRESH_EXPIRATION="15d"
 
@@ -200,7 +200,7 @@ Eventos cubiertos: limpieza de maquinaria pendiente del día, limpieza atrasada 
 
 ## 🧪 Pruebas Automatizadas
 
-Suite de pruebas unitarias/integración con [Vitest](https://vitest.dev/), usando un cliente Prisma mockeado por módulo (patrón `armar()`): cubre autenticación, scoping RBAC por rol/alcance, reglas de negocio de operaciones (OT), stock, maquinaria/limpieza, notificaciones, analítica y retos.
+Suite de pruebas unitarias/integración con [Vitest](https://vitest.dev/), de integración contra la base local: cada archivo crea sus propios datos con una marca única (`test/integracion/entorno.ts`) y los borra al terminar; solo se simulan los bordes externos (S3, sockets, reloj). Ver `MANUAL-BACKEND-COMPLETO.md` §14: cubre autenticación, scoping RBAC por rol/alcance, reglas de negocio de operaciones (OT), stock, maquinaria/limpieza, notificaciones, analítica y retos.
 
 ```bash
 pnpm test
