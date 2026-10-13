@@ -15,6 +15,8 @@ export const EXCEPCIONES_SERVIDOR: Record<string, string> = {
     "Los datos salen de maquinaria/list, que el servidor ya exige con 'maquinaria.ver', permiso que esta casilla otorga: apagarla quita ese acceso.",
   'pagina.agencias.aprobadores':
     'La pestaña lista usuarios con usuarios/list, que comparte con Usuarios y Roles. Se oculta en pantalla; su botón de asignar sí lo exige el servidor.',
+  'operadores.ficha.ver':
+    'La ficha y la productividad salen del mismo listado operadores/list que la tabla de lavadores, que exigen usuarios.ver u operadores.ver. Se oculta el botón y la columna en pantalla.',
   'pagina.agencias.agencias':
     'Es la pestaña principal: sus listados (agencias/list, bahias/list…) alimentan los desplegables de muchas pantallas y los exige el permiso de la página. Sus botones sí se exigen uno a uno.',
 };
