@@ -76,7 +76,6 @@ export const CATALOGO_PERMISOS = [
   def('Inventario', 'inventario.catalogos.gestionar', 'Gestionar catálogos de inventario', 'Insumos, envases, unidades, tipos, presentaciones y motivos.'),
   def('Inventario', 'bodegas.gestionar', 'Gestionar bodegas', 'Crear, editar, activar y eliminar bodegas.'),
   def('Inventario', 'stock.ajustar', 'Ajustar stock', 'Ajustes, reajustes y movimientos de stock.'),
-  def('Inventario', 'stock.consumir', 'Registrar consumo de stock', 'Descontar insumos al registrar un servicio.'),
   def('Inventario', 'compras.registrar', 'Registrar compras', 'Ingresar compras a la bodega central.'),
   def('Inventario', 'inventario.kits.ver', 'Ver kits de pulidores', 'Stock de insumos en el kit de cada pulidor (sección Pulidores del inventario).'),
   def('Inventario', 'despachos.ver', 'Ver despachos', 'Listado de despachos y pendientes dentro de su ámbito.'),

@@ -583,26 +583,4 @@ export class InventarioController {
     const pulidorId = (await this.inventarioService.pulidorEnAlcance(user, body?.pulidorId)) || user?.id;
     return this.inventarioService.obtenerInsumosServiciosPulidor(pulidorId, body?.servicioIds, body);
   }
-
-  @Permiso('inventario.productos.consumir')
-  @Post('stock/consumir-servicio')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Descontar stock de insumos por creación o ejecución de servicio/OT y generar alertas de stock bajo',
-  })
-  async consumirStockServicio(
-    @Body() dto: {
-      agenciaId: string;
-      ordenTrabajo?: string;
-      placa?: string;
-      insumos: Array<{ insumoId?: string; codigoSKU?: string; cantidad: number }>;
-      operador?: string;
-    },
-    @CurrentUser() user: any,
-  ) {
-    // El descuento se hace siempre en la agencia del usuario; solo quien actúa por región o país puede indicar otra dentro de su alcance.
-    const agenciaId = await this.inventarioService.agenciaEnAlcance(user, dto?.agenciaId);
-    if (!agenciaId) throw new BadRequestException('Indica la agencia donde se consume el insumo.');
-    return this.inventarioService.consumirInsumosServicio({ ...dto, agenciaId }, user?.id || user?.sub);
-  }
 }

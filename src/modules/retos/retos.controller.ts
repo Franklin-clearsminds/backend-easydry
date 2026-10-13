@@ -11,7 +11,7 @@ import { Permiso } from '../../common/permisos/permisos.decorators.js';
 export class RetosController {
   constructor(private readonly retosService: RetosService) {}
 
-  @Permiso('retos.ver')
+  @Permiso('pagina.productividad.retos', 'sistema.app.retos')
   @Post('list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar retos almacenados en PostgreSQL' })
@@ -19,7 +19,7 @@ export class RetosController {
     return this.retosService.list(dto, user);
   }
 
-  @Permiso('retos.ver')
+  @Permiso('pagina.productividad.retos', 'sistema.app.retos')
   @Post('ranking')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar vehículos atendidos para un reto' })

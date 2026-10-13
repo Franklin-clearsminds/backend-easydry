@@ -77,7 +77,6 @@ const pagina = (id: string, nombre: string, ruta: string, modulo: string | null,
 export const PAGINAS: readonly PaginaDef[] = [
   pagina('dashboard', 'Dashboard', '/dashboard', 'dashboard', ['dashboard.ver'], [], [
     accion('dashboard.alertas.ver', 'Ver alertas de stock', ['alertas.ver']),
-    accion('dashboard.retos.ver', 'Ver retos activos', ['retos.ver']),
   ]),
 
   pagina('notificaciones', 'Notificaciones', '/notificaciones', 'notificaciones', [], []),
@@ -228,7 +227,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('inventario.productos.gestionar', 'Crear o editar insumo', ['inventario.catalogos.gestionar']),
       accion('inventario.productos.compra', 'Registrar compra', ['compras.registrar']),
       accion('inventario.productos.despachar', 'Despachar insumo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
-      accion('inventario.productos.consumir', 'Registrar consumo', ['stock.consumir']),
       PRECIOS,
     ], ['inventario.ver']),
     sub('inventario', 'bodegas', 'Bodegas', [], [
@@ -287,6 +285,7 @@ export const PAGINAS: readonly PaginaDef[] = [
   pagina('perfil', 'Perfil', '/perfil', 'perfil', [], []),
 
   pagina('sistema', 'Sistema (fuera del menú)', 'app móvil y soporte', null, [], [], [
+    accion('sistema.app.retos', 'Ver retos en la app móvil', ['retos.ver']),
     accion('sistema.sync.usar', 'Usar la sincronización de la app', ['sync.usar']),
     accion('sistema.sync.errores', 'Gestionar errores de sincronización', ['sync.dlq.gestionar']),
   ]),

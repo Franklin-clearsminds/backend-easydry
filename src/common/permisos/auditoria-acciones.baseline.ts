@@ -5,7 +5,6 @@
  */
 export const SIN_SERVIDOR: string[] = [
   'dashboard.alertas.ver',
-  'dashboard.retos.ver',
   'agencias.personal.ver',
   'evidencias.ver',
   'pagina.catalogo.generales',
@@ -25,7 +24,6 @@ export const SIN_SERVIDOR: string[] = [
 ];
 
 export const SIN_PANTALLA: string[] = [
-  'dashboard.retos.ver',
   'precios.ver',
   'datos.cedula.ver',
   'datos.contacto.ver',
@@ -43,7 +41,6 @@ export const SIN_PANTALLA: string[] = [
   'catalogo.especiales.recetas.editar',
   'catalogo.especiales.recetas.historial',
   'pagina.productividad.productividad',
-  'pagina.productividad.retos',
   'productividad.retos.crear',
   'productividad.retos.cerrar',
   'productividad.retos.eliminar',
@@ -52,7 +49,6 @@ export const SIN_PANTALLA: string[] = [
   'pagina.taller.limpiezas',
   'pagina.taller.checklist',
   'pagina.inventario.productos',
-  'inventario.productos.consumir',
   'pagina.inventario.bodegas',
   'pagina.inventario.agencias',
   'pagina.inventario.pulidores',
