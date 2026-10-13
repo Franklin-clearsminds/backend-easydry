@@ -440,7 +440,10 @@ export class InventarioService {
       (typeof user?.role === 'string' ? user.role : '') ||
       '',
     );
-    const isScopedRole = ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r));
+    // Sede propia: por ámbito (agencia); los nombres de la lista siguen valiendo para los roles de sede ya conocidos.
+    const isScopedRole =
+      ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r)) ||
+      (!!user && resolverAlcance(user).tipo === 'AGENCIA' && !userRole.includes('PULIDOR'));
     // Igual que el asistente de bodega con su `bodegaId`: un rol de sede nunca amplía su alcance con
     // un `agenciaId` que mande el cliente — siempre es la suya, tomada del token.
     const targetAgenciaId = isScopedRole ? (user?.agenciaId || user?.agencia?.id) : dto?.agenciaId;
@@ -471,8 +474,11 @@ export class InventarioService {
     // Stock de productos = físico de UNA bodega (nunca el campo catálogo Insumo.stockActual)
     let bodegaStockId = '';
     if (!agenciaTarget) {
+      // Quien tiene una bodega asignada y no actúa en todo el país: SIEMPRE su bodega, no la que pida el cliente.
       const isAsistenteBodega =
-        userRole === 'ASISTENTE_BODEGA' || (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
+        userRole === 'ASISTENTE_BODEGA' ||
+        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA')) ||
+        (!!user?.bodegaId && !!user && resolverAlcance(user).tipo !== 'GLOBAL');
       if (isAsistenteBodega && user?.id) {
         // Asistente: SIEMPRE su bodega asignada (ignora dto.bodegaId del cliente)
         const u = await this.prisma.user.findUnique({ where: { id: user.id }, select: { bodegaId: true } });
@@ -792,96 +798,51 @@ export class InventarioService {
   async listStock(dto: ListStockDto, usuarioId: string, rolNombre: string, agenciaIdUsuario?: string) {
     const where: any = {};
 
-    let userRole = normalizarRol(rolNombre);
     let usuario: any = null;
-
     if (usuarioId) {
       usuario = await this.prisma.user.findUnique({
         where: { id: usuarioId },
-        include: { role: true, region: true },
+        include: { role: true, region: true, bodega: { include: { region: true } } },
       });
-      if (usuario?.role?.namerol) {
-        userRole = normalizarRol(usuario.role.namerol);
-      }
     }
+    const agenciaDelUsuario = usuario?.agenciaId || agenciaIdUsuario;
+    // Qué stock ve cada quien lo decide el ámbito de su rol (país, región, agencia o propio), no el nombre del rol.
+    // Un pulidor móvil (sin agencia) solo ve su kit.
+    const esPulidorMovil = rolDeUsuario(usuario) === 'PULIDOR' && !agenciaDelUsuario;
+    const alcance = resolverAlcance(usuario);
 
-    const isGlobal =
-      userRole === 'SUPER_ADMIN' ||
-      userRole === 'ADMIN' ||
-      userRole === 'COORD_BODEGA' ||
-      (userRole.includes('GESTOR') && userRole.includes('INVENTARIO')) ||
-      (userRole.includes('GESTOR') && userRole.includes('BODEGA')) ||
-      (userRole.includes('SUPER') && userRole.includes('ADMIN'));
-
-    const isAsistente =
-      userRole === 'ASISTENTE_BODEGA' ||
-      (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
-    const isSupervisor = userRole.includes('SUPERVISOR');
-    const isPulidorRole = userRole.includes('PULIDOR');
-    const isAgencia = userRole.includes('LIDER') || esLiderDeAgencia(userRole) || (isPulidorRole && !!agenciaIdUsuario);
-    const isPulidor = isPulidorRole && !agenciaIdUsuario;
-
-    if (isGlobal) {
-      // Super Admin, Admin y Coord Bodega ven todo sin restricciones territoriales
+    if (esPulidorMovil || alcance.tipo === 'PROPIO') {
+      where.pulidorId = usuarioId;
+    } else if (alcance.tipo === 'GLOBAL') {
+      if (dto.sucursalId) where.agenciaId = dto.sucursalId;
+    } else if (alcance.tipo === 'REGION') {
+      const regionId = alcance.regionId;
+      const regionNombre = usuario?.bodega?.region?.nombre || usuario?.region?.nombre;
+      const agenciasRegion = await this.prisma.agencia.findMany({
+        where: {
+          OR: [
+            { regionId },
+            ...(regionNombre ? [{ region: { contains: regionNombre, mode: 'insensitive' as const } }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      const agenciasRegionIds = agenciasRegion.map((a) => a.id);
       if (dto.sucursalId) {
-        where.agenciaId = dto.sucursalId;
-      }
-    } else if (isAsistente || isSupervisor) {
-      // Asistente: región de su bodega; Supervisor: región asignada
-      let userRegionId = usuario?.regionId;
-      let userRegionName = usuario?.region?.nombre;
-      if (isAsistente && usuarioId) {
-        const uFull = await this.prisma.user.findUnique({
-          where: { id: usuarioId },
-          include: { bodega: { include: { region: true } }, region: true },
-        });
-        userRegionId = uFull?.bodega?.regionId || uFull?.regionId || userRegionId;
-        userRegionName = uFull?.bodega?.region?.nombre || uFull?.region?.nombre || userRegionName;
-      }
-      let agenciasRegionIds: string[] = [];
-
-      if (userRegionId || userRegionName) {
-        const agenciasRegion = await this.prisma.agencia.findMany({
-          where: {
-            OR: [
-              ...(userRegionId ? [{ regionId: userRegionId }] : []),
-              ...(userRegionName ? [{ region: { contains: userRegionName, mode: 'insensitive' as const } }] : []),
-            ],
-          },
-          select: { id: true },
-        });
-        agenciasRegionIds = agenciasRegion.map((s) => s.id);
-      } else if (agenciaIdUsuario) {
-        const miAgencia = await this.prisma.agencia.findUnique({ where: { id: agenciaIdUsuario } });
-        if (miAgencia?.region) {
-          const ags = await this.prisma.agencia.findMany({
-            where: { region: miAgencia.region },
-            select: { id: true },
-          });
-          agenciasRegionIds = ags.map((s) => s.id);
-        }
-      }
-
-      if (dto.sucursalId) {
-        if (agenciasRegionIds.length > 0 && !agenciasRegionIds.includes(dto.sucursalId)) {
-          where.agenciaId = '__ACCESO_DENEGADO_OTRA_REGION__';
-        } else {
-          where.agenciaId = dto.sucursalId;
-        }
+        where.agenciaId = agenciasRegionIds.length > 0 && !agenciasRegionIds.includes(dto.sucursalId)
+          ? '__ACCESO_DENEGADO_OTRA_REGION__'
+          : dto.sucursalId;
       } else {
         where.agenciaId = { in: agenciasRegionIds };
       }
-    } else if (isAgencia) {
-      if (isPulidorRole && agenciaIdUsuario) {
-        where.OR = [
-          { agenciaId: agenciaIdUsuario },
-          { pulidorId: usuarioId }
-        ];
+    } else if (alcance.tipo === 'AGENCIA') {
+      if (rolDeUsuario(usuario) === 'PULIDOR') {
+        where.OR = [{ agenciaId: alcance.agenciaId }, { pulidorId: usuarioId }];
       } else {
-        where.agenciaId = agenciaIdUsuario;
+        where.agenciaId = alcance.agenciaId;
       }
-    } else if (isPulidor) {
-      where.pulidorId = usuarioId;
+    } else {
+      where.id = '__SIN_ACCESO__'; // sin ámbito, región ni agencia: no ve stock
     }
 
     if (dto.tipoUbicacion) where.tipoUbicacion = dto.tipoUbicacion;
@@ -1647,9 +1608,11 @@ export class InventarioService {
         include: { role: true, region: true, bodega: true },
       });
       const userRole = (usuario?.role?.namerol || '').toUpperCase();
+      // Con una bodega asignada y sin alcance nacional, solo se ve esa bodega.
       const isAsistente =
         userRole === 'ASISTENTE_BODEGA' ||
-        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
+        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA')) ||
+        (!!usuario?.bodegaId && resolverAlcance(usuario).tipo !== 'GLOBAL');
 
       if (isAsistente) {
         // Solo la bodega asignada al asistente (no toda la región ni Central)
@@ -2880,10 +2843,14 @@ export class InventarioService {
     const isAdmin = rol === 'ADMIN';
     const isDirector = isSuperAdmin || isAdmin;
 
-    const isCoord = rol === 'COORD_BODEGA' || (rol.includes('COORD') && rol.includes('BODEGA'));
-    const isAsistente =
-      rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
-    const isLider = esLiderDeAgencia(rol);
+    // Cómo despacha cada quien lo decide su ámbito (país, región con bodega, agencia), no solo el nombre del rol:
+    // un rol personalizado con la casilla de despachar se comporta como el rol oficial de su mismo ámbito.
+    const alcanceDespacha = resolverAlcance(usuario);
+    const nombreCoord = rol === 'COORD_BODEGA' || (rol.includes('COORD') && rol.includes('BODEGA'));
+    const nombreAsistente = rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
+    const isLider = esLiderDeAgencia(rol) || (alcanceDespacha.tipo === 'AGENCIA' && !!usuario.agenciaId && !nombreCoord && !nombreAsistente && !isDirector);
+    const isAsistente = !isLider && (nombreAsistente || (!!usuario.bodegaId && alcanceDespacha.tipo !== 'GLOBAL'));
+    const isCoord = !isLider && !isAsistente && !isDirector && (nombreCoord || alcanceDespacha.tipo === 'GLOBAL');
 
     if (!isCoord && !isAsistente && !isLider && !isDirector) {
       throw new ForbiddenException('Tu rol no está autorizado para crear despachos.');
@@ -3760,14 +3727,17 @@ export class InventarioService {
   /** Resuelve, con pocas consultas, quién mira y a qué alcance tiene derecho; el resto del listado es SQL sin más consultas. */
   private async contextoDespachos(dto: ListDespachosDto, usuarioId?: string): Promise<ContextoDespachos> {
     const viewer: any = usuarioId
-      ? await this.prisma.user.findUnique({ where: { id: usuarioId }, include: { role: true, region: true } })
+      ? await this.prisma.user.findUnique({ where: { id: usuarioId }, include: { role: true, region: true, bodega: true } })
       : null;
     const rol = normalizarRol(viewer?.role?.namerol);
     const esSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
     const esAdmin = rol === 'ADMIN' && !esSuperAdmin;
-    const esPulidor = rol.includes('PULIDOR');
-    const esAsistente = (rol.includes('ASISTENTE') && rol.includes('BODEGA')) || rol === 'ASISTENTE_BODEGA';
-    const esLider = !esSuperAdmin && !esAdmin && !esAsistente && !esPulidor && (rol.includes('LIDER') || esLiderDeAgencia(rol)) && !!viewer?.agenciaId;
+    // Qué despachos ve cada quien lo decide el ámbito de su rol: propio (kit), agencia o región; país ve todo.
+    const alc = viewer ? resolverAlcance(viewer) : { tipo: 'NINGUNO' as const };
+    const esPulidor = rol.includes('PULIDOR') || alc.tipo === 'PROPIO';
+    const esAsistente = !esPulidor && alc.tipo === 'REGION';
+    const esLider = !esPulidor && alc.tipo === 'AGENCIA' && !!viewer?.agenciaId;
+    const regionPropia: string | undefined = alc.tipo === 'REGION' ? alc.regionId : viewer?.regionId || undefined;
 
     // Agencia destino: un líder solo ve la suya (aunque el cliente pida otra); los demás pueden filtrar por la que elijan.
     const filtroAgencia = esLider
@@ -3797,19 +3767,19 @@ export class InventarioService {
     let regional: ContextoDespachos['regional'] = null;
     if (viewer && esAsistente) {
       const terminos: string[] = [];
-      if (viewer.regionId || viewer.region?.nombre) {
+      if (regionPropia || viewer.region?.nombre) {
         const agenciasRegion = await this.prisma.agencia.findMany({
           where: {
             OR: [
-              ...(viewer.regionId ? [{ regionId: viewer.regionId }] : []),
+              ...(regionPropia ? [{ regionId: regionPropia }] : []),
               ...(viewer.region?.nombre ? [{ region: { contains: viewer.region.nombre, mode: 'insensitive' as const } }] : []),
             ],
           },
           select: { id: true, nombre: true },
         });
-        const bodegasRegion = viewer.regionId
+        const bodegasRegion = regionPropia
           ? ((await this.prisma
-              .$queryRawUnsafe(`SELECT "id", "nombre", "codigo" FROM "bodegas" WHERE "regionId" = $1`, viewer.regionId)
+              .$queryRawUnsafe(`SELECT "id", "nombre", "codigo" FROM "bodegas" WHERE "regionId" = $1`, regionPropia)
               .catch(() => [])) as any[])
           : [];
         terminos.push(
@@ -3925,9 +3895,6 @@ export class InventarioService {
     }
 
     const { viewer, rol, esSuperAdmin, esAdmin } = ctx;
-    const esLiderRol = esLiderDeAgencia(rol);
-    const esAsistenteRol = rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
-
     return filas.map((h) => {
       let motivoRechazo = '';
       if (h.observaciones && h.observaciones.includes('RECHAZO:')) {
@@ -3948,8 +3915,8 @@ export class InventarioService {
         if (esSuperAdmin) {
           puedeConfirmar = true;
         } else if (!esAdmin) {
-          if (destinoAgenciaId && esLiderRol && viewer.agenciaId === destinoAgenciaId) puedeConfirmar = true;
-          else if (destinoBodegaId && esAsistenteRol && viewer.bodegaId === destinoBodegaId) puedeConfirmar = true;
+          if (destinoAgenciaId && viewer.agenciaId === destinoAgenciaId) puedeConfirmar = true;
+          else if (destinoBodegaId && viewer.bodegaId === destinoBodegaId) puedeConfirmar = true;
           else if (destinoPulidorId && viewer.id === destinoPulidorId) puedeConfirmar = true;
         }
       }
@@ -4037,38 +4004,16 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, region: true, bodega: true, agencia: true },
     });
-    const rol = normalizarRol(usuario?.role?.namerol);
-    const isSuperAdmin = rol.includes('SUPER') && rol.includes('ADMIN');
-    const isCoord = rol.includes('COORD') || rol === 'ADMIN';
-    const isAsistente = rol.includes('ASISTENTE') && rol.includes('BODEGA');
-    const isLider = rol.includes('LIDER') || esLiderDeAgencia(rol);
-    const isPulidor = rol.includes('PULIDOR');
-
     const todos = await this.listarDespachosPlano({ estadoDespacho: 'EN_TRANSITO' }, usuarioId);
 
-    if (isSuperAdmin || isCoord) {
-      return todos;
-    }
-    if (isPulidor && usuario) {
-      return todos.filter((d: any) =>
-        (usuario.id && String(d.destinoPulidorId) === String(usuario.id)) ||
-        (usuario.id && String(d.usuarioRecibeId) === String(usuario.id)) ||
-        d.puedeConfirmar
-      );
-    }
-    if (isAsistente) {
-      return todos.filter((d: any) =>
-        (usuario?.bodegaId && String(d.destinoBodegaId) === String(usuario.bodegaId)) ||
-        d.puedeConfirmar
-      );
-    }
-    if (isLider) {
-      return todos.filter((d: any) =>
-        (usuario?.agenciaId && String(d.destinoAgenciaId) === String(usuario.agenciaId)) ||
-        d.puedeConfirmar
-      );
-    }
-    return todos.filter((d: any) => d.puedeConfirmar);
+    // Alcance nacional: todos. El resto: lo que va dirigido a su pulidor, su bodega o su agencia, y lo que puede confirmar.
+    if (usuario && resolverAlcance(usuario).tipo === 'GLOBAL') return todos;
+    return todos.filter((d: any) =>
+      d.puedeConfirmar ||
+      (usuario?.id && (String(d.destinoPulidorId) === String(usuario.id) || String(d.usuarioRecibeId) === String(usuario.id))) ||
+      (usuario?.bodegaId && String(d.destinoBodegaId) === String(usuario.bodegaId)) ||
+      (usuario?.agenciaId && String(d.destinoAgenciaId) === String(usuario.agenciaId)),
+    );
   }
 
   async listMovimientos(dto: ListMovimientosDto, user?: any) {
@@ -5289,7 +5234,20 @@ export class InventarioService {
       return { mode: 'FILTER', ubicacionIds: [String(usuario.bodegaId)], incluirSinUbicacion: false };
     }
 
-    return { mode: 'ALL' };
+    // El resto, según el ámbito de su rol: país ve todo; región, sus agencias y bodegas; agencia, la suya; propio, solo lo que registró.
+    const alcance = resolverAlcance(usuario);
+    if (alcance.tipo === 'GLOBAL') return { mode: 'ALL' };
+    if (alcance.tipo === 'REGION') {
+      const [agencias, bodegas] = await Promise.all([
+        this.prisma.agencia.findMany({ where: { regionId: alcance.regionId }, select: { id: true } }),
+        this.prisma.bodega.findMany({ where: { regionId: alcance.regionId }, select: { id: true } }),
+      ]);
+      return { mode: 'FILTER', ubicacionIds: [...agencias.map((x) => x.id), ...bodegas.map((x) => x.id)], incluirSinUbicacion: false, responsableId: usuarioId };
+    }
+    if (alcance.tipo === 'AGENCIA') {
+      return { mode: 'FILTER', ubicacionIds: [alcance.agenciaId], incluirSinUbicacion: false, responsableId: usuarioId };
+    }
+    return { mode: 'FILTER', ubicacionIds: [], incluirSinUbicacion: false, responsableId: usuarioId };
   }
 
   /** `campoResponsable` es el nombre del campo "quién lo registró" en la tabla (`responsableId` en movimientos globales, `usuarioId` en el Kardex). */
