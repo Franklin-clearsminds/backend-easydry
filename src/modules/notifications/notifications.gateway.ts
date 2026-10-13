@@ -9,7 +9,10 @@ import {
 } from '@nestjs/websockets';
 import type { Server, Socket } from 'socket.io';
 import { secretoObligatorio } from '../../common/config/secretos.js';
+import { origenPermitido } from '../../common/config/cors.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { JWT_VERIFY_OPTIONS } from '../auth/jwt.config.js';
+import { tokenRevocado } from '../auth/jwt.strategy.js';
 
 /**
  * Canal en tiempo real de notificaciones para la web (push a mobile sigue por Expo, sin cambios).
@@ -33,6 +36,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
   async handleConnection(client: Socket): Promise<void> {
     try {
+      if (!origenPermitido(client.handshake.headers.origin)) throw new Error('Origen no permitido');
       const token = client.handshake.auth?.['token'] as string | undefined;
       if (!token) throw new Error('Falta el token');
       const secret = secretoObligatorio(
@@ -40,7 +44,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         'JWT_SECRET',
         'EasyDrySecretKey2026*OfflineSync',
       );
-      const payload = await this.jwtService.verifyAsync(token, { secret });
+      const payload = await this.jwtService.verifyAsync(token, { ...JWT_VERIFY_OPTIONS, secret });
+      if (payload.type !== 'access') throw new Error('Tipo de token inválido');
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
         include: { role: true },
@@ -48,6 +53,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (!user || user.estado !== 1 || !user.role || user.role.estado === 0) {
         throw new Error('Sesión inválida o usuario inactivo');
       }
+      if (tokenRevocado(payload.iat, user.sesionesRevocadasAt)) throw new Error('Sesión cerrada');
       client.data.userId = user.id;
       if (!this.userSockets.has(user.id)) this.userSockets.set(user.id, new Set());
       this.userSockets.get(user.id)!.add(client.id);

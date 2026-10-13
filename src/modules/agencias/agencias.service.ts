@@ -75,6 +75,7 @@ import { Alcance, SIN_RESULTADOS, puedeSobreAgencia, resolverAlcance, whereAgenc
 import { esLiderDeAgencia, normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { generarPasswordTemporal } from '../../common/utils/password-temporal.js';
+import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
 @Injectable()
 export class AgenciasService {
   constructor(
@@ -2190,9 +2191,7 @@ export class AgenciasService {
     // Las contraseñas las gestiona únicamente el Administrador o el Super Administrador: nadie cambia la suya.
     const nuevaPassword = dto.password?.trim();
     if (nuevaPassword) {
-      if (nuevaPassword.length < 6) {
-        throw new BadRequestException('La contraseña debe tener al menos 6 caracteres.');
-      }
+      exigirPasswordSegura(nuevaPassword, user.email);
       const rolActor = rolDeUsuario(actor);
       if (!this.esAdmin(actor)) {
         throw new ForbiddenException('Solo el Administrador o el Super Administrador pueden asignar contraseñas.');
@@ -2220,7 +2219,7 @@ export class AgenciasService {
     }
 
     let passwordHashToSet: string | undefined;
-    if (dto.password && dto.password.trim().length >= 6) {
+    if (dto.password && dto.password.trim()) {
       passwordHashToSet = await bcrypt.hash(dto.password.trim(), 10);
     }
 
@@ -2443,7 +2442,7 @@ export class AgenciasService {
         ...(agenciaIdToSet !== undefined && { agenciaId: agenciaIdToSet }),
         ...(regionIdToSet !== undefined && { regionId: regionIdToSet }),
         ...(bodegaIdToSet !== undefined && { bodegaId: bodegaIdToSet }),
-        ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet }),
+        ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet, sesionesRevocadasAt: new Date() }),
         ...(finalServicioIdsUsuario !== undefined && {
           servicioIds: finalServicioIdsUsuario,
         }),
@@ -2455,6 +2454,14 @@ export class AgenciasService {
         bodega: true,
       },
     });
+
+    // Cambió la contraseña: las sesiones abiertas con la anterior dejan de poder renovarse.
+    if (passwordHashToSet !== undefined) {
+      await this.prisma.refreshSession.updateMany({
+        where: { userId: updatedUser.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
 
     const sIdsUser = Array.isArray(updatedUser.servicioIds)
       ? (updatedUser.servicioIds as any[]).map(Number).filter((n) => !isNaN(n) && n > 0)
@@ -2700,6 +2707,7 @@ export class AgenciasService {
     if (!passwordToHash) {
       throw new BadRequestException('La contraseña es obligatoria para crear el usuario.');
     }
+    exigirPasswordSegura(passwordToHash, dto.email);
     const passwordHash = await bcrypt.hash(passwordToHash, 10);
 
     let servicioIdsToSet = Array.isArray(dto.servicioIds)

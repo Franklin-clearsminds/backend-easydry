@@ -1,5 +1,9 @@
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Logger } from '@nestjs/common';
+import helmet from 'helmet';
+import { origenPermitido } from './common/config/cors.js';
+import { secretoObligatorio, verificarSecretosDistintos } from './common/config/secretos.js';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import express from 'express';
 import { AppModule } from './app.module.js';
@@ -9,16 +13,32 @@ import { DecryptValidationPipe } from './common/pipes/decrypt-validation.pipe.js
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // Habilitar CORS para Angular 19 y React Native Expo
+  // Secretos de firma y de cifrado: en producción deben existir, ser largos y distintos entre sí.
+  verificarSecretosDistintos({
+    JWT_SECRET: secretoObligatorio(process.env.JWT_SECRET, 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync'),
+    JWT_REFRESH_SECRET: secretoObligatorio(process.env.JWT_REFRESH_SECRET, 'JWT_REFRESH_SECRET', 'EasyDryRefreshSecretKey2026*OfflineSync'),
+    ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
+  });
+
+  // Detrás de un balanceador (AWS ALB, nginx) define TRUST_PROXY=1 para que `req.ip` sea la IP real del cliente.
+  const trustProxy = process.env.TRUST_PROXY;
+  if (trustProxy) app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+
+  // API de solo JSON: sin CSP (Swagger la rompería); el resto de cabeceras de seguridad sí.
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+
+  // CORS solo para los orígenes de CORS_ORIGIN (web). La app móvil no manda `Origin` y no se ve afectada.
   app.enableCors({
-    origin: true,
+    origin: (origin, callback) => callback(null, origenPermitido(origin)),
     methods: 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: [
       'Content-Type',
       'Authorization',
+      'X-Client',
+      'x-device-id',
       'X-Request-Id',
       'x-request-id',
       'x-encrypted',
@@ -77,22 +97,25 @@ async function bootstrap() {
   // Validación declarativa estricta con soporte de descifrado
   app.useGlobalPipes(new DecryptValidationPipe(cryptoService));
 
-  // Configuración de Swagger OpenAPI
-  const config = new DocumentBuilder()
-    .setTitle('EasyDry Enterprise API (100% POST & Body Encrypted)')
-    .setDescription('Backend central Node.js / NestJS con PostgreSQL, arquitectura 100% POST y cifrado simétrico AES-256-CBC en el cuerpo')
-    .setVersion('2.0')
-    .addBearerAuth()
-    .build();
+  // Swagger expone todos los endpoints: en producción queda apagado salvo que se active a propósito con SWAGGER_ENABLED=true.
+  const swaggerActivo = process.env.NODE_ENV !== 'production' || process.env.SWAGGER_ENABLED === 'true';
+  if (swaggerActivo) {
+    const config = new DocumentBuilder()
+      .setTitle('EasyDry Enterprise API (100% POST & Body Encrypted)')
+      .setDescription('Backend central Node.js / NestJS con PostgreSQL, arquitectura 100% POST y cifrado simétrico AES-256-CBC en el cuerpo')
+      .setVersion('2.0')
+      .addBearerAuth()
+      .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   const port = process.env.PORT || 3000;
   await app.listen(port, '0.0.0.0');
 
   logger.log(`Servidor EasyDry backend ejecutándose en: http://localhost:${port}/api/v1`);
   logger.log(`Acceso LAN (app Expo): http://192.168.100.6:${port}/api/v1`);
-  logger.log(`Documentación Swagger interactiva disponible en: http://localhost:${port}/api/docs`);
+  if (swaggerActivo) logger.log(`Documentación Swagger interactiva disponible en: http://localhost:${port}/api/docs`);
 }
 bootstrap();

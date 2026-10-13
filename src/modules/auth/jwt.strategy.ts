@@ -5,12 +5,22 @@ import { ConfigService } from '@nestjs/config';
 import { secretoObligatorio } from '../../common/config/secretos.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
+import { JWT_VERIFY_OPTIONS } from './jwt.config.js';
 
 export interface JwtPayload {
   sub: string;
   email: string;
   roleId?: string;
   type?: string;
+  /** Segundos desde epoch en que se emitió el token */
+  iat?: number;
+}
+
+/** ¿Se emitió el token antes de la última revocación de sesiones del usuario? (`iat` va en segundos: se compara sin fracciones). */
+export function tokenRevocado(iat: number | undefined, revocadasAt: Date | null | undefined): boolean {
+  if (!revocadasAt) return false;
+  if (typeof iat !== 'number') return true;
+  return iat < Math.floor(revocadasAt.getTime() / 1000);
 }
 
 @Injectable()
@@ -22,12 +32,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
+      ...JWT_VERIFY_OPTIONS,
       secretOrKey: secretoObligatorio(configService.get<string>('JWT_SECRET'), 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync'),
     });
   }
 
   async validate(payload: JwtPayload) {
-    if (payload.type && payload.type !== 'access') {
+    if (payload.type !== 'access') {
       throw new UnauthorizedException('Tipo de token inválido para autorización');
     }
 
@@ -55,6 +66,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     if (!user.role || user.role.estado === 0) {
       throw new UnauthorizedException('El rol asignado al usuario se encuentra deshabilitado');
+    }
+
+    // Cambió la contraseña después de emitir este token: ya no vale aunque no haya vencido.
+    if (tokenRevocado(payload.iat, user.sesionesRevocadasAt)) {
+      throw new UnauthorizedException('Sesión cerrada. Inicie sesión nuevamente');
     }
 
     return {
