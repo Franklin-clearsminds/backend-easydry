@@ -23,6 +23,8 @@ import { PermisosModule } from './common/permisos/decisiones.service.js';
 import { PermisosGuard } from './common/permisos/permisos.guard.js';
 import { DeviceThrottlerGuard } from './common/guards/throttler-behind-proxy.guard.js';
 import { RetosModule } from './modules/retos/retos.module.js';
+import { AuditoriasModule } from './modules/auditorias/auditorias.module.js';
+import { ReportesModule } from './modules/reportes/reportes.module.js';
 
 @Module({
   imports: [
@@ -60,6 +62,8 @@ import { RetosModule } from './modules/retos/retos.module.js';
     AnalyticsModule,
     AprobacionesModule,
     RetosModule,
+    AuditoriasModule,
+    ReportesModule,
   ],
   providers: [
     {

@@ -62,9 +62,13 @@ describe('acceso y pantallas de la app (infoApp, base real)', () => {
     expect(info).toEqual({ puedeUsarApp: false, pantallasApp: [] });
   });
 
-  it('el lavador (sin permisos) no entra', async () => {
-    const info = await infoApp(await rolDeBase('LAVADOR'));
-    expect(info).toEqual({ puedeUsarApp: false, pantallasApp: [] });
+  it('el lavador entra a la app solo para ver sus resultados de auditoría (sin sincronizar ni operar)', async () => {
+    const lavador = await rolDeBase('LAVADOR');
+    expect(lavador.capacidades).not.toContain('sync.usar');
+    const info = await infoApp(lavador);
+    expect(info.puedeUsarApp).toBe(true);
+    expect(info.pantallasApp).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));
+    for (const p of ['servicios', 'inventario', 'taller-tecnico', 'auditorias']) expect(info.pantallasApp).not.toContain(p);
   });
 
   it('el super admin entra y ve todas las pantallas marcadas', async () => {

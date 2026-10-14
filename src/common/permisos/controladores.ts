@@ -14,6 +14,8 @@ import { RolesController } from '../../modules/roles/roles.controller.js';
 import { StorageController } from '../../modules/storage/storage.controller.js';
 import { SyncController } from '../../modules/sync/sync.controller.js';
 import { NotificationsController } from '../../modules/notifications/notifications.controller.js';
+import { InformesInspeccionController } from '../../modules/auditorias/informes.controller.js';
+import { Auditoria5sController } from '../../modules/auditorias/auditoria5s.controller.js';
 
 export type Controlador = new (...args: never[]) => unknown;
 
@@ -23,7 +25,7 @@ export const CONTROLADORES: Array<[string, Controlador]> = [
   ['aprobaciones', AprobacionesController], ['catalogos', CatalogosController], ['inventario', InventarioController],
   ['maquinaria', MaquinariaController], ['operaciones', OperacionesController], ['servicios-especiales', ServiciosEspecialesController],
   ['retos', RetosController], ['roles', RolesController], ['storage', StorageController], ['sync', SyncController],
-  ['notifications', NotificationsController],
+  ['notifications', NotificationsController], ['informes-inspeccion', InformesInspeccionController], ['auditorias-5s', Auditoria5sController],
 ];
 
 /** Métodos de un controlador que son rutas HTTP. */

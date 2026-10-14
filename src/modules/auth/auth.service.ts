@@ -32,7 +32,10 @@ export class AuthService {
    * aparece en el celular solo si el módulo está marcado para la app Y el rol tiene su permiso (`modulosDeRol`).
    */
   private async infoApp(role: { namerol?: string | null; capacidades?: string[] | null } | null | undefined) {
-    const puedeUsarApp = role?.namerol === 'SUPER_ADMIN' || !!role?.capacidades?.includes('sync.usar');
+    // Entra a la app quien sincroniza (sync.usar) o, sin operar, solo consulta los resultados de auditoría (líder, lavador, pulidor).
+    const puedeUsarApp =
+      role?.namerol === 'SUPER_ADMIN' ||
+      !!role?.capacidades?.some((c) => c === 'sync.usar' || c === 'informes.ver' || c === 'inspecciones.ver');
     const pantallas = modulosDeRol(role);
     if (!puedeUsarApp || !pantallas.length) return { puedeUsarApp, pantallasApp: [] as string[] };
     const enApp = await this.prisma.moduloSistema.findMany({

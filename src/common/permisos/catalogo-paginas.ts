@@ -266,6 +266,24 @@ export const PAGINAS: readonly PaginaDef[] = [
     accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir']),
   ]),
 
+  // Auditorías: tres pantallas del menú. Quien no puede auditar (líder, lavador, pulidor) solo ve el resultado de su inspección 5S y sus informes.
+  pagina('auditorias', 'Dashboard de Auditorías', '/auditorias', 'auditorias', ['auditorias.ver'], []),
+
+  pagina('informes', 'Informes de Inspección', '/informes-inspeccion', 'informes-inspeccion', ['informes.ver'], [], [
+    accion('informes.crear', 'Crear y editar informes', ['informes.crear']),
+    accion('informes.firmar', 'Registrar observaciones y calificación', ['informes.firmar']),
+    accion('informes.seguimiento', 'Dar seguimiento a los planes de acción', ['informes.seguimiento']),
+    accion('informes.revisar', 'Revisar, aprobar, rechazar y cerrar', ['informes.revisar']),
+    accion('informes.eliminar', 'Eliminar borradores', ['informes.eliminar']),
+  ]),
+
+  pagina('inspecciones', 'Auditorías 5S', '/auditorias-5s', 'auditorias-5s', ['inspecciones.ver'], [], [
+    accion('inspecciones.crear', 'Hacer auditorías 5S', ['inspecciones.crear']),
+    accion('inspecciones.acciones', 'Dar seguimiento a las acciones correctivas', ['inspecciones.acciones']),
+    accion('inspecciones.verificar', 'Verificar acciones y cerrar auditorías', ['inspecciones.verificar']),
+    accion('inspecciones.eliminar', 'Eliminar borradores', ['inspecciones.eliminar']),
+  ]),
+
   pagina('usuarios', 'Usuarios y Roles', '/usuarios', 'usuarios', [], [
     sub('usuarios', 'usuarios', 'Usuarios', ['usuarios.ver', 'agencias.ver'], [
       accion('usuarios.usuarios.crear', 'Crear usuario', ['usuarios.gestionar']),

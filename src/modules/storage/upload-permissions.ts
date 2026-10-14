@@ -21,6 +21,14 @@ export function exigirPermisoSubida(user: any, dto: Pick<GenerateUploadTicketDto
     return;
   }
 
+  // Evidencias de auditorías: quien hace informes o auditorías 5S, o da seguimiento a sus planes y acciones correctivas.
+  if (dto.type === 'FOTO_AUDITORIA' || dto.category === 'AUDITORIAS') {
+    if (!tieneAlgunPermiso(user, ['informes.crear', 'informes.seguimiento', 'inspecciones.crear', 'inspecciones.acciones'])) {
+      throw new ForbiddenException('Tu rol no puede subir evidencias de auditorías.');
+    }
+    return;
+  }
+
   const limpieza = dto.category === 'MAQUINARIA_LIMPIEZA' || dto.type === 'FOTO_LIMPIEZA';
   if (limpieza) {
     if (!tienePermiso(user, 'limpiezas.evidencias')) {

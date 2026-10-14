@@ -52,6 +52,7 @@ export type StorageCategory =
   | 'DOCUMENTO'
   | 'CATALOGO_INSUMOS'
   | 'INVENTARIO_ENVIOS'
+  | 'AUDITORIAS'
   | 'PERFIL_USUARIO';
 
 export type MediaEvidenceType =
@@ -76,6 +77,7 @@ export type MediaEvidenceType =
   | 'FOTO_AJUSTE_INVENTARIO'
   | 'FOTO_INGRESO_INVENTARIO'
   | 'FOTO_ENVIO'
+  | 'FOTO_AUDITORIA'
   | 'FOTO_PERFIL';
 
 export interface GenerateUploadTicketDto {
@@ -95,6 +97,9 @@ export interface GenerateUploadTicketDto {
   /** Evidencias de envíos: número de guía y etapa ('recepcion' | 'rechazo' | 'resolucion'). */
   envioGuia?: string;
   envioEtapa?: 'recepcion' | 'rechazo' | 'resolucion';
+  /** Evidencias de auditorías: el módulo ('informes' o '5s') y el informe o auditoría al que pertenecen (si aún no existe, se guarda como «borrador»). */
+  auditoriaTipo?: 'informes' | '5s';
+  auditoriaId?: string;
   category?: StorageCategory;
   type: MediaEvidenceType;
   fileName?: string;
@@ -135,6 +140,7 @@ const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'FOTO_AJUSTE_INVENTARIO',
   'FOTO_INGRESO_INVENTARIO',
   'FOTO_ENVIO',
+  'FOTO_AUDITORIA',
   'FOTO_PERFIL',
 ]);
 
@@ -399,6 +405,11 @@ export class StorageService implements OnModuleInit {
         key: `usuarios/${userId}/perfil/avatar.jpg`,
         contentType: 'image/jpeg',
       };
+    } else if (category === 'AUDITORIAS' || type === 'FOTO_AUDITORIA') {
+      // Evidencias de informes de inspección y de auditorías 5S: agencias/{agencia}/auditorias/{informes|5s}/{id}/
+      const modulo = dto.auditoriaTipo === '5s' ? '5s' : 'informes';
+      const referencia = this.safeSegment(dto.auditoriaId, 'borrador');
+      key = `agencias/${agencia}/auditorias/${modulo}/${referencia}/${filename}`;
     } else if (type === 'FOTO_ENVIO') {
       // Todo lo de un envío vive junto, sin importar el origen o el destino: inventario/envios/{guia}/{etapa}/
       const guia = this.safeSegment(dto.envioGuia, 'sin-guia');
@@ -1111,6 +1122,7 @@ export class StorageService implements OnModuleInit {
   private defaultCategory(type: MediaEvidenceType): StorageCategory {
     if (type === 'FOTO_PERFIL') return 'PERFIL_USUARIO';
     if (type === 'FOTO_ENVIO') return 'INVENTARIO_ENVIOS';
+    if (type === 'FOTO_AUDITORIA') return 'AUDITORIAS';
     if (
       type === 'IMAGEN_PRODUCTO' ||
       type === 'FOTO_AJUSTE_INVENTARIO' ||
@@ -1139,6 +1151,7 @@ export class StorageService implements OnModuleInit {
   ): void {
     if (category === 'PERFIL_USUARIO' && type === 'FOTO_PERFIL') return;
     if (category === 'INVENTARIO_ENVIOS' && type === 'FOTO_ENVIO') return;
+    if (category === 'AUDITORIAS' && type === 'FOTO_AUDITORIA') return;
     if (
       category === 'CATALOGO_INSUMOS' &&
       (type === 'IMAGEN_PRODUCTO' ||

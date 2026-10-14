@@ -9,6 +9,7 @@ import { ROLES_BASE } from './roles-base.js';
 import { normalizarRol } from './alias-roles.js';
 import { tienePermiso, tieneAlgunPermiso } from './capacidades.js';
 import { accionesLegacy } from './acciones-legacy.js';
+import { REPORTES } from '../../modules/reportes/reportes.definiciones.js';
 
 const rolesCon = (codigo: string): string[] =>
   ROLES_BASE.filter((r) => r.capacidades.includes(codigo as never))
@@ -57,12 +58,29 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('roles.gestionar')).toEqual(['SUPER_ADMIN']);
   });
 
-  it('el lavador no tiene ningún permiso', () => {
-    expect(
-      ROLES_BASE.find((r) => r.namerol === 'LAVADOR')!.capacidades,
-    ).toEqual([]);
-    for (const c of CODIGOS_PERMISOS)
-      expect(tienePermiso(usuario('LAVADOR'), c)).toBe(false);
+  it('el lavador no opera la plataforma: su único permiso es ver sus resultados de auditoría', () => {
+    const permisos = CODIGOS_PERMISOS.filter((c) => tienePermiso(usuario('LAVADOR'), c));
+    expect(permisos.sort()).toEqual(['informes.ver', 'inspecciones.ver']);
+  });
+
+  it('auditar (hacer informes de inspección y auditorías 5S) lo pueden todos los roles menos líder, Backup, lavador y pulidor', () => {
+    const noAudita = ['BACKUP', 'LAVADOR', 'LIDER', 'PULIDOR'];
+    const auditan = ROLES_BASE.map((r) => r.namerol).filter((n) => !noAudita.includes(n)).sort();
+    expect(rolesCon('informes.crear')).toEqual(auditan);
+    expect(rolesCon('inspecciones.crear')).toEqual(auditan);
+    expect(rolesCon('informes.firmar')).toEqual(auditan);
+    for (const rol of noAudita) {
+      const caps = ROLES_BASE.find((r) => r.namerol === rol)!.capacidades;
+      expect(caps, rol).toEqual(expect.arrayContaining(['informes.ver', 'inspecciones.ver']));
+      for (const c of ['informes.crear', 'informes.firmar', 'informes.seguimiento', 'informes.revisar', 'informes.eliminar', 'inspecciones.crear', 'inspecciones.acciones', 'inspecciones.verificar', 'inspecciones.eliminar', 'auditorias.ver']) {
+        expect(caps, `${rol} no debe tener ${c}`).not.toContain(c);
+      }
+    }
+  });
+
+  it('revisar, verificar y eliminar borradores de auditoría: administradores y supervisor', () => {
+    expect(rolesCon('informes.revisar')).toEqual(['ADMIN', 'SUPERVISOR', 'SUPER_ADMIN']);
+    expect(rolesCon('inspecciones.verificar')).toEqual(['ADMIN', 'SUPERVISOR', 'SUPER_ADMIN']);
   });
 
   it('el Backup hereda las capacidades del líder y el supervisor gestiona solo Backups', () => {
@@ -292,6 +310,106 @@ describe('matriz acordada de permisos por rol', () => {
       'GLOBAL',
       'GLOBAL',
     ]);
+  });
+
+  describe('reportes operativos', () => {
+    const ambito = (n: string) =>
+      ROLES_BASE.find((r) => r.namerol === n)!.ambito;
+    /** Reportes que el rol ve en su catálogo: hace falta el permiso de su módulo (y los precios, si el reporte los exige). */
+    const reportesDe = (n: string): string[] => {
+      const u = usuario(n);
+      return REPORTES.filter(
+        (d) =>
+          tieneAlgunPermiso(u, d.permisos) &&
+          (d.permisosTodos ?? []).every((p) => tienePermiso(u, p)),
+      ).map((d) => d.id);
+    };
+
+    it('los sacan solo administradores, coordinador y asistente de bodega, y coordinador y jefe comercial (de momento)', () => {
+      const acordados = [
+        'ADMIN',
+        'ASISTENTE_BODEGA',
+        'COORD_BODEGA',
+        'COORD_COMERCIAL',
+        'JEFE_COMERCIAL',
+        'SUPER_ADMIN',
+      ];
+      expect(rolesCon('reportes.ver')).toEqual(acordados);
+      // Exportar sale con el mismo acceso: nadie exporta sin poder ver el reporte.
+      expect(rolesCon('reportes.excel')).toEqual(acordados);
+      expect(rolesCon('reportes.pdf')).toEqual(acordados);
+    });
+
+    it('el supervisor, aunque es regional, ya no saca reportes', () => {
+      expect(rolesCon('reportes.ver')).not.toContain('SUPERVISOR');
+    });
+
+    it('el alcance del rol limita los datos del reporte: regional solo su región, nacional todo el país', () => {
+      expect(['ASISTENTE_BODEGA', 'COORD_COMERCIAL'].map(ambito)).toEqual([
+        'REGION',
+        'REGION',
+      ]);
+      expect(
+        ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA', 'JEFE_COMERCIAL'].map(ambito),
+      ).toEqual(['GLOBAL', 'GLOBAL', 'GLOBAL', 'GLOBAL']);
+    });
+
+    it('el asistente de bodega ve los reportes de inventario y ninguno de los módulos que no tiene', () => {
+      const vistos = reportesDe('ASISTENTE_BODEGA');
+      expect(vistos).toEqual(
+        expect.arrayContaining([
+          'insumos-inventario',
+          'stock-ubicacion',
+          'kardex',
+          'alertas-stock',
+        ]),
+      );
+      for (const id of [
+        'agencias-listado',
+        'lavadores-listado',
+        'servicios-generales',
+        'servicios-especiales',
+        'maquinaria-asignada',
+        'incidentes',
+        'mantenimientos',
+      ]) {
+        expect(vistos).not.toContain(id);
+      }
+    });
+
+    it('el coordinador de bodega no ve los reportes de servicios, lavadores ni agencias', () => {
+      const vistos = reportesDe('COORD_BODEGA');
+      expect(vistos).toEqual(
+        expect.arrayContaining(['insumos-inventario', 'stock-ubicacion', 'kardex']),
+      );
+      for (const id of [
+        'agencias-listado',
+        'lavadores-listado',
+        'servicios-generales',
+        'servicios-especiales',
+      ]) {
+        expect(vistos).not.toContain(id);
+      }
+    });
+
+    it('el jefe comercial no ve el reporte de precios (no tiene permiso de precios)', () => {
+      expect(reportesDe('JEFE_COMERCIAL')).not.toContain('catalogo-precios');
+    });
+
+    it('los roles operativos (aprobador, líder, pulidor, técnico…) no sacan reportes', () => {
+      for (const n of [
+        'APROBADOR',
+        'LIDER',
+        'BACKUP',
+        'LAVADOR',
+        'COORD_SERVICIOS_ESPECIALES',
+        'PULIDOR',
+        'COORD_MANTENIMIENTO',
+        'TECNICO',
+      ]) {
+        expect(tienePermiso(usuario(n), 'reportes.ver')).toBe(false);
+      }
+    });
   });
 });
 

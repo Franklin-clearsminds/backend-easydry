@@ -17,7 +17,10 @@ describe('pantallas derivadas de los permisos', () => {
   it('sin permisos no hay pantallas (ni notificaciones ni perfil)', () => {
     expect(modulosDeCapacidades([])).toEqual([]);
     expect(modulosDeCapacidades(null)).toEqual([]);
-    expect(pantallas('LAVADOR')).toEqual([]);
+  });
+
+  it('el lavador solo ve sus resultados de auditoría (informes y 5S), sus notificaciones y su perfil', () => {
+    expect(pantallas('LAVADOR')).toEqual(['notificaciones', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
   });
 
   it('SUPER_ADMIN ve todas las pantallas aunque sus permisos guardados estén vacíos', () => {
@@ -38,14 +41,22 @@ describe('pantallas derivadas de los permisos', () => {
   });
 
   it('pantallas de los roles oficiales', () => {
-    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'perfil']);
-    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'perfil']);
+    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'auditorias', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
+    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'auditorias', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
+    // El líder (y su reemplazo), el pulidor y el lavador no auditan: no tienen el dashboard de auditorías.
+    for (const rol of ['LIDER', 'BACKUP', 'PULIDOR', 'LAVADOR']) {
+      expect(pantallas(rol), rol).not.toContain('auditorias');
+      expect(pantallas(rol), rol).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));
+    }
     expect(pantallas('SUPERVISOR')).toContain('usuarios');
-    expect(pantallas('SUPERVISOR')).toContain('reportes');
+    // Reportes operativos (de momento): administradores, coordinador y asistente de bodega, coordinador y jefe comercial.
+    expect(pantallas('SUPERVISOR')).not.toContain('reportes');
+    for (const rol of ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA', 'ASISTENTE_BODEGA', 'COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
+      expect(pantallas(rol), rol).toContain('reportes');
+    }
     expect(pantallas('LIDER')).not.toContain('mapa-operativo');
     expect(pantallas('LIDER')).toContain('operadores');
     expect(pantallas('LIDER')).not.toContain('agencias');
-    expect(pantallas('ASISTENTE_BODEGA')).not.toContain('reportes');
   });
 
   it('toda pantalla tiene al menos un permiso que la habilita, salvo las de cuenta', () => {

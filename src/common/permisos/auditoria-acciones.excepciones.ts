@@ -31,10 +31,6 @@ export const EXCEPCIONES_SERVIDOR: Record<string, string> = {
     "Los datos salen de maquinaria/list, que el servidor ya exige con 'maquinaria.ver', permiso que esta casilla otorga: apagarla quita ese acceso.",
   'operadores.ficha.ver':
     'La ficha y la productividad salen del mismo listado operadores/list que la tabla de lavadores, que exigen usuarios.ver u operadores.ver. Se oculta el botón y la columna en pantalla.',
-  'reportes.excel':
-    'El reporte se arma en la pantalla con indicadores que el servidor ya entrega a quien ve el panel; el archivo Excel se genera en el navegador. Se oculta el botón.',
-  'reportes.pdf':
-    'El PDF se genera en el navegador con los mismos indicadores de la pantalla. Se oculta el botón.',
   'pagina.agencias.agencias':
     'Es la pestaña principal: sus listados (agencias/list, bahias/list…) alimentan los desplegables de muchas pantallas y los exige el permiso de la página. Sus botones sí se exigen uno a uno.',
 };
@@ -48,6 +44,7 @@ export const EXCEPCIONES_PANTALLA: Record<string, string> = {
   'datos.cedula.ver': 'El servidor omite la cédula del personal en la respuesta si falta la casilla: la pantalla muestra lo que llega.',
   'datos.contacto.ver': 'El servidor omite correo y teléfono del personal en la respuesta si falta la casilla: la pantalla muestra lo que llega.',
   'evidencias.ver': 'Las fotos y videos se piden por URL prefirmada y el servidor decide si se entrega: la pantalla muestra el estado «sin permiso».',
+  'evidencias.subir': 'La subida de archivos la valida el servidor (storage/upload-permissions); cada pantalla oculta su botón con su propia casilla de evidencias (taller.incidentes.evidencias, taller.mantenimientos.evidencias…).',
   'sistema.sync.usar': 'La sincronización no tiene botón: la app la usa en segundo plano y el servidor la rechaza si falta la casilla.',
   'sistema.sync.errores': 'La cola de errores de sincronización se gestiona desde soporte, sin pantalla propia: el servidor la exige.',
 };
