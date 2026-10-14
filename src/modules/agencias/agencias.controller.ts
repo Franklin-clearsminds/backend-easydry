@@ -132,16 +132,16 @@ export class AgenciasController {
   @Post('clientes/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Clientes/marcas para un desplegable con buscador: { value, label } paginado' })
-  async opcionesClientes(@Body() dto: ClientesOpcionesDto) {
-    return this.agenciasService.listClientesOpciones(dto);
+  async opcionesClientes(@Body() dto: ClientesOpcionesDto, @CurrentUser() user: any) {
+    return this.agenciasService.listClientesOpciones(dto, user);
   }
 
   @Permiso('agencias.ver')
   @Post('marcas/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Alias de clientes/opciones' })
-  async opcionesMarcas(@Body() dto: ClientesOpcionesDto) {
-    return this.agenciasService.listClientesOpciones(dto);
+  async opcionesMarcas(@Body() dto: ClientesOpcionesDto, @CurrentUser() user: any) {
+    return this.agenciasService.listClientesOpciones(dto, user);
   }
 
   @Permiso('clientes.gestionar')

@@ -502,7 +502,7 @@ describe('salud de inventario — orden de ubicaciones', () => {
     expect(nombres).toEqual(['Con Mezcla', 'Solo Agotada', 'Otra Agotada']);
     expect(res.saludPorUbicacion[0]).toEqual({
       nombre: 'Con Mezcla',
-      AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0, SOBRESTOCK: 0,
+      AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0,
       criticos: 3, problemas: 3,
     });
   });

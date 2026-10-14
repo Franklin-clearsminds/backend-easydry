@@ -18,6 +18,9 @@ export class RegionesOpcionesDto extends OpcionesDto {
 
 /** Clientes / marcas. */
 export class ClientesOpcionesDto extends OpcionesDto {
+  @ApiPropertyOptional({ description: 'Filtrar por región para traer solo clientes con agencias en esa región' })
+  @IsOptional() @IsString() regionId?: string;
+
   @ApiPropertyOptional({ description: '1 activos, 0 inactivos; sin valor: todos' })
   @IsOptional() @Type(() => Number) @IsInt() @IsIn([0, 1]) estado?: number;
 }

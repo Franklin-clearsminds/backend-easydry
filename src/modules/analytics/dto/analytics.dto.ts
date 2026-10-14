@@ -26,6 +26,16 @@ export class FiltroAnaliticaDto {
   @IsString()
   agenciaId?: string;
 
+  @ApiPropertyOptional({ description: 'Filtrar por cliente corporativo / marca (Ambacar, Casabaca, etc.)' })
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar por bahía específica dentro de la agencia' })
+  @IsOptional()
+  @IsString()
+  bahiaId?: string;
+
   @ApiPropertyOptional({ description: 'Filtrar por pulidor (servicios especiales)' })
   @IsOptional()
   @IsString()
