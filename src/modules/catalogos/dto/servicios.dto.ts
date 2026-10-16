@@ -111,7 +111,7 @@ export class ListCatalogoServiciosDto extends PaginacionOpcionalDto {
   agenciaId?: string;
 }
 
-export class DeleteCatalogoServicioDto {
+export class EstadoCatalogoServicioDto {
   @ApiProperty({ example: 1 })
   @IsNumber()
   @IsNotEmpty()

@@ -102,8 +102,8 @@ describe('migración de roles existentes', () => {
 
   it('cada rol oficial conserva exactamente las pantallas que tenía', () => {
     const esperadas: Record<string, string[]> = {
-      APROBADOR: ['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'perfil'],
-      COORD_MANTENIMIENTO: ['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'perfil'],
+      APROBADOR: ['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'auditorias', 'informes-inspeccion', 'auditorias-5s', 'perfil'],
+      COORD_MANTENIMIENTO: ['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'auditorias', 'informes-inspeccion', 'auditorias-5s', 'perfil'],
     };
     for (const [rol, pantallas] of Object.entries(esperadas)) {
       const r = ROLES_BASE.find((x) => x.namerol === rol)!;
@@ -139,7 +139,7 @@ describe('migración de roles existentes', () => {
   it('los roles comerciales ven en solo lectura; solo el Coordinador ve precios', () => {
     for (const nombre of ['COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
       const caps = ROLES_BASE.find((r) => r.namerol === nombre)!.capacidades;
-      expect(caps).toEqual(expect.arrayContaining(['pagina.agencias', 'pagina.operadores', 'pagina.mapa', 'pagina.inventario', 'pagina.envios']));
+      expect(caps).toEqual(expect.arrayContaining(['pagina.agencias', 'pagina.agencias.mapa', 'pagina.operadores', 'pagina.inventario', 'pagina.envios']));
       expect(caps).not.toContain('operadores.registrar');
       expect(caps).not.toContain('operadores.gestionar');
       expect(caps).not.toContain('envios.confirmar');

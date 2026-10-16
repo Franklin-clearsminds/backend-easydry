@@ -719,7 +719,7 @@ export class MaquinariaService {
     'ventanaAdelantoDias',
   ];
 
-  async update(dto: UpdateMaquinariaDto, actor: Actor) {
+  async update(dto: UpdateMaquinariaDto, actor: Actor, permisos?: { editar: boolean; archivos: boolean }) {
     const existing = await this.cargarMaquina(dto.id);
     const actual = await this.prisma.maquinaria.findUniqueOrThrow({ where: { id: dto.id } });
 
@@ -747,6 +747,18 @@ export class MaquinariaService {
     const cambios = this.diff(actual as unknown as Record<string, unknown>, cambiosDto, MaquinariaService.CAMPOS_EDITABLES);
     if (!Object.keys(cambios).length) {
       return { success: true, data: actual, sinCambios: true };
+    }
+
+    // Editar los datos y cambiar la foto o la ficha técnica son dos casillas distintas sobre el mismo endpoint.
+    if (permisos) {
+      const campos = Object.keys(cambios);
+      const archivos = campos.filter((c) => c === 'fotoUrl' || c === 'fichaTecnicaUrl');
+      if (campos.length > archivos.length && !permisos.editar) {
+        throw new ForbiddenException('Tu rol no puede editar los datos de la máquina.');
+      }
+      if (archivos.length && !permisos.archivos) {
+        throw new ForbiddenException('Tu rol no puede cambiar la foto ni la ficha técnica.');
+      }
     }
 
     const data: Prisma.MaquinariaUpdateInput = {};

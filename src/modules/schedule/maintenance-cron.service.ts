@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { CacheService } from '../../common/cache/cache.service.js';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
@@ -12,31 +13,22 @@ export class MaintenanceCronService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    @Optional() private readonly cache?: CacheService,
   ) {}
 
-  // Cron programado: Todos los domingos a las 02:00 AM (Limpieza de auditoría de sincronización)
-  @Cron('0 2 * * 0')
-  async purgarAuditoriaAntigua(dias: number = 90) {
-    this.logger.log(`[Cron] Iniciando purga programada de SyncOutboxAudit (más de ${dias} días)...`);
-    const cutoffDate = new Date(Date.now() - dias * 24 * 60 * 60 * 1000);
+  // La purga de SyncOutboxAudit (más de 90 días) pasó al módulo `archivado`: ahora se archiva a Parquet antes de borrar.
 
-    try {
-      const result = await this.prisma.syncOutboxAudit.deleteMany({
-        where: {
-          syncedAt: { lt: cutoffDate },
-        },
-      });
-
-      this.logger.log(`[Cron] Purga completada exitosamente: ${result.count} registros de auditoría eliminados.`);
-      return { success: true, count: result.count };
-    } catch (err: any) {
-      this.logger.error(`[Cron] Error al purgar SyncOutboxAudit: ${err.message}`);
-      return { success: false, error: err.message };
-    }
+  @Cron('0 6 * * *')
+  async programado_verificarMantenimientosVencidos(): Promise<void> {
+    // Con varias instancias del servidor, solo una la ejecuta (candado en Redis con vencimiento propio).
+    const tarea = async () => {
+      await this.verificarMantenimientosVencidos();
+    };
+    if (this.cache) await this.cache.unaVez('cron:verificarMantenimientosVencidos', 3600, tarea);
+    else await tarea();
   }
 
   // Cron diario: Todos los días a las 06:00 AM (Detección de mantenimientos preventivos vencidos)
-  @Cron('0 6 * * *')
   async verificarMantenimientosVencidos() {
     this.logger.log('[Cron] Verificando mantenimientos de maquinaria con fecha vencida...');
     const now = new Date();
@@ -93,8 +85,17 @@ export class MaintenanceCronService {
     });
   }
 
-  // Cron diario: todos los días a las 07:00 AM (recordatorio al responsable el día que corresponde limpiar)
   @Cron('0 7 * * *')
+  async programado_recordatorioLimpiezaDelDia(): Promise<void> {
+    // Con varias instancias del servidor, solo una la ejecuta (candado en Redis con vencimiento propio).
+    const tarea = async () => {
+      await this.recordatorioLimpiezaDelDia();
+    };
+    if (this.cache) await this.cache.unaVez('cron:recordatorioLimpiezaDelDia', 3600, tarea);
+    else await tarea();
+  }
+
+  // Cron diario: todos los días a las 07:00 AM (recordatorio al responsable el día que corresponde limpiar)
   async recordatorioLimpiezaDelDia() {
     this.logger.log('[Cron] Verificando recordatorios de limpieza del día...');
     const hoy = new Date();
@@ -139,8 +140,17 @@ export class MaintenanceCronService {
     }
   }
 
-  // Cron diario: todos los días a las 08:00 AM, una hora después del recordatorio (escalación al coordinador)
   @Cron('0 8 * * *')
+  async programado_escalarLimpiezaAtrasada(): Promise<void> {
+    // Con varias instancias del servidor, solo una la ejecuta (candado en Redis con vencimiento propio).
+    const tarea = async () => {
+      await this.escalarLimpiezaAtrasada();
+    };
+    if (this.cache) await this.cache.unaVez('cron:escalarLimpiezaAtrasada', 3600, tarea);
+    else await tarea();
+  }
+
+  // Cron diario: todos los días a las 08:00 AM, una hora después del recordatorio (escalación al coordinador)
   async escalarLimpiezaAtrasada() {
     this.logger.log('[Cron] Verificando máquinas atrasadas de limpieza...');
     const ahora = new Date();

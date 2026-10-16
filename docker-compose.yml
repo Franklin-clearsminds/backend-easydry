@@ -1,0 +1,16 @@
+# Servicios de apoyo para desarrollo local. La aplicación y PostgreSQL se levantan aparte.
+#   docker compose up -d redis
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: easydry-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # Es una caché: sin persistencia y con tope de memoria (descarta lo menos usado al llenarse).
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5

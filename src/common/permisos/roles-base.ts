@@ -40,26 +40,42 @@ const LECTURA_COMERCIAL: CodigoPermiso[] = p(
 );
 
 /** Roles que no ven precios ni costos. El Coordinador Comercial sí los ve (en su región); el Jefe Comercial no. */
-const ROLES_SIN_PRECIOS = ['JEFE_COMERCIAL'];
+const ROLES_SIN_PRECIOS = ['JEFE_COMERCIAL', 'LAVADOR'];
 /** Roles comerciales que ven bodegas y agencias pero no el stock de los kits. */
 const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
+
+/**
+ * Auditorías. Pueden auditar (crear informes de inspección, firmarlos y verlos dentro de su ámbito) todos los roles menos el líder
+ * de bahía (LIDER y su reemplazo BACKUP), el lavador y el pulidor, que solo ven el resultado de su inspección 5S y sus informes.
+ * Revisar, aprobar, cerrar y eliminar borradores es de quien administra: ADMIN, SUPER_ADMIN y SUPERVISOR.
+ */
+const ROLES_SOLO_VEN_AUDITORIA = ['LIDER', 'BACKUP', 'LAVADOR', 'PULIDOR'];
+const ROLES_REVISAN_INFORMES = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR'];
+const CAPACIDADES_AUDITOR: CodigoPermiso[] = p(
+  'auditorias.ver',
+  'informes.ver',
+  'informes.crear',
+  'informes.firmar',
+  'informes.seguimiento',
+  'inspecciones.ver',
+  'inspecciones.crear',
+  'inspecciones.acciones',
+);
+const CAPACIDADES_VER_AUDITORIA: CodigoPermiso[] = p('informes.ver', 'inspecciones.ver');
+const CAPACIDADES_REVISOR: CodigoPermiso[] = p('informes.revisar', 'informes.eliminar', 'inspecciones.verificar', 'inspecciones.eliminar');
 
 const CAPACIDADES_LIDER = p(
   ...LECTURA_RED,
   'dashboard.ver',
-  'bahias.editar',
   'operadores.ver',
   'servicios.ver',
   'servicios.crear',
   'servicios.editar',
   'servicios.anular',
-  'solicitudes.ver',
-  'solicitudes.crear',
   'consumos.ver',
   'recetas.ver',
   'retos.ver',
   'inventario.ver',
-  'stock.consumir',
   'despachos.ver',
   'despachos.crear',
   'despachos.recibir',
@@ -140,6 +156,7 @@ export const ROLES_BASE: RolBase[] = [
       'servicios.ver',
       'retos.ver',
       'retos.crear',
+      'retos.cerrar',
       'retos.eliminar',
       'sync.usar',
     ),
@@ -158,6 +175,7 @@ export const ROLES_BASE: RolBase[] = [
       'servicios.ver',
       'retos.ver',
       'retos.crear',
+      'retos.cerrar',
       'retos.eliminar',
       'limpiezas.ver',
       'sync.usar',
@@ -201,7 +219,7 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'LAVADOR',
     descripcion:
-      'Personal de lavado en bahía. Por ahora solo trazabilidad: no usa la plataforma.',
+      'Personal de lavado en bahía. No opera la plataforma: solo ve el resultado de su inspección 5S y sus informes de inspección.',
     ambito: 'AGENCIA',
     capacidades: [],
   },
@@ -214,6 +232,7 @@ export const ROLES_BASE: RolBase[] = [
       ...LECTURA_RED,
       'dashboard.ver',
       'productividad.ver',
+      'reportes.ver',
       'especiales.ver',
       'especiales.crear',
       'especiales.reasignar',
@@ -244,8 +263,7 @@ export const ROLES_BASE: RolBase[] = [
       'recetas.ver',
       'retos.ver',
       'inventario.ver',
-      'stock.consumir',
-      'despachos.ver',
+          'despachos.ver',
       'despachos.recibir',
       'alertas.ver',
       'alertas.crear',
@@ -342,6 +360,7 @@ export const ROLES_BASE: RolBase[] = [
       'usuarios.ver',
       'catalogo.ver',
       'dashboard.ver',
+      'reportes.ver',
       'consumos.ver',
       'recetas.ver',
       'recetas.historial',
@@ -356,6 +375,14 @@ export const ROLES_BASE: RolBase[] = [
     ),
   },
 ];
+
+// Auditorías: los roles que auditan reciben el paquete de auditor; el líder, el lavador y el pulidor solo ven su resultado.
+for (const rol of ROLES_BASE) {
+  const extra = ROLES_SOLO_VEN_AUDITORIA.includes(rol.namerol)
+    ? CAPACIDADES_VER_AUDITORIA
+    : [...CAPACIDADES_AUDITOR, ...(ROLES_REVISAN_INFORMES.includes(rol.namerol) ? CAPACIDADES_REVISOR : [])];
+  rol.capacidades = [...new Set([...rol.capacidades, ...extra])];
+}
 
 // `precios.ver` lo tienen todos los roles que usan la plataforma salvo el Jefe Comercial, e `inventario.kits.ver` todos los que ven
 // inventario salvo los comerciales (que ven bodegas y agencias, no el stock de los kits).

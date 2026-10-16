@@ -42,12 +42,18 @@ import {
   patronContiene,
   rangoFechas,
   type OrdenColumnas,
+  resolverCampoOrden,
   resolverOrden,
   resolverOrdenSql,
   resolverPaginacion,
   textoBusqueda,
   whereBusqueda,
 } from '../../common/utils/data-grid.helpers.js';
+import { HistoricoService } from '../archivado/historico.service.js';
+import { ServiciosFederados } from '../archivado/servicios-federados.js';
+import { KardexArchivo } from './kardex-archivo.js';
+import { MovimientosGlobalesArchivo } from './movimientos-globales-archivo.js';
+import { DespachosArchivo } from './despachos-archivo.js';
 
 /** Orden permitido de los catálogos de configuración (paginados): nombre público → columna. `fecha` = creación. */
 const ORDEN_TIPOS_PRODUCTO = columnasSimples({ codigo: 'codigo', nombre: 'nombre', estado: 'estado', fecha: 'createdAt' });
@@ -179,10 +185,10 @@ interface ContextoDespachos {
   esSuperAdmin: boolean;
   esAdmin: boolean;
   /** Agencia destino a la que se limita el listado (ids y patrones `ILIKE` ya escapados). */
-  agencia: { ids: string[]; patrones: string[] } | null;
+  agencia: { ids: string[]; patrones: string[]; terminos: string[] } | null;
   pulidorId: string | null;
   /** Asistente de bodega: sus envíos, los de su bodega y los de su región. */
-  regional: { usuarioId: string; bodegaId: string | null; patrones: string[] } | null;
+  regional: { usuarioId: string; bodegaId: string | null; patrones: string[]; terminos: string[] } | null;
   estado: string | null;
   guia: string | null;
   desde: Date | null;
@@ -237,6 +243,7 @@ function fechaFiltro(valor: unknown, finDeDia = false): Date | null {
 import { randomUUID } from 'crypto';
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { esLiderDeAgencia, normalizarRol, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 @Injectable()
 export class InventarioService {
@@ -245,6 +252,8 @@ export class InventarioService {
   constructor(
     private prisma: PrismaService,
     @Optional() private notifications?: NotificationsService,
+    /** Suma al listado de Kardex lo que ya se archivó a Parquet. Sin él, el listado lee solo de la base. */
+    @Optional() private historico?: HistoricoService,
   ) {}
 
   /** Destinatarios del aviso de "despacho en camino", según el tipo ya resuelto en `crearDespacho`. */
@@ -439,7 +448,10 @@ export class InventarioService {
       (typeof user?.role === 'string' ? user.role : '') ||
       '',
     );
-    const isScopedRole = ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r));
+    // Sede propia: por ámbito (agencia); los nombres de la lista siguen valiendo para los roles de sede ya conocidos.
+    const isScopedRole =
+      ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r)) ||
+      (!!user && resolverAlcance(user).tipo === 'AGENCIA' && !userRole.includes('PULIDOR'));
     // Igual que el asistente de bodega con su `bodegaId`: un rol de sede nunca amplía su alcance con
     // un `agenciaId` que mande el cliente — siempre es la suya, tomada del token.
     const targetAgenciaId = isScopedRole ? (user?.agenciaId || user?.agencia?.id) : dto?.agenciaId;
@@ -470,8 +482,11 @@ export class InventarioService {
     // Stock de productos = físico de UNA bodega (nunca el campo catálogo Insumo.stockActual)
     let bodegaStockId = '';
     if (!agenciaTarget) {
+      // Quien tiene una bodega asignada y no actúa en todo el país: SIEMPRE su bodega, no la que pida el cliente.
       const isAsistenteBodega =
-        userRole === 'ASISTENTE_BODEGA' || (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
+        userRole === 'ASISTENTE_BODEGA' ||
+        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA')) ||
+        (!!user?.bodegaId && !!user && resolverAlcance(user).tipo !== 'GLOBAL');
       if (isAsistenteBodega && user?.id) {
         // Asistente: SIEMPRE su bodega asignada (ignora dto.bodegaId del cliente)
         const u = await this.prisma.user.findUnique({ where: { id: user.id }, select: { bodegaId: true } });
@@ -791,96 +806,51 @@ export class InventarioService {
   async listStock(dto: ListStockDto, usuarioId: string, rolNombre: string, agenciaIdUsuario?: string) {
     const where: any = {};
 
-    let userRole = normalizarRol(rolNombre);
     let usuario: any = null;
-
     if (usuarioId) {
       usuario = await this.prisma.user.findUnique({
         where: { id: usuarioId },
-        include: { role: true, region: true },
+        include: { role: true, region: true, bodega: { include: { region: true } } },
       });
-      if (usuario?.role?.namerol) {
-        userRole = normalizarRol(usuario.role.namerol);
-      }
     }
+    const agenciaDelUsuario = usuario?.agenciaId || agenciaIdUsuario;
+    // Qué stock ve cada quien lo decide el ámbito de su rol (país, región, agencia o propio), no el nombre del rol.
+    // Un pulidor móvil (sin agencia) solo ve su kit.
+    const esPulidorMovil = rolDeUsuario(usuario) === 'PULIDOR' && !agenciaDelUsuario;
+    const alcance = resolverAlcance(usuario);
 
-    const isGlobal =
-      userRole === 'SUPER_ADMIN' ||
-      userRole === 'ADMIN' ||
-      userRole === 'COORD_BODEGA' ||
-      (userRole.includes('GESTOR') && userRole.includes('INVENTARIO')) ||
-      (userRole.includes('GESTOR') && userRole.includes('BODEGA')) ||
-      (userRole.includes('SUPER') && userRole.includes('ADMIN'));
-
-    const isAsistente =
-      userRole === 'ASISTENTE_BODEGA' ||
-      (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
-    const isSupervisor = userRole.includes('SUPERVISOR');
-    const isPulidorRole = userRole.includes('PULIDOR');
-    const isAgencia = userRole.includes('LIDER') || esLiderDeAgencia(userRole) || (isPulidorRole && !!agenciaIdUsuario);
-    const isPulidor = isPulidorRole && !agenciaIdUsuario;
-
-    if (isGlobal) {
-      // Super Admin, Admin y Coord Bodega ven todo sin restricciones territoriales
+    if (esPulidorMovil || alcance.tipo === 'PROPIO') {
+      where.pulidorId = usuarioId;
+    } else if (alcance.tipo === 'GLOBAL') {
+      if (dto.sucursalId) where.agenciaId = dto.sucursalId;
+    } else if (alcance.tipo === 'REGION') {
+      const regionId = alcance.regionId;
+      const regionNombre = usuario?.bodega?.region?.nombre || usuario?.region?.nombre;
+      const agenciasRegion = await this.prisma.agencia.findMany({
+        where: {
+          OR: [
+            { regionId },
+            ...(regionNombre ? [{ region: { contains: regionNombre, mode: 'insensitive' as const } }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      const agenciasRegionIds = agenciasRegion.map((a) => a.id);
       if (dto.sucursalId) {
-        where.agenciaId = dto.sucursalId;
-      }
-    } else if (isAsistente || isSupervisor) {
-      // Asistente: región de su bodega; Supervisor: región asignada
-      let userRegionId = usuario?.regionId;
-      let userRegionName = usuario?.region?.nombre;
-      if (isAsistente && usuarioId) {
-        const uFull = await this.prisma.user.findUnique({
-          where: { id: usuarioId },
-          include: { bodega: { include: { region: true } }, region: true },
-        });
-        userRegionId = uFull?.bodega?.regionId || uFull?.regionId || userRegionId;
-        userRegionName = uFull?.bodega?.region?.nombre || uFull?.region?.nombre || userRegionName;
-      }
-      let agenciasRegionIds: string[] = [];
-
-      if (userRegionId || userRegionName) {
-        const agenciasRegion = await this.prisma.agencia.findMany({
-          where: {
-            OR: [
-              ...(userRegionId ? [{ regionId: userRegionId }] : []),
-              ...(userRegionName ? [{ region: { contains: userRegionName, mode: 'insensitive' as const } }] : []),
-            ],
-          },
-          select: { id: true },
-        });
-        agenciasRegionIds = agenciasRegion.map((s) => s.id);
-      } else if (agenciaIdUsuario) {
-        const miAgencia = await this.prisma.agencia.findUnique({ where: { id: agenciaIdUsuario } });
-        if (miAgencia?.region) {
-          const ags = await this.prisma.agencia.findMany({
-            where: { region: miAgencia.region },
-            select: { id: true },
-          });
-          agenciasRegionIds = ags.map((s) => s.id);
-        }
-      }
-
-      if (dto.sucursalId) {
-        if (agenciasRegionIds.length > 0 && !agenciasRegionIds.includes(dto.sucursalId)) {
-          where.agenciaId = '__ACCESO_DENEGADO_OTRA_REGION__';
-        } else {
-          where.agenciaId = dto.sucursalId;
-        }
+        where.agenciaId = agenciasRegionIds.length > 0 && !agenciasRegionIds.includes(dto.sucursalId)
+          ? '__ACCESO_DENEGADO_OTRA_REGION__'
+          : dto.sucursalId;
       } else {
         where.agenciaId = { in: agenciasRegionIds };
       }
-    } else if (isAgencia) {
-      if (isPulidorRole && agenciaIdUsuario) {
-        where.OR = [
-          { agenciaId: agenciaIdUsuario },
-          { pulidorId: usuarioId }
-        ];
+    } else if (alcance.tipo === 'AGENCIA') {
+      if (rolDeUsuario(usuario) === 'PULIDOR') {
+        where.OR = [{ agenciaId: alcance.agenciaId }, { pulidorId: usuarioId }];
       } else {
-        where.agenciaId = agenciaIdUsuario;
+        where.agenciaId = alcance.agenciaId;
       }
-    } else if (isPulidor) {
-      where.pulidorId = usuarioId;
+    } else {
+      where.id = '__SIN_ACCESO__'; // sin ámbito, región ni agencia: no ve stock
     }
 
     if (dto.tipoUbicacion) where.tipoUbicacion = dto.tipoUbicacion;
@@ -1022,17 +992,9 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, bodega: { select: { id: true, nombre: true, regionId: true } } },
     });
-    const role = normalizarRol(usuario?.role?.namerol || currentUser?.roleDetails?.namerol || currentUser?.role || '');
-    const isSuper = role === 'SUPER_ADMIN' || (role.includes('SUPER') && role.includes('ADMIN'));
-    const isAdmin = role === 'ADMIN';
-    const isCoord = role === 'COORD_BODEGA' || (role.includes('COORD') && role.includes('BODEGA'));
-    const isAsistente = role === 'ASISTENTE_BODEGA' || (role.includes('ASISTENTE') && role.includes('BODEGA'));
-
-    if (!isSuper && !isAdmin && !isCoord && !isAsistente) {
-      throw new ForbiddenException(
-        'Solo Super Admin, Admin, Coordinador de Bodega o Asistente de Bodega pueden reajustar stock.',
-      );
-    }
+    // Quien reajusta lo decide su casilla (bodegas, agencias o kits de pulidores) y su ámbito, no el nombre del rol.
+    const ambitoGlobal = resolverAlcance(currentUser).tipo === 'GLOBAL';
+    const isAsistente = !ambitoGlobal;
 
     const cantidadContada = Number(dto.cantidadContada);
     if (!Number.isFinite(cantidadContada) || cantidadContada < 0) {
@@ -1095,6 +1057,10 @@ export class InventarioService {
     const pulidorId = stock?.pulidorId || dto.pulidorId || null;
     if (!insumoId || (!bodegaId && !agenciaId && !pulidorId)) {
       throw new BadRequestException('Indica el insumo y la ubicación (bodega, agencia o pulidor) a reajustar.');
+    }
+    const casillaReajuste = pulidorId ? 'inventario.pulidores.reajustar' : agenciaId ? 'inventario.agencias.reajustar' : 'inventario.bodegas.reajustar';
+    if (!tienePermiso(currentUser, casillaReajuste)) {
+      throw new ForbiddenException('Tu rol no puede reajustar el stock de ' + (pulidorId ? 'los kits de pulidores.' : agenciaId ? 'las agencias.' : 'las bodegas.'));
     }
 
     // Alcance del asistente: su bodega asignada, o agencias y pulidores de su región.
@@ -1650,9 +1616,11 @@ export class InventarioService {
         include: { role: true, region: true, bodega: true },
       });
       const userRole = (usuario?.role?.namerol || '').toUpperCase();
+      // Con una bodega asignada y sin alcance nacional, solo se ve esa bodega.
       const isAsistente =
         userRole === 'ASISTENTE_BODEGA' ||
-        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
+        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA')) ||
+        (!!usuario?.bodegaId && resolverAlcance(usuario).tipo !== 'GLOBAL');
 
       if (isAsistente) {
         // Solo la bodega asignada al asistente (no toda la región ni Central)
@@ -2839,19 +2807,17 @@ export class InventarioService {
       return { destinoBodegaId, destinoAgenciaId, destinoPulidorId };
     }
 
-    // Agencia destino → solo el LÍDER de esa sede
+    // El destino decide quién recibe: quien pertenece a esa agencia o a esa bodega, o el propio pulidor.
+    // El permiso (confirmar o rechazar) lo exige el controlador; aquí solo se valida que el envío sea suyo.
     if (destinoAgenciaId) {
-      if (!isLider || usuario?.agenciaId !== destinoAgenciaId) {
-        throw new ForbiddenException('Solo el Líder de la sucursal destino puede confirmar este envío.');
+      if (usuario?.agenciaId !== destinoAgenciaId) {
+        throw new ForbiddenException('Solo quien pertenece a la sucursal destino puede recibir o rechazar este envío.');
       }
       return { destinoBodegaId, destinoAgenciaId, destinoPulidorId };
     }
-    // Bodega destino → solo el ASISTENTE de esa bodega
     if (destinoBodegaId) {
-      if (!isAsistente || usuario?.bodegaId !== destinoBodegaId) {
-        throw new ForbiddenException(
-          'Solo el Asistente de la bodega destino puede confirmar este envío.',
-        );
+      if (usuario?.bodegaId !== destinoBodegaId) {
+        throw new ForbiddenException('Solo quien pertenece a la bodega destino puede recibir o rechazar este envío.');
       }
       return { destinoBodegaId, destinoAgenciaId, destinoPulidorId };
     }
@@ -2885,10 +2851,14 @@ export class InventarioService {
     const isAdmin = rol === 'ADMIN';
     const isDirector = isSuperAdmin || isAdmin;
 
-    const isCoord = rol === 'COORD_BODEGA' || (rol.includes('COORD') && rol.includes('BODEGA'));
-    const isAsistente =
-      rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
-    const isLider = esLiderDeAgencia(rol);
+    // Cómo despacha cada quien lo decide su ámbito (país, región con bodega, agencia), no solo el nombre del rol:
+    // un rol personalizado con la casilla de despachar se comporta como el rol oficial de su mismo ámbito.
+    const alcanceDespacha = resolverAlcance(usuario);
+    const nombreCoord = rol === 'COORD_BODEGA' || (rol.includes('COORD') && rol.includes('BODEGA'));
+    const nombreAsistente = rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
+    const isLider = esLiderDeAgencia(rol) || (alcanceDespacha.tipo === 'AGENCIA' && !!usuario.agenciaId && !nombreCoord && !nombreAsistente && !isDirector);
+    const isAsistente = !isLider && (nombreAsistente || (!!usuario.bodegaId && alcanceDespacha.tipo !== 'GLOBAL'));
+    const isCoord = !isLider && !isAsistente && !isDirector && (nombreCoord || alcanceDespacha.tipo === 'GLOBAL');
 
     if (!isCoord && !isAsistente && !isLider && !isDirector) {
       throw new ForbiddenException('Tu rol no está autorizado para crear despachos.');
@@ -3231,6 +3201,7 @@ export class InventarioService {
     }
 
     const nuevoEstado = dto.accion === 'RECIBIDO' ? 'RECIBIDO' : 'RECHAZADO';
+    const evidenciasEnvio = this.validarEvidenciasEnvio(dto.evidencias);
 
     if (dto.cantidadesRecibidas?.length) {
       for (const cr of dto.cantidadesRecibidas) {
@@ -3293,6 +3264,8 @@ export class InventarioService {
       movimiento.id,
     );
 
+    await this.guardarEvidenciasEnvio(movimiento.id, null, nuevoEstado === 'RECHAZADO' ? 'RECHAZO' : 'RECEPCION', evidenciasEnvio, usuarioId);
+
     // Origen tipado
     let origenBodegaId: string | null = null;
     let origenAgenciaId: string | null = null;
@@ -3333,6 +3306,7 @@ export class InventarioService {
       return this.unidadesABase(unidades, Number(ins?.contenidoNeto ?? 1));
     };
 
+    let hayFaltantes = false;
     if (dto.accion === 'RECIBIDO') {
       const detallesActualizados = await this.prisma.movimientoDetalle.findMany({
         where: { movimientoId: movimiento.id },
@@ -3363,14 +3337,22 @@ export class InventarioService {
             usuarioId,
           );
         } else if (reservadoAlCrear && baseSobrante > 0) {
-          // Parcial: devolver al origen lo no recibido (en base)
-          await this.devolverStockOrigen(
-            det.insumoId,
-            baseSobrante,
-            origenStockConfirm,
+          // Parcial: lo no recibido queda retenido como faltante hasta que la bodega de origen decida (devolverlo o darlo de baja).
+          await this.prisma.$executeRawUnsafe(
+            `INSERT INTO "FaltanteDespacho" ("id", "movimientoId", "numeroGuia", "insumoId", "cantidadUnd", "cantidadBase",
+                                             "origenBodegaId", "origenAgenciaId", "motivoRecepcion")
+             VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7, $8, $9)`,
+            randomUUID(),
+            movimiento.id,
             movimiento.numeroGuia,
-            usuarioId,
+            det.insumoId,
+            Math.max(0, enviadaUnd - recibidaUnd),
+            baseSobrante,
+            origenBodegaId,
+            origenAgenciaId,
+            (dto.observaciones || '').toString().trim() || null,
           );
+          hayFaltantes = true;
         }
 
         if (baseRecibida > 0) {
@@ -3386,17 +3368,25 @@ export class InventarioService {
         }
       }
     } else {
-      // Rechazo: devolver stock base reservado + alerta
+      // Rechazo: lo reservado NO vuelve solo al origen. Queda retenido hasta que la bodega de origen decida (devolverlo o darlo de baja).
       for (const det of movimiento.detalles) {
         const baseReservado = await baseReservadoKardex(det.insumoId);
         if (baseReservado > 0) {
-          await this.devolverStockOrigen(
-            det.insumoId,
-            baseReservado,
-            origenStockConfirm,
+          await this.prisma.$executeRawUnsafe(
+            `INSERT INTO "FaltanteDespacho" ("id", "movimientoId", "numeroGuia", "insumoId", "cantidadUnd", "cantidadBase",
+                                             "origenBodegaId", "origenAgenciaId", "motivoRecepcion")
+             VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7, $8, $9)`,
+            randomUUID(),
+            movimiento.id,
             movimiento.numeroGuia,
-            usuarioId,
+            det.insumoId,
+            Number(det.cantidadEnviada),
+            baseReservado,
+            origenBodegaId,
+            origenAgenciaId,
+            `Rechazado: ${motivoRechazo}`,
           );
+          hayFaltantes = true;
         }
         try {
           await this.prisma.alertaStock.create({
@@ -3413,11 +3403,199 @@ export class InventarioService {
       }
     }
 
-    if (this.notifications && movimiento.usuarioDespachaId) {
+    const rechazoConStockRetenido = nuevoEstado === 'RECHAZADO' && hayFaltantes;
+    if (this.notifications && movimiento.usuarioDespachaId && !rechazoConStockRetenido) {
       void this.notificarConfirmacionDespacho(movimiento, nuevoEstado, origenAgenciaId, origenBodegaId, motivoRechazo);
     }
+    if (hayFaltantes) {
+      // Un solo aviso: dice qué pasó (recepción incompleta o rechazo) y que hay que decidir qué hacer con el producto.
+      void this.notificarFaltantesDespacho(
+        movimiento,
+        origenAgenciaId,
+        origenBodegaId,
+        nuevoEstado === 'RECHAZADO' ? motivoRechazo : (dto.observaciones || '').toString().trim(),
+        nuevoEstado === 'RECHAZADO',
+      );
+    }
 
-    return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado };
+    return { ok: true, numeroGuia: movimiento.numeroGuia, nuevoEstado, faltantes: hayFaltantes };
+  }
+
+  /** Avisa a la bodega de origen que una recepción parcial dejó producto por resolver (devolver al stock o dar de baja). */
+  private async notificarFaltantesDespacho(
+    movimiento: { id: string; numeroGuia: string; usuarioDespachaId: string | null },
+    origenAgenciaId: string | null,
+    origenBodegaId: string | null,
+    observacion: string,
+    rechazado = false,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    let regionOrigenId: string | null = null;
+    if (origenAgenciaId) {
+      const ag = await this.prisma.agencia.findUnique({ where: { id: origenAgenciaId }, select: { regionId: true } });
+      regionOrigenId = ag?.regionId || null;
+    } else if (origenBodegaId) {
+      const bod = await this.prisma.bodega.findUnique({ where: { id: origenBodegaId }, select: { regionId: true } });
+      regionOrigenId = bod?.regionId || null;
+    }
+    const porRol = await this.notifications.resolverDestinatariosPorRol({
+      global: ['ADMIN', 'SUPER_ADMIN', 'COORD_BODEGA'],
+      regionales: ['ASISTENTE_BODEGA', 'SUPERVISOR'],
+      regionId: regionOrigenId,
+    });
+    const ids = [...new Set([movimiento.usuarioDespachaId, ...porRol].filter(Boolean))] as string[];
+    void this.notifications.notificarUsuarios(
+      ids,
+      rechazado ? 'Envío rechazado: decide qué hacer con el producto' : 'Faltante en un envío por resolver',
+      rechazado
+        ? `La guía ${movimiento.numeroGuia} fue rechazada${observacion ? `: ${observacion}` : ''}. El producto quedó retenido: decide si regresa al stock o se da de baja.`
+        : `La guía ${movimiento.numeroGuia} se recibió incompleta${observacion ? `: ${observacion}` : ''}. Decide qué hacer con lo que no llegó: devolverlo al stock o darlo de baja.`,
+      { type: 'DESPACHO_FALTANTE', movimientoId: movimiento.id },
+      { tipo: 'DESPACHO_FALTANTE', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: movimiento.id },
+    );
+  }
+
+  /** Fotos opcionales de un envío: hasta 5, ya subidas con el tipo FOTO_ENVIO (carpeta inventario/envios/{guía}/…). */
+  private validarEvidenciasEnvio(urls?: string[]): string[] {
+    const lista = (Array.isArray(urls) ? urls : []).map((u) => String(u || '').trim()).filter(Boolean);
+    if (lista.length > 5) throw new BadRequestException('Puedes adjuntar hasta 5 fotos.');
+    for (const u of lista) {
+      if (!/^https?:\/\//i.test(u) || !u.includes('/inventario/envios/')) {
+        throw new BadRequestException('Las fotos de evidencia deben subirse desde la pantalla de Envíos.');
+      }
+    }
+    return lista;
+  }
+
+  private async guardarEvidenciasEnvio(movimientoId: string, faltanteId: string | null, etapa: 'RECEPCION' | 'RECHAZO' | 'RESOLUCION', urls: string[], usuarioId: string) {
+    for (const url of urls) {
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO "EnvioEvidencia" ("id", "movimientoId", "faltanteId", "etapa", "url", "usuarioId") VALUES ($1, $2, $3, $4, $5, $6)`,
+        randomUUID(), movimientoId, faltanteId, etapa, url, usuarioId,
+      );
+    }
+  }
+
+  /** Alcance de quien resuelve: faltantes cuyo origen está en su país, región o agencia. */
+  private condicionAlcanceFaltantes(user: any, params: unknown[]): string {
+    const a = resolverAlcance(user);
+    if (a.tipo === 'GLOBAL') return 'TRUE';
+    if (a.tipo === 'REGION') {
+      params.push(a.regionId);
+      return `COALESCE(b."regionId", ag."regionId") = $${params.length}`;
+    }
+    if (a.tipo === 'AGENCIA') {
+      params.push(a.agenciaId);
+      return `f."origenAgenciaId" = $${params.length}`;
+    }
+    return 'FALSE';
+  }
+
+  async listFaltantesDespacho(dto: { estado?: string }, user: any) {
+    const resuelto = dto?.estado === 'RESUELTO';
+    const params: unknown[] = [resuelto ? 'RESUELTO' : 'PENDIENTE'];
+    const alcance = this.condicionAlcanceFaltantes(user, params);
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT f."id", f."movimientoId", f."numeroGuia", f."insumoId", f."cantidadUnd", f."motivoRecepcion", f."estado",
+              f."resolucion", f."observacionResolucion", f."resueltoEn", f."createdAt",
+              i."nombre" AS "insumoNombre", i."codigoSKU" AS "insumoSku",
+              COALESCE(b."nombre", ag."nombre") AS "origenNombre",
+              TRIM(CONCAT(u."name", ' ', u."lastname")) AS "resueltoPorNombre"
+       FROM "FaltanteDespacho" f
+       JOIN "Insumo" i ON i."id" = f."insumoId"
+       LEFT JOIN "bodegas" b ON b."id" = f."origenBodegaId"
+       LEFT JOIN "Agencia" ag ON ag."id" = f."origenAgenciaId"
+       LEFT JOIN "User" u ON u."id" = f."resueltoPorId"
+       WHERE f."estado" = $1 AND ${alcance}
+       ORDER BY ${resuelto ? 'f."resueltoEn"' : 'f."createdAt"'} DESC
+       LIMIT 200`,
+      ...params,
+    );
+    const evid: any[] = rows.length
+      ? await this.prisma.$queryRawUnsafe(
+          `SELECT "movimientoId", "faltanteId", "etapa", "url" FROM "EnvioEvidencia" WHERE "movimientoId" = ANY($1::text[]) ORDER BY "createdAt"`,
+          rows.map((r) => r.movimientoId),
+        )
+      : [];
+    return rows.map((r) => ({
+      ...r,
+      cantidadUnd: Number(r.cantidadUnd),
+      evidenciasRecepcion: evid.filter((e) => e.movimientoId === r.movimientoId && !e.faltanteId).map((e) => e.url),
+      evidenciasResolucion: evid.filter((e) => e.faltanteId === r.id).map((e) => e.url),
+    }));
+  }
+
+  /** Decide qué pasa con lo que no llegó: DEVOLVER lo regresa al stock del origen; BAJA lo registra como merma (dañado o perdido). */
+  async resolverFaltanteDespacho(dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, user: any) {
+    if (dto.resolucion !== 'DEVOLVER' && dto.resolucion !== 'BAJA') {
+      throw new BadRequestException('La resolución debe ser DEVOLVER o BAJA.');
+    }
+    const observacion = String(dto.observacion || '').trim();
+    if (observacion.length < 10) {
+      throw new BadRequestException('Explica qué pasó con el producto (mínimo 10 caracteres).');
+    }
+    const evidenciasResolucion = this.validarEvidenciasEnvio(dto.evidencias);
+    const params: unknown[] = [dto.id];
+    const alcance = this.condicionAlcanceFaltantes(user, params);
+    const rows: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT f.* FROM "FaltanteDespacho" f
+       LEFT JOIN "bodegas" b ON b."id" = f."origenBodegaId"
+       LEFT JOIN "Agencia" ag ON ag."id" = f."origenAgenciaId"
+       WHERE f."id" = $1 AND ${alcance}
+       LIMIT 1`,
+      ...params,
+    );
+    const f = rows[0];
+    if (!f) throw new NotFoundException('Faltante no encontrado o fuera de tu alcance.');
+    if (f.estado !== 'PENDIENTE') throw new BadRequestException('Este faltante ya fue resuelto.');
+
+    // Se marca primero (solo si sigue pendiente) para que dos clics seguidos no devuelvan el stock dos veces.
+    const marcado = await this.prisma.$executeRawUnsafe(
+      `UPDATE "FaltanteDespacho"
+       SET "estado" = 'RESUELTO', "resolucion" = $2, "observacionResolucion" = $3, "resueltoPorId" = $4, "resueltoEn" = NOW()
+       WHERE "id" = $1 AND "estado" = 'PENDIENTE'`,
+      f.id,
+      dto.resolucion,
+      observacion,
+      user.id,
+    );
+    if (!marcado) throw new BadRequestException('Este faltante ya fue resuelto.');
+
+    const base = Number(f.cantidadBase);
+    const origen = { bodegaId: f.origenBodegaId, agenciaId: f.origenAgenciaId };
+    if (dto.resolucion === 'DEVOLVER') {
+      await this.devolverStockOrigen(f.insumoId, base, origen, f.numeroGuia, user.id);
+    } else {
+      const stock = await this.obtenerStockOrigen(f.insumoId, origen);
+      const actual = Number(stock?.cantidadActual ?? 0);
+      await this.prisma.kardexMovimiento.create({
+        data: {
+          insumoId: f.insumoId,
+          ubicacionId: origen.agenciaId || origen.bodegaId || 'BODEGA_CENTRAL',
+          tipoMovimiento: 'AJUSTE_MERMA',
+          cantidad: -base,
+          // El producto ya salió del stock al despachar: la baja no mueve el saldo, solo deja constancia de dónde terminó.
+          stockAnterior: actual,
+          stockPosterior: actual,
+          referenciaId: f.numeroGuia,
+          usuarioId: user.id,
+        },
+      });
+    }
+    await this.guardarEvidenciasEnvio(f.movimientoId, f.id, 'RESOLUCION', evidenciasResolucion, user.id);
+
+    // Si ya no queda nada pendiente de esa guía, la alerta crítica de incidencia deja de mostrarse.
+    const pendientes: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT COUNT(*)::int AS "n" FROM "FaltanteDespacho" WHERE "movimientoId" = $1 AND "estado" = 'PENDIENTE'`,
+      f.movimientoId,
+    );
+    if (!Number(pendientes[0]?.n)) {
+      await this.prisma.alertaStock.updateMany({
+        where: { mensaje: { startsWith: `Incidencia envío ${f.numeroGuia}` }, estado: { not: 'RESUELTO' } },
+        data: { estado: 'RESUELTO', fechaAtencion: new Date() },
+      });
+    }
+    return { ok: true, resolucion: dto.resolucion };
   }
 
   /** Avisa a quien despachó, admin/super admin, coordinador de bodega (nacional), asistente de bodega
@@ -3457,7 +3635,7 @@ export class InventarioService {
   }
 
   async rechazarDespacho(
-    dto: { movimientoId: string; motivo?: string; observaciones?: string; agenciaId?: string },
+    dto: { movimientoId: string; motivo?: string; observaciones?: string; agenciaId?: string; evidencias?: string[] },
     usuarioId: string,
   ) {
     const motivoFinal = (dto.motivo || dto.observaciones || '').toString().trim();
@@ -3471,6 +3649,7 @@ export class InventarioService {
         motivo: motivoFinal,
         observaciones: motivoFinal,
         agenciaId: dto.agenciaId,
+        evidencias: dto.evidencias,
       },
       usuarioId,
     );
@@ -3511,7 +3690,15 @@ export class InventarioService {
     const orden = resolverOrdenSql(dto.sortField, dto.sortOrder, ORDEN_DESPACHOS_SQL, { campo: 'fecha', dir: 'desc' }, 'm."id"');
     const nLimite = filtro.params.length + 1;
 
-    const [filas, conteo, resumen] = await Promise.all([
+    // Si el listado toca despachos ya archivados (más de 12 meses, en estado final), se suman a los de la base con el mismo alcance,
+    // filtros, búsqueda y orden. Si no, la consulta es exactamente la de siempre.
+    const pedida = dto.sortField && Object.prototype.hasOwnProperty.call(ORDEN_DESPACHOS_SQL, dto.sortField) ? dto.sortField : null;
+    const campoOrden = pedida ?? 'fecha';
+    const dirOrden: 'asc' | 'desc' = pedida ? (String(dto.sortOrder).toLowerCase() === 'asc' ? 'asc' : 'desc') : 'desc';
+    const despachosArchivo = this.historico ? new DespachosArchivo(this.prisma, this.historico) : null;
+    const archivado = despachosArchivo ? await despachosArchivo.consultar({ ctx, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [filasBase, conteo, resumenBase] = await Promise.all([
       this.prisma.$queryRawUnsafe(
         `SELECT m."id", m."numeroGuia", m."tipo"::text AS "tipo", m."estadoDespacho"::text AS "estadoDespacho",
                 m."origenUbicacion", m."destinoUbicacion", m."fechaDespacho", m."fechaRecepcion",
@@ -3522,8 +3709,9 @@ export class InventarioService {
          ORDER BY ${orden}
          LIMIT $${nLimite} OFFSET $${nLimite + 1}`,
         ...filtro.params,
-        take,
-        skip,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        archivado ? skip + take : take,
+        archivado ? 0 : skip,
       ) as Promise<any[]>,
       this.prisma.$queryRawUnsafe(
         `SELECT COUNT(*)::int AS "total" FROM "MovimientoInventario" m WHERE ${filtro.sql}`,
@@ -3532,8 +3720,23 @@ export class InventarioService {
       dto.incluirResumen ? this.resumenDespachos(ctx) : Promise.resolve(undefined),
     ]);
 
-    const total = Number(conteo?.[0]?.total ?? 0);
-    const items = await this.armarDespachos(filas, ctx);
+    const total = Number(conteo?.[0]?.total ?? 0) + (archivado?.total ?? 0);
+    const filas = archivado && despachosArchivo ? despachosArchivo.mezclar(filasBase, archivado.filas, campoOrden, dirOrden, skip, take) : filasBase;
+    const idsArchivados = new Set((archivado?.filas ?? []).map((f) => String(f.id)));
+    const detallesArchivados = archivado && despachosArchivo ? await despachosArchivo.detallesDe(filas.filter((f) => idsArchivados.has(String(f.id))), ctx) : [];
+    const items = await this.armarDespachos(filas, ctx, detallesArchivados);
+
+    // Las tarjetas de la pantalla también cuentan lo archivado.
+    let resumen = resumenBase;
+    const porEstadoArchivado = resumenBase && despachosArchivo ? await despachosArchivo.resumen(ctx) : null;
+    if (resumenBase && porEstadoArchivado) {
+      resumen = {
+        enTransito: resumenBase.enTransito + (porEstadoArchivado['EN_TRANSITO'] ?? 0) + (porEstadoArchivado['PENDIENTE'] ?? 0),
+        recibidos: resumenBase.recibidos + (porEstadoArchivado['RECIBIDO'] ?? 0),
+        rechazados: resumenBase.rechazados + (porEstadoArchivado['RECHAZADO'] ?? 0),
+        total: resumenBase.total + Object.values(porEstadoArchivado).reduce((a, b) => a + b, 0),
+      };
+    }
     return { items, total, page, pageSize, resumen };
   }
 
@@ -3556,14 +3759,17 @@ export class InventarioService {
   /** Resuelve, con pocas consultas, quién mira y a qué alcance tiene derecho; el resto del listado es SQL sin más consultas. */
   private async contextoDespachos(dto: ListDespachosDto, usuarioId?: string): Promise<ContextoDespachos> {
     const viewer: any = usuarioId
-      ? await this.prisma.user.findUnique({ where: { id: usuarioId }, include: { role: true, region: true } })
+      ? await this.prisma.user.findUnique({ where: { id: usuarioId }, include: { role: true, region: true, bodega: true } })
       : null;
     const rol = normalizarRol(viewer?.role?.namerol);
     const esSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
     const esAdmin = rol === 'ADMIN' && !esSuperAdmin;
-    const esPulidor = rol.includes('PULIDOR');
-    const esAsistente = (rol.includes('ASISTENTE') && rol.includes('BODEGA')) || rol === 'ASISTENTE_BODEGA';
-    const esLider = !esSuperAdmin && !esAdmin && !esAsistente && !esPulidor && (rol.includes('LIDER') || esLiderDeAgencia(rol)) && !!viewer?.agenciaId;
+    // Qué despachos ve cada quien lo decide el ámbito de su rol: propio (kit), agencia o región; país ve todo.
+    const alc = viewer ? resolverAlcance(viewer) : { tipo: 'NINGUNO' as const };
+    const esPulidor = rol.includes('PULIDOR') || alc.tipo === 'PROPIO';
+    const esAsistente = !esPulidor && alc.tipo === 'REGION';
+    const esLider = !esPulidor && alc.tipo === 'AGENCIA' && !!viewer?.agenciaId;
+    const regionPropia: string | undefined = alc.tipo === 'REGION' ? alc.regionId : viewer?.regionId || undefined;
 
     // Agencia destino: un líder solo ve la suya (aunque el cliente pida otra); los demás pueden filtrar por la que elijan.
     const filtroAgencia = esLider
@@ -3584,6 +3790,7 @@ export class InventarioService {
       agencia = {
         ids: [...new Set([filtroAgencia, ...(ag ? [ag.id] : [])])],
         patrones: [...new Set(terminos)].map(patronContiene),
+        terminos: [...new Set(terminos)],
       };
     }
 
@@ -3593,19 +3800,19 @@ export class InventarioService {
     let regional: ContextoDespachos['regional'] = null;
     if (viewer && esAsistente) {
       const terminos: string[] = [];
-      if (viewer.regionId || viewer.region?.nombre) {
+      if (regionPropia || viewer.region?.nombre) {
         const agenciasRegion = await this.prisma.agencia.findMany({
           where: {
             OR: [
-              ...(viewer.regionId ? [{ regionId: viewer.regionId }] : []),
+              ...(regionPropia ? [{ regionId: regionPropia }] : []),
               ...(viewer.region?.nombre ? [{ region: { contains: viewer.region.nombre, mode: 'insensitive' as const } }] : []),
             ],
           },
           select: { id: true, nombre: true },
         });
-        const bodegasRegion = viewer.regionId
+        const bodegasRegion = regionPropia
           ? ((await this.prisma
-              .$queryRawUnsafe(`SELECT "id", "nombre", "codigo" FROM "bodegas" WHERE "regionId" = $1`, viewer.regionId)
+              .$queryRawUnsafe(`SELECT "id", "nombre", "codigo" FROM "bodegas" WHERE "regionId" = $1`, regionPropia)
               .catch(() => [])) as any[])
           : [];
         terminos.push(
@@ -3618,6 +3825,7 @@ export class InventarioService {
         usuarioId: viewer.id,
         bodegaId: viewer.bodegaId || null,
         patrones: [...new Set(terminos.filter(Boolean))].map(patronContiene),
+        terminos: [...new Set(terminos.filter(Boolean))],
       };
     }
 
@@ -3697,7 +3905,7 @@ export class InventarioService {
   }
 
   /** Agrega detalles, responsables y datos derivados a las filas de la página (3 consultas en total, sin importar el tamaño). */
-  private async armarDespachos(filas: any[], ctx: ContextoDespachos): Promise<any[]> {
+  private async armarDespachos(filas: any[], ctx: ContextoDespachos, detallesArchivados: any[] = []): Promise<any[]> {
     if (!filas.length) return [];
     const ids = filas.map((h) => String(h.id));
     const userIds = [
@@ -3714,16 +3922,15 @@ export class InventarioService {
     ]);
     const userPorId = new Map(users.map((u) => [u.id, u]));
     const detallesPorMov = new Map<string, any[]>();
-    for (const d of detalles) {
+    // El detalle no guarda cuándo se creó, así que su orden original se pierde al archivar: se ordena igual para los dos orígenes
+    // (por producto y luego por id) y el despacho se ve igual antes y después de archivarse.
+    for (const d of [...detalles, ...detallesArchivados].sort((a, b) => String(a.insumo?.nombre ?? '').localeCompare(String(b.insumo?.nombre ?? ''), 'es') || String(a.id).localeCompare(String(b.id)))) {
       const arr = detallesPorMov.get(d.movimientoId) || [];
       arr.push(d);
       detallesPorMov.set(d.movimientoId, arr);
     }
 
     const { viewer, rol, esSuperAdmin, esAdmin } = ctx;
-    const esLiderRol = esLiderDeAgencia(rol);
-    const esAsistenteRol = rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
-
     return filas.map((h) => {
       let motivoRechazo = '';
       if (h.observaciones && h.observaciones.includes('RECHAZO:')) {
@@ -3744,8 +3951,8 @@ export class InventarioService {
         if (esSuperAdmin) {
           puedeConfirmar = true;
         } else if (!esAdmin) {
-          if (destinoAgenciaId && esLiderRol && viewer.agenciaId === destinoAgenciaId) puedeConfirmar = true;
-          else if (destinoBodegaId && esAsistenteRol && viewer.bodegaId === destinoBodegaId) puedeConfirmar = true;
+          if (destinoAgenciaId && viewer.agenciaId === destinoAgenciaId) puedeConfirmar = true;
+          else if (destinoBodegaId && viewer.bodegaId === destinoBodegaId) puedeConfirmar = true;
           else if (destinoPulidorId && viewer.id === destinoPulidorId) puedeConfirmar = true;
         }
       }
@@ -3833,38 +4040,16 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, region: true, bodega: true, agencia: true },
     });
-    const rol = normalizarRol(usuario?.role?.namerol);
-    const isSuperAdmin = rol.includes('SUPER') && rol.includes('ADMIN');
-    const isCoord = rol.includes('COORD') || rol === 'ADMIN';
-    const isAsistente = rol.includes('ASISTENTE') && rol.includes('BODEGA');
-    const isLider = rol.includes('LIDER') || esLiderDeAgencia(rol);
-    const isPulidor = rol.includes('PULIDOR');
-
     const todos = await this.listarDespachosPlano({ estadoDespacho: 'EN_TRANSITO' }, usuarioId);
 
-    if (isSuperAdmin || isCoord) {
-      return todos;
-    }
-    if (isPulidor && usuario) {
-      return todos.filter((d: any) =>
-        (usuario.id && String(d.destinoPulidorId) === String(usuario.id)) ||
-        (usuario.id && String(d.usuarioRecibeId) === String(usuario.id)) ||
-        d.puedeConfirmar
-      );
-    }
-    if (isAsistente) {
-      return todos.filter((d: any) =>
-        (usuario?.bodegaId && String(d.destinoBodegaId) === String(usuario.bodegaId)) ||
-        d.puedeConfirmar
-      );
-    }
-    if (isLider) {
-      return todos.filter((d: any) =>
-        (usuario?.agenciaId && String(d.destinoAgenciaId) === String(usuario.agenciaId)) ||
-        d.puedeConfirmar
-      );
-    }
-    return todos.filter((d: any) => d.puedeConfirmar);
+    // Alcance nacional: todos. El resto: lo que va dirigido a su pulidor, su bodega o su agencia, y lo que puede confirmar.
+    if (usuario && resolverAlcance(usuario).tipo === 'GLOBAL') return todos;
+    return todos.filter((d: any) =>
+      d.puedeConfirmar ||
+      (usuario?.id && (String(d.destinoPulidorId) === String(usuario.id) || String(d.usuarioRecibeId) === String(usuario.id))) ||
+      (usuario?.bodegaId && String(d.destinoBodegaId) === String(usuario.bodegaId)) ||
+      (usuario?.agenciaId && String(d.destinoAgenciaId) === String(usuario.agenciaId)),
+    );
   }
 
   async listMovimientos(dto: ListMovimientosDto, user?: any) {
@@ -3897,7 +4082,8 @@ export class InventarioService {
       if (dto.fechaHasta) where.fechaDespacho.lte = new Date(dto.fechaHasta);
     }
 
-    return this.prisma.movimientoInventario.findMany({
+    // Base y archivo (los despachos de más de 12 meses ya cerrados están en Parquet).
+    return new ServiciosFederados(this.prisma, this.historico).findMany('movimientoInventario', {
       where,
       take: PAGE_SIZE_MAX,
       orderBy: { fechaDespacho: 'desc' },
@@ -4120,83 +4306,61 @@ export class InventarioService {
    * de nivel, estado y búsqueda se combinan aparte. `sincroniza` indica si el rol es de los que ven alertas de varias sedes
    * (y por tanto se benefician de generar las de "insumo requerido sin stock").
    */
+  /**
+   * Qué alertas ve el usuario. Lo decide el ÁMBITO configurado en su rol (Nacional, Región, Agencia o Propio), no el nombre del rol:
+   * un rol propio creado desde «Roles y Permisos» se comporta igual que uno de fábrica con el mismo ámbito.
+   * Nunca se usa como respaldo una agencia que mande el cliente: para ámbito de agencia o región manda la del usuario.
+   */
   private async alcanceAlertas(dto: ListAlertasDto, usuarioId?: string): Promise<{ where: Record<string, unknown>; sincroniza: boolean }> {
     const where: Record<string, unknown> = {};
     const targetAgencia = dto.agenciaId || dto.sucursalId;
-    let sincroniza = false;
 
-    if (usuarioId) {
-      const usuario = await this.prisma.user.findUnique({
-        where: { id: usuarioId },
-        include: { role: true, region: true, bodega: true, agencia: true },
-      });
-      const userRole = normalizarRol(usuario?.role?.namerol);
-      const isAsistente =
-        userRole === 'ASISTENTE_BODEGA' ||
-        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA'));
-      const isLiderSede =
-        esLiderDeAgencia(userRole) ||
-        userRole.includes('LIDER') ||
-        userRole === 'APROBADOR';
-      const isSupervisorRegional =
-        userRole.includes('SUPERVISOR') && !userRole.includes('NACIONAL');
-      const isGlobalAlertViewer =
-        userRole === 'SUPER_ADMIN' ||
-        userRole === 'ADMIN' ||
-        userRole === 'COORD_BODEGA';
+    // Sin usuario (llamadas internas): solo el filtro explícito.
+    if (!usuarioId) {
+      if (targetAgencia) where.agenciaId = targetAgencia;
+      return { where, sincroniza: false };
+    }
 
-      sincroniza = isGlobalAlertViewer || isAsistente || isSupervisorRegional;
+    const usuario = await this.prisma.user.findUnique({
+      where: { id: usuarioId },
+      include: { role: true, region: true, bodega: true, agencia: true },
+    });
+    const alcance = resolverAlcance(usuario);
+    // La sincronización de alertas de insumos sin stock recorre varias sedes: solo la inicia quien ve varias.
+    const sincroniza = alcance.tipo === 'GLOBAL' || alcance.tipo === 'REGION';
 
-      if (isGlobalAlertViewer) {
-        // Nacional: todo (opcional filtro por sucursal del DTO)
+    switch (alcance.tipo) {
+      case 'GLOBAL':
+        // Nacional: todo (con filtro opcional por agencia).
         if (targetAgencia) where.agenciaId = targetAgencia;
-      } else if (isAsistente || isSupervisorRegional) {
-        // Región: alertas de agencias de la región + kits de pulidores de la región
-        const regionId = usuario?.bodega?.regionId || usuario?.regionId;
-        if (regionId) {
-          const agenciasRegion = await this.prisma.agencia.findMany({
-            where: { regionId },
-            select: { id: true },
-          });
-          const agIds = agenciasRegion.map((a) => a.id);
-          const pulidoresRegion = await this.prisma.user.findMany({
-            where: {
-              regionId,
-              role: { namerol: { in: ['PULIDOR'] } },
-            },
-            select: { id: true },
-          });
-          const pulIds = pulidoresRegion.map((p) => p.id);
-
-          const orScope: any[] = [];
-          if (targetAgencia) {
-            if (agIds.includes(targetAgencia)) orScope.push({ agenciaId: targetAgencia });
-          } else if (agIds.length > 0) {
-            orScope.push({ agenciaId: { in: agIds } });
-          }
-          if (pulIds.length > 0) {
-            orScope.push({ pulidorId: { in: pulIds } });
-          }
-          if (orScope.length > 0) {
-            where.OR = orScope;
-          } else {
-            where.agenciaId = '__SIN_ALCANCE_REGION__';
-          }
-        } else {
-          where.agenciaId = '__SIN_REGION__';
+        break;
+      case 'REGION': {
+        // Alertas de las agencias de la región y de los kits de los pulidores de la región.
+        const agIds = (await this.prisma.agencia.findMany({ where: { regionId: alcance.regionId }, select: { id: true } })).map((a) => a.id);
+        const pulIds = (
+          await this.prisma.user.findMany({ where: { regionId: alcance.regionId, role: { namerol: { in: ['PULIDOR'] } } }, select: { id: true } })
+        ).map((p) => p.id);
+        const orScope: any[] = [];
+        if (targetAgencia) {
+          if (agIds.includes(targetAgencia)) orScope.push({ agenciaId: targetAgencia });
+        } else if (agIds.length > 0) {
+          orScope.push({ agenciaId: { in: agIds } });
         }
-      } else if (isLiderSede) {
-        // Solo alertas de SU sede (nunca Bodega Central / otras agencias)
-        const miAgencia = usuario?.agenciaId || targetAgencia;
-        where.agenciaId = miAgencia || '__SIN_AGENCIA_LIDER__';
-      } else if (targetAgencia) {
-        where.agenciaId = targetAgencia;
-      } else {
-        // Rol no reconocido: no exponer alertas ajenas
-        where.agenciaId = '__SIN_ALCANCE__';
+        if (pulIds.length > 0) orScope.push({ pulidorId: { in: pulIds } });
+        if (orScope.length > 0) where.OR = orScope;
+        else where.agenciaId = '__SIN_ALCANCE_REGION__';
+        break;
       }
-    } else if (targetAgencia) {
-      where.agenciaId = targetAgencia;
+      case 'AGENCIA':
+        where.agenciaId = alcance.agenciaId;
+        break;
+      case 'PROPIO':
+        // Solo lo suyo: las alertas de su propio kit.
+        where.pulidorId = alcance.userId;
+        break;
+      default:
+        // Le falta el dato de su ámbito (agencia o región): no ve alertas ajenas.
+        where.agenciaId = '__SIN_ALCANCE__';
     }
     return { where, sincroniza };
   }
@@ -4396,11 +4560,18 @@ export class InventarioService {
     const where = this.aplicarFiltroUbicacionKardex(combinarWhere(extra, busqueda) as any, scope, 'usuarioId');
     const orderBy = resolverOrden(dto.sortField, dto.sortOrder, ORDEN_KARDEX, { campo: 'fecha', dir: 'desc' });
 
-    const [items, total] = await Promise.all([
+    // Si el rango toca datos ya archivados, se suman a los de la base con el mismo filtro, búsqueda, alcance y orden. Si no, la
+    // consulta es exactamente la de siempre.
+    const { campo: campoOrden, dir: dirOrden } = resolverCampoOrden(dto.sortField, dto.sortOrder, ORDEN_KARDEX, { campo: 'fecha', dir: 'desc' });
+    const kardexArchivo = this.historico ? new KardexArchivo(this.prisma, this.historico) : null;
+    const archivado = kardexArchivo ? await kardexArchivo.consultar({ dto, alcance: scope, desde, hasta, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [itemsBase, totalBase] = await Promise.all([
       this.prisma.kardexMovimiento.findMany({
         where: where as any,
-        skip,
-        take,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        skip: archivado ? 0 : skip,
+        take: archivado ? skip + take : take,
         orderBy: orderBy as any,
         include: {
           insumo: {
@@ -4419,6 +4590,8 @@ export class InventarioService {
       }),
       this.prisma.kardexMovimiento.count({ where: where as any }),
     ]);
+    const items = archivado && kardexArchivo ? kardexArchivo.mezclar(itemsBase as any[], archivado.filas, campoOrden, dirOrden, skip, take) : itemsBase;
+    const total = totalBase + (archivado?.total ?? 0);
 
     // El id de la ubicación no le dice nada a la app: se expone también su nombre (agencia o bodega).
     const idsUnicos = [...new Set(items.map((i: any) => i.ubicacionId).filter(Boolean))];
@@ -5107,7 +5280,20 @@ export class InventarioService {
       return { mode: 'FILTER', ubicacionIds: [String(usuario.bodegaId)], incluirSinUbicacion: false };
     }
 
-    return { mode: 'ALL' };
+    // El resto, según el ámbito de su rol: país ve todo; región, sus agencias y bodegas; agencia, la suya; propio, solo lo que registró.
+    const alcance = resolverAlcance(usuario);
+    if (alcance.tipo === 'GLOBAL') return { mode: 'ALL' };
+    if (alcance.tipo === 'REGION') {
+      const [agencias, bodegas] = await Promise.all([
+        this.prisma.agencia.findMany({ where: { regionId: alcance.regionId }, select: { id: true } }),
+        this.prisma.bodega.findMany({ where: { regionId: alcance.regionId }, select: { id: true } }),
+      ]);
+      return { mode: 'FILTER', ubicacionIds: [...agencias.map((x) => x.id), ...bodegas.map((x) => x.id)], incluirSinUbicacion: false, responsableId: usuarioId };
+    }
+    if (alcance.tipo === 'AGENCIA') {
+      return { mode: 'FILTER', ubicacionIds: [alcance.agenciaId], incluirSinUbicacion: false, responsableId: usuarioId };
+    }
+    return { mode: 'FILTER', ubicacionIds: [], incluirSinUbicacion: false, responsableId: usuarioId };
   }
 
   /** `campoResponsable` es el nombre del campo "quién lo registró" en la tabla (`responsableId` en movimientos globales, `usuarioId` en el Kardex). */
@@ -5172,11 +5358,18 @@ export class InventarioService {
       ? combinarWhere(whereSinTipo, { tipoMovimientoId: dto.tipoMovimientoId })
       : whereSinTipo;
 
-    const [items, total] = await Promise.all([
+    // Si el rango toca datos ya archivados, se suman a los de la base con el mismo alcance, filtros, búsqueda y orden. Si no, la
+    // consulta es exactamente la de siempre.
+    const { campo: campoOrden, dir: dirOrden } = resolverCampoOrden(dto.sortField, dto.sortOrder, ORDEN_MOVIMIENTOS_GLOBALES, { campo: 'fecha', dir: 'desc' });
+    const globalesArchivo = this.historico ? new MovimientosGlobalesArchivo(this.prisma, this.historico) : null;
+    const archivado = globalesArchivo ? await globalesArchivo.consultar({ dto, alcance: scope, desde, hasta, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [itemsBase, totalBase] = await Promise.all([
       this.prisma.movimientoInventarioGlobal.findMany({
         where,
-        skip,
-        take,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        skip: archivado ? 0 : skip,
+        take: archivado ? skip + take : take,
         orderBy: orderBy as any,
         include: {
           insumo: {
@@ -5196,6 +5389,8 @@ export class InventarioService {
       }),
       this.prisma.movimientoInventarioGlobal.count({ where }),
     ]);
+    const items = archivado && globalesArchivo ? globalesArchivo.mezclar(itemsBase as any[], archivado.filas, campoOrden, dirOrden, skip, take) : itemsBase;
+    const total = totalBase + (archivado?.total ?? 0);
 
     // Rutas persistidas (columnas nuevas) + fallback por tipo/ubicación
     const rutaById = new Map<string, { origen?: string | null; destino?: string | null }>();
@@ -5215,6 +5410,10 @@ export class InventarioService {
           });
         }
       } catch (_) {}
+      // Las filas archivadas ya no están en la base: su ruta guardada viene en la propia fila.
+      for (const i of items as any[]) {
+        if (!rutaById.has(i.id)) rutaById.set(i.id, { origen: i.origenUbicacion, destino: i.destinoUbicacion });
+      }
     }
 
     const ubicacionIds = [...new Set(items.map((i) => i.ubicacionId).filter(Boolean) as string[])];
@@ -5292,6 +5491,12 @@ export class InventarioService {
       for (const fila of porTipoRows) {
         porTipo[fila.tipoMovimientoId] = fila._count._all;
         totalResumen += fila._count._all;
+      }
+      // Lo archivado también cuenta en el resumen.
+      const porTipoArchivado = globalesArchivo ? await globalesArchivo.resumen({ dto, alcance: scope, desde, hasta }) : null;
+      for (const [tipo, n] of Object.entries(porTipoArchivado ?? {})) {
+        porTipo[tipo] = (porTipo[tipo] ?? 0) + n;
+        totalResumen += n;
       }
       respuesta['resumen'] = { porTipo, total: totalResumen };
     }
@@ -6010,158 +6215,5 @@ export class InventarioService {
       },
       insumos: insumosResultado,
     }, paginacion);
-  }
-
-  async consumirInsumosServicio(
-    dto: {
-      agenciaId: string;
-      ordenTrabajo?: string;
-      placa?: string;
-      insumos: Array<{ insumoId?: string; codigoSKU?: string; cantidad: number }>;
-      operador?: string;
-    },
-    usuarioId?: string,
-  ) {
-    const { agenciaId, ordenTrabajo = 'OT-GENERAL', placa = 'S/P', insumos, operador } = dto;
-    if (!agenciaId) {
-      throw new BadRequestException('Se requiere el ID de la agencia.');
-    }
-
-    let finalUsuarioId = usuarioId;
-    if (!finalUsuarioId) {
-      const defaultUser = await this.prisma.user.findFirst({ select: { id: true } });
-      finalUsuarioId = defaultUser?.id || '';
-    }
-
-    let targetAgenciaId = agenciaId;
-    try {
-      const ag = await this.prisma.agencia.findFirst({
-        where: {
-          OR: [
-            { id: agenciaId },
-            { nombre: { contains: agenciaId, mode: 'insensitive' } },
-            { codigo: { contains: agenciaId, mode: 'insensitive' } },
-          ],
-        },
-      });
-      if (ag) {
-        targetAgenciaId = ag.id;
-      }
-    } catch {
-      // Usar agenciaId directo
-    }
-
-    const alertasGeneradas: string[] = [];
-
-    for (const item of insumos || []) {
-      const cantidadADescontar = Number(item.cantidad || 0);
-      if (cantidadADescontar <= 0) continue;
-
-      let insumo = null;
-      if (item.insumoId) {
-        insumo = await this.prisma.insumo.findUnique({
-          where: { id: item.insumoId },
-          include: { unidadMedida: true },
-        });
-      } else if (item.codigoSKU) {
-        insumo = await this.prisma.insumo.findUnique({
-          where: { codigoSKU: item.codigoSKU },
-          include: { unidadMedida: true },
-        });
-      }
-
-      if (!insumo) continue;
-
-      await this.prisma.$transaction(async (tx) => {
-        let stock = await tx.stockUbicacion.findFirst({
-          where: {
-            insumoId: insumo.id,
-            tipoUbicacion: 'AGENCIA',
-            agenciaId: targetAgenciaId,
-          },
-        });
-
-        if (!stock) {
-          stock = await tx.stockUbicacion.create({
-            data: {
-              insumoId: insumo.id,
-              tipoUbicacion: 'AGENCIA',
-              agenciaId: targetAgenciaId,
-              cantidadActual: 0,
-              cantidadMinima: Number(insumo.stockMinimoAgencia ?? 2),
-            },
-          });
-        }
-
-        const stockAnterior = Number(stock.cantidadActual ?? 0);
-        const stockPosterior = stockAnterior - cantidadADescontar;
-
-        await tx.stockUbicacion.update({
-          where: { id: stock.id },
-          data: { cantidadActual: { decrement: cantidadADescontar } },
-        });
-
-        await tx.kardexMovimiento.create({
-          data: {
-            insumoId: insumo.id,
-            ubicacionId: targetAgenciaId,
-            tipoMovimiento: 'CONSUMO_SERVICIO',
-            cantidad: -cantidadADescontar,
-            stockAnterior,
-            stockPosterior,
-            costoUnitario: Number(insumo.costoUnitarioUSD ?? 0),
-            costoTotal: Number((cantidadADescontar * Number(insumo.costoUnitarioUSD ?? 0)).toFixed(2)),
-            referenciaId: ordenTrabajo || placa,
-            usuarioId: finalUsuarioId || null,
-          },
-        });
-
-        const stockMinimo = Number(insumo.stockMinimoAgencia ?? 2);
-        
-        // Evitar duplicados revisando si ya existe una alerta activa para este insumo y agencia
-        let alertaExistente = null;
-        if (finalUsuarioId && stockPosterior <= stockMinimo) {
-          alertaExistente = await tx.alertaStock.findFirst({
-            where: {
-              insumoId: insumo.id,
-              agenciaId: targetAgenciaId,
-              estado: { not: 'RESUELTO' },
-            },
-            select: { id: true }
-          });
-        }
-
-        if (stockPosterior <= 0 && finalUsuarioId && !alertaExistente) {
-          alertasGeneradas.push(`¡Insumo AGOTADO! ${insumo.nombre} en la agencia (quedan ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'})`);
-          await tx.alertaStock.create({
-            data: {
-              insumoId: insumo.id,
-              nivel: 'CRITICO',
-              agenciaId: targetAgenciaId,
-              usuarioEmisorId: finalUsuarioId,
-              mensaje: `Insumo ${insumo.nombre} agotado tras registrar OT ${ordenTrabajo} (${placa}). Saldo: ${stockPosterior.toFixed(2)}`,
-              stockReportado: stockPosterior,
-            },
-          });
-        } else if (stockPosterior <= stockMinimo && finalUsuarioId && !alertaExistente) {
-          alertasGeneradas.push(`Stock Bajo: ${insumo.nombre} en la agencia cayó a ${stockPosterior.toFixed(2)} ${insumo.unidadMedida?.simbolo || 'u'} (Mínimo: ${stockMinimo})`);
-          await tx.alertaStock.create({
-            data: {
-              insumoId: insumo.id,
-              nivel: 'BAJO',
-              agenciaId: targetAgenciaId,
-              usuarioEmisorId: finalUsuarioId,
-              mensaje: `Insumo ${insumo.nombre} bajo mínimo tras registrar OT ${ordenTrabajo}. Saldo: ${stockPosterior.toFixed(2)}`,
-              stockReportado: stockPosterior,
-            },
-          });
-        }
-      });
-    }
-
-    return {
-      success: true,
-      alertasGeneradas,
-    };
   }
 }

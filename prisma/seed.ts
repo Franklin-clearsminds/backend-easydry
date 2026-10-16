@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ROLES_BASE } from '../src/common/permisos/roles-base.js';
 import { accionesLegacy } from '../src/common/permisos/acciones-legacy.js';
+import { motivoPasswordDebil } from '../src/common/utils/password-politica.js';
 import { modulosDeCapacidades } from '../src/common/permisos/modulos-navegacion.js';
 
 /**
@@ -33,7 +34,6 @@ function credencial(nombre: string, valorPorDefecto?: string): string {
 /** Catálogo oficial de módulos — fuente de verdad sembrada en BD */
 const MODULOS_DATA = [
   { codigo: 'dashboard', nombre: 'Dashboard Principal', descripcion: 'Métricas clave, KPIs generales, gráficos de rendimiento y alertas de la red', icono: 'layout-dashboard', rutaPrincipal: '/dashboard', grupo: 'Panel Principal', disponibleEnApp: true, orden: 10 },
-  { codigo: 'mapa-operativo', nombre: 'Mapa Operativo en Vivo', descripcion: 'Trazabilidad visual jerárquica: Agencias, Bahías, Operadores y Maquinaria en tiempo real', icono: 'sliders', rutaPrincipal: '/mapa-operativo', grupo: 'Panel Principal', disponibleEnApp: false, orden: 20 },
   { codigo: 'notificaciones', nombre: 'Centro de Notificaciones', descripcion: 'Alertas operativas, aprobaciones pendientes, inventario y avisos del sistema', icono: 'bell', rutaPrincipal: '/notificaciones', grupo: 'Panel Principal', disponibleEnApp: true, orden: 30 },
   { codigo: 'agencias', nombre: 'Control de Agencias', descripcion: 'Gestión y estado operativo de las agencias de la red', icono: 'building-2', rutaPrincipal: '/agencias', grupo: 'Operación & Agencias', disponibleEnApp: false, orden: 40 },
   { codigo: 'operadores', nombre: 'Gestión de Lavadores', descripcion: 'Directorio, métricas y estado del personal de lavado', icono: 'user-check', rutaPrincipal: '/operadores', grupo: 'Operación & Agencias', disponibleEnApp: true, orden: 50 },
@@ -46,6 +46,9 @@ const MODULOS_DATA = [
   { codigo: 'taller-tecnico', nombre: 'Taller Técnico e Incidentes', descripcion: 'Control de mantenimientos preventivos y reporte/resolución de incidencias', icono: 'wrench', rutaPrincipal: '/taller-tecnico', grupo: 'Gestión de Activos', disponibleEnApp: true, orden: 120 },
   { codigo: 'inventario', nombre: 'Inventario de Insumos & Bodega', descripcion: 'Control de stock central vs sucursales, tipos de producto, envases, transferencias y alertas', icono: 'boxes', rutaPrincipal: '/inventario', grupo: 'Gestión de Activos', disponibleEnApp: true, orden: 130 },
   { codigo: 'envios', nombre: 'Envíos & Confirmación', descripcion: 'Control logístico de envíos de suministros y confirmación de recepción en agencia', icono: 'send', rutaPrincipal: '/envios', grupo: 'Gestión de Activos', disponibleEnApp: true, orden: 140 },
+  { codigo: 'auditorias', nombre: 'Dashboard de Auditorías', descripcion: 'Indicadores de las inspecciones y auditorías 5S: estados, calificaciones, semáforo y planes de acción', icono: 'clipboard-check', rutaPrincipal: '/auditorias', grupo: 'Auditorías', disponibleEnApp: false, orden: 142 },
+  { codigo: 'informes-inspeccion', nombre: 'Informes de Inspección', descripcion: 'Visitas de inspección a las agencias: novedades, actividades, planes de acción, calificación y firmas', icono: 'file-search', rutaPrincipal: '/informes-inspeccion', grupo: 'Auditorías', disponibleEnApp: true, orden: 144 },
+  { codigo: 'auditorias-5s', nombre: 'Auditorías 5S', descripcion: 'Checklist 5S de 20 criterios por agencia y área, con semáforo de cumplimiento y acciones correctivas', icono: 'sparkles', rutaPrincipal: '/auditorias-5s', grupo: 'Auditorías', disponibleEnApp: true, orden: 146 },
   { codigo: 'reportes', nombre: 'Reportes Operativos', descripcion: 'Generación e impresión de informes consolidados de servicios y rendimiento', icono: 'file-bar-chart', rutaPrincipal: '/reportes', grupo: 'Administración', disponibleEnApp: false, orden: 150 },
   { codigo: 'usuarios', nombre: 'Usuarios, Roles y Permisos', descripcion: 'Directorio de colaboradores y matriz de creación/configuración de roles dinámicos', icono: 'users', rutaPrincipal: '/usuarios', grupo: 'Administración', disponibleEnApp: false, orden: 160 },
   { codigo: 'perfil', nombre: 'Mi Perfil de Usuario', descripcion: 'Información personal, credenciales y datos de sucursal', icono: 'user', rutaPrincipal: '/perfil', grupo: 'Mi Cuenta', disponibleEnApp: true, orden: 170 },
@@ -169,6 +172,11 @@ async function main() {
       lastname: 'EasyDry',
     },
   ];
+  // Las contraseñas de las cuentas de sistema cumplen la misma política que cualquier usuario (la del seed no es una excepción).
+  for (const [variable, c] of [['SEED_SUPERADMIN_PASSWORD', cuentas[0]], ['SEED_ADMIN_PASSWORD', cuentas[1]]] as const) {
+    const motivo = motivoPasswordDebil(c.password, c.email);
+    if (motivo) throw new Error(`${variable} no cumple la política de contraseñas: ${motivo}`);
+  }
   for (const c of cuentas) {
     const existe = await prisma.user.findUnique({ where: { email: c.email } });
     if (existe) continue;

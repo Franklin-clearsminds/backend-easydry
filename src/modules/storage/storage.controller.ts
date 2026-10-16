@@ -43,7 +43,10 @@ const CLAVE_AGENCIA = /^(?:thumbs\/|view\/)?agencias\/([^/]+)\//i;
  * solo se entrega con sesión iniciada y a los roles que pueden ver la trazabilidad.
  */
 
-const CLAVE_MAQUINARIA = /^(thumbs\/|view\/)?(agencias\/)?maquinaria\//i;
+const CLAVE_ENVIO = /^(thumbs\/|view\/)?inventario\/envios\//i;
+/** Evidencias de auditorías: `agencias/<agencia>/auditorias/<informes|5s>/<id>/…`. */
+const CLAVE_AUDITORIA = /^(?:thumbs\/|view\/)?agencias\/[^/]+\/auditorias\//i;
+const CLAVE_MAQUINARIA =/^(thumbs\/|view\/)?(agencias\/)?maquinaria\//i;
 
 @ApiTags('Almacenamiento S3')
 @Controller('storage')
@@ -138,6 +141,20 @@ export class StorageController {
         throw new ForbiddenException(
           'No tienes permiso para ver la evidencia de maquinaria.',
         );
+      }
+    } else if (CLAVE_ENVIO.test(key)) {
+      // Fotos de recepción, rechazo y resolución de un envío: quien ve envíos o los resuelve.
+      if (!tieneAlgunPermiso(user, ['despachos.ver', 'envios.confirmar', 'envios.rechazar', 'envios.faltantes'])) {
+        throw new ForbiddenException('No tienes permiso para ver la evidencia de envíos.');
+      }
+    } else if (CLAVE_AUDITORIA.test(key)) {
+      // Evidencias de informes de inspección y de auditorías 5S: quien las ve, dentro del alcance de la agencia dueña.
+      if (!tieneAlgunPermiso(user, ['informes.ver', 'inspecciones.ver'])) {
+        throw new ForbiddenException('No tienes permiso para ver la evidencia de auditorías.');
+      }
+      const agencia = CLAVE_AGENCIA.exec(key);
+      if (agencia && !(await this.storageService.agenciaSegmentoEnAlcance(user, agencia[1]))) {
+        throw new ForbiddenException('Esta evidencia pertenece a una agencia fuera de tu alcance.');
       }
     } else if (CLAVE_PUBLICA.test(key)) {
       // avatares e imágenes de catálogo: cualquier usuario con sesión

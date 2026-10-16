@@ -183,7 +183,7 @@ describe('AnalyticsService (base real)', () => {
     it('calcula ingresos, ticket, crecimiento y costo de reparaciones del alcance pedido', async () => {
       const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.admin);
 
-      expect(res.isAdminView).toBe(true);
+      expect(res.isSuperAdminView).toBe(true);
       expect(res.kpis.ingresoHoy).toBe(100); // 30 + 50 + 20
       expect(res.kpis.serviciosCompletadosHoy).toBe(3);
       expect(res.kpis.ticketPromedioHoy).toBe(33.33);
@@ -195,7 +195,8 @@ describe('AnalyticsService (base real)', () => {
       // Inventario y tránsito son globales: al menos lo creado aquí (28 en R1 + 34 en R2; 5 + 7 en tránsito).
       expect(res.kpis.unidadesInventario).toBeGreaterThanOrEqual(62);
       expect(res.kpis.unidadesEnTransito).toBeGreaterThanOrEqual(12);
-      expect(res.kpis.totalUsuarios).toBeGreaterThanOrEqual(13);
+      // El ADMIN recibe la misma vista que el SUPER_ADMIN (ya no la de administración con conteo de usuarios).
+      expect(res.kpis.totalUsuarios).toBeUndefined();
       // A3 aparece sin servicios porque tuvo incidentes en el periodo.
       expect(res.topAgenciasProductivas).toEqual([{ nombre: a1.nombre, cantidad: 3 }, { nombre: a3.nombre, cantidad: 0 }]);
       expect(res.topColores).toEqual([{ nombre: 'Rojo', cantidad: 2 }, { nombre: 'Azul', cantidad: 1 }]);
@@ -324,6 +325,16 @@ describe('AnalyticsService (base real)', () => {
       ]);
     });
 
+    it('publica los rankings completos de agencias (sin recortar) para el control Top N', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.admin);
+      // El top clásico y el ranking del control coinciden aquí porque R1 tiene pocas agencias; el ranking nunca se recorta.
+      expect(res.rankingsAgencias.servicios).toEqual([{ nombre: a1.nombre, valor: 3 }, { nombre: a3.nombre, valor: 0 }]);
+      for (const ranking of Object.values(res.rankingsAgencias) as { valor: number }[][]) {
+        const valores = ranking.map((r) => r.valor);
+        expect(valores).toEqual([...valores].sort((x, y) => y - x));
+      }
+    });
+
     it('las alertas operativas exponen la agencia y el pulidor del incidente, y la agencia de la alerta de stock', async () => {
       const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.superadmin);
       const mant = res.alertasOperativas.find((a: any) => a.grupo === 'mantenimiento' && a.detalle === 'Fuga de aceite');
@@ -403,6 +414,12 @@ describe('AnalyticsService (base real)', () => {
       expect(res.ranking[1]).toMatchObject({ operadorId: lavador.id, cantidadServicios: 1, tiempoPromedioMin: 20 });
     });
 
+    it('lavadores: publica también los de menor actividad, para el orden ascendente del control Top N', async () => {
+      const res: any = await service.getRankingLavadores({ ...ENE_5_11, regionId: r1.id }, act.admin);
+      // Mismos operadores que el ranking, de menos a más servicios: el lavador (1) antes que el pulidor (2).
+      expect(res.rankingBottom.map((r: any) => r.operadorId)).toEqual([lavador.id, pulidor.id]);
+    });
+
     it('lavadores: se limita a las agencias de su alcance', async () => {
       const res = await service.getRankingLavadores({ ...ENE_5_11, agenciaId: a2.id }, act.lider);
       expect(res.ranking.map((r: any) => r.operadorId).sort()).toEqual([pulidor.id, lavador.id].sort());
@@ -441,6 +458,19 @@ describe('AnalyticsService (base real)', () => {
       expect(((await service.getDashboardTaller({ ...ENERO, regionId: r1.id }, act.coordBodega)) as any).kpis.totalMaquinaria).toBe(2);
       expect(((await service.getDashboardTaller({ ...ENERO, agenciaId: a1.id }, act.coordBodega)) as any).kpis.totalMaquinaria).toBe(1);
       expect(((await service.getDashboardTaller({ ...ENERO, agenciaId: a2.id }, act.coordBodega)) as any).kpis.totalMaquinaria).toBe(0);
+    });
+
+    it('publica los rankings completos de máquinas y de agencias para el control Top N, de mayor a menor', async () => {
+      const res: any = await service.getDashboardTaller({ ...ENERO, regionId: r1.id }, act.superadmin);
+
+      // Los rankings del control traen el universo completo (los campos recortados del panel no cambian).
+      expect(res.maquinasProblematicasRank.length).toBeGreaterThanOrEqual(res.topMaquinasProblematicas.length);
+      const totales = res.maquinasProblematicasRank.map((m: any) => m.total);
+      expect(totales).toEqual([...totales].sort((x: number, y: number) => y - x));
+      const costos = res.maquinasCostosasRank.map((m: any) => m.costoTotal);
+      expect(costos).toEqual([...costos].sort((x: number, y: number) => y - x));
+      expect(res.mttrAgenciaRank).toBeDefined();
+      expect(res.costoAgenciaRank).toBeDefined();
     });
 
     it('calcula el MTTR por agencia y por gravedad con su cantidad de incidentes', async () => {

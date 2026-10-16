@@ -61,6 +61,48 @@ describe('sesiones de refresh token (base real)', () => {
     await expect(service.refreshToken(segundo)).resolves.toHaveProperty('refreshToken');
   });
 
+  it('web: dos pestañas renovando a la vez no cierran la sesión (el token viejo recibe solo un access token)', async () => {
+    const { refreshToken: primero } = await emitir();
+    const { refreshToken: segundo } = await service.refreshToken(primero, true);
+
+    // La otra pestaña llega con el token que acaba de rotarse: recibe acceso, no refresh token, y no se revoca nada.
+    const tardia: any = await service.refreshToken(primero, true);
+    expect(tardia.success).toBe(true);
+    expect(tardia.accessToken).toBeTruthy();
+    expect(tardia.refreshToken).toBe('');
+    // La cadena sigue viva: el refresh token ganador sigue sirviendo.
+    await expect(service.refreshToken(segundo, true)).resolves.toHaveProperty('refreshToken');
+  });
+
+  it('web: dos renovaciones exactamente simultáneas con el mismo token funcionan las dos y solo una rota', async () => {
+    const { refreshToken } = await emitir();
+
+    const [a, b]: any[] = await Promise.all([service.refreshToken(refreshToken, true), service.refreshToken(refreshToken, true)]);
+
+    expect(a.accessToken).toBeTruthy();
+    expect(b.accessToken).toBeTruthy();
+    // Exactamente una ganó la rotación y trae el refresh token nuevo; la otra solo recibe acceso.
+    expect([a.refreshToken, b.refreshToken].filter(Boolean)).toHaveLength(1);
+  });
+
+  it('móvil: la renovación simultánea con el mismo token sigue rechazando a la segunda', async () => {
+    const { refreshToken } = await emitir();
+
+    const resultados = await Promise.allSettled([service.refreshToken(refreshToken), service.refreshToken(refreshToken)]);
+
+    expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(resultados.filter((r) => r.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('web: tras un logout el token no renueva ni siquiera dentro de la ventana de gracia', async () => {
+    const { refreshToken: primero } = await emitir();
+    const { refreshToken: segundo } = await service.refreshToken(primero, true);
+    await service.logout(segundo);
+
+    await expect(service.refreshToken(primero, true)).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.refreshToken(segundo, true)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   it('logout revoca la sesión: el token ya no renueva', async () => {
     const { refreshToken } = await emitir();
     await service.logout(refreshToken);

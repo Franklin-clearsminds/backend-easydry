@@ -85,22 +85,21 @@ model Role {
 
   users User[]
 
-  @@index([namerol])
   @@index([estado])
   @@map("roles")
 }
 
 /// Catálogo oficial de módulos / permisos de navegación del sistema
 model ModuloSistema {
-  id            String  @id @default(uuid())
-  codigo        String  @unique
-  nombre        String
-  descripcion   String?
-  icono         String?
-  rutaPrincipal String?
-  grupo         String
-  orden         Int     @default(0)
-  estado        Int     @default(1) // 1 activo, 0 inactivo
+  id              String  @id @default(uuid())
+  codigo          String  @unique
+  nombre          String
+  descripcion     String?
+  icono           String?
+  rutaPrincipal   String?
+  grupo           String
+  orden           Int     @default(0)
+  estado          Int     @default(1) // 1 activo, 0 inactivo
   /// La pantalla existe en la app móvil (además de la web): se muestra en el celular si el rol también tiene su permiso.
   disponibleEnApp Boolean @default(false)
 
@@ -141,12 +140,12 @@ model User {
   // Servicios del catálogo asignados al pulidor móvil (ids CatalogoServicio) para kit / insumos necesarios
   servicioIds Json?
 
-  estado    Int      @default(1) // 0 desactivo, 1 activo
+  estado              Int       @default(1) // 0 desactivo, 1 activo
   /// Los access tokens emitidos antes de esta fecha dejan de valer (cambio de contraseña)
   sesionesRevocadasAt DateTime?
-  avatarUrl String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  avatarUrl           String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   serviciosAtendidos             ServicioLavado[]
   serviciosLavadoAsignados       ServicioLavadoOperador[]
@@ -183,9 +182,10 @@ model User {
   evidenciasIncidenteSubidas     EvidenciaIncidente[]         @relation("EvidenciaIncidenteSubidaPor")
   evidenciasMantenimientoSubidas EvidenciaMantenimiento[]     @relation("EvidenciaMantenimientoSubidaPor")
   limpiezasMaquinariaRegistradas LimpiezaMaquinaria[]         @relation("LimpiezaRegistradaPor")
+  informesInspeccion             InformeInspeccion[]          @relation("InformeInspector")
+  auditorias5sRealizadas         Auditoria5s[]                @relation("Auditoria5sAuditor")
   sesionesRefresh                RefreshSession[]
 
-  @@index([email])
   @@index([roleId])
   @@index([agenciaId])
   @@index([regionId])
@@ -236,6 +236,9 @@ model Agencia {
   incidentesDestinoTaller      IncidenteTecnico[]      @relation("DestinoTallerIncidente")
   movimientosMaquinariaOrigen  MovimientoMaquinaria[]  @relation("MovimientoOrigenAgencia")
   movimientosMaquinariaDestino MovimientoMaquinaria[]  @relation("MovimientoDestinoAgencia")
+  informesInspeccion           InformeInspeccion[]
+  auditorias5s                 Auditoria5s[]
+  acciones5s                   Auditoria5sAccion[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -337,6 +340,7 @@ model RecetaInsumo {
   @@unique([catalogoServicioId, insumoId])
   @@index([catalogoServicioId])
   @@index([insumoId])
+  @@index([unidadConsumoId])
 }
 
 model ServicioLavado {
@@ -399,10 +403,10 @@ model ServicioLavado {
   @@index([ordenTrabajoOT])
   @@index([estado])
   @@index([bahiaId])
-  @@index([clientUuid])
   @@index([servicioCatalogoId, estado, horaSalida])
   @@index([updatedAt])
   @@index([deletedAt])
+  @@index([operadorId])
 }
 
 // -----------------------------------------------------------------------
@@ -490,6 +494,8 @@ model RecetaInsumoHistorial {
 
   @@index([catalogoServicioId])
   @@index([loteId])
+  @@index([insumoId])
+  @@index([usuarioId])
 }
 
 model SyncOutboxAudit {
@@ -522,7 +528,6 @@ model TipoEnvase {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -537,7 +542,6 @@ model TipoProducto {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -557,7 +561,6 @@ model UnidadMedida {
   createdAt           DateTime                     @default(now())
   updatedAt           DateTime                     @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -578,6 +581,7 @@ model PresentacionInsumo {
 
   @@index([insumoId])
   @@index([estado])
+  @@index([unidadId])
 }
 
 // 2.2 Catálogo de Tipos de Movimiento de Inventario
@@ -593,7 +597,6 @@ model TipoMovimientoInventario {
   createdAt   DateTime                     @default(now())
   updatedAt   DateTime                     @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -610,8 +613,8 @@ model MotivoMovimientoInventario {
   createdAt        DateTime                     @default(now())
   updatedAt        DateTime                     @updatedAt
 
-  @@index([codigo])
   @@index([estado])
+  @@index([tipoMovimientoId])
 }
 
 // 2.4 Movimientos de Inventario Globales (Kardex Detallado y Trazable)
@@ -650,6 +653,10 @@ model MovimientoInventarioGlobal {
   @@index([insumoId])
   @@index([tipoMovimientoId])
   @@index([fechaMovimiento])
+  @@index([unidadId])
+  @@index([presentacionId])
+  @@index([responsableId])
+  @@index([motivoId])
 }
 
 // 3. Catálogo Maestro de Insumos
@@ -680,6 +687,7 @@ model Insumo {
 
   stocks              StockUbicacion[]
   movimientos         MovimientoDetalle[]
+  faltantesDespacho   FaltanteDespacho[]
   alertas             AlertaStock[]
   recetas             RecetaInsumo[]
   consumos            ConsumoServicio[]
@@ -692,10 +700,10 @@ model Insumo {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([codigoSKU])
   @@index([categoria])
   @@index([tipoProductoId])
   @@index([estado])
+  @@index([unidadMedidaId])
 }
 
 // 4. Existencias Multi-Ubicación
@@ -807,15 +815,16 @@ model MovimientoInventario {
   usuarioRecibeId   String?
   usuarioRecibe     User?   @relation("RecibeMovimiento", fields: [usuarioRecibeId], references: [id])
 
-  fechaDespacho  DateTime            @default(now())
-  fechaRecepcion DateTime?
-  observaciones  String?
-  detalles       MovimientoDetalle[]
+  fechaDespacho   DateTime            @default(now())
+  fechaRecepcion  DateTime?
+  observaciones   String?
+  detalles        MovimientoDetalle[]
+  faltantes       FaltanteDespacho[]
+  evidenciasEnvio EnvioEvidencia[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([numeroGuia])
   @@index([tipo])
   @@index([estadoDespacho])
   @@index([origenBodegaId])
@@ -823,6 +832,48 @@ model MovimientoInventario {
   @@index([destinoBodegaId])
   @@index([destinoAgenciaId])
   @@index([destinoPulidorId])
+  @@index([usuarioDespachaId])
+  @@index([usuarioRecibeId])
+}
+
+/// Lo que no llegó en una recepción parcial: queda retenido hasta que la bodega de origen lo devuelva o lo dé de baja.
+model FaltanteDespacho {
+  id                    String               @id @default(uuid())
+  movimientoId          String
+  movimiento            MovimientoInventario @relation(fields: [movimientoId], references: [id], onDelete: Cascade)
+  numeroGuia            String
+  insumoId              String
+  insumo                Insumo               @relation(fields: [insumoId], references: [id])
+  cantidadUnd           Decimal              @db.Decimal(10, 3)
+  cantidadBase          Decimal              @db.Decimal(12, 4)
+  origenBodegaId        String?
+  origenAgenciaId       String?
+  motivoRecepcion       String?
+  estado                String               @default("PENDIENTE")
+  resolucion            String?
+  observacionResolucion String?
+  resueltoPorId         String?
+  resueltoEn            DateTime?
+  createdAt             DateTime             @default(now())
+
+  @@index([estado])
+  @@index([movimientoId])
+  @@index([insumoId])
+}
+
+/// Fotos opcionales de la recepción, el rechazo o la resolución de un faltante de envío.
+model EnvioEvidencia {
+  id           String               @id @default(uuid())
+  movimientoId String
+  movimiento   MovimientoInventario @relation(fields: [movimientoId], references: [id], onDelete: Cascade)
+  faltanteId   String?
+  etapa        String
+  url          String
+  usuarioId    String?
+  createdAt    DateTime             @default(now())
+
+  @@index([movimientoId])
+  @@index([faltanteId])
 }
 
 model MovimientoDetalle {
@@ -835,6 +886,9 @@ model MovimientoDetalle {
   cantidadRecibida Decimal?             @db.Decimal(10, 3)
   costoUnitarioUSD Decimal?             @db.Decimal(10, 2)
   subtotalUSD      Decimal?             @db.Decimal(10, 2)
+
+  @@index([movimientoId])
+  @@index([insumoId])
 }
 
 // 6. Alertas de Desabastecimiento
@@ -880,6 +934,8 @@ model AlertaStock {
   @@index([nivel])
   @@index([agenciaId])
   @@index([pulidorId])
+  @@index([insumoId])
+  @@index([usuarioEmisorId])
 }
 
 // =========================================================================
@@ -918,7 +974,6 @@ model SyncDevice {
   updatedAt  DateTime @updatedAt
 
   @@index([userId])
-  @@index([deviceId])
 }
 
 // =========================================================================
@@ -943,6 +998,8 @@ enum TipoNotificacion {
   MAQUINA_DADA_DE_BAJA
   USUARIO_ACTUALIZADO
   DESPACHO_CONFIRMADO
+  DESPACHO_FALTANTE
+  ARCHIVADO_FALLIDO
 }
 
 model Notification {
@@ -1038,6 +1095,8 @@ model Maquinaria {
   @@index([bahiaId])
   @@index([operadorAsignadoId])
   @@index([activa])
+  @@index([creadoPorId])
+  @@index([desactivadoPorId])
 }
 
 /// Línea de tiempo append-only de cada máquina (nunca se borra).
@@ -1090,6 +1149,7 @@ model LimpiezaMaquinaria {
   @@unique([maquinariaId, fecha])
   @@index([maquinariaId])
   @@index([fecha])
+  @@index([registradoPorId])
 }
 
 model IncidenteTecnico {
@@ -1132,6 +1192,7 @@ model IncidenteTecnico {
   @@index([gravedad])
   @@index([tecnicoAsignadoId])
   @@index([destinoTallerId])
+  @@index([resueltoPorId])
 }
 
 model EvidenciaIncidente {
@@ -1195,6 +1256,8 @@ model MantenimientoMaquinaria {
   @@index([tipo])
   @@index([estado])
   @@index([fechaProgramada])
+  @@index([creadoPorId])
+  @@index([ejecutadoPorId])
 }
 
 model EvidenciaMantenimiento {
@@ -1242,6 +1305,7 @@ model MovimientoMaquinaria {
   @@index([origenAgenciaId])
   @@index([destinoAgenciaId])
   @@index([fecha])
+  @@index([usuarioId])
 }
 
 // =========================================================================
@@ -1268,6 +1332,7 @@ model KardexMovimiento {
   @@index([ubicacionId])
   @@index([tipoMovimiento])
   @@index([fecha])
+  @@index([usuarioId])
 }
 
 // =========================================================================
@@ -1296,6 +1361,8 @@ model SolicitudAprobacion {
   @@index([estado])
   @@index([agenciaId])
   @@index([tipo])
+  @@index([solicitanteId])
+  @@index([aprobadorId])
 }
 
 // =========================================================================
@@ -1318,6 +1385,7 @@ model HistorialAsignacionBahia {
   @@index([operadorId])
   @@index([bahiaId])
   @@index([fechaInicio])
+  @@index([asignadoPorId])
 }
 
 // =========================================================================
@@ -1341,6 +1409,7 @@ model BahiaOperador {
   @@index([bahiaId])
   @@index([operadorId])
   @@index([activo])
+  @@index([asignadoPorId])
 }
 
 model ServicioLavadoOperador {
@@ -1422,8 +1491,6 @@ model ServicioEspecial {
 
   consumos ConsumoServicioEspecial[]
 
-  @@index([clientUuid])
-  @@index([codigoSE])
   @@index([ordenTrabajoOT])
   @@index([estado])
   @@index([placa])
@@ -1431,6 +1498,7 @@ model ServicioEspecial {
   @@index([operadorId])
   @@index([regionId])
   @@index([operadorId, estado, fechaFin])
+  @@index([servicioCatalogoId])
 }
 
 model ServicioEspecialOperador {
@@ -1522,6 +1590,25 @@ model AuditoriaDecision {
   @@map("auditoria_decisiones")
 }
 
+/// Bitácora de exportaciones de Reportes Operativos: quién sacó qué reporte, con qué filtros y en qué formato.
+model ExportacionReporte {
+  id            String   @id @default(uuid())
+  usuarioId     String
+  usuarioNombre String
+  rol           String
+  reporte       String
+  /// EXCEL o PDF
+  formato       String
+  filtros       Json?
+  totalFilas    Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([usuarioId])
+  @@index([reporte])
+  @@index([createdAt])
+  @@map("exportaciones_reporte")
+}
+
 // -----------------------------------------------------------------------
 // Checklist de mantenimiento: plantillas por tipo (las administra el coordinador de mantenimiento o un administrador).
 // Editar una plantilla crea una versión nueva: lo ya marcado en mantenimientos anteriores no cambia.
@@ -1603,4 +1690,355 @@ model LimiteSolicitud {
   expiraEn DateTime
 
   @@index([expiraEn])
+}
+
+// =========================================================================
+// AUDITORÍAS — INFORMES DE INSPECCIÓN
+// Digitaliza el documento «INFORME DE INSPECCIÓN» de EasyDry: una visita a una agencia con sus novedades,
+// actividades, planes de acción, calificación del servicio y cuatro firmas. Nunca se borra de verdad (deletedAt).
+// =========================================================================
+model InformeInspeccion {
+  id                      String    @id @default(uuid())
+  /// Identificador legible y único: INF-AAAA-NNNN
+  numero                  String    @unique
+  /// INFORME MENSUAL N.º: correlativo del informe de esa agencia dentro del mes (`periodo`)
+  numeroMensual           Int
+  /// AAAA-MM de la fecha del informe
+  periodo                 String
+  agenciaId               String
+  agencia                 Agencia   @relation(fields: [agenciaId], references: [id])
+  /// DE: quien elabora el informe (el usuario autenticado)
+  inspectorId             String
+  inspector               User      @relation("InformeInspector", fields: [inspectorId], references: [id])
+  /// PARA: un usuario del sistema o un destinatario escrito a mano
+  destinatarioId          String?
+  destinatarioNombre      String
+  fecha                   DateTime  @db.Date
+  fechaVisita             DateTime
+  /// Tipo de informe: RUTINA | SEGUIMIENTO | EXTRAORDINARIA | CIERRE_MENSUAL | APERTURA_AGENCIA | CIERRE_AGENCIA | NOVEDADES
+  tipoInspeccion          String    @default("RUTINA")
+  /// BORRADOR | EN_REVISION | PENDIENTE_FIRMAS | APROBADO | RECHAZADO | CERRADO
+  estado                  String    @default("BORRADOR")
+  asunto                  String    @default("")
+  antecedentes            String    @default("")
+  desarrollo              String    @default("")
+  actividadesGeneral      String    @default("")
+  planesGeneral           String    @default("")
+  observacionesJefeTaller String    @default("")
+  /// EXCELENTE | BUENO | REGULAR | MALO
+  calificacion            String?
+  calificadoPorId         String?
+  calificadoPorNombre     String?
+  calificadoEn            DateTime?
+  /// Flujo configurable: qué firmas (RESPONSABLE, JEFE_TALLER, LIDER_BAHIA, RECEPCION) exige el informe para quedar aprobado
+  firmasRequeridas        String[]  @default(["RESPONSABLE", "JEFE_TALLER", "LIDER_BAHIA", "RECEPCION"])
+  motivoRechazo           String?
+  enviadoEn               DateTime?
+  aprobadoEn              DateTime?
+  cerradoEn               DateTime?
+  deletedAt               DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  novedades   InformeNovedad[]
+  actividades InformeActividad[]
+  planes      InformePlanAccion[]
+  firmas      InformeFirma[]
+  historial   InformeHistorial[]
+
+  @@unique([agenciaId, periodo, numeroMensual])
+  @@index([agenciaId])
+  @@index([inspectorId])
+  @@index([estado])
+  @@index([fecha])
+  @@index([deletedAt])
+}
+
+model InformeNovedad {
+  id                String            @id @default(uuid())
+  informeId         String
+  informe           InformeInspeccion @relation(fields: [informeId], references: [id], onDelete: Cascade)
+  titulo            String
+  descripcion       String            @default("")
+  /// INFRAESTRUCTURA | MAQUINARIA | INSUMOS | LIMPIEZA | SEGURIDAD | OPERACION | PERSONAL | OTROS
+  categoria         String            @default("OTROS")
+  /// BAJA | MEDIA | ALTA | CRITICA
+  prioridad         String            @default("MEDIA")
+  area              String            @default("")
+  /// Claves o URLs de las fotos de evidencia
+  fotos             String[]          @default([])
+  /// ABIERTA | EN_SEGUIMIENTO | RESUELTA
+  estadoSeguimiento String            @default("ABIERTA")
+  registradaEn      DateTime          @default(now())
+  orden             Int               @default(0)
+
+  @@index([informeId])
+}
+
+model InformeActividad {
+  id            String            @id @default(uuid())
+  informeId     String
+  informe       InformeInspeccion @relation(fields: [informeId], references: [id], onDelete: Cascade)
+  nombre        String
+  descripcion   String            @default("")
+  responsable   String            @default("")
+  fecha         DateTime?         @db.Date
+  resultado     String            @default("")
+  observaciones String            @default("")
+  fotos         String[]          @default([])
+  orden         Int               @default(0)
+
+  @@index([informeId])
+}
+
+model InformePlanAccion {
+  id                    String            @id @default(uuid())
+  informeId             String
+  informe               InformeInspeccion @relation(fields: [informeId], references: [id], onDelete: Cascade)
+  /// Se guarda también aquí para consultar los planes de una agencia sin pasar por el informe
+  agenciaId             String
+  problema              String
+  accionRequerida       String            @default("")
+  areaResponsable       String            @default("")
+  personaResponsable    String            @default("")
+  fechaCompromiso       DateTime?         @db.Date
+  /// BAJA | MEDIA | ALTA | CRITICA
+  prioridad             String            @default("MEDIA")
+  /// PENDIENTE | EN_PROCESO | COMPLETADO | CANCELADO (VENCIDO se calcula: compromiso pasado y aún abierto)
+  estado                String            @default("PENDIENTE")
+  observaciones         String            @default("")
+  evidenciaCumplimiento String[]          @default([])
+  completadoEn          DateTime?
+  orden                 Int               @default(0)
+  updatedAt             DateTime          @updatedAt
+
+  @@index([informeId])
+  @@index([agenciaId])
+  @@index([estado])
+  @@index([fechaCompromiso])
+}
+
+/// Una fila por cada una de las cuatro firmas del documento. Una vez firmada no se modifica.
+model InformeFirma {
+  id                  String            @id @default(uuid())
+  informeId           String
+  informe             InformeInspeccion @relation(fields: [informeId], references: [id], onDelete: Cascade)
+  /// RESPONSABLE | JEFE_TALLER | LIDER_BAHIA | RECEPCION
+  tipo                String
+  nombre              String            @default("")
+  cargo               String            @default("")
+  /// Firma dibujada en pantalla (data URL PNG); null mientras está pendiente
+  imagen              String?
+  firmadoEn           DateTime?
+  /// Usuario que registró la firma (sale del token, nunca del cliente)
+  registradoPorId     String?
+  registradoPorNombre String?
+
+  @@unique([informeId, tipo])
+}
+
+/// Historial de cambios de estado y hechos relevantes del informe.
+model InformeHistorial {
+  id             String            @id @default(uuid())
+  informeId      String
+  informe        InformeInspeccion @relation(fields: [informeId], references: [id], onDelete: Cascade)
+  /// CREADO | ENVIADO_REVISION | REVISION_APROBADA | RECHAZADO | REABIERTO | FIRMADO | APROBADO | CERRADO | CALIFICADO | ELIMINADO
+  accion         String
+  estadoAnterior String?
+  estadoNuevo    String?
+  usuarioId      String
+  usuarioNombre  String
+  rol            String
+  detalle        String?
+  createdAt      DateTime          @default(now())
+
+  @@index([informeId, createdAt])
+}
+
+// =========================================================================
+// AUDITORÍAS — AUDITORÍA 5S
+// Checklist de 20 criterios (5 categorías × 4) con puntaje 0-5 por criterio; el catálogo de criterios vive en el código
+// (src/modules/auditorias/auditoria5s.reglas.ts). El resultado y el semáforo los calcula siempre el servidor.
+// =========================================================================
+model Auditoria5s {
+  id                   String    @id @default(uuid())
+  /// Identificador legible y único: A5S-AAAA-NNNN
+  codigo               String    @unique
+  agenciaId            String
+  agencia              Agencia   @relation(fields: [agenciaId], references: [id])
+  auditorId            String
+  auditor              User      @relation("Auditoria5sAuditor", fields: [auditorId], references: [id])
+  responsableAgencia   String    @default("")
+  /// LAVADO | ASPIRADO | SECADO | ALMACENAMIENTO | ADMINISTRACION
+  area                 String
+  /// Formato del checklist: LISTA_20 (20 criterios 0-5) | PUNTOS_25 (25 criterios 0-4) | SI_NO_50 (cuestionario SI/NO). Cada formato se guarda por separado.
+  formato              String    @default("LISTA_20")
+  /// Las auditorías de una misma visita (distintos formatos) comparten este id y los datos de la visita
+  grupoId              String?
+  /// «Equipo o persona» auditada (encabezado del formato de 25 criterios)
+  equipoPersona        String    @default("")
+  /// Comentarios / acciones por cada S: { SEIRI: "…", SEITON: "…" }
+  comentariosCategoria Json?
+  fecha                DateTime  @db.Date
+  /// BORRADOR | EN_PROCESO | FINALIZADA | CERRADA
+  estado               String    @default("BORRADOR")
+  comentarios          String    @default("")
+  /// Se fijan al finalizar (puntaje total sobre 100); mientras tanto se calculan al leer
+  puntaje              Int?
+  porcentaje           Float?
+  /// VERDE (≥90 %) | AMARILLO (75 a <90 %) | ROJO (<75 %)
+  semaforo             String?
+  finalizadaEn         DateTime?
+  cerradaEn            DateTime?
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  respuestas Auditoria5sRespuesta[]
+  acciones   Auditoria5sAccion[]
+  historial  Auditoria5sHistorial[]
+
+  @@index([agenciaId, area, formato, fecha])
+  @@index([grupoId])
+  @@index([auditorId])
+  @@index([estado])
+  @@index([fecha])
+  @@index([deletedAt])
+}
+
+model Auditoria5sRespuesta {
+  id               String      @id @default(uuid())
+  auditoriaId      String
+  auditoria        Auditoria5s @relation(fields: [auditoriaId], references: [id], onDelete: Cascade)
+  /// Número del criterio (1 a 20) en el catálogo
+  criterio         Int
+  /// 0 a 5; null = aún sin evaluar (no cuenta como cero)
+  puntaje          Int?
+  /// Evidencia / hallazgo
+  hallazgo         String      @default("")
+  observaciones    String      @default("")
+  accionCorrectiva String      @default("")
+  responsable      String      @default("")
+  fechaCompromiso  DateTime?   @db.Date
+  fotos            String[]    @default([])
+
+  @@unique([auditoriaId, criterio])
+}
+
+/// Seguimiento de un hallazgo. Se crea al finalizar la auditoría y evoluciona sin tocar el puntaje histórico.
+model Auditoria5sAccion {
+  id                  String      @id @default(uuid())
+  /// Código de la auditoría + criterio: A5S-2026-0001-C07
+  codigo              String      @unique
+  auditoriaId         String
+  auditoria           Auditoria5s @relation(fields: [auditoriaId], references: [id], onDelete: Cascade)
+  agenciaId           String
+  agencia             Agencia     @relation(fields: [agenciaId], references: [id])
+  criterio            Int
+  hallazgo            String      @default("")
+  accion              String      @default("")
+  responsable         String      @default("")
+  fechaCompromiso     DateTime?   @db.Date
+  /// BAJA | MEDIA | ALTA | CRITICA (según el puntaje del criterio)
+  prioridad           String      @default("MEDIA")
+  /// PENDIENTE | EN_PROCESO | EN_VERIFICACION | CERRADA (VENCIDA se calcula: compromiso pasado y aún abierta)
+  estado              String      @default("PENDIENTE")
+  evidenciaInicial    String[]    @default([])
+  evidenciaCorreccion String[]    @default([])
+  observaciones       String      @default("")
+  cerradaEn           DateTime?
+  verificadaPorId     String?
+  verificadaPorNombre String?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@index([auditoriaId])
+  @@index([agenciaId])
+  @@index([estado])
+  @@index([fechaCompromiso])
+}
+
+model Auditoria5sHistorial {
+  id             String      @id @default(uuid())
+  auditoriaId    String
+  auditoria      Auditoria5s @relation(fields: [auditoriaId], references: [id], onDelete: Cascade)
+  /// CREADA | FINALIZADA | CERRADA | ELIMINADA | ACCION_SEGUIMIENTO | ACCION_VERIFICADA
+  accion         String
+  estadoAnterior String?
+  estadoNuevo    String?
+  usuarioId      String
+  usuarioNombre  String
+  rol            String
+  detalle        String?
+  createdAt      DateTime    @default(now())
+
+  @@index([auditoriaId, createdAt])
+}
+
+// -----------------------------------------------------------------------
+// Archivado de datos viejos a Parquet en S3 (ver src/modules/archivado).
+// Una corrida del job semanal puede subir varios lotes; cada lote es un archivo .parquet verificado antes de borrar de la base.
+// -----------------------------------------------------------------------
+model ArchivadoCorrida {
+  id        String          @id @default(uuid())
+  inicio    DateTime        @default(now())
+  fin       DateTime?
+  /// EN_CURSO | OK | ERROR
+  estado    String          @default("EN_CURSO")
+  /// En simulacro no se sube ni se borra nada: solo se informa qué se haría.
+  simulacro Boolean         @default(false)
+  /// Por tabla: filas archivadas, borradas, purgadas y errores.
+  resumen   Json?
+  error     String?
+  lotes     ArchivadoLote[]
+
+  @@index([inicio])
+  @@map("archivado_corridas")
+}
+
+model ArchivadoLote {
+  id             String            @id @default(uuid())
+  corridaId      String?
+  corrida        ArchivadoCorrida? @relation(fields: [corridaId], references: [id], onDelete: SetNull)
+  /// Los archivos de un mismo lote de una familia (padre e hijos) comparten grupo: se verifican y se borran juntos.
+  grupoId        String?
+  tabla          String
+  anio           Int
+  mes            Int
+  parte          Int
+  /// Clave del .parquet en el bucket.
+  clave          String
+  filas          Int
+  bytes          Int
+  sha256         String
+  /// Versión de las columnas con que se escribió el archivo (ver archivado.tablas.ts).
+  esquemaVersion Int
+  /// Fecha del evento (la que decide el mes) más antigua y más reciente del lote.
+  fechaMin       DateTime
+  fechaMax       DateTime
+  /// SUBIDO (en el bucket, aún sin verificar) | VERIFICADO | BORRADO (ya no está en la base)
+  estado         String            @default("SUBIDO")
+  createdAt      DateTime          @default(now())
+  borradoEn      DateTime?
+  /// Última vez que la verificación semanal comprobó este archivo contra el bucket.
+  verificadoEn   DateTime?
+  /// Qué falló en esa comprobación (archivo ausente, huella distinta…); vacío si todo estaba bien.
+  problema       String?
+
+  @@unique([tabla, clave])
+  @@index([tabla, anio, mes])
+  @@index([estado])
+  @@index([grupoId])
+  @@index([corridaId])
+  @@map("archivado_lotes")
+}
+
+/// Candado del archivado: una sola corrida real a la vez, aunque haya varias instancias del servidor. Es un arriendo con vencimiento:
+/// si la instancia que lo tiene se cae, vence solo y otra puede tomarlo.
+model ArchivadoCandado {
+  id          String   @id
+  propietario String
+  hasta       DateTime
+
+  @@map("archivado_candado")
 }

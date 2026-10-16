@@ -77,25 +77,24 @@ const pagina = (id: string, nombre: string, ruta: string, modulo: string | null,
 export const PAGINAS: readonly PaginaDef[] = [
   pagina('dashboard', 'Dashboard', '/dashboard', 'dashboard', ['dashboard.ver'], [], [
     accion('dashboard.alertas.ver', 'Ver alertas de stock', ['alertas.ver']),
-    accion('dashboard.retos.ver', 'Ver retos activos', ['retos.ver']),
   ]),
 
   pagina('notificaciones', 'Notificaciones', '/notificaciones', 'notificaciones', [], []),
 
-  pagina('mapa', 'Mapa Operativo', '/mapa-operativo', 'mapa-operativo', ['mapa.ver', 'agencias.ver'], [], [
-    accion('mapa.bahia.asignar', 'Asignar lavador a bahía', ['bahias.asignar']),
-    accion('mapa.bahia.quitar', 'Quitar lavador de bahía', ['bahias.asignar']),
-    CEDULA, CONTACTO,
-  ]),
-
-  pagina('agencias', 'Gestión de Agencias', '/agencias', 'agencias', ['agencias.consultar', 'agencias.ver', 'usuarios.ver', 'catalogo.ver'], [
+  // Una sola pantalla con pestañas (Mapa, Agencias, Regiones, Clientes, Aprobadores). Antes el mapa figuraba como página aparte.
+  pagina('agencias', 'Agencias & Mapa Red', '/agencias', 'agencias', ['agencias.consultar', 'agencias.ver', 'usuarios.ver', 'catalogo.ver'], [
+    // El mapa es de consulta: lo que muestra de cada bahía se enciende por bloques. Asignar o quitar lavadores se hace en Gestión de Lavadores.
+    sub('agencias', 'mapa', 'Mapa Operativo', ['mapa.ver'], [
+      accion('mapa.lavador.ver', 'Ver el lavador asignado a cada bahía', [], { migrarSi: ['mapa.ver'] }),
+      accion('mapa.maquinaria.ver', 'Ver la maquinaria de cada bahía', ['maquinaria.ver'], { migrarSi: ['maquinaria.ver'] }),
+      accion('mapa.vehiculo.ver', 'Ver el vehículo en servicio de cada bahía', [], { migrarSi: ['mapa.ver'] }),
+    ], ['mapa.ver']),
     sub('agencias', 'agencias', 'Agencias', [], [
       accion('agencias.agencias.crear', 'Crear agencia', ['agencias.crear']),
       accion('agencias.agencias.editar', 'Editar datos de la agencia', ['agencias.editar']),
       accion('agencias.agencias.servicios', 'Habilitar servicios de la agencia', ['agencias.editar']),
       accion('agencias.agencias.estado', 'Activar o desactivar agencia', ['agencias.estado']),
       accion('agencias.bahias.crear', 'Crear bahía', ['bahias.crear']),
-      accion('agencias.bahias.editar', 'Editar bahía', ['bahias.editar']),
       accion('agencias.bahias.estado', 'Activar o desactivar bahía', ['bahias.editar']),
       accion('agencias.bahias.asignar', 'Asignar lavadores a bahía', ['bahias.asignar']),
       accion('agencias.personal.ver', 'Ver personal de la agencia', ['usuarios.ver']),
@@ -112,6 +111,10 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('agencias.clientes.editar', 'Editar cliente', ['clientes.gestionar']),
       accion('agencias.clientes.estado', 'Activar o desactivar cliente', ['clientes.gestionar']),
     ], ['agencias.consultar', 'clientes.gestionar']),
+    // Aprobadores («gerentes» de la agencia): quién audita y aprueba los servicios de cada agencia.
+    sub('agencias', 'aprobadores', 'Aprobadores', ['usuarios.ver'], [
+      accion('agencias.aprobadores.asignar', 'Asignar o cambiar el aprobador de una agencia', [], { migrarSi: ['usuarios.gestionar'] }),
+    ], ['usuarios.ver']),
   ]),
 
   pagina('operadores', 'Gestión de Lavadores', '/operadores', 'operadores', ['operadores.ver', 'agencias.ver'], [], [
@@ -130,10 +133,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('servicios.generales.agregar', 'Agregar servicios a una OT', ['servicios.crear']),
       accion('servicios.generales.editar', 'Editar OT', ['servicios.editar']),
       accion('servicios.generales.anular', 'Anular OT', ['servicios.anular']),
-      accion('servicios.generales.consumos', 'Ver consumo de insumos', ['consumos.ver']),
-      accion('servicios.generales.bahias', 'Habilitar o inhabilitar bahías', ['bahias.editar']),
-      accion('servicios.generales.solicitudes', 'Ver solicitudes de aprobación', ['solicitudes.ver']),
-      accion('servicios.generales.solicitar', 'Solicitar aprobación de una OT', ['solicitudes.crear']),
       EVID_VER, EVID_SUBIR, PRECIOS,
     ]),
     sub('servicios', 'especiales', 'Servicios especiales', ['especiales.ver'], [
@@ -149,7 +148,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('catalogo', 'generales', 'Servicios generales', [], [
       accion('catalogo.generales.crear', 'Crear servicio', ['catalogo.gestionar']),
       accion('catalogo.generales.editar', 'Editar servicio', ['catalogo.gestionar']),
-      accion('catalogo.generales.eliminar', 'Desactivar o eliminar servicio', ['catalogo.gestionar']),
+      accion('catalogo.generales.estado', 'Activar o desactivar servicio', ['catalogo.gestionar']),
       accion('catalogo.generales.recetas.ver', 'Ver recetas de insumos', ['recetas.ver']),
       accion('catalogo.generales.recetas.editar', 'Editar recetas de insumos', ['recetas.gestionar']),
       accion('catalogo.generales.recetas.historial', 'Ver historial de recetas', ['recetas.historial']),
@@ -158,7 +157,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('catalogo', 'especiales', 'Servicios especiales', [], [
       accion('catalogo.especiales.crear', 'Crear servicio', ['catalogo.gestionar']),
       accion('catalogo.especiales.editar', 'Editar servicio', ['catalogo.gestionar']),
-      accion('catalogo.especiales.eliminar', 'Desactivar o eliminar servicio', ['catalogo.gestionar']),
+      accion('catalogo.especiales.estado', 'Activar o desactivar servicio', ['catalogo.gestionar']),
       accion('catalogo.especiales.recetas.ver', 'Ver recetas de insumos', ['recetas.ver']),
       accion('catalogo.especiales.recetas.editar', 'Editar recetas de insumos', ['recetas.gestionar']),
       accion('catalogo.especiales.recetas.historial', 'Ver historial de recetas', ['recetas.historial']),
@@ -166,52 +165,25 @@ export const PAGINAS: readonly PaginaDef[] = [
     ], ['catalogo.ver']),
   ]),
 
-  pagina('aprobaciones', 'Aprobaciones del Día', '/aprobaciones', 'aprobaciones', ['servicios.ver', 'agencias.ver', 'usuarios.ver'], [], [
-    accion('aprobaciones.aprobar', 'Aprobar servicio', ['servicios.decidir']),
+  pagina('aprobaciones', 'Aprobaciones del Día', '/aprobaciones', 'aprobaciones', ['servicios.ver', 'agencias.ver', 'usuarios.ver', 'solicitudes.ver'], [], [
+    accion('aprobaciones.aprobar', 'Aprobar servicio', ['servicios.decidir', 'solicitudes.crear']),
     accion('aprobaciones.rechazar', 'Rechazar servicio', ['servicios.decidir']),
     accion('aprobaciones.aprobar.todos', 'Aprobar todos', ['servicios.decidir']),
     accion('aprobaciones.anular', 'Anular servicio', ['servicios.anular']),
-    accion('aprobaciones.solicitudes.ver', 'Ver solicitudes de aprobación', ['solicitudes.ver']),
-    accion('aprobaciones.solicitudes.crear', 'Crear solicitud de aprobación', ['solicitudes.crear']),
   ]),
 
   pagina('productividad', 'Productividad & Retos', '/productividad', 'productividad', ['agencias.ver'], [
     sub('productividad', 'productividad', 'Productividad', ['productividad.ver'], []),
     sub('productividad', 'retos', 'Retos', ['retos.ver'], [
       accion('productividad.retos.crear', 'Crear reto', ['retos.crear']),
-      accion('productividad.retos.editar', 'Editar reto', ['retos.crear']),
+      accion('productividad.retos.cerrar', 'Cerrar reto', ['retos.cerrar'], { migrarSi: ['retos.crear'] }),
       accion('productividad.retos.eliminar', 'Eliminar reto', ['retos.eliminar']),
     ]),
   ]),
 
-  pagina('reportes', 'Reportes Operativos', '/reportes', 'reportes', ['reportes.ver', 'agencias.ver'], [
-    sub('reportes', 'servicios', 'Servicios y aprobaciones', [], [
-      exportar('reportes.servicios.generales', 'Exportar servicios generales (OT)'),
-      exportar('reportes.servicios.especiales', 'Exportar servicios especiales'),
-      exportar('reportes.servicios.aprobaciones', 'Exportar aprobaciones del día'),
-      exportar('reportes.servicios.catalogo', 'Exportar catálogo de servicios'),
-    ], ['reportes.ver']),
-    sub('reportes', 'inventario', 'Inventario y envíos', [], [
-      exportar('reportes.inventario.productos', 'Exportar productos y stock'),
-      exportar('reportes.inventario.movimientos', 'Exportar movimientos (kardex)'),
-      exportar('reportes.inventario.consumo', 'Exportar consumo por servicios'),
-      exportar('reportes.inventario.envios', 'Exportar envíos'),
-    ], ['reportes.ver']),
-    sub('reportes', 'agencias', 'Agencias y personal', [], [
-      exportar('reportes.agencias.agencias', 'Exportar agencias'),
-      exportar('reportes.agencias.operadores', 'Exportar lavadores y pulidores'),
-      exportar('reportes.agencias.usuarios', 'Exportar usuarios'),
-    ], ['reportes.ver']),
-    sub('reportes', 'maquinaria', 'Maquinaria y taller', [], [
-      exportar('reportes.maquinaria.maquinas', 'Exportar maquinaria'),
-      exportar('reportes.maquinaria.incidentes', 'Exportar incidentes'),
-      exportar('reportes.maquinaria.mantenimientos', 'Exportar mantenimientos'),
-      exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
-    ], ['reportes.ver']),
-    sub('reportes', 'productividad', 'Productividad y dashboard', [], [
-      exportar('reportes.productividad.ranking', 'Exportar productividad y ranking'),
-      exportar('reportes.productividad.dashboard', 'Exportar datos del dashboard'),
-    ], ['reportes.ver']),
+  pagina('reportes', 'Reportes Operativos', '/reportes', 'reportes', ['reportes.ver', 'agencias.ver'], [], [
+    exportar('reportes.excel', 'Exportar reporte a Excel'),
+    exportar('reportes.pdf', 'Exportar reporte a PDF'),
   ]),
 
   pagina('maquinaria', 'Maquinaria & Equipos', '/maquinaria', 'maquinaria', ['maquinaria.ver'], [], [
@@ -243,6 +215,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('taller', 'limpiezas', 'Limpiezas', ['limpiezas.ver'], [
       accion('taller.limpiezas.registrar', 'Registrar limpieza', ['limpiezas.evidencias']),
       accion('taller.limpiezas.editar', 'Editar o eliminar limpieza', ['limpiezas.editar']),
+      exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
     ]),
     sub('taller', 'checklist', 'Checklist', ['mantenimientos.ver', 'maquinaria.ver'], [
       accion('taller.checklist.gestionar', 'Gestionar plantillas de checklist', ['checklist.gestionar']),
@@ -254,7 +227,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('inventario.productos.gestionar', 'Crear o editar insumo', ['inventario.catalogos.gestionar']),
       accion('inventario.productos.compra', 'Registrar compra', ['compras.registrar']),
       accion('inventario.productos.despachar', 'Despachar insumo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
-      accion('inventario.productos.consumir', 'Registrar consumo', ['stock.consumir']),
       PRECIOS,
     ], ['inventario.ver']),
     sub('inventario', 'bodegas', 'Bodegas', [], [
@@ -290,7 +262,26 @@ export const PAGINAS: readonly PaginaDef[] = [
   pagina('envios', 'Envíos & Confirmación', '/envios', 'envios', ['despachos.ver', 'agencias.ver'], [], [
     accion('envios.crear', 'Crear despacho', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
     accion('envios.confirmar', 'Confirmar recepción', ['despachos.recibir']),
+    accion('envios.faltantes', 'Resolver faltantes de envíos', ['despachos.ver'], { migrarSi: ['despachos.crear'] }),
     accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir']),
+  ]),
+
+  // Auditorías: tres pantallas del menú. Quien no puede auditar (líder, lavador, pulidor) solo ve el resultado de su inspección 5S y sus informes.
+  pagina('auditorias', 'Dashboard de Auditorías', '/auditorias', 'auditorias', ['auditorias.ver'], []),
+
+  pagina('informes', 'Informes de Inspección', '/informes-inspeccion', 'informes-inspeccion', ['informes.ver'], [], [
+    accion('informes.crear', 'Crear y editar informes', ['informes.crear']),
+    accion('informes.firmar', 'Registrar observaciones y calificación', ['informes.firmar']),
+    accion('informes.seguimiento', 'Dar seguimiento a los planes de acción', ['informes.seguimiento']),
+    accion('informes.revisar', 'Revisar, aprobar, rechazar y cerrar', ['informes.revisar']),
+    accion('informes.eliminar', 'Eliminar borradores', ['informes.eliminar']),
+  ]),
+
+  pagina('inspecciones', 'Auditorías 5S', '/auditorias-5s', 'auditorias-5s', ['inspecciones.ver'], [], [
+    accion('inspecciones.crear', 'Hacer auditorías 5S', ['inspecciones.crear']),
+    accion('inspecciones.acciones', 'Dar seguimiento a las acciones correctivas', ['inspecciones.acciones']),
+    accion('inspecciones.verificar', 'Verificar acciones y cerrar auditorías', ['inspecciones.verificar']),
+    accion('inspecciones.eliminar', 'Eliminar borradores', ['inspecciones.eliminar']),
   ]),
 
   pagina('usuarios', 'Usuarios y Roles', '/usuarios', 'usuarios', [], [
@@ -299,7 +290,7 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('usuarios.usuarios.editar', 'Editar usuario', ['usuarios.gestionar']),
       accion('usuarios.usuarios.estado', 'Activar o desactivar usuario', ['usuarios.gestionar']),
       accion('usuarios.usuarios.eliminar', 'Eliminar usuario', ['usuarios.gestionar']),
-      accion('usuarios.usuarios.password', 'Asignar contraseña', ['usuarios.gestionar']),
+      accion('usuarios.usuarios.password', 'Asignar y restablecer contraseñas', []),
       accion('usuarios.usuarios.backup', 'Gestionar usuarios Backup', ['backup.gestionar']),
       CEDULA, CONTACTO,
     ], ['usuarios.gestionar', 'backup.gestionar']),
@@ -313,6 +304,7 @@ export const PAGINAS: readonly PaginaDef[] = [
   pagina('perfil', 'Perfil', '/perfil', 'perfil', [], []),
 
   pagina('sistema', 'Sistema (fuera del menú)', 'app móvil y soporte', null, [], [], [
+    accion('sistema.app.retos', 'Ver retos en la app móvil', ['retos.ver']),
     accion('sistema.sync.usar', 'Usar la sincronización de la app', ['sync.usar']),
     accion('sistema.sync.errores', 'Gestionar errores de sincronización', ['sync.dlq.gestionar']),
   ]),

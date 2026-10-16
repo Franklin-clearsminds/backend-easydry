@@ -13,7 +13,7 @@ import {
   UpdateCatalogoServicioDto,
   ListCatalogoServiciosDto,
   ServiciosOpcionesDto,
-  DeleteCatalogoServicioDto,
+  EstadoCatalogoServicioDto,
   SiguienteCodigoServicioDto,
 } from './dto/servicios.dto.js';
 
@@ -59,30 +59,30 @@ export class CatalogosController {
     return this.catalogosService.siguienteCodigo(dto?.categoria);
   }
 
-  @Permiso('catalogo.gestionar')
+  @Permiso('catalogo.generales.crear', 'catalogo.especiales.crear')
   @Post('servicios/create')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Crear nuevo servicio en el catálogo maestro' })
+  @ApiOperation({ summary: 'Crear nuevo servicio en el catálogo maestro (general o especial según su casilla)' })
   @ApiResponse({ status: 201, description: 'Servicio creado exitosamente' })
-  async createServicio(@Body() dto: CreateCatalogoServicioDto) {
-    return this.catalogosService.createServicio(dto);
+  async createServicio(@Body() dto: CreateCatalogoServicioDto, @Request() req: any) {
+    return this.catalogosService.createServicio(dto, req.user);
   }
 
-  @Permiso('catalogo.gestionar')
+  @Permiso('catalogo.generales.editar', 'catalogo.especiales.editar')
   @Post('servicios/update')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Actualizar servicio en el catálogo maestro' })
+  @ApiOperation({ summary: 'Actualizar datos de un servicio del catálogo (el precio no se cambia aquí)' })
   @ApiResponse({ status: 200, description: 'Servicio actualizado exitosamente' })
-  async updateServicio(@Body() dto: UpdateCatalogoServicioDto) {
-    return this.catalogosService.updateServicio(dto);
+  async updateServicio(@Body() dto: UpdateCatalogoServicioDto, @Request() req: any) {
+    return this.catalogosService.updateServicio(dto, req.user);
   }
 
-  @Permiso('catalogo.gestionar')
-  @Post('servicios/delete')
+  @Permiso('catalogo.generales.estado', 'catalogo.especiales.estado')
+  @Post('servicios/estado')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Eliminar servicio del catálogo (si no tiene servicios asociados)' })
-  @ApiResponse({ status: 200, description: 'Servicio eliminado exitosamente' })
-  async deleteServicio(@Body() dto: DeleteCatalogoServicioDto) {
-    return this.catalogosService.deleteServicio(dto.id);
+  @ApiOperation({ summary: 'Activar o desactivar un servicio del catálogo (nunca se elimina)' })
+  @ApiResponse({ status: 200, description: 'Estado actualizado' })
+  async estadoServicio(@Body() dto: EstadoCatalogoServicioDto, @Request() req: any) {
+    return this.catalogosService.cambiarEstadoServicio(dto.id, req.user);
   }
 }

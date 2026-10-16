@@ -83,11 +83,14 @@ describe('Precios de servicios por agencia (base real)', () => {
       expect(await precioEnBase(a1.id, otro.id)).toBeNull();
     });
 
-    it('rechaza fijar precio a un servicio ESPECIAL (el override solo aplica a GENERAL)', async () => {
-      await expect(
-        service.setPreciosServicios({ agenciaId: a1.id, precios: [{ catalogoServicioId: especial.id, precio: 5 }] } as any),
-      ).rejects.toThrow(/no son servicios GENERALES/);
-      expect(await precioEnBase(a1.id, especial.id)).toBeNull();
+    it('un servicio ESPECIAL también tiene su precio por agencia', async () => {
+      await service.setPreciosServicios({ agenciaId: a1.id, precios: [{ catalogoServicioId: especial.id, precio: 75 }] } as any);
+
+      expect(await precioEnBase(a1.id, especial.id)).toBe(75);
+      const lista: any[] = await service.listPreciosServicios({ agenciaId: a1.id } as any);
+      const fila = lista.find((f) => f.catalogoServicioId === especial.id);
+      expect(fila.categoria).toBe('ESPECIAL');
+      expect(fila.precioEfectivo).toBe(75);
     });
   });
 });

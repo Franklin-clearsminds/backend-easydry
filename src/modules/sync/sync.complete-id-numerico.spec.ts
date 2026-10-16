@@ -33,7 +33,7 @@ describe('COMPLETE con id numérico de placeholder (bug del 2026-09-30) — base
     const a1 = await env.agencia('A1', { regionId: region.id });
     bahia = await env.bahia('B1', a1.id);
     catalogo = await env.catalogo('LAVADO');
-    lavador = await env.usuario('lavador', 'LAVADOR', { agenciaId: a1.id });
+    lavador = await env.usuario('lavador', 'LIDER', { agenciaId: a1.id }) // el líder es quien registra y completa OT desde la app (el rol LAVADOR no usa la app);
   });
 
   afterAll(async () => {

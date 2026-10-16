@@ -86,6 +86,21 @@ describe('ServiciosEspecialesService.create — precio congelado desde el catál
     expect(fila.precio).toBeNull();
   });
 
+  it('usa el precio que la agencia tiene fijado para ese servicio especial, no el del catálogo', async () => {
+    const c = await env.catalogo('ESPECIAL-4', { categoria: 'ESPECIAL', precio: 0 });
+    await env.prisma.precioAgenciaServicio.create({ data: { agenciaId: a1.id, catalogoServicioId: c.id, precio: 85 } });
+    const d = dto({ servicioCatalogoId: c.id });
+    await service.create(d, coordinador.id, coordinador);
+    expect(Number((await creado(d)).precio)).toBe(85);
+  });
+
+  it('una agencia sin precio fijado para el servicio especial queda con el valor del catálogo (0 si no tiene precio base)', async () => {
+    const c = await env.catalogo('ESPECIAL-5', { categoria: 'ESPECIAL', precio: 0 });
+    const d = dto({ servicioCatalogoId: c.id });
+    await service.create(d, coordinador.id, coordinador);
+    expect(Number((await creado(d)).precio)).toBe(0);
+  });
+
   it('el precio queda congelado: un cambio posterior del catálogo no afecta a la OT', async () => {
     const c = await env.catalogo('ESPECIAL-3', { categoria: 'ESPECIAL', precio: 40 });
     const d = dto({ servicioCatalogoId: c.id });

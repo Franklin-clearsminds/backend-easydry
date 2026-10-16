@@ -150,8 +150,10 @@ describe('InventarioService.listDespachos (base real)', () => {
       expect(nombres(await lista({ estadoDespacho: 'recibido' }))).toEqual(['D2']); // sin importar mayúsculas
       expect(nombres(await service.listDespachos({ numeroGuia: `${env.marca}-D3` } as any))).toEqual(['D3']);
       // Del día -6 al día -4: D2, D3 y D4. Con un "hasta" de solo día, ese día entra completo.
+      // `hace()` se evalúa de nuevo aquí, algo después de crear las filas: el margen debe cubrir lo que tarde la prueba (con la máquina
+      // cargada pasa de 1 segundo) y seguir dejando fuera las filas vecinas, que están a un día de distancia.
       const filtradas = await lista({
-        fechaDesde: new Date(hace(6).getTime() - 1000).toISOString(),
+        fechaDesde: new Date(hace(6).getTime() - 10 * 60_000).toISOString(),
         fechaHasta: hace(4).toISOString().slice(0, 10),
       });
       expect(nombres(filtradas).sort()).toEqual(['D2', 'D3', 'D4']);

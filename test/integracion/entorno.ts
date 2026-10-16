@@ -510,6 +510,8 @@ export async function abrirEntorno(): Promise<Entorno> {
         }
         await new Promise((ok) => setTimeout(ok, 300));
         await borrarPorEntidad();
+        // Candado propio que las pruebas del archivado toman para no bloquearse entre sí (ver `OpcionesCorrida.candado`).
+        await prisma.$executeRawUnsafe(`DELETE FROM archivado_candado WHERE id = $1`, `prueba-${marca}`).catch(() => undefined);
         // Tablas de sincronización sin clave foránea: se reconocen por la marca en el id de la mutación o del cliente.
         for (const [modelo, columnas] of [['SyncDeadLetterQueue', ['mutationId', 'clientUuid']], ['SyncOutboxAudit', ['mutationId', 'clientUuid']]] as const) {
           const donde = columnas.map((c) => `"${c}" LIKE $1`).join(' OR ');

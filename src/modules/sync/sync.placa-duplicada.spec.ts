@@ -38,7 +38,7 @@ describe('placa con otra orden activa (ventana de 4h) — base real', () => {
     bahia = await env.bahia('B1', a1.id);
     catalogo = await env.catalogo('LAVADO');
     await env.prisma.agencia.update({ where: { id: a1.id }, data: { servicioIds: [catalogo.id] } });
-    lavador = await env.usuario('lavador', 'LAVADOR', { agenciaId: a1.id });
+    lavador = await env.usuario('lavador', 'LIDER', { agenciaId: a1.id }) // el líder es quien registra y completa OT desde la app (el rol LAVADOR no usa la app);
     placa = `DUP-${env.marca.slice(1, 5).toUpperCase()}`;
     // La orden activa que ya existe para esa placa en la agencia.
     await env.servicioLavado({ bahiaId: bahia.id, operadorId: lavador.id, catalogoId: catalogo.id, estado: 'EN_PROCESO', placa, horaSalida: null });

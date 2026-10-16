@@ -1,4 +1,5 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { normalizarRol, ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
@@ -167,7 +168,17 @@ export class CatalogosService {
     return { codigo: `${prefijo}-${String(mayor + 1).padStart(3, '0')}` };
   }
 
-  async createServicio(dto: CreateCatalogoServicioDto) {
+  /** Cada categoría tiene sus propias casillas: «catalogo.generales.*» o «catalogo.especiales.*». */
+  private exigir(user: any, categoria: string, accion: 'crear' | 'editar' | 'estado') {
+    if (!user) return;
+    const grupo = String(categoria).toUpperCase() === 'ESPECIAL' ? 'especiales' : 'generales';
+    if (!tienePermiso(user, `catalogo.${grupo}.${accion}`)) {
+      throw new ForbiddenException(`Tu rol no puede ${accion === 'crear' ? 'crear' : accion === 'editar' ? 'editar' : 'activar o desactivar'} servicios ${grupo}.`);
+    }
+  }
+
+  async createServicio(dto: CreateCatalogoServicioDto, user?: any) {
+    this.exigir(user, dto.categoria, 'crear');
     const codigoUpper = dto.codigo.trim().toUpperCase();
     const existing = await this.prisma.catalogoServicio.findUnique({
       where: { codigo: codigoUpper },
@@ -182,7 +193,7 @@ export class CatalogosService {
         nombre: dto.nombre.trim(),
         categoria: dto.categoria.trim().toUpperCase(),
         descripcion: dto.descripcion?.trim() || null,
-        precio: dto.precio ?? 0,
+        precio: 0, // el precio lo fija «Fijar precios por agencia», nunca el formulario del catálogo
         tiempoEstimadoMin: Number(dto.tiempoEstimadoMin) > 0 ? Math.round(Number(dto.tiempoEstimadoMin)) : 30,
         estado: dto.estado === 'Inactivo' ? 'Inactivo' : 'Activo',
       },
@@ -197,13 +208,15 @@ export class CatalogosService {
     });
   }
 
-  async updateServicio(dto: UpdateCatalogoServicioDto) {
+  async updateServicio(dto: UpdateCatalogoServicioDto, user?: any) {
     const existing = await this.prisma.catalogoServicio.findUnique({
       where: { id: dto.id },
     });
     if (!existing) {
       throw new NotFoundException(`Servicio de catálogo con ID ${dto.id} no encontrado`);
     }
+    this.exigir(user, existing.categoria, 'editar');
+    if (dto.categoria && dto.categoria.trim().toUpperCase() !== existing.categoria) this.exigir(user, dto.categoria, 'editar');
 
     if (dto.codigo && dto.codigo.trim().toUpperCase() !== existing.codigo) {
       const codigoUpper = dto.codigo.trim().toUpperCase();
@@ -222,11 +235,9 @@ export class CatalogosService {
         ...(dto.nombre && { nombre: dto.nombre.trim() }),
         ...(dto.categoria && { categoria: dto.categoria.trim().toUpperCase() }),
         ...(dto.descripcion !== undefined && { descripcion: dto.descripcion?.trim() || null }),
-        ...(dto.precio !== undefined && { precio: dto.precio }),
         ...(dto.tiempoEstimadoMin !== undefined && {
           tiempoEstimadoMin: Math.max(1, Math.round(Number(dto.tiempoEstimadoMin) || 30)),
         }),
-        ...(dto.estado !== undefined && { estado: dto.estado }),
       },
       include: {
         recetas: {
@@ -239,26 +250,14 @@ export class CatalogosService {
     });
   }
 
-  async deleteServicio(id: number) {
-    const existing = await this.prisma.catalogoServicio.findUnique({
-      where: { id },
-      include: { _count: { select: { servicios: true } } },
-    });
+  async cambiarEstadoServicio(id: number, user?: any) {
+    const existing = await this.prisma.catalogoServicio.findUnique({ where: { id } });
     if (!existing) {
       throw new NotFoundException(`Servicio de catálogo con ID ${id} no encontrado`);
     }
-
-    if (existing._count.servicios > 0) {
-      throw new ConflictException(
-        `No se puede eliminar el servicio "${existing.nombre}" porque tiene ${existing._count.servicios} órdenes de lavado asociadas`,
-      );
-    }
-
-    await this.prisma.catalogoServicio.delete({
-      where: { id },
-    });
-
-    return { success: true, message: `Servicio "${existing.nombre}" eliminado correctamente` };
+    this.exigir(user, existing.categoria, 'estado');
+    const estado = existing.estado === 'Activo' ? 'Inactivo' : 'Activo';
+    return this.prisma.catalogoServicio.update({ where: { id }, data: { estado } });
   }
 
   async getAgencias() {

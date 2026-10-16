@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
+import { tieneAlgunPermiso, tienePermiso } from '../../common/permisos/capacidades.js';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -16,11 +17,15 @@ import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import {
   columnasSimples,
   combinarWhere,
+  resolverCampoOrden,
   resolverOrden,
   resolverPaginacion,
   whereBusqueda,
 } from '../../common/utils/data-grid.helpers.js';
 import { serializeServicioLavado } from '../../common/utils/servicio-serializer.util.js';
+import { HistoricoService } from '../archivado/historico.service.js';
+import { ServiciosArchivo } from './servicios-archivo.js';
+import { ConsumosArchivo } from './consumos-archivo.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { Alcance, puedeSobreAgencia, resolverAlcance } from '../../common/permisos/alcance.js';
 import { esLiderDeAgencia, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
@@ -50,6 +55,8 @@ export class OperacionesService {
     private prisma: PrismaService,
     @Optional() private notifications?: NotificationsService,
     @Optional() decisiones?: DecisionesService,
+    /** Suma al listado de servicios lo que ya se archivó a Parquet. Sin él, el listado lee solo de la base. */
+    @Optional() private historico?: HistoricoService,
   ) {
     this.decisiones = decisiones ?? new DecisionesService(prisma);
   }
@@ -211,11 +218,18 @@ export class OperacionesService {
     const { page, pageSize, skip, take } = resolverPaginacion(params ?? {}, sinTamano ? { defecto: 100 } : {});
     const orderBy = resolverOrden(params?.sortField, params?.sortOrder, ORDEN_SERVICIOS, { campo: 'fecha', dir: 'desc' });
 
-    const [items, total] = await Promise.all([
+    // Si el rango toca datos ya archivados, se suman a los de la base con el mismo alcance, filtros, búsqueda y orden. Si no, la
+    // consulta es exactamente la de siempre.
+    const { campo: campoOrden, dir: dirOrden } = resolverCampoOrden(params?.sortField, params?.sortOrder, ORDEN_SERVICIOS, { campo: 'fecha', dir: 'desc' });
+    const serviciosArchivo = this.historico ? new ServiciosArchivo(this.prisma, this.historico) : null;
+    const archivado = serviciosArchivo ? await serviciosArchivo.consultar({ params: params ?? {}, alcance, usuarioId: currentUser?.id, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [itemsBase, totalBase] = await Promise.all([
       this.prisma.servicioLavado.findMany({
         where: whereFinal,
-        skip,
-        take,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        skip: archivado ? 0 : skip,
+        take: archivado ? skip + take : take,
         orderBy: orderBy as any,
         include: {
           bahia: {
@@ -245,6 +259,8 @@ export class OperacionesService {
       }),
       this.prisma.servicioLavado.count({ where: whereFinal }),
     ]);
+    const items = archivado && serviciosArchivo ? serviciosArchivo.mezclar(itemsBase as any[], archivado.filas, campoOrden, dirOrden, skip, take) : itemsBase;
+    const total = totalBase + (archivado?.total ?? 0);
 
     // A cada servicio finalizado se le marca si quien consulta puede decidirlo ahora (aprobar o rechazar) y si su agencia tiene
     // aprobador designado: así la pantalla de aprobaciones muestra solo acciones que el servidor aceptaría.
@@ -278,6 +294,12 @@ export class OperacionesService {
       for (const fila of porEstado) {
         conteo[fila.estado] = fila._count._all;
         totalResumen += fila._count._all;
+      }
+      // Lo archivado (decidido: aprobado, rechazado o cancelado) también cuenta en el resumen.
+      const porEstadoArchivado = serviciosArchivo ? await serviciosArchivo.resumen({ params: params ?? {}, alcance, usuarioId: currentUser?.id }) : null;
+      for (const [estado, n] of Object.entries(porEstadoArchivado ?? {})) {
+        conteo[estado] = (conteo[estado] ?? 0) + n;
+        totalResumen += n;
       }
       respuesta['resumen'] = { porEstado: conteo, porAprobar, total: totalResumen };
     }
@@ -333,15 +355,30 @@ export class OperacionesService {
     return servicio;
   }
 
+  /**
+   * Para LEER un servicio: de la base y, si ya se archivó (más de 12 meses), del archivo. Las rutas que lo modifican siguen usando
+   * `findOneRaw`, que solo mira la base: lo archivado es inmutable y para ellas "no existe".
+   */
+  private async leerServicio(id: string) {
+    try {
+      return await this.findOneRaw(id);
+    } catch (e) {
+      if (!(e instanceof NotFoundException) || !this.historico) throw e;
+      const archivado = await new ServiciosArchivo(this.prisma, this.historico).detalle(id);
+      if (!archivado) throw e;
+      return archivado as Awaited<ReturnType<OperacionesService['findOneRaw']>>;
+    }
+  }
+
   async findOne(id: string, actor?: any) {
-    const servicio = await this.findOneRaw(id);
+    const servicio = await this.leerServicio(id);
     this.asegurarAlcanceServicio(actor, servicio);
     return serializeServicioLavado(servicio);
   }
 
   /** Quién aprobó, rechazó, anuló o corrigió este servicio, con qué regla y por qué (del más reciente al más antiguo). */
   async historialDecisiones(id: string, actor: any) {
-    const servicio = await this.findOneRaw(id);
+    const servicio = await this.leerServicio(id);
     this.asegurarAlcanceServicio(actor, servicio);
     return this.prisma.auditoriaDecision.findMany({
       where: { entidad: 'SERVICIO_LAVADO', entidadId: servicio.id },
@@ -482,6 +519,22 @@ export class OperacionesService {
   }
 
   async create(createDto: CreateServicioDto, operadorId: string, actor?: any) {
+    // Registrar una OT nueva y agregar un servicio a una OT que ya existe son dos botones con dos permisos: el servidor mira cuál es.
+    if (actor) {
+      const ot = createDto.ordenTrabajoOT?.trim().toUpperCase();
+      const yaExiste = ot
+        ? !!(await this.prisma.servicioLavado.findFirst({
+            where: { ordenTrabajoOT: { equals: ot, mode: 'insensitive' }, deletedAt: null, estado: { not: ServiceStatus.CANCELADO } },
+            select: { id: true },
+          }))
+        : false;
+      if (yaExiste && !tieneAlgunPermiso(actor, ['servicios.generales.agregar'])) {
+        throw new ForbiddenException('Tu rol no puede agregar servicios a una OT que ya existe.');
+      }
+      if (!yaExiste && !tieneAlgunPermiso(actor, ['servicios.generales.crear'])) {
+        throw new ForbiddenException('Tu rol no puede registrar órdenes de servicio nuevas.');
+      }
+    }
     const clientUuid = createDto.clientUuid || randomUUID();
     const now = new Date();
 
@@ -1356,7 +1409,19 @@ export class OperacionesService {
   //  RECETAS DE INSUMOS POR CATÁLOGO DE SERVICIO
   // ============================================================
 
-  async asignarReceta(dto: AsignarRecetaDto, usuarioId?: string) {
+  /** Las recetas se rigen por la categoría del servicio: «catalogo.generales.recetas.*» o «catalogo.especiales.recetas.*». */
+  private async exigirRecetaDe(actor: any, catalogoServicioId: number, accion: 'ver' | 'editar' | 'historial') {
+    if (!actor) return;
+    const servicio = await this.prisma.catalogoServicio.findUnique({ where: { id: catalogoServicioId }, select: { categoria: true } });
+    if (!servicio) return; // el método que sigue responde el 404
+    const grupo = String(servicio.categoria).toUpperCase() === 'ESPECIAL' ? 'especiales' : 'generales';
+    if (!tienePermiso(actor, `catalogo.${grupo}.recetas.${accion}`)) {
+      throw new ForbiddenException(`Tu rol no tiene permiso para ${accion === 'ver' ? 'ver' : accion === 'editar' ? 'editar' : 'ver el historial de'} recetas de servicios ${grupo}.`);
+    }
+  }
+
+  async asignarReceta(dto: AsignarRecetaDto, usuarioId?: string, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'editar');
     // Verificar que el catálogo existe
     const catalogo = await this.prisma.catalogoServicio.findUnique({
       where: { id: dto.catalogoServicioId },
@@ -1564,7 +1629,7 @@ export class OperacionesService {
       ];
     }
 
-    const [generales, especiales] = await Promise.all([
+    const [generalesDb, especialesDb] = await Promise.all([
       tipo === 'ESPECIAL' ? [] : this.prisma.consumoServicio.findMany({
         where: whereGeneral,
         orderBy: { createdAt: 'desc' },
@@ -1603,6 +1668,17 @@ export class OperacionesService {
         },
       }),
     ]);
+
+    // Lo archivado en Parquet se suma por debajo: la base va primero y el archivo completa lo más antiguo.
+    const consumosArchivo = this.historico ? new ConsumosArchivo(this.prisma, this.historico) : null;
+    const params = { agenciaId: dto.agenciaId, busqueda, fechaDesde: dto.fechaDesde, fechaHasta: dto.fechaHasta };
+    const [generalesArchivo, especialesArchivo] = await Promise.all([
+      tipo === 'ESPECIAL' || !consumosArchivo ? [] : consumosArchivo.generales(params, LIMITE_LINEAS),
+      tipo === 'GENERAL' || !consumosArchivo ? [] : consumosArchivo.especiales(params, LIMITE_LINEAS),
+    ]);
+    const masNuevasPrimero = (a: any, b: any) => b.createdAt.getTime() - a.createdAt.getTime();
+    const generales: any[] = [...generalesDb, ...generalesArchivo].sort(masNuevasPrimero).slice(0, LIMITE_LINEAS);
+    const especiales: any[] = [...especialesDb, ...especialesArchivo].sort(masNuevasPrimero).slice(0, LIMITE_LINEAS);
 
     type ItemConsumo = {
       servicioNombre: string;
@@ -1697,7 +1773,8 @@ export class OperacionesService {
     };
   }
 
-  async listRecetaHistorial(dto: ListRecetaDto) {
+  async listRecetaHistorial(dto: ListRecetaDto, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'historial');
     return this.prisma.recetaInsumoHistorial.findMany({
       where: { catalogoServicioId: dto.catalogoServicioId },
       include: {
@@ -1707,7 +1784,8 @@ export class OperacionesService {
     });
   }
 
-  async listReceta(dto: ListRecetaDto) {
+  async listReceta(dto: ListRecetaDto, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'ver');
     const catalogo = await this.prisma.catalogoServicio.findUnique({
       where: { id: dto.catalogoServicioId },
       include: {
@@ -1736,7 +1814,8 @@ export class OperacionesService {
     return catalogo;
   }
 
-  async eliminarRecetaItem(dto: EliminarRecetaItemDto, usuarioId?: string) {
+  async eliminarRecetaItem(dto: EliminarRecetaItemDto, usuarioId?: string, actor?: any) {
+    await this.exigirRecetaDe(actor, dto.catalogoServicioId, 'editar');
     const receta = await this.prisma.recetaInsumo.findUnique({
       where: {
         catalogoServicioId_insumoId: {

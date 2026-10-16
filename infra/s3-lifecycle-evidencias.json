@@ -1,0 +1,34 @@
+{
+  "Rules": [
+    {
+      "ID": "evidencias-agencias-a-clase-barata",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "agencias/" },
+      "Transitions": [
+        { "Days": 90, "StorageClass": "STANDARD_IA" },
+        { "Days": 365, "StorageClass": "GLACIER_IR" }
+      ],
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    },
+    {
+      "ID": "evidencias-envios-inventario-a-clase-barata",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "inventario/envios/" },
+      "Transitions": [
+        { "Days": 90, "StorageClass": "STANDARD_IA" },
+        { "Days": 365, "StorageClass": "GLACIER_IR" }
+      ],
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    },
+    {
+      "ID": "evidencias-maquinaria-a-clase-barata",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "maquinaria/" },
+      "Transitions": [
+        { "Days": 90, "StorageClass": "STANDARD_IA" },
+        { "Days": 365, "StorageClass": "GLACIER_IR" }
+      ],
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

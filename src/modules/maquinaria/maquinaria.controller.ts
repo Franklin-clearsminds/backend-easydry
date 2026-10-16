@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { ForbiddenException, Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { MaquinariaService } from './maquinaria.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -71,12 +71,15 @@ export class MaquinariaController {
     return this.maquinariaService.create(dto, actorFromUser(user));
   }
 
-  @Permiso('maquinaria.editar')
+  @Permiso('maquinaria.editar', 'maquinaria.archivos')
   @Post('update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Editar datos de la máquina, con historial de qué cambió (admin, super admin)' })
   async update(@Body() dto: UpdateMaquinariaDto, @CurrentUser() user: any) {
-    return this.maquinariaService.update(dto, actorFromUser(user));
+    return this.maquinariaService.update(dto, actorFromUser(user), {
+      editar: tienePermiso(user, 'maquinaria.editar'),
+      archivos: tienePermiso(user, 'maquinaria.archivos'),
+    });
   }
 
   @Permiso('maquinaria.editar')
@@ -103,7 +106,7 @@ export class MaquinariaController {
     return this.maquinariaService.configurarVentana(dto, actorFromUser(user));
   }
 
-  @Permiso('maquinaria.trazabilidad')
+  @Permiso('maquinaria.trazabilidad.ver')
   @Post('historial')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Línea de tiempo de la máquina (paginada y filtrable por tipo, fechas y persona)' })
@@ -115,12 +118,12 @@ export class MaquinariaController {
   // INCIDENTES TÉCNICOS
   // ==============================================================
 
-  @Permiso('incidentes.reportar')
+  @Permiso('maquinaria.incidente.reportar', 'taller.incidentes.reportar')
   @Post('incidentes/reportar')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Reportar una incidencia dentro del alcance; las evidencias se exigen solo si el rol tiene el permiso de subida.' })
   async reportarIncidente(@Body() dto: ReportarIncidenteDto, @CurrentUser() user: any) {
-    return this.maquinariaService.reportarIncidente(dto, actorFromUser(user), tienePermiso(user, 'maquinaria.evidencias'));
+    return this.maquinariaService.reportarIncidente(dto, actorFromUser(user), tienePermiso(user, 'taller.incidentes.evidencias'));
   }
 
   @Permiso('taller.incidentes.asignar')
@@ -131,15 +134,19 @@ export class MaquinariaController {
     return this.maquinariaService.asignarIncidente(dto, actorFromUser(user));
   }
 
-  @Permiso('incidentes.resolver')
+  @Permiso('taller.incidentes.resolver', 'taller.incidentes.cancelar')
   @Post('incidentes/resolver')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cerrar la incidencia; las evidencias se exigen solo si el rol tiene el permiso de subida.' })
   async resolverIncidente(@Body() dto: ResolverIncidenteDto, @CurrentUser() user: any) {
-    return this.maquinariaService.resolverIncidente(dto, actorFromUser(user), tienePermiso(user, 'maquinaria.evidencias'));
+    const cancela = dto.estado === 'CANCELADO';
+    if (!tienePermiso(user, cancela ? 'taller.incidentes.cancelar' : 'taller.incidentes.resolver')) {
+      throw new ForbiddenException(cancela ? 'Tu rol no puede cancelar incidentes.' : 'Tu rol no puede resolver incidentes.');
+    }
+    return this.maquinariaService.resolverIncidente(dto, actorFromUser(user), tienePermiso(user, 'taller.incidentes.evidencias'));
   }
 
-  @Permiso('incidentes.resolver')
+  @Permiso('taller.incidentes.resolver')
   @Post('incidentes/editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Editar una incidencia; queda registrado quién editó y qué cambió' })
@@ -175,15 +182,15 @@ export class MaquinariaController {
     return this.maquinariaService.asignarMantenimiento(dto, actorFromUser(user));
   }
 
-  @Permiso('mantenimientos.ejecutar')
+  @Permiso('taller.mantenimientos.ejecutar')
   @Post('mantenimientos/ejecutar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ejecutar el mantenimiento; las evidencias se exigen solo si el rol tiene el permiso de subida.' })
   async ejecutarMantenimiento(@Body() dto: EjecutarMantenimientoDto, @CurrentUser() user: any) {
-    return this.maquinariaService.ejecutarMantenimiento(dto, actorFromUser(user), tienePermiso(user, 'maquinaria.evidencias'));
+    return this.maquinariaService.ejecutarMantenimiento(dto, actorFromUser(user), tienePermiso(user, 'taller.mantenimientos.evidencias'));
   }
 
-  @Permiso('mantenimientos.ejecutar')
+  @Permiso('taller.mantenimientos.editar')
   @Post('mantenimientos/editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Editar un mantenimiento; queda registrado quién editó y qué cambió' })
@@ -211,7 +218,7 @@ export class MaquinariaController {
     return this.maquinariaService.listarPlantillasChecklist();
   }
 
-  @Permiso('checklist.gestionar')
+  @Permiso('taller.checklist.gestionar')
   @Post('checklist/plantillas/guardar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Guardar los pasos de un tipo como una versión nueva de la plantilla (la anterior queda inactiva)' })
@@ -227,7 +234,7 @@ export class MaquinariaController {
     return this.maquinariaService.obtenerChecklist(dto.mantenimientoId, actorFromUser(user));
   }
 
-  @Permiso('mantenimientos.ejecutar')
+  @Permiso('taller.mantenimientos.ejecutar')
   @Post('mantenimientos/checklist/marcar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Marcar o desmarcar un paso del checklist (deja quién y cuándo)' })
@@ -235,7 +242,7 @@ export class MaquinariaController {
     return this.maquinariaService.marcarChecklist(dto, actorFromUser(user), user);
   }
 
-  @Permiso('maquinaria.evidencias')
+  @Permiso('taller.incidentes.evidencias', 'taller.mantenimientos.evidencias')
   @Post('evidencias/agregar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Agregar o reemplazar evidencia de una incidencia o mantenimiento (nunca se borra)' })
@@ -247,7 +254,7 @@ export class MaquinariaController {
   // LIMPIEZA (2x/semana para la maquinaria de agencia, diaria para la asignada a un pulidor)
   // ==============================================================
 
-  @Permiso('limpiezas.evidencias')
+  @Permiso('taller.limpiezas.registrar')
   @Post('limpiezas/registrar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Registrar la limpieza de una máquina (una o varias fotos); el líder la de su agencia, el pulidor la suya' })
@@ -279,7 +286,7 @@ export class MaquinariaController {
     return this.maquinariaService.exportarLimpiezas(dto, actorFromUser(user));
   }
 
-  @Permiso('limpiezas.editar')
+  @Permiso('taller.limpiezas.editar')
   @Post('limpiezas/editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Corregir las observaciones de un registro de limpieza (admin, supervisor y coordinador de mantenimiento de su región)' })
@@ -287,7 +294,7 @@ export class MaquinariaController {
     return this.maquinariaService.editarLimpieza(dto, actorFromUser(user));
   }
 
-  @Permiso('limpiezas.editar')
+  @Permiso('taller.limpiezas.editar')
   @Post('limpiezas/eliminar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar un registro de limpieza (queda el evento en la línea de tiempo de la máquina)' })
@@ -307,7 +314,7 @@ export class MaquinariaController {
     return this.maquinariaService.transferirMaquinaria(dto, actorFromUser(user));
   }
 
-  @Permiso('maquinaria.trazabilidad')
+  @Permiso('maquinaria.trazabilidad.ver')
   @Post('movimientos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Historial de movimientos entre agencias, bahías y talleres' })

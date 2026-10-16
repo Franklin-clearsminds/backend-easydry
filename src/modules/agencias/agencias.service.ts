@@ -73,14 +73,16 @@ import {
 
 import { Alcance, SIN_RESULTADOS, puedeSobreAgencia, resolverAlcance, whereAgencias, whereSobreAgencia } from '../../common/permisos/alcance.js';
 import { esLiderDeAgencia, normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
-import { tienePermiso } from '../../common/permisos/capacidades.js';
-import { generarPasswordTemporal } from '../../common/utils/password-temporal.js';
+import { tieneAlgunPermiso, tienePermiso } from '../../common/permisos/capacidades.js';
 import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
+import { CacheService } from '../../common/cache/cache.service.js';
+import { USUARIO_PREFIJO } from '../auth/jwt.strategy.js';
 @Injectable()
 export class AgenciasService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly cache?: CacheService,
   ) {}
 
   /** Avisa al propio usuario afectado (rol, estado o agencia/región cambiados) y a admin/super admin. Nunca bloquea el flujo. */
@@ -113,6 +115,83 @@ export class AgenciasService {
   /** Cédula del personal: el administrador, o quien tenga la casilla «Ver cédula». */
   private veCedula(user: any): boolean {
     return this.esAdmin(user) || tienePermiso(user, 'datos.cedula.ver');
+  }
+
+  /**
+   * ¿Puede `actor` asignar la contraseña de `objetivo`? Hace falta el permiso `usuarios.usuarios.password` (Roles y Permisos › Usuarios › Asignar y restablecer contraseñas) y además:
+   *  - nadie cambia la suya (la asigna otro);
+   *  - el Super Administrador es intocable (se rechaza antes) y la de un Administrador solo la cambia el Super Administrador;
+   *  - se actúa solo sobre usuarios de la propia zona (país, región o agencia, según el ámbito del rol); entre los demás roles no hay jerarquía.
+   */
+  private asegurarPuedeAsignarPassword(actor: any, objetivo: { id: string; role?: { namerol?: string | null } | null; agenciaId?: string | null; regionId?: string | null; agencia?: { regionId?: string | null } | null; bodega?: { regionId?: string | null } | null }): void {
+    if (!tienePermiso(actor, 'usuarios.usuarios.password')) {
+      throw new ForbiddenException('Tu rol no tiene permiso para asignar contraseñas.');
+    }
+    if (actor?.id && String(actor.id) === String(objetivo.id)) {
+      throw new ForbiddenException('No puedes cambiar tu propia contraseña: la asigna otro usuario con ese permiso.');
+    }
+    if (objetivo.role?.namerol === 'ADMIN' && rolDeUsuario(actor) !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Solo el Super Administrador puede reiniciar la contraseña de un Administrador.');
+    }
+    const alcance = resolverAlcance(actor);
+    const regionDelObjetivo = objetivo.regionId ?? objetivo.agencia?.regionId ?? objetivo.bodega?.regionId ?? null;
+    const dentro =
+      alcance.tipo === 'GLOBAL' ||
+      (alcance.tipo === 'REGION' && !!regionDelObjetivo && regionDelObjetivo === alcance.regionId) ||
+      (alcance.tipo === 'AGENCIA' && !!objetivo.agenciaId && objetivo.agenciaId === alcance.agenciaId);
+    if (!dentro) {
+      throw new ForbiddenException('Este usuario no pertenece a tu zona: no puedes asignarle una contraseña.');
+    }
+  }
+
+  /**
+   * Asigna (o restablece) la contraseña de un usuario existente. Es el único camino para quien tiene SOLO el permiso de contraseñas: no
+   * puede tocar ningún otro dato del usuario. Cierra las sesiones abiertas del usuario y deja constancia.
+   */
+  async asignarPassword(dto: { id: string; password: string }, actor: any): Promise<{ ok: true }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: dto.id },
+      include: { role: true, agencia: { select: { regionId: true } }, bodega: { select: { regionId: true } } },
+    });
+    if (!user) throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
+    if (user.role?.namerol === 'SUPER_ADMIN') {
+      throw new ForbiddenException('El usuario Super Administrador es de sistema y no puede gestionarse desde la aplicación.');
+    }
+    const nueva = dto.password?.trim();
+    if (!nueva) throw new BadRequestException('Escribe la nueva contraseña.');
+    exigirPasswordSegura(nueva, user.email);
+    this.asegurarPuedeAsignarPassword(actor, user);
+
+    const ahora = new Date();
+    const passwordHash = await bcrypt.hash(nueva, 10);
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: user.id }, data: { passwordHash, sesionesRevocadasAt: ahora } }),
+      this.prisma.refreshSession.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: ahora } }),
+    ]);
+    await this.cache?.del(`${USUARIO_PREFIJO}${user.id}`);
+    await this.registrarAsignacionPassword(actor, user.id, user.email, user.agenciaId);
+    return { ok: true };
+  }
+
+  /** Deja constancia (sin la contraseña) de quién asignó una contraseña a quién. Nunca bloquea el flujo. */
+  private async registrarAsignacionPassword(actor: any, objetivoId: string, objetivoEmail: string, agenciaId?: string | null): Promise<void> {
+    try {
+      await this.prisma.auditoriaDecision.create({
+        data: {
+          entidad: 'USUARIO',
+          entidadId: objetivoId,
+          accion: 'ASIGNAR_PASSWORD',
+          usuarioId: String(actor?.id ?? ''),
+          usuarioNombre: `${actor?.name ?? ''} ${actor?.lastname ?? ''}`.trim() || String(actor?.email ?? ''),
+          rol: rolDeUsuario(actor),
+          regla: this.esAdmin(actor) ? 'ADMIN' : 'DELEGADO',
+          agenciaId: agenciaId ?? null,
+          detalle: { usuario: objetivoEmail },
+        },
+      });
+    } catch {
+      // La constancia no debe impedir el cambio.
+    }
   }
 
   /** El usuario debe poder actuar sobre esa agencia (según su ámbito). */
@@ -699,9 +778,9 @@ export class AgenciasService {
       camposBusqueda: ['nombre', 'codigo'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>
-        this.prisma.region.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, codigo: true } }),
+        this.prisma.region.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, codigo: true, estado: true } }),
       contar: (where) => this.prisma.region.count({ where }),
-      mapear: (r) => ({ value: r.id, label: r.nombre, sublabel: r.codigo || undefined }),
+      mapear: (r) => ({ value: r.id, label: r.nombre, sublabel: r.codigo || undefined, estado: r.estado }),
     });
   }
 
@@ -711,9 +790,9 @@ export class AgenciasService {
       camposBusqueda: ['nombre'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>
-        this.prisma.cliente.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true } }),
+        this.prisma.cliente.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, estado: true } }),
       contar: (where) => this.prisma.cliente.count({ where }),
-      mapear: (c) => ({ value: c.id, label: c.nombre }),
+      mapear: (c) => ({ value: c.id, label: c.nombre, estado: c.estado }),
     });
   }
 
@@ -1483,7 +1562,7 @@ export class AgenciasService {
   }
 
   // =========================================================================
-  // PRECIOS POR AGENCIA (override de CatalogoServicio.precio, solo servicios GENERAL)
+  // PRECIOS POR AGENCIA (cada agencia tiene su propio valor de los servicios generales y especiales; el catálogo no tiene precio base)
   // =========================================================================
 
   /**
@@ -1504,8 +1583,8 @@ export class AgenciasService {
 
     const [servicios, overrides] = await Promise.all([
       this.prisma.catalogoServicio.findMany({
-        where: { id: { in: ids }, categoria: 'GENERAL' },
-        select: { id: true, codigo: true, nombre: true, precio: true, estado: true },
+        where: { id: { in: ids }, categoria: { in: ['GENERAL', 'ESPECIAL'] } },
+        select: { id: true, codigo: true, nombre: true, categoria: true, precio: true, estado: true },
         orderBy: { nombre: 'asc' },
       }),
       this.prisma.precioAgenciaServicio.findMany({
@@ -1521,6 +1600,7 @@ export class AgenciasService {
         catalogoServicioId: s.id,
         codigo: s.codigo,
         nombre: s.nombre,
+        categoria: s.categoria,
         estado: s.estado,
         precioCatalogo: Number(s.precio),
         precioAgencia,
@@ -1554,10 +1634,10 @@ export class AgenciasService {
       select: { id: true, categoria: true },
     });
     const servicioPorId = new Map(servicios.map((s) => [s.id, s]));
-    const invalidos = idsSolicitados.filter((id) => servicioPorId.get(id)?.categoria !== 'GENERAL');
+    const invalidos = idsSolicitados.filter((id) => !['GENERAL', 'ESPECIAL'].includes(servicioPorId.get(id)?.categoria as string));
     if (invalidos.length > 0) {
       throw new BadRequestException(
-        `Los servicios con ID ${invalidos.join(', ')} no existen o no son servicios GENERALES: el precio por agencia solo aplica a servicios generales.`,
+        `Los servicios con ID ${invalidos.join(', ')} no existen o no son servicios generales ni especiales.`,
       );
     }
 
@@ -1763,6 +1843,11 @@ export class AgenciasService {
       throw new NotFoundException(`Bahía con ID "${dto.id}" no encontrada`);
     }
     await this.bahiaEnAlcance(user, dto.id);
+
+    // Este endpoint lo abre "Activar o desactivar bahia". Cambiar el nombre no tiene casilla ni pantalla: solo el Super Admin.
+    if (user && dto.nombre && dto.nombre.trim() !== bahia.nombre && !tienePermiso(user, 'agencias.bahias.editar')) {
+      throw new ForbiddenException('Tu rol no puede cambiar el nombre de una bahía: solo activarla o desactivarla.');
+    }
 
     const actualizada = await this.prisma.bahia.update({
       where: { id: dto.id },
@@ -2179,7 +2264,7 @@ export class AgenciasService {
   }
 
   async updateUsuario(dto: UpdateUsuarioDto, actor?: any) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.id }, include: { role: true } });
+    const user = await this.prisma.user.findUnique({ where: { id: dto.id }, include: { role: true, agencia: { select: { regionId: true } }, bodega: { select: { regionId: true } } } });
     if (!user) {
       throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
     }
@@ -2188,20 +2273,11 @@ export class AgenciasService {
       throw new ForbiddenException('El usuario Super Administrador es de sistema y no puede gestionarse desde la aplicación.');
     }
 
-    // Las contraseñas las gestiona únicamente el Administrador o el Super Administrador: nadie cambia la suya.
+    // Las contraseñas las asigna quien tiene el permiso `usuarios.usuarios.password` (por defecto, Admin y Super Admin): nadie cambia la suya.
     const nuevaPassword = dto.password?.trim();
     if (nuevaPassword) {
       exigirPasswordSegura(nuevaPassword, user.email);
-      const rolActor = rolDeUsuario(actor);
-      if (!this.esAdmin(actor)) {
-        throw new ForbiddenException('Solo el Administrador o el Super Administrador pueden asignar contraseñas.');
-      }
-      if (actor?.id && String(actor.id) === String(user.id)) {
-        throw new ForbiddenException('No puedes cambiar tu propia contraseña: la asigna otro administrador.');
-      }
-      if (user.role?.namerol === 'ADMIN' && rolActor !== 'SUPER_ADMIN') {
-        throw new ForbiddenException('Solo el Super Administrador puede reiniciar la contraseña de un Administrador.');
-      }
+      this.asegurarPuedeAsignarPassword(actor, user);
     }
 
     let roleIdToSet: string | undefined = undefined;
@@ -2461,6 +2537,8 @@ export class AgenciasService {
         where: { userId: updatedUser.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      await this.cache?.del(`${USUARIO_PREFIJO}${updatedUser.id}`);
+      await this.registrarAsignacionPassword(actor, updatedUser.id, updatedUser.email, updatedUser.agenciaId);
     }
 
     const sIdsUser = Array.isArray(updatedUser.servicioIds)
@@ -3075,7 +3153,24 @@ export class AgenciasService {
     }), currentUser);
   }
 
-  async createOperador(dto: CreateOperadorDto, creatorId?: string) {
+  /**
+   * Cada botón de Gestión de Lavadores tiene su permiso: editar datos, cambiar el rol, asignar a una bahía y quitar de una bahía son
+   * cuatro casillas distintas aunque viajen en el mismo formulario. `actor` solo falta en llamadas internas (sin sesión web).
+   */
+  private exigirPermiso(actor: any, codigos: string[], accion: string): void {
+    if (!actor) return;
+    if (!tieneAlgunPermiso(actor, codigos)) throw new ForbiddenException(`Tu rol no puede ${accion}.`);
+  }
+
+  /** Asignar a una bahía lo permiten Gestión de Lavadores y Gestión de Agencias (la misma acción en dos pantallas). */
+  private static readonly PERMISOS_ASIGNAR_BAHIA = ['operadores.bahia.asignar', 'agencias.bahias.asignar'];
+  private static readonly PERMISOS_QUITAR_BAHIA = ['operadores.bahia.quitar', 'agencias.bahias.asignar'];
+
+  async createOperador(dto: CreateOperadorDto, creatorId?: string, actor?: any) {
+    // Registrar con una bahía ya asignada es asignar: exige además ese permiso.
+    const quiereBahia = !!dto.bahiaId && !!dto.bahiaId.trim() && !/sin bah[ií]a/i.test(dto.bahiaId);
+    if (quiereBahia) this.exigirPermiso(actor, AgenciasService.PERMISOS_ASIGNAR_BAHIA, 'asignar lavadores a una bahía');
+
     const agencia = await this.prisma.agencia.findFirst({
       where: {
         OR: [
@@ -3134,8 +3229,11 @@ export class AgenciasService {
       throw new ConflictException(`Ya existe un lavador registrado con esta identificación/cédula (${cedulaClean})`);
     }
 
-    const passwordTemporal = generarPasswordTemporal();
-    const passwordHash = await bcrypt.hash(passwordTemporal, 10);
+    // La contraseña la define quien registra al operador (con la misma política que cualquier usuario) y se la comunica.
+    const passwordInicial = dto.password?.trim();
+    if (!passwordInicial) throw new BadRequestException('La contraseña es obligatoria para registrar al operador.');
+    exigirPasswordSegura(passwordInicial, emailToUse);
+    const passwordHash = await bcrypt.hash(passwordInicial, 10);
     const names = dto.nombre.trim().split(' ');
     const firstName = names[0] || 'Lavador';
     const lastNamePart = names.slice(1).join(' ');
@@ -3194,11 +3292,10 @@ export class AgenciasService {
       }
     });
 
-    // La contraseña se entrega una sola vez, para que quien registra al operador se la comunique. Solo un administrador puede cambiarla después.
-    return { ...this.mapUserToOperador(created), passwordTemporal };
+    return this.mapUserToOperador(created);
   }
 
-  async updateOperador(dto: UpdateOperadorDto, updaterId?: string) {
+  async updateOperador(dto: UpdateOperadorDto, updaterId?: string, actor?: any) {
     const user = await this.prisma.user.findUnique({
       where: { id: dto.id },
       include: { role: { select: { namerol: true } }, bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } } }
@@ -3246,6 +3343,24 @@ export class AgenciasService {
       if (role) {
         dataToUpdate.roleId = role.id;
         rolNombreFinal = role.namerol;
+      }
+    }
+
+    // Permisos por botón: solo se exige cada uno si ese cambio ocurre de verdad (el formulario manda todos los campos).
+    const cambiaRol = dataToUpdate.roleId !== undefined && dataToUpdate.roleId !== user.roleId;
+    const cambiaDatos =
+      (dataToUpdate.name !== undefined && dataToUpdate.name !== user.name) ||
+      (dataToUpdate.lastname !== undefined && dataToUpdate.lastname !== user.lastname) ||
+      (dataToUpdate.estado !== undefined && dataToUpdate.estado !== user.estado) ||
+      (dataToUpdate.agenciaId !== undefined && dataToUpdate.agenciaId !== user.agenciaId);
+    if (cambiaDatos) this.exigirPermiso(actor, ['operadores.editar'], 'editar los datos de lavadores y pulidores');
+    if (cambiaRol) this.exigirPermiso(actor, ['operadores.rol'], 'cambiar el rol de lavadores y pulidores');
+    if (dto.bahiaId !== undefined) {
+      const actual = user.bahiaOperadores?.[0]?.bahia;
+      const sinBahia = !dto.bahiaId || /sin bah[ií]a/i.test(dto.bahiaId);
+      if (sinBahia && actual) this.exigirPermiso(actor, AgenciasService.PERMISOS_QUITAR_BAHIA, 'dejar a un lavador sin bahía');
+      if (!sinBahia && (!actual || (actual.id !== dto.bahiaId && actual.nombre !== dto.bahiaId))) {
+        this.exigirPermiso(actor, AgenciasService.PERMISOS_ASIGNAR_BAHIA, 'asignar lavadores a una bahía');
       }
     }
 

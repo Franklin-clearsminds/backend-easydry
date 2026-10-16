@@ -103,6 +103,79 @@ describe('InventarioService: alertas y stock bajo (base real)', () => {
     });
   });
 
+  /**
+   * El alcance sale del ÁMBITO configurado en el rol, no de su nombre: un rol propio creado desde «Roles y Permisos» con
+   * ámbito Nacional, Región, Agencia o Propio ve lo mismo que uno de fábrica con ese ámbito.
+   */
+  describe('listAlertas — alcance por el ámbito del rol (roles propios)', () => {
+    const rolPropio = async (sufijo: string, ambito: 'GLOBAL' | 'REGION' | 'AGENCIA' | 'PROPIO') => {
+      const r = await env.prisma.role.create({
+        data: { namerol: `${env.marca}_${sufijo}`.toUpperCase(), capacidades: ['alertas.ver'], ambito, permisos: [], esSistema: false },
+      });
+      env.rastrear('Role', r.id);
+      return r.namerol;
+    };
+    const ordenado = (r: any) => mias(r).sort();
+
+    it('Nacional: ve las alertas de todas las agencias y de los kits', async () => {
+      const u = await env.usuario('propioNacional', await rolPropio('nacional', 'GLOBAL'));
+      const { service, sincronizaciones } = servicio();
+      expect(ordenado(await service.listAlertas({} as any, u.id))).toEqual(['al1', 'al2', 'al3', 'al4', 'al5']);
+      // Un ámbito amplio inicia la sincronización de alertas, igual que los roles de fábrica con vista de varias sedes.
+      expect(sincronizaciones).toEqual([u.id]);
+    });
+
+    it('Nacional: puede acotar a una agencia', async () => {
+      const u = await env.usuario('propioNacional2', await rolPropio('nacional2', 'GLOBAL'));
+      const { service } = servicio();
+      expect(ordenado(await service.listAlertas({ agenciaId: a3.id } as any, u.id))).toEqual(['al4']);
+    });
+
+    it('Región: ve las agencias de su región y no las de otra', async () => {
+      const u = await env.usuario('propioRegion', await rolPropio('region', 'REGION'), { regionId: r1.id });
+      const { service } = servicio();
+      const r = ordenado(await service.listAlertas({} as any, u.id));
+      expect(r).toEqual(expect.arrayContaining(['al1', 'al2', 'al3']));
+      expect(r).not.toContain('al4'); // agencia de la región R2
+    });
+
+    it('Región: pedir una agencia de otra región no devuelve nada ajeno', async () => {
+      const u = await env.usuario('propioRegion2', await rolPropio('region2', 'REGION'), { regionId: r1.id });
+      const { service } = servicio();
+      expect(ordenado(await service.listAlertas({ agenciaId: a3.id } as any, u.id))).not.toContain('al4');
+    });
+
+    it('Agencia: solo la suya, y una agencia que mande el cliente se ignora', async () => {
+      const u = await env.usuario('propioAgencia', await rolPropio('agencia', 'AGENCIA'), { agenciaId: a1.id });
+      const { service, sincronizaciones } = servicio();
+      expect(ordenado(await service.listAlertas({ agenciaId: a2.id } as any, u.id))).toEqual(['al1', 'al2', 'al5']);
+      expect(sincronizaciones).toEqual([]); // no inicia la sincronización de varias sedes
+    });
+
+    it('Propio: solo las alertas de su propio kit', async () => {
+      const u = await env.usuario('propioKit', await rolPropio('propio', 'PROPIO'));
+      al.al6 = (await env.prisma.alertaStock.create({
+        data: { usuarioEmisorId: ids.admin, insumoId: cera.id, pulidorId: u.id, nivel: 'BAJO', estado: 'PENDIENTE' } as never,
+      })).id;
+      try {
+        const { service } = servicio();
+        expect(ordenado(await service.listAlertas({} as any, u.id))).toEqual(['al6']);
+      } finally {
+        // Esta alerta es solo de este caso: las demás pruebas cuentan alertas del mundo compartido.
+        await env.prisma.alertaStock.delete({ where: { id: al.al6 } });
+        delete al.al6;
+      }
+    });
+
+    it('Región o Agencia sin ese dato en el usuario: no ve nada (nunca alertas ajenas)', async () => {
+      const sinRegion = await env.usuario('propioSinRegion', await rolPropio('sinregion', 'REGION'));
+      const sinAgencia = await env.usuario('propioSinAgencia', await rolPropio('sinagencia', 'AGENCIA'));
+      const { service } = servicio();
+      expect(ordenado(await service.listAlertas({} as any, sinRegion.id))).toEqual([]);
+      expect(ordenado(await service.listAlertas({} as any, sinAgencia.id))).toEqual([]);
+    });
+  });
+
   describe('listAlertas — modo paginado (no escribe)', () => {
     it('no sincroniza al listar y responde el formato estándar', async () => {
       const { service, sincronizaciones } = servicio();

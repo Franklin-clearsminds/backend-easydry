@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { CacheService } from '../../common/cache/cache.service.js';
+import { USUARIO_PREFIJO } from '../auth/jwt.strategy.js';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRoleDto } from './dto/create-role.dto.js';
@@ -33,6 +35,7 @@ export class RolesService implements OnModuleInit {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    @Optional() private cache?: CacheService,
   ) {}
 
   /**
@@ -354,6 +357,8 @@ export class RolesService implements OnModuleInit {
       data: dataToUpdate,
       include: { _count: { select: { users: true } } },
     });
+    // Los usuarios con este rol guardan una copia del rol en caché: los permisos nuevos deben valer ya.
+    await this.cache?.delPrefijo(USUARIO_PREFIJO);
 
     const cambioPermisos =
       (dataToUpdate.capacidades !== undefined && !listasIguales(role.capacidades, dataToUpdate.capacidades)) ||
@@ -390,6 +395,7 @@ export class RolesService implements OnModuleInit {
     }
 
     await this.prisma.role.delete({ where: { id } });
+    await this.cache?.delPrefijo(USUARIO_PREFIJO);
 
     return {
       success: true,

@@ -175,6 +175,12 @@ export class ConfirmarRecepcionDto {
   @IsOptional()
   @IsArray()
   cantidadesRecibidas?: { detalleId: string; cantidadRecibida: number }[];
+
+  @ApiPropertyOptional({ type: [String], description: 'Fotos de evidencia (opcionales, máximo 5), subidas con el tipo FOTO_ENVIO' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidencias?: string[];
 }
 
 export class RechazarDespachoDto {
@@ -195,6 +201,12 @@ export class RechazarDespachoDto {
   @IsOptional()
   @IsString()
   agenciaId?: string;
+
+  @ApiPropertyOptional({ type: [String], description: 'Fotos de evidencia (opcionales, máximo 5)' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidencias?: string[];
 }
 
 export class ListMovimientosDto {

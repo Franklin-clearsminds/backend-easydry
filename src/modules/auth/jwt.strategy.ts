@@ -1,9 +1,10 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { secretoObligatorio } from '../../common/config/secretos.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { CacheService } from '../../common/cache/cache.service.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 import { JWT_VERIFY_OPTIONS } from './jwt.config.js';
 
@@ -23,11 +24,16 @@ export function tokenRevocado(iat: number | undefined, revocadasAt: Date | null 
   return iat < Math.floor(revocadasAt.getTime() / 1000);
 }
 
+/** Prefijo de las claves del usuario en caché: quien cambie sesiones o roles borra con `delPrefijo`. */
+export const USUARIO_PREFIJO = 'auth:user:';
+const TTL_USUARIO_SEG = 10;
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     configService: ConfigService,
     private prisma: PrismaService,
+    @Optional() private cache?: CacheService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -42,8 +48,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Tipo de token inválido para autorización');
     }
 
-    const user = await this.prisma.user.findUnique({
+    const cargar = () => this.prisma.user.findUnique({
       where: { id: payload.sub },
+      // El hash de la contraseña no se necesita aquí y NO debe quedar en la caché.
+      omit: { passwordHash: true },
       include: {
         role: {
           select: { id: true, namerol: true, permisos: true, acciones: true, capacidades: true, ambito: true, esSistema: true, estado: true },
@@ -59,6 +67,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         },
       },
     });
+    // Cada petición autenticada necesita al usuario con su rol y ubicación: se guarda unos segundos (compartido entre instancias) para no
+    // consultar la base en cada una. Los cambios de contraseña, cierre de sesión y de roles lo borran de inmediato (`USUARIO_PREFIJO`);
+    // lo demás (p. ej. desactivar a alguien) se nota en cuanto vence. El tipo y la vigencia del token se revisan siempre.
+    const user = this.cache
+      ? await this.cache.obtenerOCalcular(`${USUARIO_PREFIJO}${payload.sub}`, (u) => (u ? TTL_USUARIO_SEG : 0), cargar)
+      : await cargar();
 
     if (!user || user.estado !== 1) {
       throw new UnauthorizedException('Sesión inválida o usuario inactivo');

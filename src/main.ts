@@ -7,6 +7,8 @@ import { secretoObligatorio, verificarSecretosDistintos } from './common/config/
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import express from 'express';
 import { AppModule } from './app.module.js';
+import { CacheService } from './common/cache/cache.service.js';
+import { RedisIoAdapter } from './common/cache/redis-io.adapter.js';
 import { CryptoService } from './common/crypto/crypto.service.js';
 import { CryptoResponseInterceptor } from './common/interceptors/crypto-response.interceptor.js';
 import { DecryptValidationPipe } from './common/pipes/decrypt-validation.pipe.js';
@@ -38,6 +40,8 @@ async function bootstrap() {
       'Content-Type',
       'Authorization',
       'X-Client',
+      'X-Skip-Auth-Refresh',
+      'x-skip-auth-refresh',
       'x-device-id',
       'X-Request-Id',
       'x-request-id',
@@ -109,6 +113,18 @@ async function bootstrap() {
 
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
+  }
+
+  // Varias instancias: los avisos en tiempo real (sockets) se reparten entre todas por Redis.
+  const adaptadorSockets = new RedisIoAdapter(app, app.get(CacheService));
+  if (adaptadorSockets.conectar()) {
+    app.useWebSocketAdapter(adaptadorSockets);
+    logger.log('Sockets repartidos entre instancias con Redis');
+  }
+
+  // En producción, sin CORS_ORIGIN ningún navegador puede llamar a la API: se avisa en el arranque en vez de fallar en silencio.
+  if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGIN?.trim()) {
+    logger.warn('CORS_ORIGIN vacío en producción: el panel web no podrá llamar a la API. Defínelo con el dominio exacto del panel.');
   }
 
   const port = process.env.PORT || 3000;

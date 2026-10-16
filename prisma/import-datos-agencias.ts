@@ -7,6 +7,8 @@
  */
 import { Prisma, PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { Redis } from 'ioredis';
+import { motivoPasswordDebil } from '../src/common/utils/password-politica.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,12 +17,15 @@ const prisma = new PrismaClient();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = path.join(__dirname, 'data', 'datos-agencias.json');
 /**
- * Contraseña inicial de los usuarios NUEVOS (todos deben cambiarla en su primer ingreso). Es obligatoria, viene de
- * IMPORT_PASSWORD_INICIAL (mínimo 8 caracteres) y no tiene valor por defecto.
+ * Contraseña inicial de los usuarios NUEVOS. Es obligatoria, viene de IMPORT_PASSWORD_INICIAL, no tiene valor por defecto y debe
+ * cumplir la política de contraseñas. Los usuarios no pueden cambiarla: solo un administrador (o quien tenga ese permiso) la cambia.
  */
 function passwordInicial(): string {
   const valor = process.env.IMPORT_PASSWORD_INICIAL?.trim();
-  if (!valor || valor.length < 8) throw new Error('Define IMPORT_PASSWORD_INICIAL (mínimo 8 caracteres) en el .env o en el entorno.');
+  if (!valor) throw new Error('Define IMPORT_PASSWORD_INICIAL en el .env o en el entorno.');
+  // Misma política que cualquier contraseña del sistema (10+ caracteres, mayúscula, minúscula, número y carácter especial).
+  const motivo = motivoPasswordDebil(valor);
+  if (motivo) throw new Error(`IMPORT_PASSWORD_INICIAL no cumple la política de contraseñas: ${motivo}`);
   return valor;
 }
 const PASSWORD = passwordInicial();
@@ -748,7 +753,7 @@ async function main() {
   if (gestionPorRol.size || problemasGestion.length) {
     console.log(`🧑‍💼 Personal de gestión:  ${[...gestionPorRol.entries()].map(([r, n]) => `${r} ${n}`).join(', ') || 'ninguno'}`);
   }
-  console.log('🔑 Los usuarios nuevos usan la contraseña inicial de IMPORT_PASSWORD_INICIAL y deben cambiarla al entrar (los existentes conservan la suya).');
+  console.log('🔑 Los usuarios nuevos usan la contraseña de IMPORT_PASSWORD_INICIAL; solo un administrador puede cambiarla después (los existentes conservan la suya).');
   console.log('   Correo: {nombre}.{rol}@easydry.com, o el de la hoja de personal si lo trae.');
   if (problemasGestion.length) {
     console.log(`⚠ Personal de gestión no cargado (${problemasGestion.length}): corrige el Excel y vuelve a importar`);
@@ -761,7 +766,37 @@ async function main() {
   console.log('=====================================================');
 }
 
+/**
+ * La importación escribe directo en la base, sin pasar por los servicios que borran la caché. Si hay Redis (REDIS_URL), se borran las
+ * copias de usuarios y paneles para que lo importado se vea de inmediato y no al vencer. Si Redis no responde no se interrumpe nada:
+ * la caché vence sola en segundos.
+ */
+async function limpiarCache(): Promise<void> {
+  const url = process.env.REDIS_URL?.trim();
+  if (!url) return;
+  const prefijo = process.env.REDIS_PREFIX?.trim() || 'easydry';
+  const redis = new Redis(url, { enableOfflineQueue: false, maxRetriesPerRequest: 1, connectTimeout: 2000, retryStrategy: () => null });
+  redis.on('error', () => undefined);
+  try {
+    let borradas = 0;
+    for (const grupo of ['auth:user:', 'analytics:']) {
+      let cursor = '0';
+      do {
+        const [siguiente, claves] = await redis.scan(cursor, 'MATCH', `${prefijo}:${grupo}*`, 'COUNT', 500);
+        cursor = siguiente;
+        if (claves.length) borradas += await redis.unlink(...claves);
+      } while (cursor !== '0');
+    }
+    console.log(`🧹 Caché de Redis limpiada (${borradas} claves de usuarios y paneles).`);
+  } catch (e) {
+    console.log(`ℹ No se pudo limpiar la caché de Redis (${(e as Error).message}): vence sola en unos segundos.`);
+  } finally {
+    redis.disconnect();
+  }
+}
+
 main()
+  .then(limpiarCache)
   .catch((e) => {
     console.error('❌ Error importando datos de agencias:', e);
     process.exit(1);

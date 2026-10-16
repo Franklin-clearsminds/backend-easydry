@@ -13,8 +13,8 @@ import { PAGINAS } from './catalogo-paginas.js';
 export const PERMISOS_POR_MODULO: Readonly<Record<string, readonly CodigoPermiso[] | null>> = {
   dashboard: ['dashboard.ver'],
   notificaciones: null,
-  'mapa-operativo': ['mapa.ver', 'bahias.asignar'],
-  agencias: ['agencias.consultar', 'agencias.crear', 'agencias.editar', 'agencias.estado', 'regiones.gestionar', 'clientes.gestionar', 'agencias.precios.gestionar'],
+  // «Agencias & Mapa Red» es una sola pantalla: el mapa es una pestaña suya (antes tenía su propio módulo, 'mapa-operativo').
+  agencias: ['agencias.consultar', 'mapa.ver', 'bahias.asignar', 'agencias.crear', 'agencias.editar', 'agencias.estado', 'regiones.gestionar', 'clientes.gestionar', 'agencias.precios.gestionar'],
   operadores: ['operadores.ver', 'operadores.gestionar', 'bahias.asignar', 'especiales.crear', 'especiales.reasignar'],
   'configuracion/servicios': ['catalogo.ver'],
   servicios: ['servicios.ver', 'especiales.ver'],
@@ -25,6 +25,9 @@ export const PERMISOS_POR_MODULO: Readonly<Record<string, readonly CodigoPermiso
   inventario: ['inventario.ver'],
   envios: ['despachos.ver'],
   reportes: ['reportes.ver'],
+  auditorias: ['auditorias.ver'],
+  'informes-inspeccion': ['informes.ver'],
+  'auditorias-5s': ['inspecciones.ver'],
   usuarios: ['usuarios.gestionar', 'backup.gestionar', 'roles.ver', 'roles.gestionar'],
   perfil: null,
 };

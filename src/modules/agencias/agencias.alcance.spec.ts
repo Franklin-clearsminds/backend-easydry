@@ -118,8 +118,8 @@ describe('Agencias: alcance por rol (base real)', () => {
       expect(await env.prisma.bahiaOperador.count({ where: { bahiaId: b1.id, operadorId: ids.luis, activo: true } })).toBe(1);
 
       // El líder de la agencia sí puede.
-      await service.updateBahia({ id: b1.id, nombre: `${env.marca} Nueva` } as any, actores.ana);
-      expect((await env.prisma.bahia.findUniqueOrThrow({ where: { id: b1.id } })).nombre).toBe(`${env.marca} Nueva`);
+      // Renombrar no tiene casilla: el líder solo activa o desactiva.
+      await expect(service.updateBahia({ id: b1.id, nombre: `${env.marca} Nueva` } as any, actores.ana)).rejects.toThrow(/cambiar el nombre/);
       await service.toggleActivaBahia({ id: b1.id } as any, actores.ana);
       expect((await env.prisma.bahia.findUniqueOrThrow({ where: { id: b1.id } })).activa).toBe(false);
       await service.toggleActivaBahia({ id: b1.id } as any, actores.ana); // la deja como estaba
@@ -127,8 +127,8 @@ describe('Agencias: alcance por rol (base real)', () => {
 
     it('el supervisor edita bahías solo de su región', async () => {
       await expect(service.updateBahia({ id: b2.id, nombre: 'X' } as any, actores.supR2)).rejects.toThrow(/alcance/);
-      await expect(service.updateBahia({ id: b2.id, nombre: `${env.marca} Editada` } as any, actores.supR1)).resolves.toBeDefined();
-      expect((await env.prisma.bahia.findUniqueOrThrow({ where: { id: b2.id } })).nombre).toBe(`${env.marca} Editada`);
+      await expect(service.updateBahia({ id: b2.id, nombre: `${env.marca} Editada` } as any, actores.supR1)).rejects.toThrow(/cambiar el nombre/);
+      await expect(service.updateBahia({ id: b2.id } as any, actores.supR1)).resolves.toBeDefined();
     });
 
     it('los operadores de una bahía se leen solo dentro del alcance y sin correo para quien no es administrador', async () => {

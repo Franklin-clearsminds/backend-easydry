@@ -163,9 +163,14 @@ describe('servicios especiales — alcance por rol (base real)', () => {
       expect(await env.prisma.servicioEspecial.count({ where: { codigoSE: d.ordenTrabajoOT.toUpperCase() } })).toBe(0);
     });
 
-    it('rechaza crear OTs a roles distintos del coordinador', async () => {
+    it('rechaza crear OTs a quien no tiene la casilla «Crear OT especial» (decide la casilla, no el nombre del rol)', async () => {
       const d = dtoCrear({ operadoresIds: [ids.paco] });
-      await expect(service.create(d, ids.paco, actores.paco)).rejects.toThrow(/Solo el coordinador/);
+      const sinCasilla = {
+        ...actores.paco,
+        role: { ...actores.paco.role, capacidades: ['servicios.especiales.operar'] },
+        roleDetails: { ...actores.paco.roleDetails, capacidades: ['servicios.especiales.operar'] },
+      };
+      await expect(service.create(d, ids.paco, sinCasilla)).rejects.toThrow(/no puede crear/);
       expect(await env.prisma.servicioEspecial.count({ where: { codigoSE: d.ordenTrabajoOT.toUpperCase() } })).toBe(0);
     });
   });
