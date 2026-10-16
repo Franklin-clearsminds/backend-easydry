@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { CacheService, huella } from '../../common/cache/cache.service.js';
 import { agenciasConLider } from './lideres-agencia.js';
 import { columnasSimples, combinarWhere, paginacionListado, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
@@ -71,7 +72,11 @@ function limpiarComentarios(c: Record<string, string> | undefined | null): Recor
 
 @Injectable()
 export class Auditoria5sService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** Guarda un rato el resumen del dashboard de auditorías 5S. Sin él, cada visita lo recalcula. */
+    @Optional() private readonly cache?: CacheService,
+  ) {}
 
   /** Los catálogos de los tres formatos son únicos y viven aquí: los clientes los leen y no los copian. */
   catalogo() {
@@ -214,6 +219,11 @@ export class Auditoria5sService {
   }
 
   async resumen(dto: ResumenAuditorias5sDto, user: any) {
+    if (!this.cache) return this.calcularResumen(dto, user);
+    return this.cache.obtenerOCalcular(`auditoria5s:resumen:${user?.id ?? 'anonimo'}:${huella(dto ?? {})}`, 60, () => this.calcularResumen(dto, user));
+  }
+
+  private async calcularResumen(dto: ResumenAuditorias5sDto, user: any) {
     const visible = combinarWhere(this.whereVisible(user), dto.formato ? { formato: dto.formato } : undefined) as Prisma.Auditoria5sWhereInput;
     const finalizadas = combinarWhere(visible, { estado: { in: [...ESTADOS_RESULTADO_5S] } }) as Prisma.Auditoria5sWhereInput;
     const hoy = hoyEcuador();
