@@ -1,6 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, Optional, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { HistoricoService } from '../archivado/historico.service.js';
+import { CacheService } from '../../common/cache/cache.service.js';
+import { RetosArchivo } from './retos-archivo.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { CerrarRetoDto, CreateRetoDto, ListRetosDto } from './dto/retos.dto.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
@@ -24,7 +27,7 @@ import {
   type TipoServicioReto,
 } from './retos.reglas.js';
 
-const ROLES_PULIDOR = ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL'];
+const ROLES_PULIDOR = ['PULIDOR'];
 const ROLES_LAVADOR = ['LAVADOR'];
 
 /** "Todas" (o nada) significa sin filtro. */
@@ -40,6 +43,8 @@ export class RetosService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly historico?: HistoricoService,
+    @Optional() private readonly cache?: CacheService,
   ) {}
 
   async list(dto: ListRetosDto, user: any) {
@@ -421,6 +426,11 @@ export class RetosService {
       [s.operadorId, ...(s.operadoresAsignados || []).map((o) => o.operadorId)].filter(Boolean) as string[];
 
     const contados: ServicioContado[] = [];
+    const archivo = this.historico ? new RetosArchivo(this.prisma, this.historico) : null;
+    const filtroArchivo = {
+      desde, hasta, regiones: filtroLista(reto.regiones), marcas: filtroLista(reto.marcas), sucursalesIds: (reto.sucursalesIds || []) as string[],
+      catalogoIds: reto.tipoServicios === 'ESPECIFICOS' && reto.catalogoServicioIds?.length ? (reto.catalogoServicioIds as number[]) : undefined,
+    };
 
     if (fuentes.generales && tipo !== 'PULIDOR') {
       const lavados = await this.prisma.servicioLavado.findMany({
@@ -437,7 +447,7 @@ export class RetosService {
           operadoresAsignados: { select: { operadorId: true } },
         },
       });
-      for (const s of lavados as any[]) {
+      for (const s of [...(lavados as any[]), ...(archivo ? await archivo.lavados(filtroArchivo) : [])]) {
         const participantes = tipo === 'AGENCIA' ? [s.bahia?.agenciaId] : tipo === 'BAHIA' ? [s.bahiaId] : personas(s);
         contados.push({ participantes: participantes.filter(Boolean), placa: s.placa || '', monto: Number(s.precio || 0), fin: s.horaSalida, operadores: personas(s) });
       }
@@ -466,7 +476,7 @@ export class RetosService {
           operadoresAsignados: { select: { operadorId: true } },
         },
       });
-      for (const s of especiales as any[]) {
+      for (const s of [...(especiales as any[]), ...(archivo ? await archivo.especiales(filtroArchivo) : [])]) {
         const participantes = tipo === 'AGENCIA' ? [s.agenciaId] : tipo === 'BAHIA' ? [s.bahiaId] : personas(s);
         contados.push({ participantes: participantes.filter(Boolean), placa: s.placa || '', monto: Number(s.precio || 0), fin: s.fechaFin, operadores: personas(s) });
       }
@@ -533,8 +543,17 @@ export class RetosService {
     return this.finalizar(existing, user?.id ? String(user.id) : null, dto.resultado?.trim() || null);
   }
 
-  /** Cada madrugada (hora de Ecuador) se cierran los retos cuya fecha fin ya pasó. */
   @Cron('10 0 * * *', { name: 'cerrar-retos-vencidos', timeZone: 'America/Guayaquil' })
+  async programado_cerrarVencidos(): Promise<void> {
+    // Con varias instancias del servidor, solo una la ejecuta (candado en Redis con vencimiento propio).
+    const tarea = async () => {
+      await this.cerrarVencidos();
+    };
+    if (this.cache) await this.cache.unaVez('cron:cerrarVencidos', 3600, tarea);
+    else await tarea();
+  }
+
+  /** Cada madrugada (hora de Ecuador) se cierran los retos cuya fecha fin ya pasó. */
   async cerrarVencidos(): Promise<number> {
     const vencidos = await this.prisma.reto.findMany({ where: { estado: 'ACTIVO', fechaFin: { lt: hoyEcuador() } } });
     let cerrados = 0;
@@ -550,7 +569,7 @@ export class RetosService {
     return cerrados;
   }
 
-  private async finalizar(reto: any, cerradoPorId: string | null, resultado: string | null) {
+  protected async finalizar(reto: any, cerradoPorId: string | null, resultado: string | null) {
     const ganadores = (await this.calcularRankingReto(reto))
       .filter((f) => f.gana)
       .map(({ participanteId, nombre, valor, posicion }) => ({ participanteId, nombre, valor, posicion }));

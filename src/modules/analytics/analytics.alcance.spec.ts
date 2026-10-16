@@ -1,816 +1,564 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AnalyticsService } from './analytics.service.js';
-import { ROLES_BASE } from '../../common/permisos/roles-base.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
-/** Usuario como lo deja `JwtStrategy.validate()`: `role` y `roleDetails` apuntan al mismo objeto. */
-const usuario = (namerol: string, extra: Record<string, unknown> = {}) => {
-  const r = ROLES_BASE.find((x) => x.namerol === namerol)!;
-  const role = { namerol, capacidades: r.capacidades, ambito: r.ambito };
-  return { id: `id-${namerol}`, role, roleDetails: role, ...extra };
-};
+/**
+ * Integración con la base real (sin mocks): alcance, filtros y cálculos de los dashboards.
+ *
+ * La base real tiene datos de otros usuarios, así que TODAS las consultas se acotan a regiones/agencias creadas aquí
+ * (y las fechas son de enero de 2026, un periodo fijo). Los totales globales (usuarios, inventario sin filtro)
+ * solo se comparan con "al menos".
+ *
+ * Mundo
+ *  R1: A1 (bahías B1, B2, B5 sin actividad), A3 y A4.   R2: A2 (bahía B3) y A5.
+ *  Servicios (catálogo G = GENERAL, E = ESPECIAL):
+ *    s1 A1/B1 G $30  lun 5-ene 10:00→10:30  Toyota Corolla Rojo  · pulidor fijo de A1
+ *    s2 A1/B1 E $50  mar 6-ene 15:00→16:00  Toyota Hilux Rojo    · pulidor fijo de A1
+ *    s3 A1/B2 G $20  mar 6-ene 11:00→11:20  Kia Rio Azul         · lavador de A1
+ *    s4 A2/B3 G $40  lun 5-ene 09:00                              · lavador de A2
+ *    s5 A1/B1 G $10  EN_PROCESO 7-ene                             · lavador de A1
+ *    s6 A1/B1 G $80  FINALIZADO 15-dic-2025 (mes anterior)
+ *    s7, s8 A1/B1 anulados el 28-ene
+ *  Incidentes: i1 M1 ALTA abierto $300 (7-ene) · i2 M1 BAJA resuelto en 10 h $100 (6-ene) · i4 M1 MEDIA resuelto en 20 h
+ *  (8-ene) · i3 M3(A3) ALTA resuelto en 48 h $200 (9-ene, lo reporta el lavador de A2) · i5 M1 abierto de dic-2025 $999.
+ *  Insumos X1..X4 (mín. 10 / ideal 40) con existencias en R1; Y1 en R2.
+ */
+const ENE_5_11 = { rango: 'RANGO', fechaDesde: '2026-01-05', fechaHasta: '2026-01-11' } as any;
+const ENERO = { rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31' } as any;
+const f = (d: number, h = 0, mi = 0, mes = 1, anio = 2026) => new Date(anio, mes - 1, d, h, mi);
 
-function armar() {
-  const prisma: any = {
-    // Si el filtro de agencia quedó en "sin resultados", no devuelve agencias (como en la base real).
-    agencia: {
-      findMany: vi.fn((args: any) => Promise.resolve(args?.where?.id?.in?.length === 0 ? [] : [{ id: 'a1' }])),
-      findUnique: vi.fn().mockResolvedValue({ regionId: 'r1' }),
-      count: vi.fn().mockResolvedValue(0),
-    },
-    bodega: { findMany: vi.fn().mockResolvedValue([{ id: 'b1' }]) },
-    bahia: { findMany: vi.fn().mockResolvedValue([]) },
-    servicioLavado: {
-      findMany: vi.fn().mockResolvedValue([]),
-      count: vi.fn().mockResolvedValue(0),
-      groupBy: vi.fn().mockResolvedValue([]),
-      aggregate: vi.fn().mockResolvedValue({ _sum: { precio: 0 } }),
-    },
-    incidenteTecnico: {
-      count: vi.fn().mockResolvedValue(0),
-      findMany: vi.fn().mockResolvedValue([]),
-      aggregate: vi.fn().mockResolvedValue({ _sum: { costoTotal: 0 } }),
-    },
-    alertaStock: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
-    maquinaria: { groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
-    mantenimientoMaquinaria: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
-    consumoServicio: { findMany: vi.fn().mockResolvedValue([]), groupBy: vi.fn().mockResolvedValue([]) },
-    movimientoInventario: { findMany: vi.fn().mockResolvedValue([]) },
-    stockUbicacion: { findMany: vi.fn().mockResolvedValue([]) },
-    servicioEspecial: { findMany: vi.fn().mockResolvedValue([]) },
-    solicitudAprobacion: { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) },
-    auditoriaDecision: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
-    user: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]), findMany: vi.fn().mockResolvedValue([]) },
-    role: { findMany: vi.fn().mockResolvedValue([]) },
-    catalogoServicio: { count: vi.fn().mockResolvedValue(0), groupBy: vi.fn().mockResolvedValue([]) },
-    insumo: { count: vi.fn().mockResolvedValue(0) },
-  };
-  return { prisma, service: new AnalyticsService(prisma) };
-}
+describe('AnalyticsService (base real)', () => {
+  let env: Entorno;
+  let service: AnalyticsService;
+  let r1: any, r2: any;
+  let a1: any, a2: any, a3: any, a4: any, a5: any;
+  let b1: any, b2: any, b5: any;
+  let pulidor: any, lavador: any, lavador2: any;
+  let x: any[];
+  let y1: any;
+  let gen: any, esp: any;
+  const act: Record<string, any> = {};
+  const nombreCompleto = (u: any) => `${u.name} ${u.lastname}`;
 
-const dondeServicios = (prisma: any) => JSON.stringify(prisma.servicioLavado.findMany.mock.calls[0][0].where);
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new AnalyticsService(env.prisma as never);
+    r1 = await env.region('R1');
+    r2 = await env.region('R2');
+    a1 = await env.agencia('A1', { regionId: r1.id });
+    a3 = await env.agencia('A3', { regionId: r1.id });
+    a4 = await env.agencia('A4', { regionId: r1.id });
+    a2 = await env.agencia('A2', { regionId: r2.id });
+    a5 = await env.agencia('A5', { regionId: r2.id });
+    b1 = await env.bahia('B1', a1.id);
+    b2 = await env.bahia('B2', a1.id);
+    b5 = await env.bahia('B5', a1.id);
+    const b3 = await env.bahia('B3', a2.id);
+    gen = await env.catalogo('G', { categoria: 'GENERAL', precio: 30 });
+    esp = await env.catalogo('E', { categoria: 'ESPECIAL', precio: 50 });
 
-describe('dashboard — alcance', () => {
-  it('cada rol ve solo su agencia o su región; el cliente solo acota dentro de su alcance', async () => {
-    const a = armar();
-    await a.service.getDashboardMetrics({ agenciaId: 'a-ajena' } as any, usuario('LIDER', { agenciaId: 'a1' }));
-    expect(dondeServicios(a.prisma)).toContain('"id":"a1"');
-    expect(dondeServicios(a.prisma)).not.toContain('a-ajena');
+    pulidor = await env.usuario('pulidor', 'PULIDOR', { agenciaId: a1.id });
+    lavador = await env.usuario('lavador', 'LAVADOR', { agenciaId: a1.id });
+    lavador2 = await env.usuario('lavador2', 'LAVADOR', { agenciaId: a2.id });
+    const roles: Array<[string, string, Record<string, any>]> = [
+      ['superadmin', 'SUPER_ADMIN', {}],
+      ['admin', 'ADMIN', {}],
+      ['lider', 'LIDER', { agenciaId: a1.id }],
+      ['liderSinAgencia', 'LIDER', {}],
+      ['supervisor', 'SUPERVISOR', { regionId: r1.id }],
+      ['aprobador', 'APROBADOR', { agenciaId: a1.id }],
+      ['comercial', 'COORD_COMERCIAL', { regionId: r1.id }],
+      ['coordBodega', 'COORD_BODEGA', {}],
+      ['asistenteBodega', 'ASISTENTE_BODEGA', { regionId: r1.id }],
+      ['coordEspeciales', 'COORD_SERVICIOS_ESPECIALES', {}],
+    ];
+    for (const [sufijo, rol, opts] of roles) act[sufijo] = await env.actor((await env.usuario(sufijo.toLowerCase(), rol, opts)).id);
 
-    const b = armar();
-    await b.service.getDashboardMetrics({ regionId: 'r-ajena' } as any, usuario('SUPERVISOR', { regionId: 'r1' }));
-    expect(dondeServicios(b.prisma)).toContain('"regionId":"r1"');
-    expect(dondeServicios(b.prisma)).not.toContain('r-ajena');
-  });
-
-  it('un usuario global puede acotar a la agencia que pida; sin filtro ve todo el país', async () => {
-    const a = armar();
-    await a.service.getDashboardMetrics({ agenciaId: 'a2' } as any, usuario('COORD_BODEGA'));
-    expect(dondeServicios(a.prisma)).toContain('"id":"a2"');
-
-    const b = armar();
-    await b.service.getDashboardMetrics({} as any, usuario('COORD_BODEGA'));
-    expect(JSON.parse(dondeServicios(b.prisma)).bahia).toBeUndefined();
-  });
-
-  it('un rol de agencia sin agencia no ve nada, en ninguna de las consultas', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardMetrics({ agenciaId: 'a1' } as any, usuario('LIDER'));
-    expect(dondeServicios(prisma)).toContain('"id":{"in":[]}');
-    expect(JSON.stringify(prisma.incidenteTecnico.count.mock.calls[0][0].where)).toContain('"id":{"in":[]}');
-    expect(JSON.stringify(prisma.alertaStock.findMany.mock.calls[0][0].where)).toContain('"id":{"in":[]}');
-    expect(JSON.stringify(prisma.maquinaria.groupBy.mock.calls[0][0].where)).toContain('"id":{"in":[]}');
-  });
-});
-
-describe('dashboard admin — KPIs estratégicos', () => {
-  it('calcula ingresos, ticket, crecimiento, inventario y top agencias', async () => {
-    const { prisma, service } = armar();
-    prisma.servicioLavado.aggregate
-      .mockResolvedValueOnce({ _sum: { precio: 500 } }) // hoy
-      .mockResolvedValueOnce({ _sum: { precio: 6000 } }) // mes
-      .mockResolvedValueOnce({ _sum: { precio: 5000 } }); // mes anterior
-    prisma.servicioLavado.count.mockResolvedValue(10);
-    // Servicios del periodo (alimentan top agencias, mix, color/marca y ganancia neta).
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { precio: 30, marca: 'Toyota', modelo: 'Corolla', color: 'Rojo', horaInicio: null, horaSalida: null, catalogo: { nombre: 'Lavado Express', categoria: 'GENERAL' }, bahia: { nombre: 'Bahía 01', agencia: { nombre: 'Quito Norte', region: 'Sierra' } }, consumos: [{ cantidadUsada: 2, insumo: { costoUnitarioUSD: 1 } }] },
-      { precio: 50, marca: 'Toyota', modelo: 'Hilux', color: 'Rojo', horaInicio: null, horaSalida: null, catalogo: { nombre: 'Cerámico', categoria: 'ESPECIAL' }, bahia: { nombre: 'Bahía 02', agencia: { nombre: 'Quito Norte', region: 'Sierra' } }, consumos: [{ cantidadUsada: 1, insumo: { costoUnitarioUSD: 5 } }] },
-    ]);
-    prisma.incidenteTecnico.findMany.mockResolvedValue([
-      { costoTotal: 300, createdAt: new Date(), maquinaria: { agencia: { nombre: 'Quito Norte' } } },
-      // Fuera del periodo: no debe sumar al costo del rango consultado.
-      { costoTotal: 999, createdAt: new Date('2020-01-01T10:00:00'), maquinaria: { agencia: { nombre: 'Quito Norte' } } },
-    ]);
-    prisma.stockUbicacion.findMany.mockResolvedValue([{ cantidadActual: 10, insumo: { costoUnitarioUSD: 2 } }]);
-    prisma.movimientoInventario.findMany.mockResolvedValue([{ detalles: [{ cantidadEnviada: 5, costoUnitarioUSD: 3 }] }]);
-
-    const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
-
-    expect(res.isSuperAdminView).toBe(true);
-    expect(res.kpis.ingresoHoy).toBe(500);
-    expect(res.kpis.ticketPromedioHoy).toBe(50); // 500 / 10 servicios
-    expect(res.kpis.variacionMesPct).toBe(20); // (6000 - 5000) / 5000
-    expect(res.kpis.costoReparaciones30d).toBe(300);
-    expect(res.kpis.unidadesInventario).toBe(10); // existencias en unidades, no en USD
-    expect(res.kpis.unidadesEnTransito).toBe(5); // unidades despachadas sin recibir
-    expect(res.topAgenciasProductivas).toEqual([{ nombre: 'Quito Norte', cantidad: 2 }]);
-    expect(res.topColores).toEqual([{ nombre: 'Rojo', cantidad: 2 }]);
-    expect(res.mixGenerales).toEqual([{ nombre: 'Lavado Express', cantidad: 1 }]);
-    expect(res.mixEspeciales).toEqual([{ nombre: 'Cerámico', cantidad: 1 }]);
-    // Rentabilidad por agencia (nombre + ingresos del período).
-    const rentabilidad = res.topAgenciasRentabilidad[0];
-    expect(rentabilidad.nombre).toBe('Quito Norte');
-    expect(rentabilidad.ingresos).toBe(80); // 30 + 50
-    // Los insumos se reportan en unidades y NO entran en el monto: su costo del catálogo es por envase
-    // y el consumo está en unidad base, así que inflaba la ganancia neta.
-    expect(rentabilidad.unidadesInsumos).toBe(3); // 2 + 1 consumidas
-    expect(rentabilidad.costoInsumos).toBeUndefined();
-    expect(rentabilidad.gananciaNeta).toBe(-220); // 80 ingresos − 300 reparaciones
-    // El panel comercial también reporta el consumo de insumos en unidades, no en USD.
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { precio: 30, horaIngreso: new Date(), horaInicio: null, horaSalida: null, estado: 'FINALIZADO', marca: 'Toyota', catalogo: { nombre: 'Lavado Express', categoria: 'GENERAL', tiempoEstimadoMin: 30 }, consumos: [{ cantidadUsada: 2 }] },
-      { precio: 50, horaIngreso: new Date(), horaInicio: null, horaSalida: null, estado: 'FINALIZADO', marca: 'Toyota', catalogo: { nombre: 'Cerámico', categoria: 'ESPECIAL', tiempoEstimadoMin: 60 }, consumos: [{ cantidadUsada: 1 }] },
-    ]);
-    const comercial: any = await service.getDashboardMetrics({} as any, usuario('COORD_COMERCIAL'));
-    expect(comercial.isComercialView).toBe(true);
-    expect(comercial.kpis.unidadesQuimicos).toBe(3); // 2 + 1 consumidas
-    expect(comercial.kpis.costoQuimicos30d).toBeUndefined();
-  });
-
-  it('publica los rankings de agencias completos para el control Top N', async () => {
-    const { prisma, service } = armar();
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-    // Ocho agencias con volúmenes decrecientes: el top clásico se queda en 5, el ranking del control no.
-    const servicios: any[] = [];
-    for (let i = 0; i < 8; i++) {
-      for (let j = 0; j < 8 - i; j++) {
-        servicios.push({
-          precio: 10, horaInicio: null, horaSalida: null, marca: 'Toyota', modelo: 'Corolla', color: 'Rojo',
-          catalogo: { nombre: 'Lavado Express', categoria: 'GENERAL' },
-          bahia: { nombre: 'Bahía 01', agencia: { nombre: `Agencia ${i + 1}`, region: 'Sierra' } },
-        });
-      }
-    }
-    prisma.servicioLavado.findMany.mockResolvedValue(servicios);
-
-    const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
-
-    expect(res.topAgenciasProductivas.length).toBe(5);
-    expect(res.rankingsAgencias.servicios.length).toBe(8);
-    expect(res.rankingsAgencias.servicios[0]).toEqual({ nombre: 'Agencia 1', valor: 8 });
-    // El último del ranking es el de menos servicios: es justo lo que muestra el orden ascendente.
-    expect(res.rankingsAgencias.servicios[7]).toEqual({ nombre: 'Agencia 8', valor: 1 });
-    expect(res.rankingsAgencias.ganancia.length).toBe(8);
-    expect(res.rankingsAgencias.costoIncidentes.length).toBe(8);
-  });
-});
-
-describe('dashboard admin — drill-down jerárquico', () => {
-  it('agrupa por región en GLOBAL y calcula heatmap, top y bottom', async () => {
-    const { prisma, service } = armar();
-    // Servicios con hora de ingreso para poblar el heatmap (lunes 10:00, martes 15:00).
-    const lunes10 = new Date('2026-10-05T10:00:00'); // lunes
-    const martes15 = new Date('2026-10-06T15:00:00'); // martes
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { precio: 10, horaIngreso: lunes10, horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-      { precio: 20, horaIngreso: martes15, horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 02', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-    ]);
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-
-    const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
-
-    expect(res.jerarquia.dimension).toBe('GLOBAL');
-    expect(res.jerarquia.entidad).toBe('Región');
-    expect(res.jerarquia.desglose[0]).toMatchObject({ nombre: 'Sierra', cantidad: 2 });
-    expect(res.jerarquia.ranking.top[0].nombre).toBe('Sierra');
-    // Heatmap: lunes (0) a las 10:00 → índice de hora 3; martes (1) a las 15:00 → índice 8.
-    expect(res.jerarquia.heatmap.matriz[0][3]).toBe(1);
-    expect(res.jerarquia.heatmap.matriz[1][8]).toBe(1);
-  });
-
-  it('con dimension=AGENCY agrupa por bahía y lista top/bottom de bahías', async () => {
-    const { prisma, service } = armar();
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-      { precio: 10, horaIngreso: new Date('2026-10-05T11:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Luis', lastname: 'Mora' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-      { precio: 10, horaIngreso: new Date('2026-10-05T12:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Luis', lastname: 'Mora' }, bahia: { nombre: 'Bahía 02', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-    ]);
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-
-    const res: any = await service.getDashboardMetrics({ dimension: 'AGENCY', agenciaId: 'a1' } as any, usuario('ADMIN'));
-
-    expect(res.jerarquia.dimension).toBe('AGENCY');
-    expect(res.jerarquia.entidad).toBe('Bahía');
-    expect(res.jerarquia.desglose[0]).toMatchObject({ nombre: 'Bahía 01', cantidad: 2 });
-    expect(res.jerarquia.ranking.entidad).toBe('Bahía');
-  });
-
-  it('con dimension=POLISHER filtra por operador y agrupa por día (evolución)', async () => {
-    const { prisma, service } = armar();
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-      { precio: 20, horaIngreso: new Date('2026-10-06T09:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-    ]);
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-
-    const res: any = await service.getDashboardMetrics(
-      { dimension: 'POLISHER', pulidorId: 'op-1' } as any,
-      usuario('ADMIN'),
-    );
-
-    // El alcance del filtro por operador debe llegar a la consulta.
-    const where = prisma.servicioLavado.findMany.mock.calls[0][0].where;
-    expect(where.operadorId).toBe('op-1');
-    expect(res.jerarquia.dimension).toBe('POLISHER');
-    expect(res.jerarquia.entidad).toBe('Día');
-    expect(res.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['2026-10-05', '2026-10-06']);
-  });
-
-  it('la serie del gráfico trae los dos extremos para que el orden ascendente no mienta', async () => {
-    const { prisma, service } = armar();
-    // 25 agencias con volúmenes decrecientes: el desglose normal se queda en 12 y nunca vería la más baja.
-    const servicios: any[] = [];
-    for (let i = 1; i <= 25; i++) {
-      for (let j = 0; j < 26 - i; j++) {
-        servicios.push({
-          precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null,
-          operador: { name: 'Ana', lastname: 'Soto' },
-          bahia: { nombre: 'Bahía 01', agencia: { id: `a${i}`, nombre: `Agencia ${String(i).padStart(2, '0')}`, region: 'Sierra', regionRel: { nombre: 'Sierra' } } },
-        });
-      }
-    }
-    prisma.servicioLavado.findMany.mockResolvedValue(servicios);
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-
-    const res: any = await service.getDashboardMetrics({ desglose: 'AGENCY' } as any, usuario('ADMIN'));
-
-    // El desglose que alimenta los tiempos no cambia: la serie del gráfico es un campo aparte.
-    expect(res.jerarquia.desglose.length).toBe(12);
-    expect(res.jerarquia.desgloseGrafico.length).toBe(20);
-    expect(res.jerarquia.desgloseGrafico[0]).toMatchObject({ nombre: 'Agencia 01', cantidad: 25 });
-    expect(res.jerarquia.desgloseGrafico[19]).toMatchObject({ nombre: 'Agencia 25', cantidad: 1 });
-  });
-
-  it('lista las agencias operativas con menos actividad, incluidas las que no registraron servicios', async () => {
-    const { prisma, service } = armar();
-    prisma.agencia.findMany.mockResolvedValue([{ nombre: 'Quito Norte' }, { nombre: 'Ambato Centro' }]);
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-    ]);
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-
-    const res: any = await service.getDashboardMetrics({} as any, usuario('ADMIN'));
-
-    expect(res.jerarquia.bajaActividad.entidad).toBe('Agencia');
-    expect(res.jerarquia.bajaActividad.items).toEqual([
-      { nombre: 'Ambato Centro', cantidad: 0, tiempoPromedioMin: 0 },
-      { nombre: 'Quito Norte', cantidad: 1, tiempoPromedioMin: 0 },
-    ]);
-    // Solo agencias activas y operativas: los talleres y las inactivas no cuentan como "dormidas".
-    expect(prisma.agencia.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ estado: 1, tipoUbicacion: 'OPERATIVA' }) }),
-    );
-  });
-
-  it('la lista de menor actividad respeta la región filtrada', async () => {
-    const { prisma, service } = armar();
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-
-    await service.getDashboardMetrics({ regionId: 'r2' } as any, usuario('SUPER_ADMIN'));
-
-    const whereOperativa = prisma.agencia.findMany.mock.calls.map((c: any) => c[0].where).find((w: any) => w?.tipoUbicacion);
-    expect(whereOperativa).toEqual({ estado: 1, tipoUbicacion: 'OPERATIVA', regionId: 'r2' });
-  });
-
-  it('a nivel de agencia, la menor actividad se calcula por bahía', async () => {
-    const { prisma, service } = armar();
-    prisma.bahia.findMany.mockResolvedValue([{ nombre: 'Bahía 01' }, { nombre: 'Bahía 09' }]);
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null, operador: { name: 'Ana', lastname: 'Soto' }, bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: 'Quito Norte', region: 'Sierra', regionRel: { nombre: 'Sierra' } } } },
-    ]);
-    prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    prisma.servicioLavado.count.mockResolvedValue(0);
-
-    const res: any = await service.getDashboardMetrics({ dimension: 'AGENCY', agenciaId: 'a1' } as any, usuario('ADMIN'));
-
-    expect(res.jerarquia.bajaActividad.entidad).toBe('Bahía');
-    expect(res.jerarquia.bajaActividad.items.map((i: any) => [i.nombre, i.cantidad])).toEqual([['Bahía 09', 0], ['Bahía 01', 1]]);
-    expect(prisma.bahia.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { agenciaId: 'a1' } }));
-  });
-});
-
-describe('filtros globales — tipo de servicio e incidentes', () => {
-  it('el tipo de servicio (generales/especiales) acota los lavados y sus agregados', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardMetrics({ categoriaServicio: 'ESPECIAL' } as any, usuario('SUPER_ADMIN'));
-
-    expect(prisma.servicioLavado.findMany).toHaveBeenCalled();
-    for (const call of prisma.servicioLavado.findMany.mock.calls) {
-      expect(call[0].where.catalogo).toEqual({ categoria: 'ESPECIAL' });
-    }
-    // También los agregados de ingresos (periodo, mes y mes anterior).
-    for (const call of prisma.servicioLavado.aggregate.mock.calls) {
-      expect(call[0].where.catalogo).toEqual({ categoria: 'ESPECIAL' });
-    }
-  });
-
-  it('sin tipo de servicio no se acota el catálogo, y el filtro se combina con agencia', async () => {
-    const sinFiltro = armar();
-    await sinFiltro.service.getDashboardMetrics({} as any, usuario('ADMIN'));
-    for (const call of sinFiltro.prisma.servicioLavado.findMany.mock.calls) {
-      expect(call[0].where.catalogo).toBeUndefined();
+    // ── Servicios de lavado ───────────────────────────────────────────────────────────────────────────────────
+    const s1 = await env.servicioLavado({ bahiaId: b1.id, operadorId: pulidor.id, catalogoId: gen.id, precio: 30, horaIngreso: f(5, 10), horaSalida: f(5, 10, 30), modelo: 'Corolla', datos: { marca: 'Toyota', color: 'Rojo', horaInicio: f(5, 10) } });
+    const s2 = await env.servicioLavado({ bahiaId: b1.id, operadorId: pulidor.id, catalogoId: esp.id, precio: 50, horaIngreso: f(6, 15), horaSalida: f(6, 16), modelo: 'Hilux', datos: { marca: 'Toyota', color: 'Rojo', horaInicio: f(6, 15) } });
+    const s3 = await env.servicioLavado({ bahiaId: b2.id, operadorId: lavador.id, catalogoId: gen.id, precio: 20, horaIngreso: f(6, 11), horaSalida: f(6, 11, 20), modelo: 'Rio', datos: { marca: 'Kia', color: 'Azul' } });
+    const s4 = await env.servicioLavado({ bahiaId: b3.id, operadorId: lavador2.id, catalogoId: gen.id, precio: 40, horaIngreso: f(5, 9), horaSalida: null });
+    await env.servicioLavado({ bahiaId: b1.id, operadorId: lavador.id, catalogoId: gen.id, precio: 10, estado: 'EN_PROCESO', horaIngreso: f(7, 9), horaSalida: null });
+    await env.servicioLavado({ bahiaId: b1.id, operadorId: pulidor.id, catalogoId: gen.id, precio: 80, horaIngreso: f(15, 10, 0, 12, 2025), horaSalida: f(15, 11, 0, 12, 2025) });
+    for (const n of [7, 8]) {
+      await env.servicioLavado({ bahiaId: b1.id, operadorId: lavador.id, catalogoId: gen.id, precio: 10, estado: 'CANCELADO', horaIngreso: f(28, 12), horaSalida: null, datos: { anuladoEn: f(28, 12, n) } });
     }
 
-    const combinado = armar();
-    await combinado.service.getDashboardMetrics({ categoriaServicio: 'GENERAL', regionId: 'r1' } as any, usuario('SUPER_ADMIN'));
-    const where = combinado.prisma.servicioLavado.findMany.mock.calls[0][0].where;
-    expect(where.catalogo).toEqual({ categoria: 'GENERAL' });
-    expect(JSON.stringify(where.bahia)).toContain('"regionId":"r1"');
-  });
-
-  it('los incidentes se acotan por agencia y por el pulidor seleccionado (vía reportante)', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardMetrics({ pulidorId: 'op-1', regionId: 'r1' } as any, usuario('SUPER_ADMIN'));
-
-    expect(prisma.incidenteTecnico.findMany).toHaveBeenCalled();
-    for (const call of prisma.incidenteTecnico.findMany.mock.calls) {
-      expect(call[0].where.reportadoPorId).toBe('op-1');
-      expect(JSON.stringify(call[0].where.maquinaria)).toContain('"regionId":"r1"');
-    }
-    expect(prisma.incidenteTecnico.count.mock.calls[0][0].where.reportadoPorId).toBe('op-1');
-  });
-
-  it('el taller también acota los incidentes por pulidor', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardTaller({ pulidorId: 'op-9' } as any, usuario('ADMIN'));
-    expect(prisma.incidenteTecnico.count.mock.calls[0][0].where.reportadoPorId).toBe('op-9');
-    expect(prisma.incidenteTecnico.findMany.mock.calls[0][0].where.reportadoPorId).toBe('op-9');
-  });
-
-  it('Super Admin: el tipo de servicio acota KPI, mezcla, rentabilidad y desglose jerárquico', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardMetrics({ categoriaServicio: 'ESPECIAL' } as any, usuario('SUPER_ADMIN'));
-    const esp = [{ categoria: 'ESPECIAL' }];
-
-    // KPI del período, mes y mes anterior (ejecutivo + estratégicos).
-    expect(prisma.servicioLavado.count.mock.calls.map((c: any) => c[0].where.catalogo)).toEqual(
-      prisma.servicioLavado.count.mock.calls.map(() => esp[0]),
-    );
-    expect(prisma.servicioLavado.aggregate.mock.calls.map((c: any) => c[0].where.catalogo)).toEqual(
-      prisma.servicioLavado.aggregate.mock.calls.map(() => esp[0]),
-    );
-    // Series de los gráficos: mezcla, marcas/colores y desglose jerárquico.
-    expect(prisma.servicioLavado.findMany.mock.calls.map((c: any) => c[0].where.catalogo)).toEqual(
-      prisma.servicioLavado.findMany.mock.calls.map(() => esp[0]),
-    );
-  });
-
-  it('los rankings de personal respetan el tipo de servicio', async () => {    const { prisma, service } = armar();
-    await service.getRankingLavadores({ categoriaServicio: 'ESPECIAL' } as any, usuario('ADMIN'));
-    expect(prisma.servicioLavado.findMany.mock.calls[0][0].where.catalogo).toEqual({ categoria: 'ESPECIAL' });
-    await service.getRankingPulidores({ categoriaServicio: 'GENERAL' } as any, usuario('ADMIN'));
-    expect(prisma.servicioLavado.findMany.mock.calls[1][0].where.catalogo).toEqual({ categoria: 'GENERAL' });
-  });
-
-  it('las alertas de mantenimiento exponen la agencia y el pulidor del incidente', async () => {
-    const { prisma, service } = armar();
-    prisma.incidenteTecnico.findMany.mockResolvedValue([
-      {
-        id: 'inc-1', titulo: 'Fuga de aceite', gravedad: 'ALTA', estado: 'ABIERTO', costoTotal: 10,
-        createdAt: new Date(), fechaReporte: new Date(), fechaSolucion: null,
-        reportadoPor: { name: 'Ana', lastname: 'Soto' },
-        maquinaria: { codigo: 'MQ-01', nombre: 'Hidro', tipo: 'HIDRO', agencia: { nombre: 'Quito Norte', region: 'Sierra' } },
-      },
-    ]);
-    prisma.alertaStock.findMany.mockResolvedValue([
-      {
-        id: 'al-1', nivel: 'CRITICO', estado: 'PENDIENTE', createdAt: new Date(),
-        agencia: { nombre: 'Ambato Centro', region: 'Sierra' }, pulidor: null, insumo: { nombre: 'Shampoo' },
-      },
-    ]);
-
-    const res: any = await service.getDashboardMetrics({} as any, usuario('SUPER_ADMIN'));
-
-    const mant = res.alertasOperativas.find((a: any) => a.grupo === 'mantenimiento');
-    expect(mant.agencia).toBe('Quito Norte');
-    expect(mant.pulidor).toBe('Ana Soto');
-    const stock = res.alertasOperativas.find((a: any) => a.grupo === 'stock');
-    expect(stock.agencia).toBe('Ambato Centro');
-    expect(stock.pulidor).toBeNull();
-  });
-});
-
-describe('dashboard aprobador — control', () => {
-  it('cuenta anuladas del día y descuentos fuera de rango (>15% del precio enlazado)', async () => {
-    const { prisma, service } = armar();
-    prisma.solicitudAprobacion.findMany.mockImplementation((args: any) => {
-      if (args?.select?.entidadRefId) {
-        const createdAt = new Date();
-        return Promise.resolve([
-          { tipo: 'DESCUENTO', estado: 'APROBADO', createdAt, montoUSD: 30, entidadRefId: 's1' }, // 30/100 = 30% → fuera
-          { tipo: 'DESCUENTO', estado: 'PENDIENTE', createdAt, montoUSD: 5, entidadRefId: 's2' }, // 5% → dentro
-          { tipo: 'DESCUENTO', estado: 'PENDIENTE', createdAt, montoUSD: 20, entidadRefId: 'x' }, // sin precio base → no cuenta
-        ]);
-      }
-      return Promise.resolve([]);
+    // ── Insumos, existencias y consumos ────────────────────────────────────────────────────────────────────────
+    x = [];
+    for (const n of [1, 2, 3, 4]) x.push(await env.insumo(`X${n}`));
+    y1 = await env.insumo('Y1');
+    await env.prisma.insumo.updateMany({
+      where: { id: { in: [...x.map((i) => i.id), y1.id] } },
+      data: { stockMinimoAgencia: 10, stockOptimoAgencia: 40 },
     });
-    prisma.servicioLavado.findMany.mockResolvedValue([{ id: 's1', precio: 100 }, { id: 's2', precio: 100 }]);
-    prisma.servicioLavado.count.mockResolvedValue(2);
+    const stock = (insumoId: string, agenciaId: string, cantidad: number) => env.stock({ insumoId, tipoUbicacion: 'AGENCIA', agenciaId, cantidad });
+    for (const i of x) await stock(i.id, a4.id, 0); // "Solo Agotada": 4 posiciones agotadas
+    await stock(x[0].id, a3.id, 4); // "Con Mezcla": 2 críticas y 1 bajo el ideal
+    await stock(x[1].id, a3.id, 4);
+    await stock(x[2].id, a3.id, 20);
+    await stock(x[0].id, a1.id, 0); // "Otra Agotada"
+    await stock(y1.id, a2.id, 4); // R2: 36 + 10 unidades de reposición
+    await stock(y1.id, a5.id, 30);
+    const consumo = (servicioId: string, insumoId: string, agenciaId: string, cantidadUsada: number) =>
+      env.prisma.consumoServicio.create({ data: { servicioId, insumoId, agenciaId, cantidadUsada } });
+    await consumo(s1.id, x[0].id, a1.id, 2);
+    await consumo(s2.id, x[0].id, a1.id, 1);
+    await consumo(s4.id, y1.id, a2.id, 5);
+    void s3;
 
-    const res: any = await service.getDashboardMetrics({} as any, usuario('APROBADOR', { agenciaId: 'a1' }));
+    // ── Maquinaria e incidentes ───────────────────────────────────────────────────────────────────────────────
+    const m1 = await env.maquinaria('M1', { agenciaId: a1.id });
+    const m3 = await env.maquinaria('M3', { agenciaId: a3.id });
+    const incidente = (maquinariaId: string, por: string, titulo: string, gravedad: string, estado: string, reporte: Date, costoTotal: number | null, horasHastaSolucion?: number) =>
+      env.prisma.incidenteTecnico.create({
+        data: {
+          maquinariaId, reportadoPorId: por, titulo, descripcion: titulo, gravedad, estado, costoTotal,
+          fechaReporte: reporte, createdAt: reporte,
+          fechaSolucion: horasHastaSolucion ? new Date(reporte.getTime() + horasHastaSolucion * 3600000) : null,
+        },
+      });
+    await incidente(m1.id, pulidor.id, 'Fuga de aceite', 'ALTA', 'ABIERTO', f(7, 9), 300);
+    await incidente(m1.id, pulidor.id, 'Manguera floja', 'BAJA', 'RESUELTO', f(6, 8), 100, 10);
+    await incidente(m1.id, pulidor.id, 'Ruido en motor', 'MEDIA', 'RESUELTO', f(8, 8), null, 20);
+    await incidente(m3.id, lavador2.id, 'Cable roto', 'ALTA', 'RESUELTO', f(9, 8), 200, 48);
+    await incidente(m1.id, pulidor.id, 'Incidente antiguo', 'BAJA', 'ABIERTO', f(20, 8, 0, 12, 2025), 999);
 
-    expect(res.isAprobadorView).toBe(true);
-    expect(res.kpis.descuentosFueraDeRango).toBe(1);
-    expect(res.kpis.anuladasHoy).toBe(2);
-  });
-});
+    // ── Alertas, movimientos y solicitudes ────────────────────────────────────────────────────────────────────
+    await env.prisma.alertaStock.create({ data: { insumoId: x[0].id, agenciaId: a1.id, usuarioEmisorId: pulidor.id, nivel: 'CRITICO', mensaje: 'poco' } });
+    await env.prisma.alertaStock.create({ data: { insumoId: y1.id, agenciaId: a2.id, usuarioEmisorId: pulidor.id, nivel: 'BAJO', mensaje: 'poco' } });
+    await env.movimiento({ usuarioDespachaId: pulidor.id, tipo: 'DESPACHO_AGENCIA', estadoDespacho: 'EN_TRANSITO', destinoAgenciaId: a1.id, destinoUbicacion: a1.nombre, detalle: { insumoId: x[0].id, cantidadEnviada: 5 } });
+    await env.movimiento({ usuarioDespachaId: pulidor.id, tipo: 'DESPACHO_AGENCIA', estadoDespacho: 'EN_TRANSITO', destinoAgenciaId: a2.id, destinoUbicacion: a2.nombre, detalle: { insumoId: y1.id, cantidadEnviada: 7 } });
+    const solicitud = (estado: string, montoUSD: number, entidadRefId: string | null) =>
+      env.prisma.solicitudAprobacion.create({
+        data: { tipo: 'DESCUENTO', titulo: 'Descuento', estado, montoUSD, entidadRefId, solicitanteId: pulidor.id, agenciaId: a1.id, createdAt: f(28, 20) },
+      });
+    await solicitud('APROBADO', 30, s1.id); // 30 de 30 → 100 %: fuera de rango
+    await solicitud('PENDIENTE', 1, s3.id); // 1 de 20 → 5 %: dentro
+    await solicitud('PENDIENTE', 20, null); // sin servicio enlazado: no cuenta
 
-describe('aprobaciones — serie de 7 días', () => {
-  it('se ancla al fin del período y agrupa por día local', async () => {
-    const { prisma, service } = armar();
-    // Solicitud creada a las 20:00 locales: con claves de día UTC caería en el 29.
-    prisma.solicitudAprobacion.findMany.mockResolvedValue([
-      { tipo: 'DESCUENTO', estado: 'APROBADO', montoUSD: 10, entidadRefId: null, createdAt: new Date(2026, 0, 28, 20, 0, 0) },
-    ]);
-
-    const res: any = await service.getDashboardMetrics(
-      { rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31' } as any, usuario('APROBADOR'),
-    );
-
-    // Antes la serie se anclaba a «hoy», así que un período pasado mostraba días fuera del filtro.
-    expect(Object.keys(res.flujoEstadosPorDia).sort()).toEqual([
-      '2026-01-25', '2026-01-26', '2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-01-31',
-    ]);
-    expect(res.flujoEstadosPorDia['2026-01-28'].APROBADO).toBe(1);
-    expect(res.flujoEstadosPorDia['2026-01-29'].APROBADO).toBe(0);
-  });
-});
-
-describe('fallas de maquinaria — desglose por gravedad', () => {  /** Incidente mínimo: la gravedad es lo único que alimenta este desglose. */
-  const incidente = (gravedad: string) => ({ gravedad, maquinaria: null, reportadoPor: null, costoTotal: 0 });
-
-  it('ordena de la más grave a la más leve y omite las severidades sin fallas', async () => {
-    const { prisma, service } = armar();
-    prisma.incidenteTecnico.findMany.mockResolvedValue([
-      incidente('BAJA'),
-      incidente('MEDIA'),
-      incidente('CRITICA'),
-      incidente('MEDIA'),
-    ]);
-
-    const res: any = await service.getDashboardMetrics({} as any, usuario('SUPERVISOR', { regionId: 'r1' }));
-
-    // Se alimenta la pestaña "Fallas por Gravedad": reemplaza al antiguo "Ubicación de Daños", que repetía
-    // el desglose por agencia del gráfico de incidentes.
-    expect(res.incidentesPorGravedad).toEqual([
-      { nombre: 'CRITICA', cantidad: 1 },
-      { nombre: 'MEDIA', cantidad: 2 },
-      { nombre: 'BAJA', cantidad: 1 },
-    ]);
-  });
-});
-
-describe('salud de inventario — orden de ubicaciones', () => {
-  /** Posición de stock con umbrales propios; `actual` define el estado resultante. */
-  const posicion = (ubicacion: string, actual: number, minimo = 10, ideal = 40) => ({
-    tipoUbicacion: 'AGENCIA',
-    cantidadActual: actual,
-    cantidadMinima: minimo,
-    agencia: { nombre: ubicacion },
-    insumo: { nombre: 'Shampoo', categoria: 'QUIMICO', costoUnitarioUSD: 2, stockMinimoAgencia: minimo, stockOptimoAgencia: ideal },
+    // ── Servicios especiales ──────────────────────────────────────────────────────────────────────────────────
+    await env.servicioEspecial({ operadorId: pulidor.id, agenciaId: a1.id, regionId: r1.id, estado: 'Completado', precio: 70, tipoServicio: 'Lavado', datos: { createdAt: f(28, 20) } });
+    await env.servicioEspecial({ operadorId: lavador.id, agenciaId: a1.id, regionId: r1.id, estado: 'Pendiente', fechaFin: null, precio: 10, tipoServicio: 'Lavado', datos: { createdAt: f(28, 10) } });
   });
 
-  it('prioriza las ubicaciones con mezcla de severidades y completa con las más agotadas', async () => {
-    const { prisma, service } = armar();
-    prisma.stockUbicacion.findMany.mockResolvedValue([
-      // 100% agotada y con MÁS problemas (4): antes copaba el primer lugar y el gráfico salía de un solo color.
-      posicion('Solo Agotada', 0), posicion('Solo Agotada', 0), posicion('Solo Agotada', 0), posicion('Solo Agotada', 0),
-      // Mezcla (2 críticos + 1 bajo ideal = 3 problemas): es la accionable y debe ir primero.
-      posicion('Con Mezcla', 4), posicion('Con Mezcla', 4), posicion('Con Mezcla', 20),
-      posicion('Otra Agotada', 0),
-    ]);
+  afterAll(async () => {
+    await env.cerrar();
+  });
 
-    const res: any = await service.getDashboardBodega({} as any, usuario('COORD_BODEGA'));
-    const nombres = res.saludPorUbicacion.map((u: any) => u.nombre);
+  describe('dashboard — alcance', () => {
+    it('cada rol ve solo su agencia o su región; el cliente solo acota dentro de su alcance', async () => {
+      // Líder de A1 pide A2: sigue viendo A1 (s1, s2, s3 y el EN_PROCESO).
+      const lider: any = await service.getDashboardMetrics({ ...ENE_5_11, agenciaId: a2.id }, act.lider);
+      expect(lider.kpis.totalLavadosHoy).toBe(4);
+      // Supervisor de R1 pide R2: sigue viendo R1.
+      const supervisor: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r2.id }, act.supervisor);
+      expect(supervisor.kpis.totalLavadosHoy).toBe(4);
+      expect(supervisor.isSupervisorView).toBe(true);
+    });
 
-    expect(nombres).toEqual(['Con Mezcla', 'Solo Agotada', 'Otra Agotada']);
-    expect(res.saludPorUbicacion[0]).toEqual({
-      nombre: 'Con Mezcla',
-      AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0,
-      criticos: 3, problemas: 3,
+it('un usuario global puede acotar a la agencia o región que pida', async () => {
+      const agencia: any = await service.getDashboardMetrics({ ...ENE_5_11, agenciaId: a2.id }, act.coordBodega);
+      expect(agencia.kpis.totalLavadosHoy).toBe(1);
+      const region: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r2.id }, act.coordBodega);
+      expect(region.kpis.totalLavadosHoy).toBe(1);
+      const r1res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.coordBodega);
+      expect(r1res.kpis.totalLavadosHoy).toBe(4);
+    });
+
+    it('un rol de agencia sin agencia no ve nada, en ninguna de las consultas', async () => {
+      const sin = act.liderSinAgencia;
+      const dash: any = await service.getDashboardMetrics({ ...ENE_5_11, agenciaId: a1.id }, sin);
+      expect(dash.kpis).toMatchObject({ totalLavadosHoy: 0, incidentesAbiertos: 0, alertasStockPendientes: 0 });
+      expect(dash.alertasOperativas).toEqual([]);
+      expect((await service.getDashboardTaller({ ...ENERO, agenciaId: a1.id }, sin) as any).kpis.totalMaquinaria).toBe(0);
+      expect((await service.getDashboardBodega({ agenciaId: a1.id }, sin) as any).kpis).toMatchObject({ totalAlertasActivas: 0, unidadesStock: 0, despachos30d: 0 });
+      expect((await service.getRankingLavadores({ ...ENE_5_11, agenciaId: a1.id }, sin)).ranking).toEqual([]);
+      expect((await service.getConsumoQuimicos({ agenciaId: a1.id }, sin) as any).insumos).toEqual([]);
     });
   });
 
-  it('la reposición y las existencias se reportan en UNIDADES, nunca en USD', async () => {
-    const { prisma, service } = armar();
-    // El costo del catálogo es por envase y las existencias están en unidad base (ml), así que el monto en
-    // USD salía inflado: por eso la sección completa se expresa en unidades.
-    const conUnidad = (actual: number) => ({
-      ...posicion('Agencia A', actual),
-      insumo: { nombre: 'Shampoo', categoria: 'QUIMICO', costoUnitarioUSD: 75, unidadMedida: { simbolo: 'ml' }, stockMinimoAgencia: 10, stockOptimoAgencia: 40 },
+  describe('dashboard admin — KPIs estratégicos', () => {
+    it('calcula ingresos, ticket, crecimiento y costo de reparaciones del alcance pedido', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.admin);
+
+      expect(res.isSuperAdminView).toBe(true);
+      expect(res.kpis.ingresoHoy).toBe(100); // 30 + 50 + 20
+      expect(res.kpis.serviciosCompletadosHoy).toBe(3);
+      expect(res.kpis.ticketPromedioHoy).toBe(33.33);
+      expect(res.kpis.ingresoMes).toBe(100);
+      expect(res.kpis.ingresoMesAnterior).toBe(80);
+      expect(res.kpis.variacionMesPct).toBe(25); // (100 - 80) / 80
+      // Solo los incidentes dentro del periodo (el de diciembre y los de fuera de R1 no suman): 300 + 100 + 200.
+      expect(res.kpis.costoReparaciones30d).toBe(600);
+      // Inventario y tránsito son globales: al menos lo creado aquí (28 en R1 + 34 en R2; 5 + 7 en tránsito).
+      expect(res.kpis.unidadesInventario).toBeGreaterThanOrEqual(62);
+      expect(res.kpis.unidadesEnTransito).toBeGreaterThanOrEqual(12);
+      // El ADMIN recibe la misma vista que el SUPER_ADMIN (ya no la de administración con conteo de usuarios).
+      expect(res.kpis.totalUsuarios).toBeUndefined();
+      // A3 aparece sin servicios porque tuvo incidentes en el periodo.
+      expect(res.topAgenciasProductivas).toEqual([{ nombre: a1.nombre, cantidad: 3 }, { nombre: a3.nombre, cantidad: 0 }]);
+      expect(res.topColores).toEqual([{ nombre: 'Rojo', cantidad: 2 }, { nombre: 'Azul', cantidad: 1 }]);
+      expect(res.mixGenerales).toEqual([{ nombre: gen.nombre, cantidad: 2 }]);
+      expect(res.mixEspeciales).toEqual([{ nombre: esp.nombre, cantidad: 1 }]);
     });
-    prisma.stockUbicacion.findMany.mockResolvedValue([conUnidad(4), conUnidad(30)]);
 
-    const res: any = await service.getDashboardBodega({} as any, usuario('COORD_BODEGA'));
+    it('la rentabilidad por agencia reporta insumos en unidades y resta reparaciones', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.superadmin);
+      const [primera, segunda] = res.topAgenciasRentabilidad;
+      expect(primera).toMatchObject({ nombre: a1.nombre, ingresos: 100, costoIncidentes: 400, gastosOperativos: 400, gananciaNeta: -300 });
+      // Los insumos NO entran al monto (su costo es por envase y el consumo en unidad base); van en unidades.
+      expect(primera.unidadesInsumos).toBe(3); // 2 + 1 consumidas
+      expect(primera.costoInsumos).toBeUndefined();
+      expect(segunda).toMatchObject({ nombre: a3.nombre, ingresos: 0, costoIncidentes: 200, gananciaNeta: -200 });
+      expect(res.kpis.gananciaNetaGlobal).toBe(-500);
+      expect(res.kpis.gastosOperativosGlobal).toBe(600);
+    });
 
-    expect(res.kpis.unidadesReponer).toBe(46); // (40-4) + (40-30)
-    expect(res.kpis.insumosConDeficit).toBe(1);
-    expect(res.kpis.ubicacionesConDeficit).toBe(2);
-    expect(res.kpis.costoReposicionUSD).toBeUndefined();
-    expect(res.topDeficit[0]).toEqual({ nombre: 'Shampoo', unidades: 46, unidad: 'ml', ubicaciones: 2 });
-    // Existencias del alcance y unidades sin recibir, también en unidades.
-    expect(res.kpis.unidadesStock).toBe(34);
-    expect(res.kpis.unidadesEnTransito).toBe(0);
-    expect(res.kpis.valorStockUSD).toBeUndefined();
-    expect(res.kpis.valorEnTransitoUSD).toBeUndefined();
-  });
-});
-
-describe('consumo de químicos — alcance', () => {
-  it('se limita a las agencias de su alcance', async () => {
-    const a = armar();
-    await a.service.getConsumoQuimicos({ agenciaId: 'a-ajena' } as any, usuario('LIDER', { agenciaId: 'a1' }));
-    expect(a.prisma.agencia.findMany.mock.calls[0][0].where).toEqual({ id: 'a1' });
-    expect(a.prisma.consumoServicio.findMany.mock.calls[0][0].where.agenciaId).toEqual({ in: ['a1'] });
-    const b = armar();
-    await b.service.getConsumoQuimicos({} as any, usuario('COORD_BODEGA'));
-    expect(b.prisma.consumoServicio.findMany.mock.calls[0][0].where).not.toHaveProperty('agenciaId');
+    it('el panel comercial reporta el consumo de insumos en unidades, nunca en USD', async () => {
+      const res: any = await service.getDashboardMetrics(ENE_5_11, act.comercial);
+      expect(res.isComercialView).toBe(true);
+      expect(res.kpis).toMatchObject({ serviciosHoy: 4, servicios30Dias: 4, unidadesQuimicos: 3, premiumPct: 25 });
+      expect(res.kpis.costoQuimicos30d).toBeUndefined();
+    });
   });
 
-  it('respeta el filtro por región de un usuario global (antes se ignoraba)', async () => {
-    const { prisma, service } = armar();
-    await service.getConsumoQuimicos({ regionId: 'r2' } as any, usuario('COORD_BODEGA'));
-    expect(prisma.agencia.findMany.mock.calls[0][0].where).toEqual({ regionId: 'r2' });
-    expect(prisma.consumoServicio.findMany.mock.calls[0][0].where.agenciaId).toEqual({ in: ['a1'] });
-  });
-});
+  describe('dashboard admin — drill-down jerárquico', () => {
+    it('con región filtrada agrupa por agencia, calcula el heatmap y lista las agencias con menos actividad', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.superadmin);
+      const j = res.jerarquia;
 
-describe('ranking de lavadores', () => {
-  it('agrupa por operador, calcula cantidad y tiempo promedio solo sobre los que tienen hora de salida', async () => {
-    const { prisma, service } = armar();
-    prisma.servicioLavado.findMany.mockResolvedValue([
-      { operadorId: 'op1', horaIngreso: new Date('2026-10-01T10:00:00Z'), horaSalida: new Date('2026-10-01T10:30:00Z'), operador: { id: 'op1', name: 'Juan', lastname: 'Pérez' } },
-      { operadorId: 'op1', horaIngreso: new Date('2026-10-01T11:00:00Z'), horaSalida: new Date('2026-10-01T11:50:00Z'), operador: { id: 'op1', name: 'Juan', lastname: 'Pérez' } },
-      { operadorId: 'op1', horaIngreso: new Date('2026-10-01T12:00:00Z'), horaSalida: null, operador: { id: 'op1', name: 'Juan', lastname: 'Pérez' } },
-      { operadorId: 'op2', horaIngreso: new Date('2026-10-01T09:00:00Z'), horaSalida: new Date('2026-10-01T09:20:00Z'), operador: { id: 'op2', name: 'Ana', lastname: 'Soto' } },
-    ]);
+      expect(j.dimension).toBe('REGION');
+      expect(j.entidad).toBe('Agencia');
+      expect(j.desglose).toEqual([{ nombre: a1.nombre, cantidad: 3, tiempoPromedioMin: 37, ingresos: 100 }]); // (30 + 60 + 20) / 3
+      expect(j.kpis).toMatchObject({ registros: 3, ingresos: 100 });
+      // Lunes 10:00 → índice de hora 3; martes 15:00 → 8; martes 11:00 → 4.
+      expect(j.heatmap.matriz[0][3]).toBe(1);
+      expect(j.heatmap.matriz[1][8]).toBe(1);
+      expect(j.heatmap.matriz[1][4]).toBe(1);
+      // Incluye las agencias activas que no registraron servicios, las de menos actividad primero.
+      expect(j.bajaActividad.entidad).toBe('Agencia');
+      expect(j.bajaActividad.items.map((i: any) => i.cantidad)).toEqual([0, 0, 3]);
+      expect(j.bajaActividad.items[2].nombre).toBe(a1.nombre);
+      expect(j.bajaActividad.items.slice(0, 2).map((i: any) => i.nombre).sort()).toEqual([a3.nombre, a4.nombre].sort());
+    });
 
-    const res = await service.getRankingLavadores({} as any, usuario('ADMIN'));
-    expect(res.ranking).toHaveLength(2);
-    const op1 = res.ranking.find((r: any) => r.operadorId === 'op1');
-    expect(op1).toMatchObject({ nombre: 'Juan Pérez', cantidadServicios: 3, tiempoPromedioMin: 40 });
-    const op2 = res.ranking.find((r: any) => r.operadorId === 'op2');
-    expect(op2).toMatchObject({ nombre: 'Ana Soto', cantidadServicios: 1, tiempoPromedioMin: 20 });
-    expect(res.ranking[0].operadorId).toBe('op1'); // ordenado por cantidad desc
-  });
+    it('con agencia filtrada agrupa por bahía y la menor actividad incluye las bahías sin servicios', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, agenciaId: a1.id }, act.superadmin);
+      const j = res.jerarquia;
+      expect(j.dimension).toBe('AGENCY');
+      expect(j.entidad).toBe('Bahía');
+      expect(j.desglose.map((d: any) => [d.nombre, d.cantidad])).toEqual([[b1.nombre, 2], [b2.nombre, 1]]);
+      expect(j.ranking.entidad).toBe('Bahía');
+      expect(j.bajaActividad.entidad).toBe('Bahía');
+      expect(j.bajaActividad.items.map((i: any) => [i.nombre, i.cantidad])).toEqual([[b5.nombre, 0], [b2.nombre, 1], [b1.nombre, 2]]);
+    });
 
-  it('se limita a las agencias de su alcance', async () => {
-    const { prisma, service } = armar();
-    await service.getRankingLavadores({ agenciaId: 'a-ajena' } as any, usuario('LIDER', { agenciaId: 'a1' }));
-    const where = prisma.servicioLavado.findMany.mock.calls[0][0].where;
-    expect(JSON.stringify(where)).toContain('"id":"a1"');
-    expect(JSON.stringify(where)).not.toContain('a-ajena');
-  });
-});
+    it('con un pulidor filtra por operador y agrupa por día (evolución)', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id, pulidorId: pulidor.id }, act.superadmin);
+      const j = res.jerarquia;
+      expect(j.dimension).toBe('POLISHER');
+      expect(j.entidad).toBe('Día');
+      expect(j.desglose.map((d: any) => d.nombre).sort()).toEqual(['2026-01-05', '2026-01-06']);
+      expect(j.kpis.registros).toBe(2);
+    });
 
-describe('dashboards dedicados — alcance y filtros', () => {
-  it('el taller acota la maquinaria al alcance y al filtro pedido', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardTaller({ agenciaId: 'a2' } as any, usuario('COORD_BODEGA'));
-    expect(JSON.stringify(prisma.maquinaria.findMany.mock.calls[0][0].where)).toContain('"id":"a2"');
-  });
+    it('el desglose explícito decide la agrupación del gráfico de rendimiento', async () => {
+      const base = { ...ENE_5_11, regionId: r1.id };
+      const porAgencia: any = await service.getDashboardMetrics({ ...base, desglose: 'AGENCY' }, act.superadmin);
+      expect(porAgencia.jerarquia).toMatchObject({ agrupacion: 'AGENCY', entidad: 'Agencia', titulo: 'Rendimiento Operativo Nacional por Agencia' });
+      expect(porAgencia.jerarquia.desglose.map((d: any) => d.nombre)).toEqual([a1.nombre]);
 
-  it('la bodega aplica el alcance a alertas, movimientos y stock (ya no ve datos ajenos)', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardBodega({} as any, usuario('ASISTENTE_BODEGA', { regionId: 'r1' }));
+      const porPulidor: any = await service.getDashboardMetrics({ ...base, desglose: 'POLISHER' }, act.superadmin);
+      expect(porPulidor.jerarquia).toMatchObject({ entidad: 'Pulidor', titulo: 'Rendimiento Operativo por Pulidor' });
+      expect(porPulidor.jerarquia.desglose.map((d: any) => [d.nombre, d.cantidad])).toEqual([
+        [nombreCompleto(pulidor), 2],
+        [nombreCompleto(lavador), 1],
+      ]);
+      expect(porPulidor.jerarquia.bajaActividad.entidad).toBe('Pulidor');
 
-    expect(prisma.agencia.findMany.mock.calls[0][0].where).toEqual({ regionId: 'r1' });
-    expect(JSON.stringify(prisma.alertaStock.findMany.mock.calls[0][0].where)).toContain('"in":["a1"]');
-    expect(prisma.movimientoInventario.findMany.mock.calls[0][0].where.OR).toEqual([
-      { origenAgenciaId: { in: ['a1'] } },
-      { destinoAgenciaId: { in: ['a1'] } },
-      { origenBodegaId: { in: ['b1'] } },
-      { destinoBodegaId: { in: ['b1'] } },
-    ]);
-    expect(prisma.stockUbicacion.findMany.mock.calls[0][0].where.OR).toEqual([
-      { agenciaId: { in: ['a1'] } },
-      { bodega: { regionId: 'r1' } },
-    ]);
-  });
-
-  it('un rol de agencia sin agencia no ve movimientos ni stock', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardBodega({} as any, usuario('LIDER'));
-    expect(prisma.movimientoInventario.findMany.mock.calls[0][0].where.OR).toEqual([
-      { origenAgenciaId: { in: [] } },
-      { destinoAgenciaId: { in: [] } },
-    ]);
-    expect(prisma.stockUbicacion.findMany.mock.calls[0][0].where.OR).toEqual([{ agenciaId: { in: [] } }]);
+      const porRegion: any = await service.getDashboardMetrics({ ...base, desglose: 'REGION' }, act.superadmin);
+      expect(porRegion.jerarquia.agrupacion).toBe('REGION');
+      expect(porRegion.jerarquia.desglose.map((d: any) => d.nombre)).toEqual([r1.nombre]);
+      // Sin desglose y filtrando por región, el gráfico agrupa por agencia (comportamiento previo intacto).
+      const sin: any = await service.getDashboardMetrics(base, act.superadmin);
+      expect(sin.jerarquia.agrupacion).toBe('AGENCY');
+    });
   });
 
-  it('filtro por pulidor: acota las OT de Servicios Especiales al operador elegido', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardEspeciales({ pulidorId: 'op-1' } as any, usuario('COORD_SERVICIOS_ESPECIALES'));
-    // Todas las consultas de la OT llevan el operadorId del pulidor seleccionado.
-    for (const call of prisma.servicioEspecial.findMany.mock.calls) {
-      expect(call[0].where.operadorId).toBe('op-1');
-    }
-    expect(prisma.servicioEspecial.findMany).toHaveBeenCalled();
-  });
+  describe('filtros globales — tipo de servicio, pulidor e incidentes', () => {
+    it('el tipo de servicio acota KPI, mezcla y desglose', async () => {
+      const base = { ...ENE_5_11, regionId: r1.id };
+      const especiales: any = await service.getDashboardMetrics({ ...base, categoriaServicio: 'ESPECIAL' }, act.superadmin);
+      expect(especiales.kpis).toMatchObject({ serviciosCompletadosHoy: 1, ingresoHoy: 50, totalLavadosHoy: 1 });
+      expect(especiales.mixEspeciales).toEqual([{ nombre: esp.nombre, cantidad: 1 }]);
+      expect(especiales.mixGenerales).toEqual([]);
+      expect(especiales.jerarquia.kpis.registros).toBe(1);
 
-  it('la serie de 7 días de Servicios Especiales se ancla al fin del período y agrupa por día local', async () => {
-    const { prisma, service } = armar();
-    // OT creada a las 20:00 locales: con claves de día UTC caería en el 29.
-    prisma.servicioEspecial.findMany.mockResolvedValue([
-      {
-        estado: 'Completado', tipoServicio: 'Lavado', prioridad: 'Media', precio: 10, tiempoEfectivoSeg: 600,
-        calificacionCalidad: 5, createdAt: new Date(2026, 0, 28, 20, 0, 0), fechaFin: null, operador: null,
-      },
-    ]);
+      const generales: any = await service.getDashboardMetrics({ ...base, categoriaServicio: 'GENERAL' }, act.superadmin);
+      expect(generales.kpis).toMatchObject({ serviciosCompletadosHoy: 2, ingresoHoy: 50 });
 
-    const res: any = await service.getDashboardEspeciales(
-      { rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31' } as any, usuario('COORD_SERVICIOS_ESPECIALES'),
-    );
+      const todos: any = await service.getDashboardMetrics(base, act.superadmin);
+      expect(todos.kpis.serviciosCompletadosHoy).toBe(3);
+    });
 
-    // Antes la serie se anclaba a «hoy», así que un período pasado mostraba días fuera del filtro.
-    expect(res.flujoSemanal.map((x: any) => x.hora)).toEqual([
-      '2026-01-25', '2026-01-26', '2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-01-31',
-    ]);
-    expect(res.flujoSemanal[3].cantidad).toBe(1);
-    expect(res.flujoSemanal[4].cantidad).toBe(0);
-  });
+    it('el filtro por pulidor acota los servicios al operador elegido', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id, pulidorId: lavador.id }, act.superadmin);
+      expect(res.kpis).toMatchObject({ serviciosCompletadosHoy: 1, ingresoHoy: 20 });
+    });
 
-  it('filtro por pulidor: la bodega se acota al kit del pulidor', async () => {
-    const { prisma, service } = armar();
-    await service.getDashboardBodega({ pulidorId: 'op-1' } as any, usuario('COORD_BODEGA'));
-    expect(prisma.alertaStock.findMany.mock.calls[0][0].where.pulidorId).toBe('op-1');
-    expect(prisma.movimientoInventario.findMany.mock.calls[0][0].where.destinoPulidorId).toBe('op-1');
-    expect(prisma.stockUbicacion.findMany.mock.calls[0][0].where.pulidorId).toBe('op-1');
-  });
-});
+    it('los incidentes se acotan por agencia y por el pulidor seleccionado (vía reportante)', async () => {
+      const todos: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.superadmin);
+      expect(todos.kpis.incidentesAbiertos).toBe(2); // i1 y el de diciembre (los abiertos no dependen del periodo)
+      const delLavador: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id, pulidorId: lavador2.id }, act.superadmin);
+      // El lavador de A2 reportó el incidente de la máquina de A3; sigue dentro de R1 porque el alcance manda.
+      expect(delLavador.incidentesPorGravedad).toEqual([{ nombre: 'ALTA', cantidad: 1 }]);
+    });
 
-describe('filtros globales — periodo', () => {
-  /** Rango explícito: se compara contra fechas locales, que es como las construye `resolverPeriodo`. */
-  it('los rankings acotan al periodo pedido (antes ignoraban los presets y devolvían el mes completo)', async () => {
-    const { prisma, service } = armar();
+    it('las fallas se ordenan de la más grave a la más leve y omiten las severidades sin fallas', async () => {
+      const res: any = await service.getDashboardMetrics(ENE_5_11, act.supervisor);
+      expect(res.incidentesPorGravedad).toEqual([
+        { nombre: 'ALTA', cantidad: 2 },
+        { nombre: 'MEDIA', cantidad: 1 },
+        { nombre: 'BAJA', cantidad: 1 },
+      ]);
+    });
 
-    await service.getRankingLavadores({ rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31' } as any, usuario('ADMIN'));
-    const w = prisma.servicioLavado.findMany.mock.calls[0][0].where.horaIngreso;
-    expect(w.gte.getTime()).toBe(new Date(2026, 0, 1).getTime());
-    expect(w.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
-
-    await service.getRankingPulidores({ rango: 'RANGO', fechaDesde: '2026-02-10', fechaHasta: '2026-02-11' } as any, usuario('ADMIN'));
-    const w2 = prisma.servicioLavado.findMany.mock.calls[1][0].where.horaIngreso;
-    expect(w2.gte.getTime()).toBe(new Date(2026, 1, 10).getTime());
-    expect(w2.lte.getTime()).toBe(new Date(2026, 1, 11, 23, 59, 59, 999).getTime());
-  });
-
-  it('sin `rango` se conserva el mes en curso como respaldo', async () => {
-    const { prisma, service } = armar();
-    await service.getRankingLavadores({} as any, usuario('ADMIN'));
-    const w = prisma.servicioLavado.findMany.mock.calls[0][0].where.horaIngreso;
-    expect(w.gte.getDate()).toBe(1);
-    expect(w.gte.getMonth()).toBe(new Date().getMonth());
-  });
-
-  it('el consumo de químicos también respeta el preset del periodo', async () => {
-    const { prisma, service } = armar();
-    prisma.consumoServicio.findMany.mockResolvedValue([]);
-    await service.getConsumoQuimicos({ rango: 'RANGO', fechaDesde: '2026-03-01', fechaHasta: '2026-03-05' } as any, usuario('ADMIN'));
-    const w = prisma.consumoServicio.findMany.mock.calls[0][0].where.createdAt;
-    expect(w.gte.getTime()).toBe(new Date(2026, 2, 1).getTime());
-    expect(w.lte.getTime()).toBe(new Date(2026, 2, 5, 23, 59, 59, 999).getTime());
-  });
-});
-
-describe('dashboard taller — MTTR y periodo', () => {
-  /** Incidente resuelto con una duración exacta en horas. */
-  const incidente = (agencia: string, horas: number, gravedad = 'MEDIA') => {
-    const reporte = new Date('2026-10-01T08:00:00');
-    return {
-      id: `i-${agencia}-${horas}`, titulo: 'Falla', gravedad, estado: 'RESUELTO', costoTotal: 100,
-      fechaReporte: reporte, fechaSolucion: new Date(reporte.getTime() + horas * 3600000), createdAt: reporte,
-      maquinaria: { nombre: 'Hidro', codigo: 'MQ-01', tipo: 'HIDRO', agencia: { nombre: agencia } },
-    };
-  };
-
-  it('calcula el MTTR por agencia (dónde se resuelve lento) con su cantidad de incidentes', async () => {
-    const { prisma, service } = armar();
-    prisma.incidenteTecnico.findMany.mockResolvedValue([
-      incidente('Quito Norte', 10),
-      incidente('Quito Norte', 20),
-      incidente('Ambato', 48, 'ALTA'),
-    ]);
-    prisma.maquinaria.findMany.mockResolvedValue([]);
-
-    const res: any = await service.getDashboardTaller({} as any, usuario('ADMIN'));
-
-    // Ordenado de más lento a más rápido, con el respaldo de cuántos incidentes promedian.
-    expect(res.mttrPorAgencia).toEqual([
-      { nombre: 'Ambato', horas: 48, incidentes: 1 },
-      { nombre: 'Quito Norte', horas: 15, incidentes: 2 },
-    ]);
-    // El desglose por gravedad sigue existiendo y ahora informa sobre cuántos incidentes se calculó.
-    expect(res.mttrPorGravedad).toEqual([{ nombre: 'MEDIA', horas: 15, incidentes: 2 }, { nombre: 'ALTA', horas: 48, incidentes: 1 }]);
-  });
-
-  it('acota la ventana de incidentes al fin del período y respeta el filtro de región', async () => {
-    const { prisma, service } = armar();
-    prisma.incidenteTecnico.findMany.mockResolvedValue([]);
-    prisma.mantenimientoMaquinaria.findMany.mockResolvedValue([]);
-
-    await service.getDashboardTaller(
-      { rango: 'RANGO', fechaDesde: '2026-01-01', fechaHasta: '2026-01-31', regionId: 'r1' } as any,
-      usuario('SUPER_ADMIN'),
-    );
-
-    // La ventana sigue EXACTAMENTE el período: ni 30 días hacia atrás ni datos posteriores al rango.
-    const incWhere = prisma.incidenteTecnico.findMany.mock.calls[0][0].where;
-    expect(incWhere.createdAt.gte.getTime()).toBe(new Date(2026, 0, 1).getTime());
-    expect(incWhere.createdAt.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
-    expect(incWhere.maquinaria).toEqual({ agencia: { regionId: 'r1' } });
-    const mantWhere = prisma.mantenimientoMaquinaria.findMany.mock.calls[0][0].where;
-    expect(mantWhere.createdAt.gte.getTime()).toBe(new Date(2026, 0, 1).getTime());
-    expect(mantWhere.createdAt.lte.getTime()).toBe(new Date(2026, 0, 31, 23, 59, 59, 999).getTime());
-  });
-
-  it('publica los rankings completos de equipos, MTTR y costo para el control Top N', async () => {
-    const { prisma, service } = armar();
-    // Seis equipos con volúmenes y costos decrecientes: los tops recortados de 5 no bastan para el
-    // orden ascendente, que necesita ver también al último.
-    const incidentes: any[] = [];
-    for (let i = 1; i <= 6; i++) {
-      for (let j = 0; j < 7 - i; j++) {
-        const inc = incidente(`Agencia ${i}`, i * 2);
-        inc.maquinaria = { nombre: `Equipo ${i}`, codigo: `MQ-0${i}`, tipo: 'HIDRO', agencia: { nombre: `Agencia ${i}` } };
-        incidentes.push(inc);
+    it('publica los rankings completos de agencias (sin recortar) para el control Top N', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.admin);
+      // El top clásico y el ranking del control coinciden aquí porque R1 tiene pocas agencias; el ranking nunca se recorta.
+      expect(res.rankingsAgencias.servicios).toEqual([{ nombre: a1.nombre, valor: 3 }, { nombre: a3.nombre, valor: 0 }]);
+      for (const ranking of Object.values(res.rankingsAgencias) as { valor: number }[][]) {
+        const valores = ranking.map((r) => r.valor);
+        expect(valores).toEqual([...valores].sort((x, y) => y - x));
       }
-    }
-    prisma.incidenteTecnico.findMany.mockResolvedValue(incidentes);
-    prisma.maquinaria.findMany.mockResolvedValue([]);
-    prisma.mantenimientoMaquinaria.findMany.mockResolvedValue([]);
-
-    const res: any = await service.getDashboardTaller({} as any, usuario('ADMIN'));
-
-    // Los campos recortados que consume el panel ejecutivo no cambian: los equipos se capan en 5.
-    expect(res.topMaquinasProblematicas.length).toBe(5);
-    expect(res.topMaquinasCostosas.length).toBe(5);
-    // MTTR y costo se capan en 8, así que con 6 agencias el campo recortado trae las 6.
-    expect(res.mttrPorAgencia.length).toBe(6);
-    expect(res.costoPorAgencia.length).toBe(6);
-
-    // Los rankings del control sí traen el universo completo.
-    expect(res.maquinasProblematicasRank.length).toBe(6);
-    expect(res.maquinasProblematicasRank[0]).toMatchObject({ total: 6 });
-    expect(res.maquinasProblematicasRank[5]).toMatchObject({ total: 1 });
-    expect(res.maquinasCostosasRank.length).toBe(6);
-    expect(res.maquinasCostosasRank[5].costoTotal).toBe(100);
-    expect(res.mttrAgenciaRank.length).toBe(6);
-    expect(res.costoAgenciaRank.length).toBe(6);
-  });
-
-  it('el desglose explícito decide la agrupación del gráfico de rendimiento', async () => {
-    const servicio = (agencia: string, operador: string) => ({
-      precio: 10, horaIngreso: new Date('2026-10-05T10:00:00'), horaInicio: null, horaSalida: null,
-      operador: { name: operador, lastname: 'Soto' },
-      bahia: { nombre: 'Bahía 01', agencia: { id: 'a1', nombre: agencia, region: 'Sierra', regionRel: { nombre: 'Sierra' } } },
     });
 
-    const porAgencia = armar();
-    porAgencia.prisma.servicioLavado.findMany.mockResolvedValue([servicio('Quito Norte', 'Ana'), servicio('Ambato', 'Luis')]);
-    porAgencia.prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    porAgencia.prisma.servicioLavado.count.mockResolvedValue(0);
-    const resAgencia: any = await porAgencia.service.getDashboardMetrics({ desglose: 'AGENCY' } as any, usuario('SUPER_ADMIN'));
-    expect(resAgencia.jerarquia.agrupacion).toBe('AGENCY');
-    expect(resAgencia.jerarquia.entidad).toBe('Agencia');
-    expect(resAgencia.jerarquia.titulo).toBe('Rendimiento Operativo Nacional por Agencia');
-    expect(resAgencia.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['Ambato', 'Quito Norte']);
-    expect(resAgencia.jerarquia.ranking.entidad).toBe('Agencia');
+    it('las alertas operativas exponen la agencia y el pulidor del incidente, y la agencia de la alerta de stock', async () => {
+      const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.superadmin);
+      const mant = res.alertasOperativas.find((a: any) => a.grupo === 'mantenimiento' && a.detalle === 'Fuga de aceite');
+      expect(mant).toMatchObject({ agencia: a1.nombre, pulidor: nombreCompleto(pulidor), severidad: 'critica' });
+      const stock = res.alertasOperativas.find((a: any) => a.grupo === 'stock');
+      expect(stock).toMatchObject({ agencia: a1.nombre, pulidor: null, nivel: 'CRITICO' });
+      expect(res.alertasOperativas.filter((a: any) => a.grupo === 'stock')).toHaveLength(1); // la de A2 queda fuera
+      expect(res.kpis).toMatchObject({ alertasStockPendientes: 1, alertasCriticas: 1 });
+    });
 
-    // Desglose por pulidor: agrupa por operador, no por día.
-    const porPulidor = armar();
-    porPulidor.prisma.servicioLavado.findMany.mockResolvedValue([servicio('Quito Norte', 'Ana'), servicio('Ambato', 'Luis')]);
-    porPulidor.prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    porPulidor.prisma.servicioLavado.count.mockResolvedValue(0);
-    const resPulidor: any = await porPulidor.service.getDashboardMetrics({ desglose: 'POLISHER' } as any, usuario('SUPER_ADMIN'));
-    expect(resPulidor.jerarquia.entidad).toBe('Pulidor');
-    expect(resPulidor.jerarquia.titulo).toBe('Rendimiento Operativo por Pulidor');
-    expect(resPulidor.jerarquia.desglose.map((d: any) => d.nombre).sort()).toEqual(['Ana Soto', 'Luis Soto']);
-    expect(resPulidor.jerarquia.bajaActividad.entidad).toBe('Pulidor');
+    it('los pendientes de la bandeja salen del mismo cálculo, acotados a la región del usuario y ordenados por severidad', async () => {
+      const res: any = await service.getPendientes(act.supervisor);
+      expect(res.total).toBe(res.pendientes.length);
+      expect(res.pendientes.every((p: any) => !!p.id)).toBe(true);
+      // Solo la alerta de stock de A1 (R1): la de A2 es de otra región.
+      expect(res.pendientes.filter((p: any) => p.grupo === 'stock')).toHaveLength(1);
+      expect(res.pendientes.find((p: any) => p.detalle === 'Fuga de aceite')).toMatchObject({ agencia: a1.nombre, severidad: 'critica' });
+      // Las críticas van antes que las advertencias.
+      const orden = res.pendientes.map((p: any) => p.severidad);
+      expect(orden).toEqual([...orden].sort((x: string, y: string) => ['critica', 'advertencia', 'info'].indexOf(x) - ['critica', 'advertencia', 'info'].indexOf(y)));
+    });
 
-    // Sin desglose, el nivel país sigue agrupando por región (comportamiento previo intacto).
-    const sinDesglose = armar();
-    sinDesglose.prisma.servicioLavado.findMany.mockResolvedValue([servicio('Quito Norte', 'Ana'), servicio('Ambato', 'Luis')]);
-    sinDesglose.prisma.servicioLavado.aggregate.mockResolvedValue({ _sum: { precio: 0 } });
-    sinDesglose.prisma.servicioLavado.count.mockResolvedValue(0);
-    const resRegion: any = await sinDesglose.service.getDashboardMetrics({} as any, usuario('SUPER_ADMIN'));
-    expect(resRegion.jerarquia.agrupacion).toBe('REGION');
-    expect(resRegion.jerarquia.desglose.map((d: any) => d.nombre)).toEqual(['Sierra']);
+    it('quien no tiene permiso para ver stock ni mantenimiento no recibe pendientes', async () => {
+      const res: any = await service.getPendientes(act.aprobador);
+      expect(res).toMatchObject({ total: 0, pendientes: [] });
+    });
+  });
+
+  describe('dashboard aprobador — control', () => {
+    it('cuenta anuladas del periodo y descuentos fuera de rango (>15 % del precio enlazado)', async () => {
+      const res: any = await service.getDashboardMetrics(ENERO, act.aprobador);
+      expect(res.isAprobadorView).toBe(true);
+      expect(res.kpis.descuentosFueraDeRango).toBe(1);
+      expect(res.kpis.anuladasHoy).toBe(2);
+      expect(res.kpis.totalHoy).toBe(3);
+    });
+
+    it('la serie de 7 días se ancla al fin del periodo y agrupa por día local', async () => {
+      const res: any = await service.getDashboardMetrics(ENERO, act.aprobador);
+      // Solicitudes creadas a las 20:00 locales: con claves de día UTC caerían en el 29.
+      expect(Object.keys(res.flujoEstadosPorDia).sort()).toEqual([
+        '2026-01-25', '2026-01-26', '2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-01-31',
+      ]);
+      expect(res.flujoEstadosPorDia['2026-01-28']).toEqual({ PENDIENTE: 2, APROBADO: 1, RECHAZADO: 0 });
+      expect(res.flujoEstadosPorDia['2026-01-29']).toEqual({ PENDIENTE: 0, APROBADO: 0, RECHAZADO: 0 });
+    });
+  });
+
+  describe('consumo de químicos — alcance', () => {
+    it('se limita a las agencias de su alcance', async () => {
+      const res: any = await service.getConsumoQuimicos({ agenciaId: a2.id }, act.lider);
+      expect(res.consumoPorAgencia.map((c: any) => c.nombre)).toEqual([a1.nombre]);
+      expect(res.insumos).toHaveLength(1);
+      expect(res.insumos[0]).toMatchObject({ insumoId: x[0].id, cantidadTotal: 3, vecesConsumido: 2, nombre: `${x[0].nombre} (${a1.nombre})` });
+    });
+
+    it('respeta el filtro por agencia y por región de un usuario global', async () => {
+      const agencia: any = await service.getConsumoQuimicos({ agenciaId: a2.id }, act.coordBodega);
+      expect(agencia.insumos.map((i: any) => i.insumoId)).toEqual([y1.id]);
+      const region: any = await service.getConsumoQuimicos({ regionId: r2.id }, act.coordBodega);
+      expect(region.consumoPorAgencia.map((c: any) => c.nombre)).toEqual([a2.nombre]);
+      expect(region.insumos.map((i: any) => i.cantidadTotal)).toEqual([5]);
+    });
+
+    it('también respeta el preset del periodo', async () => {
+      const enero: any = await service.getConsumoQuimicos({ ...ENERO, agenciaId: a1.id }, act.coordBodega);
+      expect(enero.insumos).toEqual([]); // los consumos se registraron hoy, no en enero
+      expect(enero.rango).toEqual({ desde: '2026-01-01', hasta: '2026-01-31' });
+    });
+  });
+
+  describe('rankings', () => {
+    it('lavadores: agrupa por operador y promedia el tiempo solo sobre los que tienen hora de salida', async () => {
+      const res = await service.getRankingLavadores({ ...ENE_5_11, regionId: r1.id }, act.admin);
+      expect(res.ranking).toHaveLength(2);
+      expect(res.ranking[0]).toMatchObject({ operadorId: pulidor.id, nombre: nombreCompleto(pulidor), agencia: a1.nombre, cantidadServicios: 2, tiempoPromedioMin: 45 }); // (30 + 60) / 2
+      expect(res.ranking[1]).toMatchObject({ operadorId: lavador.id, cantidadServicios: 1, tiempoPromedioMin: 20 });
+    });
+
+    it('lavadores: publica también los de menor actividad, para el orden ascendente del control Top N', async () => {
+      const res: any = await service.getRankingLavadores({ ...ENE_5_11, regionId: r1.id }, act.admin);
+      // Mismos operadores que el ranking, de menos a más servicios: el lavador (1) antes que el pulidor (2).
+      expect(res.rankingBottom.map((r: any) => r.operadorId)).toEqual([lavador.id, pulidor.id]);
+    });
+
+    it('lavadores: se limita a las agencias de su alcance', async () => {
+      const res = await service.getRankingLavadores({ ...ENE_5_11, agenciaId: a2.id }, act.lider);
+      expect(res.ranking.map((r: any) => r.operadorId).sort()).toEqual([pulidor.id, lavador.id].sort());
+    });
+
+    it('los rankings respetan el tipo de servicio y el periodo pedido (antes ignoraban los presets)', async () => {
+      const base = { ...ENE_5_11, regionId: r1.id };
+      const lav = await service.getRankingLavadores({ ...base, categoriaServicio: 'ESPECIAL' }, act.admin);
+      expect(lav.ranking.map((r: any) => [r.operadorId, r.cantidadServicios])).toEqual([[pulidor.id, 1]]);
+
+      const pul: any = await service.getRankingPulidores(base, act.admin);
+      expect(pul.rankingFijos).toEqual([
+        { operadorId: pulidor.id, nombre: nombreCompleto(pulidor), ubicacion: a1.nombre, esFijo: true, cantidadServicios: 2, dineroTotal: 80 },
+      ]);
+      expect(pul.rankingMoviles).toEqual([]);
+      const esp1: any = await service.getRankingPulidores({ ...base, categoriaServicio: 'ESPECIAL' }, act.admin);
+      expect(esp1.rankingFijos[0]).toMatchObject({ cantidadServicios: 1, dineroTotal: 50 });
+
+      const febrero: any = await service.getRankingPulidores({ rango: 'RANGO', fechaDesde: '2026-02-10', fechaHasta: '2026-02-11', regionId: r1.id } as any, act.admin);
+      expect(febrero.rankingFijos).toEqual([]);
+      const fechas = await service.getRankingLavadores({ rango: 'RANGO', fechaDesde: '2026-01-06', fechaHasta: '2026-01-06', regionId: r1.id } as any, act.admin);
+      expect(fechas.rango).toEqual({ desde: '2026-01-06', hasta: '2026-01-06' });
+      expect(fechas.ranking.map((r: any) => r.cantidadServicios).sort()).toEqual([1, 1]);
+    });
+
+    it('sin `rango` se conserva el mes en curso como respaldo', async () => {
+      const res = await service.getRankingLavadores({ regionId: r1.id }, act.admin);
+      const hoy = new Date();
+      expect(res.rango.desde.slice(0, 7)).toBe(`${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`);
+      expect(res.rango.desde.endsWith('-01')).toBe(true);
+    });
+  });
+
+  describe('dashboard taller — alcance, MTTR y periodo', () => {
+    it('acota la maquinaria al alcance y al filtro pedido', async () => {
+      expect(((await service.getDashboardTaller({ ...ENERO, regionId: r1.id }, act.coordBodega)) as any).kpis.totalMaquinaria).toBe(2);
+      expect(((await service.getDashboardTaller({ ...ENERO, agenciaId: a1.id }, act.coordBodega)) as any).kpis.totalMaquinaria).toBe(1);
+      expect(((await service.getDashboardTaller({ ...ENERO, agenciaId: a2.id }, act.coordBodega)) as any).kpis.totalMaquinaria).toBe(0);
+    });
+
+    it('publica los rankings completos de máquinas y de agencias para el control Top N, de mayor a menor', async () => {
+      const res: any = await service.getDashboardTaller({ ...ENERO, regionId: r1.id }, act.superadmin);
+
+      // Los rankings del control traen el universo completo (los campos recortados del panel no cambian).
+      expect(res.maquinasProblematicasRank.length).toBeGreaterThanOrEqual(res.topMaquinasProblematicas.length);
+      const totales = res.maquinasProblematicasRank.map((m: any) => m.total);
+      expect(totales).toEqual([...totales].sort((x: number, y: number) => y - x));
+      const costos = res.maquinasCostosasRank.map((m: any) => m.costoTotal);
+      expect(costos).toEqual([...costos].sort((x: number, y: number) => y - x));
+      expect(res.mttrAgenciaRank).toBeDefined();
+      expect(res.costoAgenciaRank).toBeDefined();
+    });
+
+    it('calcula el MTTR por agencia y por gravedad con su cantidad de incidentes', async () => {
+      const res: any = await service.getDashboardTaller({ ...ENERO, regionId: r1.id }, act.superadmin);
+      // Ordenado de más lento a más rápido, con el respaldo de cuántos incidentes promedian.
+      expect(res.mttrPorAgencia).toEqual([
+        { nombre: a3.nombre, horas: 48, incidentes: 1 },
+        { nombre: a1.nombre, horas: 15, incidentes: 2 },
+      ]);
+      expect(res.mttrPorGravedad).toEqual([
+        { nombre: 'BAJA', horas: 10, incidentes: 1 },
+        { nombre: 'MEDIA', horas: 20, incidentes: 1 },
+        { nombre: 'ALTA', horas: 48, incidentes: 1 },
+      ]);
+      expect(res.kpis).toMatchObject({ incidentesActivos: 2, costoTotalReparaciones: 600 });
+    });
+
+    it('la ventana de incidentes sigue exactamente el periodo pedido', async () => {
+      const res: any = await service.getDashboardTaller({ rango: 'RANGO', fechaDesde: '2026-01-07', fechaHasta: '2026-01-07', regionId: r1.id } as any, act.superadmin);
+      expect(res.gravedadIncidentes).toEqual([{ nombre: 'ALTA', cantidad: 1 }]);
+      expect(res.kpis.costoTotalReparaciones).toBe(300);
+    });
+
+    it('el taller también acota los incidentes por pulidor', async () => {
+      const res: any = await service.getDashboardTaller({ ...ENERO, regionId: r1.id, pulidorId: lavador2.id }, act.superadmin);
+      expect(res.gravedadIncidentes).toEqual([{ nombre: 'ALTA', cantidad: 1 }]);
+      expect(res.kpis.costoTotalReparaciones).toBe(200);
+    });
+  });
+
+  describe('dashboard bodega — alcance y salud de inventario', () => {
+    it('aplica el alcance a alertas, movimientos y existencias (no ve datos ajenos)', async () => {
+      const res: any = await service.getDashboardBodega({}, act.asistenteBodega);
+      expect(res.kpis).toMatchObject({ totalAlertasActivas: 1, despachosEnTransito: 1, unidadesEnTransito: 5, unidadesStock: 28 });
+      expect(res.kpis.costoReposicionUSD).toBeUndefined();
+      expect(res.kpis.valorStockUSD).toBeUndefined();
+      // Cobertura: 3 unidades consumidas en 30 días → 0,1 al día; 4 unidades en R1 duran 40 días.
+      expect(res.coberturaDias).toEqual([{ nombre: x[0].nombre, stock: 4, consumoDiario: 0.1, dias: 40 }]);
+    });
+
+    it('prioriza las ubicaciones con mezcla de severidades y completa con las más agotadas', async () => {
+      const res: any = await service.getDashboardBodega({}, act.asistenteBodega);
+      // "Solo Agotada" (A4) tiene MÁS problemas (4) pero la mezcla (A3) es la accionable y va primero.
+      expect(res.saludPorUbicacion.map((u: any) => u.nombre)).toEqual([a3.nombre, a4.nombre, a1.nombre]);
+      expect(res.saludPorUbicacion[0]).toEqual({
+        nombre: a3.nombre,
+        AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0,
+        criticos: 3, problemas: 3,
+      });
+      expect(res.kpis.posicionesEvaluadas).toBe(8);
+    });
+
+    it('la reposición y las existencias se reportan en UNIDADES, nunca en USD', async () => {
+      const res: any = await service.getDashboardBodega({ regionId: r2.id }, act.coordBodega);
+      expect(res.kpis).toMatchObject({ unidadesReponer: 46, insumosConDeficit: 1, ubicacionesConDeficit: 2, unidadesStock: 34, unidadesEnTransito: 7 }); // (40-4) + (40-30)
+      expect(res.kpis.costoReposicionUSD).toBeUndefined();
+      expect(res.topDeficit).toEqual([{ nombre: y1.nombre, unidades: 46, unidad: 'L', ubicaciones: 2 }]);
+    });
+
+    it('un rol de agencia sin agencia no ve movimientos ni existencias', async () => {
+      const res: any = await service.getDashboardBodega({}, act.liderSinAgencia);
+      expect(res.kpis).toMatchObject({ despachos30d: 0, unidadesStock: 0 });
+    });
+
+    it('con un pulidor filtrado se acota a su kit', async () => {
+      const res: any = await service.getDashboardBodega({ pulidorId: pulidor.id }, act.coordBodega);
+      expect(res.kpis).toMatchObject({ totalAlertasActivas: 0, despachos30d: 0, unidadesStock: 0 });
+    });
+  });
+
+  describe('dashboard de servicios especiales', () => {
+    it('la serie de 7 días se ancla al fin del periodo y agrupa por día local', async () => {
+      const res: any = await service.getDashboardEspeciales({ ...ENERO, agenciaId: a1.id }, act.coordEspeciales);
+      // OT creadas a las 20:00 y 10:00 locales: con claves de día UTC la de la tarde caería en el 29.
+      expect(res.flujoSemanal.map((d: any) => d.hora)).toEqual([
+        '2026-01-25', '2026-01-26', '2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-01-31',
+      ]);
+      expect(res.flujoSemanal[3].cantidad).toBe(2);
+      expect(res.flujoSemanal[4].cantidad).toBe(0);
+      expect(res.kpis).toMatchObject({ serviciosHoy: 2, completadosHoy: 1, pendientesHoy: 1, ingresoHoy: 70 });
+    });
+
+    it('filtro por pulidor: acota las OT al operador elegido', async () => {
+      const res: any = await service.getDashboardEspeciales({ ...ENERO, agenciaId: a1.id, pulidorId: pulidor.id }, act.coordEspeciales);
+      expect(res.flujoSemanal[3].cantidad).toBe(1);
+      expect(res.kpis.serviciosHoy).toBe(1);
+      expect(res.pulidores.fijos).toEqual([{ nombre: nombreCompleto(pulidor), servicios: 1, ingresos: 70 }]);
+      expect(res.pulidores.moviles).toEqual([]);
+    });
   });
 });

@@ -28,6 +28,15 @@ export class AnalyticsController {
     return this.analyticsService.getDashboardMetrics(dto, user);
   }
 
+  @Permiso('alertas.ver', 'incidentes.ver', 'mantenimientos.ver')
+  @Post('pendientes')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Pendientes operativos del usuario (stock, incidentes, preventivos vencidos) para la bandeja de Notificaciones' })
+  @ApiResponse({ status: 200, description: 'Lista ordenada por severidad, ya acotada al alcance del rol' })
+  async getPendientes(@CurrentUser() user: any) {
+    return this.analyticsService.getPendientes(user);
+  }
+
   @Permiso('dashboard.ver')
   @Post('consumo-quimicos')
   @HttpCode(HttpStatus.OK)

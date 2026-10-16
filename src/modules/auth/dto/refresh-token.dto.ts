@@ -1,12 +1,12 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString } from 'class-validator';
 
 export class RefreshTokenDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
-    description: 'Refresh Token JWT obtenido durante el login o en el último refresco',
+    description: 'Refresh Token de la app móvil. El cliente web lo manda en una cookie HttpOnly y no lo incluye en el cuerpo.',
   })
+  @IsOptional()
   @IsString({ message: 'El refreshToken debe ser un texto válido' })
-  @IsNotEmpty({ message: 'El refreshToken es requerido' })
-  refreshToken: string;
+  refreshToken?: string;
 }

@@ -1,4 +1,5 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
+import { Controller, Post, Body, HttpCode, HttpStatus, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { OperacionesService } from './operaciones.service.js';
 import { CreateServicioDto } from './dto/create-servicio.dto.js';
@@ -12,6 +13,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Operaciones y Lavados (100% POST)')
+@UseInterceptors(OcultarPreciosInterceptor)
 @Controller('operaciones')
 @ApiBearerAuth()
 export class OperacionesController {
@@ -68,7 +70,7 @@ export class OperacionesController {
     return this.operacionesService.historialDecisiones(detailDto.id, user);
   }
 
-  @Permiso('servicios.crear')
+  @Permiso('servicios.generales.crear', 'servicios.generales.agregar')
   @Post('servicios/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -83,7 +85,7 @@ export class OperacionesController {
     return this.operacionesService.createMultiple(createDto, user.id, user);
   }
 
-  @Permiso('servicios.editar')
+  @Permiso('servicios.generales.editar')
   @Post('servicios/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -98,7 +100,7 @@ export class OperacionesController {
     return this.operacionesService.update(updateDto.id, updateDto, false, user);
   }
 
-  @Permiso('servicios.anular')
+  @Permiso('servicios.generales.anular', 'aprobaciones.anular')
   @Post('servicios/delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -114,7 +116,7 @@ export class OperacionesController {
   //  APROBACIONES Y CIERRE DIARIO (GERENCIA / SUPERVISIÓN)
   // ──────────────────────────────────────────────────────────────────
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.aprobar')
   @Post('servicios/aprobar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Aprobar orden de servicio finalizada (Cierre diario por Gerencia)' })
@@ -126,7 +128,7 @@ export class OperacionesController {
     return this.operacionesService.aprobarServicio(dto.id, dto.observacion, user);
   }
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.rechazar')
   @Post('servicios/rechazar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rechazar orden de servicio por inconformidad técnica o calidad' })
@@ -138,7 +140,7 @@ export class OperacionesController {
     return this.operacionesService.rechazarServicio(dto.id, dto.motivo, user);
   }
 
-  @Permiso('servicios.decidir')
+  @Permiso('aprobaciones.aprobar.todos')
   @Post('servicios/aprobar-todos')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Aprobación masiva de todos los servicios FINALIZADOS de una agencia (Cierre diario)' })
@@ -170,8 +172,8 @@ export class OperacionesController {
   })
   @ApiResponse({ status: 200, description: 'Receta asignada/actualizada' })
   @ApiResponse({ status: 404, description: 'Catálogo o insumo no encontrado' })
-  async asignarReceta(@Body() dto: AsignarRecetaDto, @CurrentUser('id') userId: string) {
-    return this.operacionesService.asignarReceta(dto, userId);
+  async asignarReceta(@Body() dto: AsignarRecetaDto, @CurrentUser('id') userId: string, @CurrentUser() actor: any) {
+    return this.operacionesService.asignarReceta(dto, userId, actor);
   }
 
   @Permiso('recetas.ver')
@@ -179,8 +181,8 @@ export class OperacionesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ver la receta de insumos completa de un servicio del catálogo' })
   @ApiResponse({ status: 200, description: 'Receta del catálogo de servicio' })
-  async listReceta(@Body() dto: ListRecetaDto) {
-    return this.operacionesService.listReceta(dto);
+  async listReceta(@Body() dto: ListRecetaDto, @CurrentUser() actor: any) {
+    return this.operacionesService.listReceta(dto, actor);
   }
 
   @Permiso('recetas.gestionar')
@@ -188,8 +190,8 @@ export class OperacionesController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Quitar un insumo de la receta de un servicio (COORD_BODEGA / ADMIN)' })
   @ApiResponse({ status: 404, description: 'Receta no encontrada' })
-  async eliminarRecetaItem(@Body() dto: EliminarRecetaItemDto, @CurrentUser('id') userId: string) {
-    return this.operacionesService.eliminarRecetaItem(dto, userId);
+  async eliminarRecetaItem(@Body() dto: EliminarRecetaItemDto, @CurrentUser('id') userId: string, @CurrentUser() actor: any) {
+    return this.operacionesService.eliminarRecetaItem(dto, userId, actor);
   }
 
   @Permiso('recetas.historial')
@@ -200,8 +202,8 @@ export class OperacionesController {
     description: 'Cada cambio de receta (agregar, modificar cantidad, quitar un insumo) queda registrado con fecha, quién lo hizo, y el producto/cantidad exactos involucrados.',
   })
   @ApiResponse({ status: 200, description: 'Historial de cambios de receta, más reciente primero' })
-  async listRecetaHistorial(@Body() dto: ListRecetaDto) {
-    return this.operacionesService.listRecetaHistorial(dto);
+  async listRecetaHistorial(@Body() dto: ListRecetaDto, @CurrentUser() actor: any) {
+    return this.operacionesService.listRecetaHistorial(dto, actor);
   }
 
   @Permiso('consumos.ver')
@@ -215,7 +217,7 @@ export class OperacionesController {
     return this.operacionesService.listConsumosPorServicio(dto);
   }
 
-  @Permiso('servicios.crear')
+  @Permiso('servicios.generales.crear', 'servicios.generales.agregar')
   @Post('servicios/simular-consumo')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

@@ -50,7 +50,7 @@ export class RolesController {
     return this.rolesService.findOne(detailDto.id);
   }
 
-  @Permiso('roles.gestionar')
+  @Permiso('usuarios.roles.crear')
   @Post('create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear un nuevo rol dinámico con permisos y estado (POST)' })
@@ -60,7 +60,7 @@ export class RolesController {
     return this.rolesService.create(createDto, user);
   }
 
-  @Permiso('roles.gestionar')
+  @Permiso('usuarios.roles.editar')
   @Post('update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar namerol, estado (0/1) o array de permisos (POST Seguro)' })
@@ -70,7 +70,7 @@ export class RolesController {
     return this.rolesService.update(updateDto, user);
   }
 
-  @Permiso('roles.gestionar')
+  @Permiso('usuarios.roles.eliminar')
   @Post('delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar o desactivar un rol por ID (POST Seguro)' })

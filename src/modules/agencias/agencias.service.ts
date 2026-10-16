@@ -72,14 +72,17 @@ import {
 } from './dto/usuarios-agencia.dto.js';
 
 import { Alcance, SIN_RESULTADOS, puedeSobreAgencia, resolverAlcance, whereAgencias, whereSobreAgencia } from '../../common/permisos/alcance.js';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
-import { tienePermiso } from '../../common/permisos/capacidades.js';
-import { generarPasswordTemporal } from '../../common/utils/password-temporal.js';
+import { esLiderDeAgencia, normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { tieneAlgunPermiso, tienePermiso } from '../../common/permisos/capacidades.js';
+import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
+import { CacheService } from '../../common/cache/cache.service.js';
+import { USUARIO_PREFIJO } from '../auth/jwt.strategy.js';
 @Injectable()
 export class AgenciasService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly cache?: CacheService,
   ) {}
 
   /** Avisa al propio usuario afectado (rol, estado o agencia/región cambiados) y a admin/super admin. Nunca bloquea el flujo. */
@@ -102,6 +105,93 @@ export class AgenciasService {
 
   private esAdmin(user: any): boolean {
     return ['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(user));
+  }
+
+  /** Correo y teléfono de otros usuarios: el administrador, o quien tenga la casilla «Ver correo y teléfono». */
+  private veContacto(user: any): boolean {
+    return this.esAdmin(user) || tienePermiso(user, 'datos.contacto.ver');
+  }
+
+  /** Cédula del personal: el administrador, o quien tenga la casilla «Ver cédula». */
+  private veCedula(user: any): boolean {
+    return this.esAdmin(user) || tienePermiso(user, 'datos.cedula.ver');
+  }
+
+  /**
+   * ¿Puede `actor` asignar la contraseña de `objetivo`? Hace falta el permiso `usuarios.usuarios.password` (Roles y Permisos › Usuarios › Asignar y restablecer contraseñas) y además:
+   *  - nadie cambia la suya (la asigna otro);
+   *  - el Super Administrador es intocable (se rechaza antes) y la de un Administrador solo la cambia el Super Administrador;
+   *  - se actúa solo sobre usuarios de la propia zona (país, región o agencia, según el ámbito del rol); entre los demás roles no hay jerarquía.
+   */
+  private asegurarPuedeAsignarPassword(actor: any, objetivo: { id: string; role?: { namerol?: string | null } | null; agenciaId?: string | null; regionId?: string | null; agencia?: { regionId?: string | null } | null; bodega?: { regionId?: string | null } | null }): void {
+    if (!tienePermiso(actor, 'usuarios.usuarios.password')) {
+      throw new ForbiddenException('Tu rol no tiene permiso para asignar contraseñas.');
+    }
+    if (actor?.id && String(actor.id) === String(objetivo.id)) {
+      throw new ForbiddenException('No puedes cambiar tu propia contraseña: la asigna otro usuario con ese permiso.');
+    }
+    if (objetivo.role?.namerol === 'ADMIN' && rolDeUsuario(actor) !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Solo el Super Administrador puede reiniciar la contraseña de un Administrador.');
+    }
+    const alcance = resolverAlcance(actor);
+    const regionDelObjetivo = objetivo.regionId ?? objetivo.agencia?.regionId ?? objetivo.bodega?.regionId ?? null;
+    const dentro =
+      alcance.tipo === 'GLOBAL' ||
+      (alcance.tipo === 'REGION' && !!regionDelObjetivo && regionDelObjetivo === alcance.regionId) ||
+      (alcance.tipo === 'AGENCIA' && !!objetivo.agenciaId && objetivo.agenciaId === alcance.agenciaId);
+    if (!dentro) {
+      throw new ForbiddenException('Este usuario no pertenece a tu zona: no puedes asignarle una contraseña.');
+    }
+  }
+
+  /**
+   * Asigna (o restablece) la contraseña de un usuario existente. Es el único camino para quien tiene SOLO el permiso de contraseñas: no
+   * puede tocar ningún otro dato del usuario. Cierra las sesiones abiertas del usuario y deja constancia.
+   */
+  async asignarPassword(dto: { id: string; password: string }, actor: any): Promise<{ ok: true }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: dto.id },
+      include: { role: true, agencia: { select: { regionId: true } }, bodega: { select: { regionId: true } } },
+    });
+    if (!user) throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
+    if (user.role?.namerol === 'SUPER_ADMIN') {
+      throw new ForbiddenException('El usuario Super Administrador es de sistema y no puede gestionarse desde la aplicación.');
+    }
+    const nueva = dto.password?.trim();
+    if (!nueva) throw new BadRequestException('Escribe la nueva contraseña.');
+    exigirPasswordSegura(nueva, user.email);
+    this.asegurarPuedeAsignarPassword(actor, user);
+
+    const ahora = new Date();
+    const passwordHash = await bcrypt.hash(nueva, 10);
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: user.id }, data: { passwordHash, sesionesRevocadasAt: ahora } }),
+      this.prisma.refreshSession.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: ahora } }),
+    ]);
+    await this.cache?.del(`${USUARIO_PREFIJO}${user.id}`);
+    await this.registrarAsignacionPassword(actor, user.id, user.email, user.agenciaId);
+    return { ok: true };
+  }
+
+  /** Deja constancia (sin la contraseña) de quién asignó una contraseña a quién. Nunca bloquea el flujo. */
+  private async registrarAsignacionPassword(actor: any, objetivoId: string, objetivoEmail: string, agenciaId?: string | null): Promise<void> {
+    try {
+      await this.prisma.auditoriaDecision.create({
+        data: {
+          entidad: 'USUARIO',
+          entidadId: objetivoId,
+          accion: 'ASIGNAR_PASSWORD',
+          usuarioId: String(actor?.id ?? ''),
+          usuarioNombre: `${actor?.name ?? ''} ${actor?.lastname ?? ''}`.trim() || String(actor?.email ?? ''),
+          rol: rolDeUsuario(actor),
+          regla: this.esAdmin(actor) ? 'ADMIN' : 'DELEGADO',
+          agenciaId: agenciaId ?? null,
+          detalle: { usuario: objetivoEmail },
+        },
+      });
+    } catch {
+      // La constancia no debe impedir el cambio.
+    }
   }
 
   /** El usuario debe poder actuar sobre esa agencia (según su ámbito). */
@@ -138,13 +228,19 @@ export class AgenciasService {
     }
   }
 
-  /** Quien no es administrador nunca recibe el correo ni el teléfono de otros usuarios: solo nombre, rol y estado. */
+  /** Quien no tiene la casilla correspondiente no recibe el correo, el teléfono ni la cédula de otros usuarios: solo nombre, rol y estado. */
   private ocultarContacto<T>(resultado: T, user: any): T {
-    if (this.esAdmin(user)) return resultado;
+    const conContacto = this.veContacto(user);
+    const conCedula = this.veCedula(user);
+    if (conContacto && conCedula) return resultado;
     const limpiar = (fila: any) => {
       if (!fila || typeof fila !== 'object') return fila;
-      const { email, telefono, phone, ...resto } = fila;
-      return resto;
+      const { email, telefono, phone, cedula, ...resto } = fila;
+      return {
+        ...resto,
+        ...(conContacto ? { ...(email !== undefined ? { email } : {}), ...(telefono !== undefined ? { telefono } : {}), ...(phone !== undefined ? { phone } : {}) } : {}),
+        ...(conCedula && cedula !== undefined ? { cedula } : {}),
+      };
     };
     if (Array.isArray(resultado)) return resultado.map(limpiar) as unknown as T;
     const r: any = resultado;
@@ -188,7 +284,7 @@ export class AgenciasService {
     else if (norm.includes('SUPERVISOR')) code = 'SUPERVISOR';
     else if (norm.includes('JEFE') && norm.includes('COMERCIAL')) code = 'JEFE_COMERCIAL';
     else if (norm.includes('COORD') && norm.includes('COMERCIAL')) code = 'COORD_COMERCIAL';
-    else if (norm.includes('APROBADOR') || norm.includes('GERENTE')) code = 'APROBADOR';
+    else if (norm.includes('APROBADOR')) code = 'APROBADOR';
     else if (norm.includes('LIDER') || norm.includes('LÍDER')) code = 'LIDER';
     else if (norm.includes('ESPECIALES')) code = 'COORD_SERVICIOS_ESPECIALES';
     else if (norm.includes('PULIDOR')) code = 'PULIDOR';
@@ -196,7 +292,7 @@ export class AgenciasService {
     else if (norm.includes('TECNICO') || norm.includes('TÉCNICO')) code = 'TECNICO';
     else if (norm.includes('ASISTENTE')) code = 'ASISTENTE_BODEGA';
     else if (norm.includes('BODEGA') || norm.includes('INVENTARIO') || norm.includes('GESTOR')) code = 'COORD_BODEGA';
-    else if (norm.includes('LAVADOR') || norm === 'OPERADOR') code = 'LAVADOR';
+    else if (norm.includes('LAVADOR')) code = 'LAVADOR';
 
     const roleFound = await this.prisma.role.findFirst({
       where: {
@@ -235,7 +331,7 @@ export class AgenciasService {
   }
 
   private limpiarContactoBahia<T extends { operadorActual?: any; operadores?: any[] } | null>(bahia: T, user: any): T {
-    if (!bahia || this.esAdmin(user)) return bahia;
+    if (!bahia || this.veContacto(user)) return bahia;
     const sinEmail = (u: any) => (u ? (({ email: _c, ...resto }: any) => resto)(u) : u);
     return {
       ...bahia,
@@ -266,7 +362,7 @@ export class AgenciasService {
         regiones.map((r) => {
           const supervisor = r.usuarios?.find((u: any) => u.role?.namerol === 'SUPERVISOR') || r.usuarios?.[0];
           // Quien no es admin nunca recibe el correo de otro usuario (D9).
-          const usuarios = this.esAdmin(user) ? r.usuarios : r.usuarios?.map(({ email: _correo, ...resto }: any) => resto);
+          const usuarios = this.veContacto(user) ? r.usuarios : r.usuarios?.map(({ email: _correo, ...resto }: any) => resto);
           return {
             ...r,
             usuarios,
@@ -633,7 +729,7 @@ export class AgenciasService {
     return list.map((a: any) => {
       const ger = a.usuarios?.find((u: any) => {
         const r = (u.role?.namerol || '').toUpperCase();
-        return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+        return r === 'APROBADOR' || r.includes('APROBADOR');
       });
       const lider = a.usuarios?.find((u: any) => {
         const r = (u.role?.namerol || '').toUpperCase();
@@ -682,9 +778,9 @@ export class AgenciasService {
       camposBusqueda: ['nombre', 'codigo'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>
-        this.prisma.region.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, codigo: true } }),
+        this.prisma.region.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, codigo: true, estado: true } }),
       contar: (where) => this.prisma.region.count({ where }),
-      mapear: (r) => ({ value: r.id, label: r.nombre, sublabel: r.codigo || undefined }),
+      mapear: (r) => ({ value: r.id, label: r.nombre, sublabel: r.codigo || undefined, estado: r.estado }),
     });
   }
 
@@ -703,9 +799,9 @@ export class AgenciasService {
       camposBusqueda: ['nombre'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>
-        this.prisma.cliente.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true } }),
+        this.prisma.cliente.findMany({ where, orderBy, skip, take, select: { id: true, nombre: true, estado: true } }),
       contar: (where) => this.prisma.cliente.count({ where }),
-      mapear: (c) => ({ value: c.id, label: c.nombre }),
+      mapear: (c) => ({ value: c.id, label: c.nombre, estado: c.estado }),
     });
   }
 
@@ -768,8 +864,8 @@ export class AgenciasService {
       contar: (where) => this.prisma.user.count({ where }),
       mapear: (u) => ({
         value: u.id,
-        label: `${u.name || ''} ${u.lastname || ''}`.trim() || (this.esAdmin(user) ? u.email : u.id),
-        sublabel: [u.role?.namerol, this.esAdmin(user) ? u.email : undefined].filter(Boolean).join(' · ') || undefined,
+        label: `${u.name || ''} ${u.lastname || ''}`.trim() || (this.veContacto(user) ? u.email : u.id),
+        sublabel: [u.role?.namerol, this.veContacto(user) ? u.email : undefined].filter(Boolean).join(' · ') || undefined,
       }),
     });
   }
@@ -828,7 +924,7 @@ export class AgenciasService {
 
     const ger = agencia.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+      return r === 'APROBADOR' || r.includes('APROBADOR');
     });
     const lider = agencia.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
@@ -837,7 +933,7 @@ export class AgenciasService {
 
     return {
       ...agencia,
-      usuarios: this.esAdmin(user) ? agencia.usuarios : agencia.usuarios.map(({ email: _correo, ...resto }) => resto),
+      usuarios: this.veContacto(user) ? agencia.usuarios : agencia.usuarios.map(({ email: _correo, ...resto }) => resto),
       responsable: ger ? `${ger.name} ${ger.lastname}`.trim() : 'Sin Asignar',
       gerenteId: ger?.id || null,
       gerenteNombre: ger ? `${ger.name} ${ger.lastname}`.trim() : null,
@@ -1220,11 +1316,11 @@ export class AgenciasService {
 
     const ger = finalCreated?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+      return r === 'APROBADOR' || r.includes('APROBADOR');
     });
     const lider = finalCreated?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
+      return r === 'LIDER' || r.includes('LIDER') || r.includes('LÍDER');
     });
 
     const sIdsCreacion = Array.isArray(created.servicioIds) ? (created.servicioIds as number[]) : [];
@@ -1371,7 +1467,7 @@ export class AgenciasService {
     if (dto.gerenteId !== undefined) {
       if (dto.gerenteId && dto.gerenteId !== '0' && dto.gerenteId !== 'null' && dto.gerenteId !== 'undefined') {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['APROBADOR'] } } },
           data: { agenciaId: null },
         });
         await this.prisma.user.update({
@@ -1380,7 +1476,7 @@ export class AgenciasService {
         }).catch((e) => console.warn('No se pudo asignar gerente en updateAgencia', e));
       } else {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['GERENTE', 'APROBADOR'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['APROBADOR'] } } },
           data: { agenciaId: null },
         });
       }
@@ -1389,7 +1485,7 @@ export class AgenciasService {
     if (dto.liderOperadorId !== undefined) {
       if (dto.liderOperadorId && dto.liderOperadorId !== '0' && dto.liderOperadorId !== 'null' && dto.liderOperadorId !== 'undefined') {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER'] } } },
           data: { agenciaId: null },
         });
         await this.prisma.user.update({
@@ -1398,7 +1494,7 @@ export class AgenciasService {
         }).catch((e) => console.warn('No se pudo asignar líder operador en updateAgencia', e));
       } else {
         await this.prisma.user.updateMany({
-          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'] } } },
+          where: { agenciaId: updated.id, role: { namerol: { in: ['LIDER'] } } },
           data: { agenciaId: null },
         });
       }
@@ -1449,11 +1545,11 @@ export class AgenciasService {
 
     const ger = finalAgencia?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'GERENTE' || r === 'APROBADOR' || r.includes('GERENTE') || r.includes('APROBADOR') || r === 'LIDER_AGENCIA';
+      return r === 'APROBADOR' || r.includes('APROBADOR');
     });
     const lider = finalAgencia?.usuarios?.find((u) => {
       const r = (u.role?.namerol || '').toUpperCase();
-      return r === 'LIDER' || r === 'LIDER_OPERADOR' || r.includes('LIDER') || r.includes('LÍDER');
+      return r === 'LIDER' || r.includes('LIDER') || r.includes('LÍDER');
     });
 
     const serviciosParaSincronizar = Array.isArray(finalServicioIds)
@@ -1475,7 +1571,7 @@ export class AgenciasService {
   }
 
   // =========================================================================
-  // PRECIOS POR AGENCIA (override de CatalogoServicio.precio, solo servicios GENERAL)
+  // PRECIOS POR AGENCIA (cada agencia tiene su propio valor de los servicios generales y especiales; el catálogo no tiene precio base)
   // =========================================================================
 
   /**
@@ -1496,8 +1592,8 @@ export class AgenciasService {
 
     const [servicios, overrides] = await Promise.all([
       this.prisma.catalogoServicio.findMany({
-        where: { id: { in: ids }, categoria: 'GENERAL' },
-        select: { id: true, codigo: true, nombre: true, precio: true, estado: true },
+        where: { id: { in: ids }, categoria: { in: ['GENERAL', 'ESPECIAL'] } },
+        select: { id: true, codigo: true, nombre: true, categoria: true, precio: true, estado: true },
         orderBy: { nombre: 'asc' },
       }),
       this.prisma.precioAgenciaServicio.findMany({
@@ -1513,6 +1609,7 @@ export class AgenciasService {
         catalogoServicioId: s.id,
         codigo: s.codigo,
         nombre: s.nombre,
+        categoria: s.categoria,
         estado: s.estado,
         precioCatalogo: Number(s.precio),
         precioAgencia,
@@ -1546,10 +1643,10 @@ export class AgenciasService {
       select: { id: true, categoria: true },
     });
     const servicioPorId = new Map(servicios.map((s) => [s.id, s]));
-    const invalidos = idsSolicitados.filter((id) => servicioPorId.get(id)?.categoria !== 'GENERAL');
+    const invalidos = idsSolicitados.filter((id) => !['GENERAL', 'ESPECIAL'].includes(servicioPorId.get(id)?.categoria as string));
     if (invalidos.length > 0) {
       throw new BadRequestException(
-        `Los servicios con ID ${invalidos.join(', ')} no existen o no son servicios GENERALES: el precio por agencia solo aplica a servicios generales.`,
+        `Los servicios con ID ${invalidos.join(', ')} no existen o no son servicios generales ni especiales.`,
       );
     }
 
@@ -1636,7 +1733,7 @@ export class AgenciasService {
       return r.includes('PULIDOR');
     });
     const lideres = agencia.usuarios.filter((u) =>
-      ['LIDER_AGENCIA', 'LIDER', 'APROBADOR'].includes(u.role?.namerol || ''),
+      ['LIDER', 'APROBADOR'].includes(u.role?.namerol || ''),
     );
 
     return {
@@ -1756,6 +1853,11 @@ export class AgenciasService {
     }
     await this.bahiaEnAlcance(user, dto.id);
 
+    // Este endpoint lo abre "Activar o desactivar bahia". Cambiar el nombre no tiene casilla ni pantalla: solo el Super Admin.
+    if (user && dto.nombre && dto.nombre.trim() !== bahia.nombre && !tienePermiso(user, 'agencias.bahias.editar')) {
+      throw new ForbiddenException('Tu rol no puede cambiar el nombre de una bahía: solo activarla o desactivarla.');
+    }
+
     const actualizada = await this.prisma.bahia.update({
       where: { id: dto.id },
       data: {
@@ -1790,6 +1892,22 @@ export class AgenciasService {
     return this.limpiarContactoBahia(actualizada, user);
   }
 
+  /** Solo el rol Lavador trabaja en bahía. */
+  private esRolLavador(namerol?: string | null): boolean {
+    const r = (namerol || '').trim().toUpperCase();
+    return r === 'LAVADOR' || r.startsWith('LAVADOR ');
+  }
+
+  /** Quita al usuario de todas sus bahías activas y cierra su historial de asignación. */
+  private async liberarBahiasDeOperador(operadorId: string): Promise<void> {
+    const activas = await this.prisma.bahiaOperador.findMany({ where: { operadorId, activo: true }, select: { bahiaId: true } });
+    if (activas.length === 0) return;
+    const bahiaIds = activas.map((a) => a.bahiaId);
+    await this.prisma.bahiaOperador.updateMany({ where: { operadorId, activo: true }, data: { activo: false } });
+    await this.prisma.historialAsignacionBahia.updateMany({ where: { operadorId, fechaFin: null }, data: { fechaFin: new Date() } });
+    await this.prisma.bahia.updateMany({ where: { id: { in: bahiaIds }, operadorActualId: operadorId }, data: { operadorActualId: null } });
+  }
+
   async asignarOperadorABahia(dto: AsignarOperadorBahiaDto, asignadoPorId: string, user?: any) {
     await this.bahiaEnAlcance(user, dto.bahiaId);
     const bahia = await this.prisma.bahia.findUnique({
@@ -1803,9 +1921,15 @@ export class AgenciasService {
     const operadorNuevoId = dto.operadorId && dto.operadorId.trim() ? dto.operadorId.trim() : null;
 
     if (operadorNuevoId) {
-      const operador = await this.prisma.user.findUnique({ where: { id: operadorNuevoId } });
+      const operador = await this.prisma.user.findUnique({ where: { id: operadorNuevoId }, include: { role: { select: { namerol: true } } } });
       if (!operador) {
         throw new NotFoundException(`Operador con ID "${operadorNuevoId}" no encontrado`);
+      }
+      // Solo los lavadores trabajan en bahía; el resto de roles (pulidores, técnicos, líderes…) no se asignan a una.
+      if (!this.esRolLavador(operador.role?.namerol)) {
+        throw new BadRequestException(
+          `Solo los lavadores se asignan a una bahía. "${operador.name}" tiene el rol ${operador.role?.namerol || 'sin rol'}.`,
+        );
       }
 
       // Verificar que el operador no esté ya asignado a esta bahía
@@ -1936,7 +2060,7 @@ export class AgenciasService {
       },
       orderBy: { fechaAsignacion: 'asc' },
     });
-    return this.esAdmin(user) ? filas : filas.map((f: any) => ({ ...f, operador: f.operador ? (({ email: _c, ...o }: any) => o)(f.operador) : f.operador }));
+    return this.veContacto(user) ? filas : filas.map((f: any) => ({ ...f, operador: f.operador ? (({ email: _c, ...o }: any) => o)(f.operador) : f.operador }));
   }
 
   async desasignarOperadorDeBahia(dto: DesasignarOperadorBahiaDto, desasignadoPorId: string, user?: any) {
@@ -2032,7 +2156,7 @@ export class AgenciasService {
     ]);
 
     // Quien no es admin nunca recibe el correo de otro usuario (D9).
-    const itemsFinal = this.esAdmin(user)
+    const itemsFinal = this.veContacto(user)
       ? items
       : items.map(({ operador, asignadoPor, ...resto }: any) => ({
           ...resto,
@@ -2149,7 +2273,7 @@ export class AgenciasService {
   }
 
   async updateUsuario(dto: UpdateUsuarioDto, actor?: any) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.id }, include: { role: true } });
+    const user = await this.prisma.user.findUnique({ where: { id: dto.id }, include: { role: true, agencia: { select: { regionId: true } }, bodega: { select: { regionId: true } } } });
     if (!user) {
       throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
     }
@@ -2158,22 +2282,11 @@ export class AgenciasService {
       throw new ForbiddenException('El usuario Super Administrador es de sistema y no puede gestionarse desde la aplicación.');
     }
 
-    // Las contraseñas las gestiona únicamente el Administrador o el Super Administrador: nadie cambia la suya.
+    // Las contraseñas las asigna quien tiene el permiso `usuarios.usuarios.password` (por defecto, Admin y Super Admin): nadie cambia la suya.
     const nuevaPassword = dto.password?.trim();
     if (nuevaPassword) {
-      if (nuevaPassword.length < 6) {
-        throw new BadRequestException('La contraseña debe tener al menos 6 caracteres.');
-      }
-      const rolActor = rolDeUsuario(actor);
-      if (!this.esAdmin(actor)) {
-        throw new ForbiddenException('Solo el Administrador o el Super Administrador pueden asignar contraseñas.');
-      }
-      if (actor?.id && String(actor.id) === String(user.id)) {
-        throw new ForbiddenException('No puedes cambiar tu propia contraseña: la asigna otro administrador.');
-      }
-      if (user.role?.namerol === 'ADMIN' && rolActor !== 'SUPER_ADMIN') {
-        throw new ForbiddenException('Solo el Super Administrador puede reiniciar la contraseña de un Administrador.');
-      }
+      exigirPasswordSegura(nuevaPassword, user.email);
+      this.asegurarPuedeAsignarPassword(actor, user);
     }
 
     let roleIdToSet: string | undefined = undefined;
@@ -2191,7 +2304,7 @@ export class AgenciasService {
     }
 
     let passwordHashToSet: string | undefined;
-    if (dto.password && dto.password.trim().length >= 6) {
+    if (dto.password && dto.password.trim()) {
       passwordHashToSet = await bcrypt.hash(dto.password.trim(), 10);
     }
 
@@ -2284,37 +2397,19 @@ export class AgenciasService {
         'El Supervisor solo puede gestionar usuarios Backup de su propia región.',
       );
     }
-    if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (
-      userRoleCode === 'COORD_BODEGA' ||
-      userRoleCode === 'DISTRIBUIDOR' ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
+    const rolNormalizadoUpdate = normalizarRol(userRoleCode);
+    if (
+      ambitoRolUpdate === 'GLOBAL' ||
+      rolNormalizadoUpdate === 'SUPER_ADMIN' ||
+      rolNormalizadoUpdate === 'ADMIN' ||
+      rolNormalizadoUpdate === 'COORD_BODEGA'
     ) {
-      // Coord Bodega: acceso total nacional (sin agencia ni región fija)
+      // Alcance nacional: sin agencia ni región fija. Solo Coord Bodega conserva bodega (opcional, central).
       agenciaIdToSet = null;
       regionIdToSet = null;
-      if (dto.bodegaId !== undefined) bodegaIdToSet = dto.bodegaId || null;
-    } else if (userRoleCode.includes('SUPERVISOR')) {
-      agenciaIdToSet = null;
-      bodegaIdToSet = null;
-      if (!regionIdToSet) {
-        regionIdToSet = user.regionId;
-      }
-      if (!regionIdToSet) {
-        throw new BadRequestException('El supervisor debe tener una región asignada.');
-      }
-    } else if (
-      userRoleCode === 'ASISTENTE_BODEGA' ||
-      (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
-    ) {
+      if (rolNormalizadoUpdate !== 'COORD_BODEGA') bodegaIdToSet = null;
+      else if (dto.bodegaId !== undefined) bodegaIdToSet = dto.bodegaId || null;
+    } else if (rolNormalizadoUpdate === 'ASISTENTE_BODEGA') {
       // Asistente de Bodega: vinculado a bodega regional
       agenciaIdToSet = null;
       if (dto.bodegaId !== undefined) {
@@ -2366,8 +2461,8 @@ export class AgenciasService {
           'El Supervisor solo puede asignar agencias dentro de su propia región.',
         );
       }
-    } else if (ambitoRolUpdate === 'REGION') {
-      // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
+    } else if (ambitoRolUpdate === 'REGION' || rolNormalizadoUpdate === 'SUPERVISOR') {
+      // Ámbito regional (supervisor, técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
       agenciaIdToSet = null;
       bodegaIdToSet = null;
       if (!regionIdToSet) regionIdToSet = user.regionId;
@@ -2432,7 +2527,7 @@ export class AgenciasService {
         ...(agenciaIdToSet !== undefined && { agenciaId: agenciaIdToSet }),
         ...(regionIdToSet !== undefined && { regionId: regionIdToSet }),
         ...(bodegaIdToSet !== undefined && { bodegaId: bodegaIdToSet }),
-        ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet }),
+        ...(passwordHashToSet !== undefined && { passwordHash: passwordHashToSet, sesionesRevocadasAt: new Date() }),
         ...(finalServicioIdsUsuario !== undefined && {
           servicioIds: finalServicioIdsUsuario,
         }),
@@ -2445,6 +2540,16 @@ export class AgenciasService {
       },
     });
 
+    // Cambió la contraseña: las sesiones abiertas con la anterior dejan de poder renovarse.
+    if (passwordHashToSet !== undefined) {
+      await this.prisma.refreshSession.updateMany({
+        where: { userId: updatedUser.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await this.cache?.del(`${USUARIO_PREFIJO}${updatedUser.id}`);
+      await this.registrarAsignacionPassword(actor, updatedUser.id, updatedUser.email, updatedUser.agenciaId);
+    }
+
     const sIdsUser = Array.isArray(updatedUser.servicioIds)
       ? (updatedUser.servicioIds as any[]).map(Number).filter((n) => !isNaN(n) && n > 0)
       : [];
@@ -2454,6 +2559,11 @@ export class AgenciasService {
     }
 
     const rolCambio = roleIdToSet !== undefined && roleIdToSet !== user.roleId;
+    const agenciaCambio = agenciaIdToSet !== undefined && agenciaIdToSet !== user.agenciaId;
+    // La bahía solo aplica a lavadores y pertenece a una agencia: si deja de ser lavador o se mueve de agencia, se libera.
+    if (agenciaCambio || (rolCambio && !this.esRolLavador(updatedUser.role?.namerol))) {
+      await this.liberarBahiasDeOperador(updatedUser.id);
+    }
     const estadoCambio = dto.estado !== undefined && dto.estado !== user.estado;
     if (rolCambio || estadoCambio) {
       const partes: string[] = [];
@@ -2604,33 +2714,18 @@ export class AgenciasService {
         'El Supervisor solo puede crear usuarios Backup para su propia región.',
       );
     }
-    if (userRoleCode.includes('SUPER') && userRoleCode.includes('ADMIN')) {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (userRoleCode === 'ADMIN' || userRoleCode === 'ADMINISTRADOR') {
-      agenciaIdToSet = null;
-      regionIdToSet = null;
-      bodegaIdToSet = null;
-    } else if (
-      userRoleCode === 'COORD_BODEGA' ||
-      userRoleCode === 'DISTRIBUIDOR' ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('INVENTARIO')) ||
-      (userRoleCode.includes('GESTOR') && userRoleCode.includes('BODEGA'))
+    const rolNormalizadoCreate = normalizarRol(userRoleCode);
+    if (
+      ambitoRolCreate === 'GLOBAL' ||
+      rolNormalizadoCreate === 'SUPER_ADMIN' ||
+      rolNormalizadoCreate === 'ADMIN' ||
+      rolNormalizadoCreate === 'COORD_BODEGA'
     ) {
-      // Coord Bodega: alcance nacional sin agencia/región; bodega opcional (central)
+      // Alcance nacional: sin agencia ni región fija. Solo Coord Bodega conserva bodega (opcional, central).
       agenciaIdToSet = null;
       regionIdToSet = null;
-    } else if (userRoleCode.includes('SUPERVISOR')) {
-      agenciaIdToSet = null;
-      bodegaIdToSet = null;
-      if (!regionIdToSet) {
-        throw new BadRequestException('El supervisor debe tener una región asignada.');
-      }
-    } else if (
-      userRoleCode === 'ASISTENTE_BODEGA' ||
-      (userRoleCode.includes('ASISTENTE') && userRoleCode.includes('BODEGA'))
-    ) {
+      if (rolNormalizadoCreate !== 'COORD_BODEGA') bodegaIdToSet = null;
+    } else if (rolNormalizadoCreate === 'ASISTENTE_BODEGA') {
       agenciaIdToSet = null;
       if (!bodegaIdToSet) {
         throw new BadRequestException('El Asistente de Bodega debe estar asignado a una bodega regional (bodegaId).');
@@ -2643,7 +2738,7 @@ export class AgenciasService {
       if (!regionIdToSet) {
         throw new BadRequestException('La bodega asignada al asistente debe tener región.');
       }
-    } else if (userRoleCode === 'LIDER' || userRoleCode.includes('LIDER')) {
+    } else if (rolNormalizadoCreate === 'LIDER') {
       if (!agenciaIdToSet) {
         throw new BadRequestException('El Líder Operador debe tener una agencia asignada.');
       }
@@ -2686,8 +2781,8 @@ export class AgenciasService {
           );
         }
       }
-    } else if (ambitoRolCreate === 'REGION') {
-      // Ámbito regional (técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
+    } else if (ambitoRolCreate === 'REGION' || rolNormalizadoCreate === 'SUPERVISOR') {
+      // Ámbito regional (supervisor, técnico de maquinaria, coordinador de mantenimiento…): el ámbito es la región, no una agencia.
       agenciaIdToSet = null;
       bodegaIdToSet = null;
       if (!regionIdToSet) {
@@ -2699,6 +2794,7 @@ export class AgenciasService {
     if (!passwordToHash) {
       throw new BadRequestException('La contraseña es obligatoria para crear el usuario.');
     }
+    exigirPasswordSegura(passwordToHash, dto.email);
     const passwordHash = await bcrypt.hash(passwordToHash, 10);
 
     let servicioIdsToSet = Array.isArray(dto.servicioIds)
@@ -2857,10 +2953,10 @@ export class AgenciasService {
 
   /** Condiciones sobre el rol de cada segmento rápido (la pantalla los llama píldoras). */
   private static readonly SEGMENTOS_USUARIO: Record<string, string[]> = {
-    lavadores: ['LAVADOR', 'PULIDOR', 'OPERADOR'],
+    lavadores: ['LAVADOR', 'PULIDOR'],
     supervisores: ['SUPERVISOR', 'COORD'],
-    bodega: ['BODEGA', 'DISTRIBUIDOR', 'INVENTARIO'],
-    admins: ['ADMIN', 'GERENTE', 'AUDITOR'],
+    bodega: ['BODEGA', 'INVENTARIO'],
+    admins: ['ADMIN', 'AUDITOR'],
   };
 
   private whereSegmentoUsuario(segmento?: string): Record<string, unknown> | undefined {
@@ -2980,20 +3076,31 @@ export class AgenciasService {
     currentUser?: any,
   ): any {
     const rolUsuario = currentUser ? (currentUser?.role?.namerol || currentUser?.roleDetails?.namerol || (typeof currentUser?.role === 'string' ? currentUser.role : '')) : '';
-    const isCoordEspeciales = rolUsuario === 'COORD_SERVICIOS_ESPECIALES' || dto.categoriaRol === 'PULIDOR' || dto.rol === 'PULIDOR';
-    const isLider = ['LIDER', 'LIDER_OPERADOR', 'LIDER_AGENCIA'].includes(rolUsuario);
+    const isLider = esLiderDeAgencia(normalizarRol(rolUsuario));
+    const isCoordEspeciales = !isLider && (rolUsuario === 'COORD_SERVICIOS_ESPECIALES' || dto.categoriaRol === 'PULIDOR' || dto.rol === 'PULIDOR');
 
-    const rolesPulidor = ['PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
-    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía', 'OPERADOR'];
+    const rolesPulidor = ['PULIDOR', 'Pulidor'];
+    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía'];
 
-    let targetRoles: string[] = ['LAVADOR', 'PULIDOR', 'PULIDOR_FIJO', 'PULIDOR_MOVIL', 'TECNICO', 'Pulidor', 'Pulidor Móvil', 'Pulidor Fijo'];
+    let targetRoles: string[] = ['LAVADOR', 'PULIDOR', 'TECNICO', 'Pulidor'];
 
-    if (isCoordEspeciales) {
+    if (isLider) {
+      // El líder ve a quien tiene asignado en su agencia: sus lavadores y su pulidor fijo (el móvil no tiene agencia).
+      const pide = dto.rol || dto.categoriaRol;
+      targetRoles = pide === 'LAVADOR' ? rolesLavador : pide === 'PULIDOR' ? rolesPulidor : [...rolesLavador, ...rolesPulidor];
+    } else if (isCoordEspeciales) {
       targetRoles = rolesPulidor;
-    } else if (isLider || dto.categoriaRol === 'LAVADOR' || dto.rol === 'LAVADOR') {
+    } else if (dto.categoriaRol === 'LAVADOR' || dto.rol === 'LAVADOR') {
       targetRoles = rolesLavador;
     } else if (dto.rol) {
       targetRoles = [dto.rol];
+    }
+
+    // Filtro por un rol concreto (p. ej. PULIDOR_FIJO) dentro de lo que el usuario puede ver; LAVADOR y PULIDOR son las categorías de arriba.
+    if (dto.rol && dto.rol !== 'LAVADOR' && dto.rol !== 'PULIDOR' && targetRoles.includes(dto.rol)) {
+      targetRoles = [dto.rol];
+    } else if (dto.rol && dto.rol !== 'LAVADOR' && dto.rol !== 'PULIDOR' && !targetRoles.includes(dto.rol)) {
+      targetRoles = [];
     }
 
     const where: any = {
@@ -3055,7 +3162,24 @@ export class AgenciasService {
     }), currentUser);
   }
 
-  async createOperador(dto: CreateOperadorDto, creatorId?: string) {
+  /**
+   * Cada botón de Gestión de Lavadores tiene su permiso: editar datos, cambiar el rol, asignar a una bahía y quitar de una bahía son
+   * cuatro casillas distintas aunque viajen en el mismo formulario. `actor` solo falta en llamadas internas (sin sesión web).
+   */
+  private exigirPermiso(actor: any, codigos: string[], accion: string): void {
+    if (!actor) return;
+    if (!tieneAlgunPermiso(actor, codigos)) throw new ForbiddenException(`Tu rol no puede ${accion}.`);
+  }
+
+  /** Asignar a una bahía lo permiten Gestión de Lavadores y Gestión de Agencias (la misma acción en dos pantallas). */
+  private static readonly PERMISOS_ASIGNAR_BAHIA = ['operadores.bahia.asignar', 'agencias.bahias.asignar'];
+  private static readonly PERMISOS_QUITAR_BAHIA = ['operadores.bahia.quitar', 'agencias.bahias.asignar'];
+
+  async createOperador(dto: CreateOperadorDto, creatorId?: string, actor?: any) {
+    // Registrar con una bahía ya asignada es asignar: exige además ese permiso.
+    const quiereBahia = !!dto.bahiaId && !!dto.bahiaId.trim() && !/sin bah[ií]a/i.test(dto.bahiaId);
+    if (quiereBahia) this.exigirPermiso(actor, AgenciasService.PERMISOS_ASIGNAR_BAHIA, 'asignar lavadores a una bahía');
+
     const agencia = await this.prisma.agencia.findFirst({
       where: {
         OR: [
@@ -3114,8 +3238,11 @@ export class AgenciasService {
       throw new ConflictException(`Ya existe un lavador registrado con esta identificación/cédula (${cedulaClean})`);
     }
 
-    const passwordTemporal = generarPasswordTemporal();
-    const passwordHash = await bcrypt.hash(passwordTemporal, 10);
+    // La contraseña la define quien registra al operador (con la misma política que cualquier usuario) y se la comunica.
+    const passwordInicial = dto.password?.trim();
+    if (!passwordInicial) throw new BadRequestException('La contraseña es obligatoria para registrar al operador.');
+    exigirPasswordSegura(passwordInicial, emailToUse);
+    const passwordHash = await bcrypt.hash(passwordInicial, 10);
     const names = dto.nombre.trim().split(' ');
     const firstName = names[0] || 'Lavador';
     const lastNamePart = names.slice(1).join(' ');
@@ -3143,8 +3270,8 @@ export class AgenciasService {
       }
     });
 
-    // Si se especificó bahía, asignarlo inmediatamente a la bahía en BD
-    if (dto.bahiaId && dto.bahiaId.trim() && !dto.bahiaId.toLowerCase().includes('sin bahia') && !dto.bahiaId.toLowerCase().includes('sin bahía')) {
+    // Si se especificó bahía, asignarlo inmediatamente a la bahía en BD (solo los lavadores van a bahía)
+    if (this.esRolLavador(role.namerol) && dto.bahiaId && dto.bahiaId.trim() &&!dto.bahiaId.toLowerCase().includes('sin bahia') && !dto.bahiaId.toLowerCase().includes('sin bahía')) {
       const bahiaFound = await this.prisma.bahia.findFirst({
         where: {
           agenciaId: agencia.id,
@@ -3174,20 +3301,20 @@ export class AgenciasService {
       }
     });
 
-    // La contraseña se entrega una sola vez, para que quien registra al operador se la comunique. Solo un administrador puede cambiarla después.
-    return { ...this.mapUserToOperador(created), passwordTemporal };
+    return this.mapUserToOperador(created);
   }
 
-  async updateOperador(dto: UpdateOperadorDto, updaterId?: string) {
+  async updateOperador(dto: UpdateOperadorDto, updaterId?: string, actor?: any) {
     const user = await this.prisma.user.findUnique({
       where: { id: dto.id },
-      include: { bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } } }
+      include: { role: { select: { namerol: true } }, bahiaOperadores: { where: { activo: true }, include: { bahia: { select: { id: true, nombre: true, codigo: true, updatedAt: true } } } } }
     });
     if (!user) {
       throw new NotFoundException(`Operador con ID "${dto.id}" no encontrado`);
     }
 
     const dataToUpdate: any = {};
+    let rolNombreFinal: string | undefined = user.role?.namerol;
     if (dto.nombre) {
       const names = dto.nombre.trim().split(' ');
       dataToUpdate.name = names[0];
@@ -3224,6 +3351,25 @@ export class AgenciasService {
       }
       if (role) {
         dataToUpdate.roleId = role.id;
+        rolNombreFinal = role.namerol;
+      }
+    }
+
+    // Permisos por botón: solo se exige cada uno si ese cambio ocurre de verdad (el formulario manda todos los campos).
+    const cambiaRol = dataToUpdate.roleId !== undefined && dataToUpdate.roleId !== user.roleId;
+    const cambiaDatos =
+      (dataToUpdate.name !== undefined && dataToUpdate.name !== user.name) ||
+      (dataToUpdate.lastname !== undefined && dataToUpdate.lastname !== user.lastname) ||
+      (dataToUpdate.estado !== undefined && dataToUpdate.estado !== user.estado) ||
+      (dataToUpdate.agenciaId !== undefined && dataToUpdate.agenciaId !== user.agenciaId);
+    if (cambiaDatos) this.exigirPermiso(actor, ['operadores.editar'], 'editar los datos de lavadores y pulidores');
+    if (cambiaRol) this.exigirPermiso(actor, ['operadores.rol'], 'cambiar el rol de lavadores y pulidores');
+    if (dto.bahiaId !== undefined) {
+      const actual = user.bahiaOperadores?.[0]?.bahia;
+      const sinBahia = !dto.bahiaId || /sin bah[ií]a/i.test(dto.bahiaId);
+      if (sinBahia && actual) this.exigirPermiso(actor, AgenciasService.PERMISOS_QUITAR_BAHIA, 'dejar a un lavador sin bahía');
+      if (!sinBahia && (!actual || (actual.id !== dto.bahiaId && actual.nombre !== dto.bahiaId))) {
+        this.exigirPermiso(actor, AgenciasService.PERMISOS_ASIGNAR_BAHIA, 'asignar lavadores a una bahía');
       }
     }
 
@@ -3232,8 +3378,14 @@ export class AgenciasService {
       data: dataToUpdate
     });
 
+    // Un rol distinto de lavador no trabaja en bahía: se le libera la que tuviera y no se le asigna otra.
+    const trabajaEnBahia = this.esRolLavador(rolNombreFinal);
+    if (!trabajaEnBahia || (dataToUpdate.agenciaId && dataToUpdate.agenciaId !== user.agenciaId)) {
+      await this.liberarBahiasDeOperador(dto.id);
+    }
+
     // Si se especificó bahía para cambiar o desvincular
-    if (dto.bahiaId !== undefined) {
+    if (trabajaEnBahia && dto.bahiaId !== undefined) {
       const currentBahia = user.bahiaOperadores?.[0]?.bahia;
       const esSinBahia = !dto.bahiaId || dto.bahiaId.toLowerCase().includes('sin bahia') || dto.bahiaId.toLowerCase().includes('sin bahía');
 

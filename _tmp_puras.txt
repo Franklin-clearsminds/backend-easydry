@@ -1,0 +1,26 @@
+describe('nivelStock', () => {
+  it('agotado, bajo mínimo, moderado y óptimo (misma regla que la pantalla)', () => {
+    expect(nivelStock(0, 10, 30)).toBe('agotado');
+    expect(nivelStock(-2, 10, 30)).toBe('agotado');
+    expect(nivelStock(10, 10, 30)).toBe('bajo_minimo');
+    expect(nivelStock(11, 10, 30)).toBe('moderado');
+    expect(nivelStock(29.9, 10, 30)).toBe('moderado');
+    expect(nivelStock(30, 10, 30)).toBe('optimo');
+  });
+
+  it('sin óptimo definido toma el doble del mínimo (o 10)', () => {
+    expect(nivelStock(15, 10, null)).toBe('moderado'); // óptimo = 20
+    expect(nivelStock(20, 10, null)).toBe('optimo');
+    expect(nivelStock(5, 0, 0)).toBe('moderado'); // sin mínimo: óptimo = 10
+    expect(nivelStock('5', '3', undefined)).toBe('moderado'); // óptimo = 6, y los textos numéricos cuentan
+    expect(nivelStock('7', '3', undefined)).toBe('optimo');
+  });
+
+  it('alerta_total incluye agotado y bajo mínimo (antes solo agotado por un error de la pantalla)', () => {
+    expect(cumpleNivel('agotado', 'alerta_total')).toBe(true);
+    expect(cumpleNivel('bajo_minimo', 'alerta_total')).toBe(true);
+    expect(cumpleNivel('moderado', 'alerta_total')).toBe(false);
+    expect(cumpleNivel('optimo', 'optimo')).toBe(true);
+  });
+});
+

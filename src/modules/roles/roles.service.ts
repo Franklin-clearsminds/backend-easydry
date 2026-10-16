@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { CacheService } from '../../common/cache/cache.service.js';
+import { USUARIO_PREFIJO } from '../auth/jwt.strategy.js';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRoleDto } from './dto/create-role.dto.js';
@@ -12,6 +14,8 @@ import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.j
 import { ambitoDeUsuario, tienePermiso } from '../../common/permisos/capacidades.js';
 import { accionesLegacy } from '../../common/permisos/acciones-legacy.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { arbolPaginas, capacidadesDesdeNuevos, dependenciasRotas, esCodigoNuevo, nombreDeCodigo } from '../../common/permisos/catalogo-paginas.js';
+import { capacidadesConPaginas, tienePaginas } from '../../common/permisos/migracion-paginas.js';
 import { MODULOS_NAVEGACION, PERMISOS_POR_MODULO, modulosDeCapacidades, modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 
 /** Qué tan amplio es un ámbito: un rol no puede darle a otro más alcance del que él mismo tiene. */
@@ -25,11 +29,41 @@ function listasIguales(a: unknown, b: unknown): boolean {
 }
 
 @Injectable()
-export class RolesService {
+export class RolesService implements OnModuleInit {
+  private readonly logger = new Logger(RolesService.name);
+
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    @Optional() private cache?: CacheService,
   ) {}
+
+  /**
+   * Los roles creados antes del catálogo de páginas guardan solo permisos clásicos: se les agregan sus páginas, sub-páginas y
+   * acciones equivalentes (sin quitarles nada) para que el editor y el menú los muestren bien. Es idempotente.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      const roles = await this.prisma.role.findMany({ where: { namerol: { not: ROL_SUPER_ADMIN } } });
+      let migrados = 0;
+      for (const rol of roles) {
+        const actuales = Array.isArray(rol.capacidades) ? rol.capacidades : [];
+        if (actuales.length === 0 || tienePaginas(actuales)) continue;
+        const capacidades = capacidadesConPaginas(actuales, rol.namerol);
+        await this.prisma.role.update({
+          where: { id: rol.id },
+          data: {
+            capacidades,
+            permisos: modulosDeCapacidades(capacidades, rol.namerol),
+          },
+        });
+        migrados++;
+      }
+      if (migrados > 0) this.logger.log(`Roles migrados al catálogo de páginas: ${migrados}`);
+    } catch (e) {
+      this.logger.warn(`No se pudo migrar los roles al catálogo de páginas: ${e instanceof Error ? e.message : e}`);
+    }
+  }
 
   /**
    * Catálogo de pantallas (tabla modulos_sistema) y de permisos que exige el backend. Cada pantalla trae los permisos
@@ -60,6 +94,8 @@ export class RolesService {
       catalogo,
       /** Permisos que el backend exige en cada endpoint, agrupados para la pantalla de roles. */
       capacidades: CATALOGO_PERMISOS.map((p) => ({ codigo: p.codigo, grupo: p.grupo, nombre: p.nombre, descripcion: p.descripcion })),
+      /** Páginas, sub-páginas y acciones: lo que se activa en el editor de roles. */
+      paginas: arbolPaginas(),
       ambitos: [...AMBITOS],
     };
   }
@@ -94,6 +130,8 @@ export class RolesService {
       estado: role.estado,
       permisos: modulosDeRol(role),
       capacidades: Array.isArray(role.capacidades) ? role.capacidades : [],
+      /** Solo los códigos del catálogo de páginas que el rol tiene activos (lo que edita la pantalla de roles). */
+      paginas: (Array.isArray(role.capacidades) ? role.capacidades : []).filter(esCodigoNuevo),
       ambito: role.ambito ?? 'AGENCIA',
       esSistema: !!role.esSistema,
       acciones: role.acciones ?? null,
@@ -161,7 +199,18 @@ export class RolesService {
     const unicos = Array.from(new Set(codigos));
     const desconocidos = unicos.filter((c) => !esCodigoPermiso(c));
     if (desconocidos.length) throw new BadRequestException(`Permisos desconocidos: ${desconocidos.join(', ')}`);
-    return unicos;
+
+    // Lista sin páginas (cliente antiguo): son permisos clásicos y de ellos se derivan las páginas.
+    if (!tienePaginas(unicos)) return capacidadesConPaginas(unicos);
+
+    // Con páginas, manda el catálogo: una sub-página o acción solo puede estar activa si su página lo está.
+    const nuevos = unicos.filter(esCodigoNuevo);
+    const rotas = dependenciasRotas(nuevos);
+    if (rotas.length) {
+      const detalle = rotas.map((r) => `"${nombreDeCodigo(r.codigo)}" requiere "${nombreDeCodigo(r.requiere)}"`).join('; ');
+      throw new BadRequestException(`No se puede dar una acción o sub-página sin acceso a su página: ${detalle}.`);
+    }
+    return capacidadesDesdeNuevos(nuevos);
   }
 
   /** Nadie puede darle a un rol permisos o alcance que él mismo no tiene (el SUPER_ADMIN puede todo). */
@@ -195,9 +244,6 @@ export class RolesService {
     }
     if (nombre === ROL_SUPER_ADMIN) {
       throw new ForbiddenException('El rol SUPER_ADMIN es un rol de sistema reservado.');
-    }
-    if (normalizarRol(nombre) !== nombre) {
-      throw new BadRequestException(`El nombre '${nombre}' es un alias antiguo de '${normalizarRol(nombre)}'; usa otro nombre.`);
     }
     return nombre;
   }
@@ -311,6 +357,8 @@ export class RolesService {
       data: dataToUpdate,
       include: { _count: { select: { users: true } } },
     });
+    // Los usuarios con este rol guardan una copia del rol en caché: los permisos nuevos deben valer ya.
+    await this.cache?.delPrefijo(USUARIO_PREFIJO);
 
     const cambioPermisos =
       (dataToUpdate.capacidades !== undefined && !listasIguales(role.capacidades, dataToUpdate.capacidades)) ||
@@ -347,6 +395,7 @@ export class RolesService {
     }
 
     await this.prisma.role.delete({ where: { id } });
+    await this.cache?.delPrefijo(USUARIO_PREFIJO);
 
     return {
       success: true,

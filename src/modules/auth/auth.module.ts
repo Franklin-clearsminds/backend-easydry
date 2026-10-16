@@ -7,6 +7,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtStrategy } from './jwt.strategy.js';
 import { StorageModule } from '../storage/storage.module.js';
+import { JWT_ACCESS_DEFAULT, JWT_SIGN_OPTIONS } from './jwt.config.js';
 
 @Global()
 @Module({
@@ -18,7 +19,8 @@ import { StorageModule } from '../storage/storage.module.js';
       useFactory: (configService: ConfigService) => ({
         secret: secretoObligatorio(configService.get<string>('JWT_SECRET'), 'JWT_SECRET', 'EasyDrySecretKey2026*OfflineSync'),
         signOptions: {
-          expiresIn: (configService.get<string>('JWT_ACCESS_EXPIRATION') || '1h') as any,
+          ...JWT_SIGN_OPTIONS,
+          expiresIn: (configService.get<string>('JWT_ACCESS_EXPIRATION') || JWT_ACCESS_DEFAULT) as any,
         },
       }),
     }),

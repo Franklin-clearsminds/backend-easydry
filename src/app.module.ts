@@ -3,6 +3,11 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { PrismaModule } from './modules/prisma/prisma.module.js';
+import { PrismaService } from './modules/prisma/prisma.service.js';
+import { CacheModule } from './common/cache/cache.module.js';
+import { CacheService } from './common/cache/cache.service.js';
+import { RedisThrottlerStorage } from './common/cache/throttler-redis.storage.js';
+import { PostgresThrottlerStorage } from './common/guards/throttler-postgres.storage.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { SyncModule } from './modules/sync/sync.module.js';
 import { CatalogosModule } from './modules/catalogos/catalogos.module.js';
@@ -21,18 +26,31 @@ import { PermisosModule } from './common/permisos/decisiones.service.js';
 import { PermisosGuard } from './common/permisos/permisos.guard.js';
 import { DeviceThrottlerGuard } from './common/guards/throttler-behind-proxy.guard.js';
 import { RetosModule } from './modules/retos/retos.module.js';
+import { AuditoriasModule } from './modules/auditorias/auditorias.module.js';
+import { ReportesModule } from './modules/reportes/reportes.module.js';
+import { ArchivadoModule } from './modules/archivado/archivado.module.js';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60000, // Ventana de 1 minuto
-        limit: 120, // 120 peticiones/minuto por tracker (dispositivo/usuario)
-      },
-    ]),
+    // Los contadores del límite viven en Redis cuando hay (una operación atómica en memoria, sin tocar la base en cada petición) y, si
+    // no, en PostgreSQL: en ambos casos el límite vale para todas las instancias y sobrevive a reinicios de una de ellas.
+    ThrottlerModule.forRootAsync({
+      imports: [PrismaModule, CacheModule],
+      inject: [PrismaService, CacheService],
+      useFactory: (prisma: PrismaService, cache: CacheService) => ({
+        throttlers: [
+          {
+            ttl: 60000, // Ventana de 1 minuto
+            limit: 120, // 120 peticiones/minuto por tracker (dispositivo/usuario)
+          },
+        ],
+        storage: cache.usaRedis ? new RedisThrottlerStorage(cache) : new PostgresThrottlerStorage(prisma),
+      }),
+    }),
+    CacheModule,
     PrismaModule,
     PermisosModule,
     CryptoModule,
@@ -50,6 +68,9 @@ import { RetosModule } from './modules/retos/retos.module.js';
     AnalyticsModule,
     AprobacionesModule,
     RetosModule,
+    AuditoriasModule,
+    ReportesModule,
+    ArchivadoModule,
   ],
   providers: [
     {

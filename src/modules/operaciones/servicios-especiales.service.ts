@@ -28,10 +28,13 @@ import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import {
   columnasSimples,
   combinarWhere,
+  resolverCampoOrden,
   resolverOrden,
   resolverPaginacion,
   whereBusqueda,
 } from '../../common/utils/data-grid.helpers.js';
+import { HistoricoService } from '../archivado/historico.service.js';
+import { ServiciosEspecialesArchivo } from './servicios-especiales-archivo.js';
 
 /** Columnas por las que se puede ordenar la lista de servicios especiales (nombre público → campo de la base). */
 const ORDEN_ESPECIALES = columnasSimples({
@@ -55,6 +58,8 @@ export class ServiciosEspecialesService {
     private prisma: PrismaService,
     decisiones?: DecisionesService,
     @Optional() private notifications?: NotificationsService,
+    /** Suma al listado de servicios especiales lo que ya se archivó a Parquet. Sin él, el listado lee solo de la base. */
+    @Optional() private historico?: HistoricoService,
   ) {
     this.decisiones = decisiones ?? new DecisionesService(prisma);
   }
@@ -366,11 +371,19 @@ export class ServiciosEspecialesService {
       { campo: 'fecha', dir: 'desc' },
     );
 
-    const [items, total] = await Promise.all([
+    // Si el listado toca datos ya archivados, se suman a los de la base con el mismo alcance, filtros, búsqueda y orden. Si no, la
+    // consulta es exactamente la de siempre.
+    const { campo: campoOrden, dir: dirOrden } = resolverCampoOrden(query.sortField, query.sortOrder, ORDEN_ESPECIALES, { campo: 'fecha', dir: 'desc' });
+    const especialesArchivo = this.historico ? new ServiciosEspecialesArchivo(this.prisma, this.historico) : null;
+    const quien = { id: currentUser?.id as string | undefined, esPulidor: rolDeUsuario(currentUser) === 'PULIDOR' };
+    const archivado = especialesArchivo ? await especialesArchivo.consultar({ params: query, alcance, actor: quien, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [itemsBase, totalBase] = await Promise.all([
       this.prisma.servicioEspecial.findMany({
         where: whereFinal,
-        skip,
-        take,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        skip: archivado ? 0 : skip,
+        take: archivado ? skip + take : take,
         orderBy: orderBy as any,
         include: {
           agencia: { select: { id: true, nombre: true, codigo: true } },
@@ -394,6 +407,8 @@ export class ServiciosEspecialesService {
       }),
       this.prisma.servicioEspecial.count({ where: whereFinal }),
     ]);
+    const items = archivado && especialesArchivo ? especialesArchivo.mezclar(itemsBase as any[], archivado.filas, campoOrden, dirOrden, skip, take) : itemsBase;
+    const total = totalBase + (archivado?.total ?? 0);
 
     const formatted = items.map((i) => this._formatItem(i));
     const respuesta: Record<string, unknown> = {
@@ -411,6 +426,12 @@ export class ServiciosEspecialesService {
       for (const fila of porEstado) {
         conteo[fila.estado] = fila._count._all;
         totalResumen += fila._count._all;
+      }
+      // Lo archivado (completado o cancelado) también cuenta en el resumen.
+      const porEstadoArchivado = especialesArchivo ? await especialesArchivo.resumen({ params: query, alcance, actor: quien }) : null;
+      for (const [estado, n] of Object.entries(porEstadoArchivado ?? {})) {
+        conteo[estado] = (conteo[estado] ?? 0) + n;
+        totalResumen += n;
       }
       respuesta['resumen'] = { porEstado: conteo, total: totalResumen };
     }
@@ -456,15 +477,30 @@ export class ServiciosEspecialesService {
     return item;
   }
 
+  /**
+   * Para LEER un servicio especial: de la base y, si ya se archivó (más de 12 meses), del archivo. Las rutas que lo modifican siguen
+   * usando `findOneRaw`, que solo mira la base: lo archivado es inmutable y para ellas "no existe".
+   */
+  private async leerServicio(id: string) {
+    try {
+      return await this.findOneRaw(id);
+    } catch (e) {
+      if (!(e instanceof NotFoundException) || !this.historico) throw e;
+      const archivado = await new ServiciosEspecialesArchivo(this.prisma, this.historico).detalle(id);
+      if (!archivado) throw e;
+      return archivado as Awaited<ReturnType<ServiciosEspecialesService['findOneRaw']>>;
+    }
+  }
+
   async findOne(id: string, actor?: any) {
-    const item = await this.findOneRaw(id);
+    const item = await this.leerServicio(id);
     this.asegurarPuedeVer(actor, item);
     return this._formatItem(item);
   }
 
   /** Quién anuló este servicio especial y por qué (del más reciente al más antiguo). */
   async historialDecisiones(id: string, actor: any) {
-    const item = await this.findOneRaw(id);
+    const item = await this.leerServicio(id);
     this.asegurarPuedeVer(actor, item);
     return this.prisma.auditoriaDecision.findMany({
       where: { entidad: 'SERVICIO_ESPECIAL', entidadId: item.id },
@@ -478,9 +514,10 @@ export class ServiciosEspecialesService {
     creatorId?: string,
     currentUser?: any,
   ) {
-    if (rolDeUsuario(currentUser) !== 'COORD_SERVICIOS_ESPECIALES') {
+    // Quien crea lo decide su casilla («Crear OT especial»), no el nombre del rol.
+    if (!tienePermiso(currentUser, 'servicios.especiales.crear')) {
       throw new ForbiddenException(
-        'Solo el coordinador de servicios especiales puede crear estas órdenes.',
+        'Tu rol no puede crear órdenes de servicios especiales.',
       );
     }
 
@@ -663,8 +700,7 @@ export class ServiciosEspecialesService {
         : null;
     }
 
-    // Precio: se toma del catálogo (servicio ESPECIAL elegido, o si no se resuelve por el nombre de
-    // tipoServicio) y se congela en la OT; no hay override por agencia para especiales.
+    // Precio: el que la agencia tiene fijado para ese servicio especial (el catálogo no tiene precio base); se congela en la OT.
     let catalogoEspecial: { id: number; precio: any } | null = null;
     if (dto.servicioCatalogoId) {
       catalogoEspecial = await this.prisma.catalogoServicio.findUnique({
@@ -686,6 +722,15 @@ export class ServiciosEspecialesService {
       });
     }
 
+    let precioEspecial: number | null = catalogoEspecial ? Number(catalogoEspecial.precio) : null;
+    if (catalogoEspecial && finalAgenciaId) {
+      const delaAgencia = await this.prisma.precioAgenciaServicio.findUnique({
+        where: { agenciaId_catalogoServicioId: { agenciaId: finalAgenciaId, catalogoServicioId: catalogoEspecial.id } },
+        select: { precio: true },
+      });
+      if (delaAgencia) precioEspecial = Number(delaAgencia.precio);
+    }
+
     const created = await this.prisma.servicioEspecial.create({
       data: {
         id: rawOT,
@@ -694,7 +739,7 @@ export class ServiciosEspecialesService {
         ordenTrabajoOT: codigoSE,
         tipoServicio: dto.tipoServicio.trim(),
         servicioCatalogoId: catalogoEspecial?.id ?? null,
-        precio: catalogoEspecial ? Number(catalogoEspecial.precio) : null,
+        precio: precioEspecial,
         placa,
         marca,
         modelo,
@@ -1973,8 +2018,6 @@ export class ServiciosEspecialesService {
         namerol: {
           in: [
             'PULIDOR',
-            'PULIDOR_MOVIL',
-            'PULIDOR_FIJO',
             'Pulidor',
             'Pulidor Móvil',
             'Pulidor Fijo',
@@ -2020,7 +2063,7 @@ export class ServiciosEspecialesService {
 
     return list.map((p) => {
       // Pulidor fijo: asignado a una sucursal / agencia en la base de datos (p.agenciaId != null)
-      const esFijo = Boolean(p.agenciaId || p.role?.namerol === 'PULIDOR_FIJO');
+      const esFijo = Boolean(p.agenciaId);
       return {
         id: p.id,
         name: p.name,

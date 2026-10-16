@@ -24,7 +24,7 @@ export class AprobacionesService {
   /** Aprobador designado de la agencia (APROBADOR/GERENTE activos); si no hay, respaldo en ADMIN/SUPER_ADMIN. */
   private async resolverAprobadores(agenciaId: string): Promise<string[]> {
     const titulares = await this.prisma.user.findMany({
-      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR', 'GERENTE'] }, estado: 1 } },
+      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR'] }, estado: 1 } },
       select: { id: true },
     });
     if (titulares.length) return titulares.map((u) => u.id);

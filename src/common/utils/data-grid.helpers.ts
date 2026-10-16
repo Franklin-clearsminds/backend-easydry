@@ -85,6 +85,20 @@ export function resolverOrden(
 }
 
 /**
+ * La columna y la dirección que `resolverOrden` terminaría usando. Sirve a quien debe ordenar también filas que no salen de
+ * Prisma (por ejemplo las archivadas a Parquet) con el mismo criterio que el cliente pidió.
+ */
+export function resolverCampoOrden(
+  sortField: string | null | undefined,
+  sortOrder: string | null | undefined,
+  columnas: OrdenColumnas,
+  defecto: { campo: string; dir: 'asc' | 'desc' },
+): { campo: string; dir: 'asc' | 'desc' } {
+  const pedida = sortField && Object.prototype.hasOwnProperty.call(columnas, sortField) ? sortField : null;
+  return { campo: pedida ?? defecto.campo, dir: pedida ? (String(sortOrder).toLowerCase() === 'asc' ? 'asc' : 'desc') : defecto.dir };
+}
+
+/**
  * Igual que `resolverOrden` pero para SQL crudo: devuelve el texto de `ORDER BY`. `columnas` asocia el nombre público
  * con una expresión SQL fija escrita en el código (nunca con texto del cliente); una columna desconocida usa el orden
  * por defecto. Los nulos van al final en ambas direcciones y `desempate` (una expresión SQL) mantiene estables las páginas.

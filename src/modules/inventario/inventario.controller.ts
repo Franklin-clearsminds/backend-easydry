@@ -1,4 +1,6 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
+import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ForbiddenException, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { InventarioService } from './inventario.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -20,10 +22,19 @@ import { CreateBodegaDto, UpdateBodegaDto, ToggleActivaBodegaDto, DeleteBodegaDt
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Inventario & Bodega (100% POST)')
+@UseInterceptors(OcultarPreciosInterceptor)
 @Controller('inventario')
 @ApiBearerAuth()
 export class InventarioController {
   constructor(private readonly inventarioService: InventarioService) {}
+
+  /** Aceptar y rechazar un envío son dos casillas sobre el mismo endpoint: se mira cuál se pidió. */
+  private exigirCasillaRecepcion(accion: string | undefined, user: any) {
+    const rechaza = accion === 'RECHAZADO';
+    if (!tienePermiso(user, rechaza ? 'envios.rechazar' : 'envios.confirmar')) {
+      throw new ForbiddenException(rechaza ? 'Tu rol no puede rechazar envíos.' : 'Tu rol no puede confirmar la recepción de envíos.');
+    }
+  }
 
   // ==============================================================
   // TIPOS DE ENVASE
@@ -38,7 +49,7 @@ export class InventarioController {
     return this.inventarioService.listEnvases(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.unidades')
   @Post('envases/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo tipo de envase (COORD_BODEGA / ADMIN / SUPER_ADMIN)' })
@@ -48,7 +59,7 @@ export class InventarioController {
     return this.inventarioService.createEnvase(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.unidades')
   @Post('envases/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar tipo de envase' })
@@ -68,7 +79,7 @@ export class InventarioController {
     return this.inventarioService.listUnidades(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.unidades')
   @Post('unidades/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva unidad de medida (COORD_BODEGA / ADMIN)' })
@@ -76,7 +87,7 @@ export class InventarioController {
     return this.inventarioService.createUnidad(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.unidades')
   @Post('unidades/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar unidad de medida' })
@@ -105,7 +116,7 @@ export class InventarioController {
     return this.inventarioService.detailInsumo(dto.id);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.productos.gestionar')
   @Post('insumos/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Registrar nuevo insumo en catálogo (COORD_BODEGA / ADMIN)' })
@@ -114,7 +125,7 @@ export class InventarioController {
     return this.inventarioService.createInsumo(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.productos.gestionar')
   @Post('insumos/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar datos, umbrales o estado de un insumo' })
@@ -149,7 +160,7 @@ export class InventarioController {
     );
   }
 
-  @Permiso('stock.ajustar')
+  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
   @Post('stock/ajuste')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ajuste manual de stock por conteo físico, merma o daño (deja trazabilidad)' })
@@ -158,7 +169,7 @@ export class InventarioController {
     return this.inventarioService.ajusteStock(dto, user.id);
   }
 
-  @Permiso('stock.ajustar')
+  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
   @Post('stock/reajuste')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -171,7 +182,7 @@ export class InventarioController {
     return this.inventarioService.reajustarStock(dto, user);
   }
 
-  @Permiso('stock.ajustar')
+  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
   @Post('stock/resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard rápido: totales de stock, bajo mínimo y alertas pendientes' })
@@ -197,7 +208,7 @@ export class InventarioController {
     return this.inventarioService.listBodegas(user?.id);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.gestionar')
   @Post('bodegas/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva bodega regional vinculada estrictamente a una región (SUPER_ADMIN / ADMIN / COORD_BODEGA)' })
@@ -205,7 +216,7 @@ export class InventarioController {
     return this.inventarioService.crearBodega(dto);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.gestionar')
   @Post('bodegas/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar bodega (nombre, código, región, ciudad, etc.)' })
@@ -213,7 +224,7 @@ export class InventarioController {
     return this.inventarioService.actualizarBodega(dto);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.estado')
   @Post('bodegas/toggle-activa')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activar o desactivar bodega regional' })
@@ -221,7 +232,7 @@ export class InventarioController {
     return this.inventarioService.toggleActivaBodega(dto);
   }
 
-  @Permiso('bodegas.gestionar')
+  @Permiso('inventario.bodegas.eliminar')
   @Post('bodegas/delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar bodega regional del sistema' })
@@ -237,7 +248,7 @@ export class InventarioController {
     return this.inventarioService.obtenerStockBodegasResumen(dto, user?.id);
   }
 
-  @Permiso('inventario.ver')
+  @Permiso('inventario.kits.ver')
   @Post('stock/pulidores-resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resumen consolidado de insumos en kits de pulidores' })
@@ -249,7 +260,7 @@ export class InventarioController {
   // MOVIMIENTOS — Compras, Despachos y Recepción
   // ==============================================================
 
-  @Permiso('compras.registrar')
+  @Permiso('inventario.productos.compra')
   @Post('movimientos/compras/registrar')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -261,7 +272,7 @@ export class InventarioController {
     return this.inventarioService.registrarCompra(dto, user.id);
   }
 
-  @Permiso('despachos.crear')
+  @Permiso('inventario.productos.despachar', 'inventario.bodegas.despachar', 'inventario.agencias.despachar', 'inventario.pulidores.despachar', 'inventario.stockbajo.despachar', 'envios.crear')
   @Post('movimientos/despachos/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -273,7 +284,7 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
-  @Permiso('despachos.crear')
+  @Permiso('inventario.productos.despachar', 'inventario.bodegas.despachar', 'inventario.agencias.despachar', 'inventario.pulidores.despachar', 'inventario.stockbajo.despachar', 'envios.crear')
   @Post('despachos/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Generar despacho químico a agencia o pulidor (Ruta canónica frontend)' })
@@ -281,7 +292,7 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
-  @Permiso('despachos.recibir')
+  @Permiso('envios.confirmar', 'envios.rechazar')
   @Post('movimientos/despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -290,23 +301,42 @@ export class InventarioController {
       'Si accion=RECIBIDO: incrementa stock en destino. Si accion=RECHAZADO: devuelve las unidades a Bodega Central.',
   })
   async confirmarRecepcion(@Body() dto: ConfirmarRecepcionDto, @CurrentUser() user: any) {
+    this.exigirCasillaRecepcion(dto.accion, user);
     return this.inventarioService.confirmarRecepcion(dto, user.id);
   }
 
-  @Permiso('despachos.recibir')
+  @Permiso('envios.confirmar', 'envios.rechazar')
   @Post('despachos/confirmar-recepcion')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Confirmar recepción física de químicos en agencia (Ruta canónica frontend)' })
   async confirmarRecepcionDirecto(@Body() dto: ConfirmarRecepcionDto, @CurrentUser() user: any) {
-    return this.inventarioService.confirmarRecepcion({ ...dto, accion: dto.accion || 'RECIBIDO' }, user.id);
+    const accion = dto.accion || 'RECIBIDO';
+    this.exigirCasillaRecepcion(accion, user);
+    return this.inventarioService.confirmarRecepcion({ ...dto, accion }, user.id);
   }
 
-  @Permiso('despachos.recibir')
+  @Permiso('envios.rechazar')
   @Post('despachos/rechazar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rechazar despacho químico recibido en agencia (devuelve stock a Bodega)' })
   async rechazarDespachoDirecto(@Body() dto: RechazarDespachoDto, @CurrentUser() user: any) {
     return this.inventarioService.rechazarDespacho(dto, user.id);
+  }
+
+  @Permiso('envios.faltantes')
+  @Post('despachos/faltantes/list')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Faltantes de envíos recibidos de forma parcial, por resolver por la bodega de origen' })
+  async listFaltantes(@Body() dto: { estado?: string }, @CurrentUser() user: any) {
+    return this.inventarioService.listFaltantesDespacho(dto, user);
+  }
+
+  @Permiso('envios.faltantes')
+  @Post('despachos/faltantes/resolver')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Devolver al stock o dar de baja lo que no llegó en un envío' })
+  async resolverFaltante(@Body() dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, @CurrentUser() user: any) {
+    return this.inventarioService.resolverFaltanteDespacho(dto, user);
   }
 
   @Permiso('despachos.ver')
@@ -349,7 +379,7 @@ export class InventarioController {
   // ALERTAS DE STOCK
   // ==============================================================
 
-  @Permiso('alertas.crear')
+  @Permiso('inventario.alertas.crear')
   @Post('alertas/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -368,7 +398,7 @@ export class InventarioController {
     return this.inventarioService.listAlertas(dto, user?.id);
   }
 
-  @Permiso('alertas.atender')
+  @Permiso('inventario.alertas.atender')
   @Post('alertas/sincronizar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -378,7 +408,7 @@ export class InventarioController {
     return this.inventarioService.sincronizarAlertas(user?.id, !!dto?.forzar);
   }
 
-  @Permiso('alertas.atender')
+  @Permiso('inventario.alertas.atender')
   @Post('alertas/atender')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cambiar estado de alerta: EN_PROCESO | DESPACHADO | RESUELTO' })
@@ -412,7 +442,7 @@ export class InventarioController {
     return this.inventarioService.listTiposProducto(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.tipos')
   @Post('tipos/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo tipo de producto (Líquido, Polvo, Gel, etc.)' })
@@ -420,7 +450,7 @@ export class InventarioController {
     return this.inventarioService.createTipoProducto(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.tipos')
   @Post('tipos/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar tipo de producto o desactivarlo lógicamente' })
@@ -440,7 +470,7 @@ export class InventarioController {
     return this.inventarioService.listPresentaciones(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.unidades')
   @Post('presentaciones/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva presentación con factor de equivalencia a unidad base' })
@@ -448,7 +478,7 @@ export class InventarioController {
     return this.inventarioService.createPresentacion(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.unidades')
   @Post('presentaciones/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar o desactivar presentación' })
@@ -476,7 +506,7 @@ export class InventarioController {
     return this.inventarioService.listMotivos(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.tipos')
   @Post('motivos/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo motivo de movimiento' })
@@ -484,7 +514,7 @@ export class InventarioController {
     return this.inventarioService.createMotivo(dto);
   }
 
-  @Permiso('inventario.catalogos.gestionar')
+  @Permiso('inventario.config.tipos')
   @Post('motivos/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar motivo de movimiento' })
@@ -496,7 +526,7 @@ export class InventarioController {
   // MOVIMIENTOS GLOBALES & REGISTRO CENTRALIZADO (Kardex Atómico)
   // ==============================================================
 
-  @Permiso('stock.ajustar')
+  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
   @Post('movimientos/registrar')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -530,7 +560,7 @@ export class InventarioController {
     return this.inventarioService.obtenerResumenDashboard(user?.id || user?.sub);
   }
 
-  @Permiso('stock.ajustar')
+  @Permiso('pagina.inventario.stock-bajo')
   @Post('stock-bajo/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listado de productos cuyo stock actual es menor o igual al stock mínimo' })
@@ -568,27 +598,5 @@ export class InventarioController {
   ) {
     const pulidorId = (await this.inventarioService.pulidorEnAlcance(user, body?.pulidorId)) || user?.id;
     return this.inventarioService.obtenerInsumosServiciosPulidor(pulidorId, body?.servicioIds, body);
-  }
-
-  @Permiso('stock.consumir')
-  @Post('stock/consumir-servicio')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Descontar stock de insumos por creación o ejecución de servicio/OT y generar alertas de stock bajo',
-  })
-  async consumirStockServicio(
-    @Body() dto: {
-      agenciaId: string;
-      ordenTrabajo?: string;
-      placa?: string;
-      insumos: Array<{ insumoId?: string; codigoSKU?: string; cantidad: number }>;
-      operador?: string;
-    },
-    @CurrentUser() user: any,
-  ) {
-    // El descuento se hace siempre en la agencia del usuario; solo quien actúa por región o país puede indicar otra dentro de su alcance.
-    const agenciaId = await this.inventarioService.agenciaEnAlcance(user, dto?.agenciaId);
-    if (!agenciaId) throw new BadRequestException('Indica la agencia donde se consume el insumo.');
-    return this.inventarioService.consumirInsumosServicio({ ...dto, agenciaId }, user?.id || user?.sub);
   }
 }

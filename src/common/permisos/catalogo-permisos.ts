@@ -9,6 +9,8 @@
  * validan en los servicios, encima del permiso.
  */
 
+import { esCodigoNuevo } from './catalogo-paginas.js';
+
 export interface DefinicionPermiso {
   codigo: string;
   grupo: string;
@@ -24,6 +26,8 @@ export const CATALOGO_PERMISOS = [
   def('Panel', 'reportes.ver', 'Ver reportes operativos', 'Informes consolidados de servicios y rendimiento dentro de su ámbito.'),
 
   def('Agencias', 'agencias.ver', 'Ver agencias, bahías, regiones y clientes', 'Listados, detalle, resumen y desplegables dentro de su ámbito.'),
+  def('Agencias', 'agencias.consultar', 'Ver la pantalla de Agencias', 'Consultar la información de cada agencia (datos, servicios, bahías y personal) sin poder editarla.'),
+  def('Agencias', 'mapa.ver', 'Ver el Mapa Operativo', 'Ver las bahías de su ámbito y quién está asignado en cada una, sin poder asignar.'),
   def('Agencias', 'agencias.crear', 'Crear agencias', 'Registrar una agencia nueva.'),
   def('Agencias', 'agencias.editar', 'Editar agencias', 'Modificar datos de una agencia de su ámbito.'),
   def('Agencias', 'agencias.estado', 'Activar o desactivar agencias', 'Cambiar el estado de una agencia.'),
@@ -37,6 +41,7 @@ export const CATALOGO_PERMISOS = [
   def('Usuarios', 'usuarios.ver', 'Ver usuarios', 'Listar usuarios y operadores de su ámbito (nombre, rol y estado).'),
   def('Usuarios', 'usuarios.gestionar', 'Gestionar usuarios', 'Crear, editar, activar, eliminar y asignar usuarios.'),
   def('Usuarios', 'backup.gestionar', 'Gestionar usuarios Backup', 'Crear usuarios Backup de su región y asignarlos temporalmente a una agencia.'),
+  def('Usuarios', 'operadores.ver', 'Ver operadores', 'Ver los lavadores y pulidores fijos asignados a su agencia, con su bahía (solo lectura).'),
   def('Usuarios', 'operadores.gestionar', 'Gestionar operadores', 'Registrar y editar lavadores y pulidores.'),
   def('Usuarios', 'roles.ver', 'Ver roles', 'Consultar roles, módulos y permisos.'),
   def('Usuarios', 'roles.gestionar', 'Gestionar roles y permisos', 'Crear roles, editar sus permisos y ámbito, y eliminarlos.'),
@@ -55,6 +60,7 @@ export const CATALOGO_PERMISOS = [
   def('Servicios', 'especiales.reasignar', 'Reasignar servicios especiales', 'Cambiar el pulidor asignado.'),
   def('Servicios', 'especiales.anular', 'Anular servicios especiales', 'Anular con motivo; nunca se borran.'),
 
+  def('Catálogo', 'precios.ver', 'Ver precios y costos', 'Precios de servicios (catálogo, OT y agencia) y costos de insumos. Sin este permiso el servidor no los envía.'),
   def('Catálogo', 'catalogo.ver', 'Ver catálogo de servicios', 'Consultar el catálogo dentro del alcance de su sede.'),
   def('Catálogo', 'catalogo.gestionar', 'Gestionar catálogo de servicios', 'Crear, editar y eliminar servicios del catálogo.'),
   def('Catálogo', 'recetas.ver', 'Ver recetas de insumos', 'Consultar la receta de cada servicio.'),
@@ -63,14 +69,15 @@ export const CATALOGO_PERMISOS = [
 
   def('Retos', 'retos.ver', 'Ver retos', 'Consultar los retos visibles para su región o sede.'),
   def('Retos', 'retos.crear', 'Crear retos', 'Crear retos (un coordinador solo para su región).'),
+  def('Retos', 'retos.cerrar', 'Cerrar retos', 'Cerrar un reto registrando ganador y resultado.'),
   def('Retos', 'retos.eliminar', 'Eliminar retos', 'Eliminar retos propios (un administrador, cualquiera).'),
 
   def('Inventario', 'inventario.ver', 'Ver inventario', 'Stock, insumos, catálogos, movimientos y kardex dentro de su ámbito.'),
   def('Inventario', 'inventario.catalogos.gestionar', 'Gestionar catálogos de inventario', 'Insumos, envases, unidades, tipos, presentaciones y motivos.'),
   def('Inventario', 'bodegas.gestionar', 'Gestionar bodegas', 'Crear, editar, activar y eliminar bodegas.'),
   def('Inventario', 'stock.ajustar', 'Ajustar stock', 'Ajustes, reajustes y movimientos de stock.'),
-  def('Inventario', 'stock.consumir', 'Registrar consumo de stock', 'Descontar insumos al registrar un servicio.'),
   def('Inventario', 'compras.registrar', 'Registrar compras', 'Ingresar compras a la bodega central.'),
+  def('Inventario', 'inventario.kits.ver', 'Ver kits de pulidores', 'Stock de insumos en el kit de cada pulidor (sección Pulidores del inventario).'),
   def('Inventario', 'despachos.ver', 'Ver despachos', 'Listado de despachos y pendientes dentro de su ámbito.'),
   def('Inventario', 'despachos.crear', 'Crear despachos', 'Enviar insumos a agencias, bodegas o pulidores.'),
   def('Inventario', 'despachos.recibir', 'Confirmar o rechazar recepciones', 'Confirmar o rechazar un despacho recibido.'),
@@ -94,6 +101,19 @@ export const CATALOGO_PERMISOS = [
   def('Maquinaria', 'limpiezas.ver', 'Ver limpiezas de maquinaria', 'Auditoría de limpiezas registradas (fecha, quién y fotos) dentro de su ámbito.'),
   def('Maquinaria', 'limpiezas.editar', 'Editar o eliminar limpiezas', 'Corregir las observaciones o eliminar un registro de limpieza dentro de su ámbito.'),
 
+  def('Auditorías', 'auditorias.ver', 'Ver el dashboard de auditorías', 'Indicadores de las inspecciones de su ámbito: estados, calificaciones y planes de acción.'),
+  def('Auditorías', 'informes.ver', 'Ver informes de inspección', 'Listado y detalle de los informes de su ámbito. Quien no puede auditar solo ve los informes ya aprobados o cerrados de su agencia.'),
+  def('Auditorías', 'informes.crear', 'Crear y editar informes de inspección', 'Hacer inspecciones: crear informes, editar sus borradores, registrar novedades, actividades y planes de acción, adjuntar evidencias y enviarlos a revisión.'),
+  def('Auditorías', 'informes.firmar', 'Registrar observaciones y calificación del informe', 'Registrar las observaciones del jefe de taller y la calificación del servicio de un informe de inspección.'),
+  def('Auditorías', 'informes.seguimiento', 'Dar seguimiento a los planes de acción', 'Actualizar el estado y la evidencia de cumplimiento de los planes de acción de un informe.'),
+  def('Auditorías', 'informes.revisar', 'Revisar, aprobar, rechazar y cerrar informes', 'Decidir sobre los informes en revisión, reabrir los rechazados y cerrar los aprobados.'),
+  def('Auditorías', 'informes.eliminar', 'Eliminar informes en borrador', 'Eliminar (con registro) un informe que aún es borrador.'),
+  def('Auditorías', 'inspecciones.ver', 'Ver auditorías 5S', 'Resultados de las auditorías 5S de su ámbito. Quien no puede auditar solo ve las finalizadas de su agencia.'),
+  def('Auditorías', 'inspecciones.crear', 'Hacer auditorías 5S', 'Crear auditorías 5S, evaluar los 20 criterios, registrar hallazgos y evidencias, y finalizarlas.'),
+  def('Auditorías', 'inspecciones.acciones', 'Dar seguimiento a las acciones correctivas 5S', 'Actualizar el estado y la evidencia de corrección de las acciones correctivas de una auditoría 5S.'),
+  def('Auditorías', 'inspecciones.verificar', 'Verificar y cerrar auditorías 5S', 'Verificar la corrección de una acción (única forma de cerrarla) y cerrar las auditorías finalizadas.'),
+  def('Auditorías', 'inspecciones.eliminar', 'Eliminar auditorías 5S en borrador', 'Eliminar (con registro) una auditoría 5S que aún no se finalizó.'),
+
   def('Sistema', 'sync.usar', 'Usar la sincronización de la app', 'Sincronizar datos de la app móvil y registrar el dispositivo.'),
   def('Sistema', 'sync.dlq.gestionar', 'Gestionar errores de sincronización', 'Ver, resolver y reintentar los errores de todos los usuarios.'),
   def('Sistema', 'evidencias.subir', 'Subir evidencias de servicios', 'Subir fotos y videos de órdenes de servicios generales y especiales.'),
@@ -105,7 +125,8 @@ export type CodigoPermiso = (typeof CATALOGO_PERMISOS)[number]['codigo'];
 export const CODIGOS_PERMISOS: readonly CodigoPermiso[] = CATALOGO_PERMISOS.map((p) => p.codigo);
 
 const CODIGOS_SET = new Set<string>(CODIGOS_PERMISOS);
-export const esCodigoPermiso = (codigo: string): codigo is CodigoPermiso => CODIGOS_SET.has(codigo);
+/** Permiso clásico (el que exigen los endpoints) o código del catálogo de páginas (página, sub-página o acción). */
+export const esCodigoPermiso = (codigo: string): boolean => CODIGOS_SET.has(codigo) || esCodigoNuevo(codigo);
 
 /** Sobre qué datos actúa un rol. */
 export const AMBITOS = ['GLOBAL', 'REGION', 'AGENCIA', 'PROPIO'] as const;

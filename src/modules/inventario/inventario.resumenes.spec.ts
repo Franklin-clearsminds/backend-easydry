@@ -1,383 +1,377 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { InventarioService } from './inventario.service.js';
 import { StockResumenAgenciasDto, StockResumenBodegasDto, StockResumenPulidoresDto } from './dto/stock-resumen.dto.js';
+import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
-const insumo = (id: string, nombre: string, extra: Record<string, unknown> = {}) => ({
-  id,
-  codigoSKU: `SKU-${id.toUpperCase()}`,
-  nombre,
-  categoria: 'QUIMICOS_LAVADO',
-  contenidoNeto: 1,
-  stockMinimoAgencia: 2,
-  stockMinimoBodega: 10,
-  stockOptimoBodega: 30,
-  tipoProducto: { id: 't1', nombre: 'Líquido' },
-  unidadMedida: { id: 'u1', simbolo: 'u', nombre: 'Unidad' },
-  recetas: [] as Array<{ catalogoServicioId: number }>,
-  ...extra,
-});
+/**
+ * Integración con la base real (sin mocks): los resúmenes de stock por agencia, por kit de pulidor y por bodega.
+ *
+ * Mundo de la prueba, todo creado aquí:
+ *  Insumos I1 "Jabón neutro" · I2 "Cera líquida" · I3 "Pulidor abrasivo" · I4 "Ácido cítrico"  (mínimo agencia 2)
+ *  Región R1 ── Agencia UNO (región "Norte", servicio S1 con I1+I2) · DOS ("Norte", S1) · TRES ("Sur", servicio S3 con I4)
+ *               Stock en agencias: UNO I1=0 sin stock, I2=10 · DOS I1=3, I2=1 crítico · TRES I4=5
+ *               Kits: Ana (pulidora fija en UNO) I3=0, I4=9 · Beto (pulidor móvil de R1) I3=8
+ *               (S2 es un servicio ESPECIAL con la receta de I3: por eso I3 pertenece a los kits)
+ *  Región R2 ── Agencia CUATRO (para comprobar que el alcance regional la deja fuera)
+ *  Región RB ── Agencia BODEGUERA (servicio SB con I1…I4) y la Bodega B propia: I1=0 · I2=8 · I3=11 · I4=50 (mín. 10, óptimo 30)
+ * Los resúmenes por agencia y por kit se piden con un usuario de la región R1, así solo se ve este mundo.
+ * Los kits también incluyen los insumos de servicios especiales REALES de la base (en cero): por eso en los kits solo se
+ * comprueban los insumos propios y no los totales de la red.
+ */
+describe('resúmenes de stock (base real)', () => {
+  let env: Entorno;
+  let service: InventarioService;
+  let r1: any;
+  let ag: Record<string, any>;
+  let bodegaB: any;
+  let regionRB: any;
+  let insumos: any[];
+  const ids: Record<string, string> = {};
 
-const INSUMOS = [
-  insumo('i1', 'Jabón neutro', { recetas: [{ catalogoServicioId: 1 }] }),
-  insumo('i2', 'Cera líquida', { recetas: [{ catalogoServicioId: 1 }] }),
-  insumo('i3', 'Pulidor abrasivo', { recetas: [{ catalogoServicioId: 2 }] }),
-  insumo('i4', 'Ácido cítrico'),
-];
+  const idAg = (r: any) => r.items.map((a: any) => a.agencia.id);
 
-function construir(op: { rol?: string; usuario?: Record<string, unknown> } = {}) {
-  const usuario = op.rol ? { id: 'u1', role: { namerol: op.rol }, regionId: 'r1', region: { nombre: 'Norte' }, ...op.usuario } : null;
-  const agencias = [
-    { id: 'a1', codigo: 'A-01', nombre: 'Agencia Uno', region: 'Norte', regionId: 'r1', direccion: '', numeroBahias: 2, servicioIds: [1], tieneServiciosEspeciales: false },
-    { id: 'a2', codigo: 'A-02', nombre: 'Agencia Dos', region: 'Norte', regionId: 'r1', direccion: '', numeroBahias: 1, servicioIds: [1], tieneServiciosEspeciales: false },
-    { id: 'a3', codigo: 'A-03', nombre: 'Agencia Tres', region: 'Sur', regionId: 'r2', direccion: '', numeroBahias: 1, servicioIds: [], tieneServiciosEspeciales: false },
-  ];
-  const stocks = [
-    { agenciaId: 'a1', insumoId: 'i1', cantidadActual: 0 }, // Sin Stock
-    { agenciaId: 'a1', insumoId: 'i2', cantidadActual: 10 }, // Óptimo
-    { agenciaId: 'a2', insumoId: 'i1', cantidadActual: 3 }, // Óptimo
-    { agenciaId: 'a2', insumoId: 'i2', cantidadActual: 1 }, // Crítico
-    { agenciaId: 'a3', insumoId: 'i4', cantidadActual: 5 }, // Óptimo
-    // kits de pulidor
-    { pulidorId: 'p1', insumoId: 'i3', cantidadActual: 0 }, // Sin Stock
-    { pulidorId: 'p1', insumoId: 'i4', cantidadActual: 9 }, // Óptimo
-    { pulidorId: 'p2', insumoId: 'i3', cantidadActual: 8 }, // Óptimo
-  ];
-  const pulidores = [
-    { id: 'p1', name: 'Ana', lastname: 'Paz', email: 'ana@x.com', role: { namerol: 'PULIDOR_FIJO' }, regionId: 'r1', region: { id: 'r1', nombre: 'Norte' }, agenciaId: 'a1', agencia: { id: 'a1', nombre: 'Agencia Uno', regionId: 'r1' }, servicioIds: [] },
-    { id: 'p2', name: 'Beto', lastname: 'Ruiz', email: 'beto@x.com', role: { namerol: 'PULIDOR_MOVIL' }, regionId: 'r1', region: { id: 'r1', nombre: 'Norte' }, agenciaId: null, agencia: null, servicioIds: [] },
-  ];
-  const prisma = {
-    user: {
-      findUnique: vi.fn().mockResolvedValue(usuario),
-      findMany: vi.fn(async (args: any) =>
-        pulidores.filter((p) => {
-          const where = args.where || {};
-          const coincide = (filtro: any) =>
-            (!filtro.id || (typeof filtro.id === 'string' ? p.id === filtro.id : filtro.id.in?.includes(p.id))) &&
-            (!filtro.regionId || p.regionId === filtro.regionId) &&
-            (!filtro.agenciaId || p.agenciaId === filtro.agenciaId) &&
-            (!filtro.agencia?.regionId || p.agencia?.regionId === filtro.agencia.regionId) &&
-            (!filtro.OR || filtro.OR.some(coincide));
-          return coincide(where) && (where.AND || []).every(coincide);
-        }),
-      ),
-    },
-    agencia: {
-      findMany: vi.fn(async (args: any) =>
-        agencias.filter((a) => {
-          const where = args.where || {};
-          const coincide = (filtro: any) =>
-            (!filtro.id || (typeof filtro.id === 'string' ? a.id === filtro.id : filtro.id.in?.includes(a.id))) &&
-            (!filtro.region || a.region === filtro.region) &&
-            (!filtro.regionId || a.regionId === filtro.regionId);
-          return coincide(where) && (where.AND || []).every(coincide);
-        }),
-      ),
-    },
-    insumo: { findMany: vi.fn().mockResolvedValue(INSUMOS) },
-    stockUbicacion: {
-      findMany: vi.fn(async (args: any) =>
-        args?.where?.tipoUbicacion === 'AGENCIA' ? stocks.filter((s) => s.agenciaId) : stocks.filter((s) => (s as any).pulidorId),
-      ),
-    },
-    recetaInsumo: { findMany: vi.fn().mockResolvedValue([{ insumoId: 'i3' }]) },
-    $queryRawUnsafe: vi.fn().mockResolvedValue([
-      { insumoId: 'i1', cantidadActual: 0 }, // Agotado
-      { insumoId: 'i2', cantidadActual: 8 }, // Crítico (≤ 10)
-      { insumoId: 'i3', cantidadActual: 11 }, // Bajo (≤ 10 × 1.2 = 12)
-      { insumoId: 'i4', cantidadActual: 50 }, // Óptimo
-    ]),
-  };
-  const service = new InventarioService(prisma as never);
-  vi.spyOn(service as any, 'listBodegas').mockResolvedValue([
-    { id: 'b1', nombre: 'Bodega Central', esCentral: true, tipo: 'CENTRAL', porcentajeAlerta: 20, regionId: null },
-  ]);
-  return { service, prisma };
-}
+  beforeAll(async () => {
+    env = await abrirEntorno();
+    service = new InventarioService(env.prisma as never);
 
-describe('obtenerStockAgenciasResumen', () => {
-  it('modo heredado: la respuesta de siempre, con todos los insumos de cada ficha', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockAgenciasResumen({}, undefined);
-    expect(r).toMatchObject({ totalAgencias: 3, agenciasEnAlerta: 2, insumosCriticosTotal: 2 });
-    expect(r.agencias).toHaveLength(3);
-    const a1 = r.agencias.find((a: any) => a.agencia.id === 'a1');
-    expect(a1).toMatchObject({ totalInsumos: 2, insumosCriticos: 1, tieneAlerta: true });
-    expect(a1.insumos.map((i: any) => i.estado).sort()).toEqual(['Sin Stock', 'Óptimo']);
-  });
+    r1 = await env.region('R1');
+    const r2 = await env.region('R2');
+    regionRB = await env.region('RB');
+    const bodegaR1 = await env.bodega('R1', { regionId: r1.id });
+    bodegaB = await env.bodega('B', { regionId: regionRB.id });
 
-  it('modo heredado por agencia (lo que usa la app móvil): una ficha con sus insumos', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockAgenciasResumen({ agenciaId: 'a2' } as any);
-    expect(r.agencias).toHaveLength(1);
-    expect(r.agencias[0].insumos).toHaveLength(2);
-  });
+    // Insumos (nombres reales de dominio; el SKU y el nombre llevan la marca para poder buscarlos).
+    const nuevo = async (n: number, nombre: string) => {
+      const i = await env.insumo(`I${n}`);
+      await env.prisma.insumo.update({ where: { id: i.id }, data: { nombre: `${env.marca} ${nombre}`, stockMinimoBodega: 10, stockOptimoBodega: 30 } });
+      return { ...i, nombre: `${env.marca} ${nombre}` };
+    };
+    insumos = [await nuevo(1, 'Jabón neutro'), await nuevo(2, 'Cera líquida'), await nuevo(3, 'Pulidor abrasivo'), await nuevo(4, 'Ácido cítrico')];
+    const [i1, i2, i3, i4] = insumos;
+    const unidadId = (await env.prisma.insumo.findUniqueOrThrow({ where: { id: i1.id } })).unidadMedidaId;
+    const receta = (catalogoServicioId: number, insumoId: string) =>
+      env.prisma.recetaInsumo.create({ data: { catalogoServicioId, insumoId, cantidadUsada: 1, unidadConsumoId: unidadId } });
 
-  it('paginado sin agenciaId: fichas sin insumos, métricas de toda la red y formato estándar', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockAgenciasResumen({ page: 1, pageSize: 2 } as any);
-    expect(r).toMatchObject({ total: 3, page: 1, pageSize: 2, totalPages: 2, hasNextPage: true });
-    expect(r.metricas).toEqual({ totalAgencias: 3, agenciasEnAlerta: 2, insumosCriticosTotal: 2 });
-    expect(r.items.map((a: any) => a.agencia.nombre)).toEqual(['Agencia Dos', 'Agencia Tres']);
-    expect(r.items[0]).not.toHaveProperty('insumos');
-    expect(r.items[0]).toMatchObject({ totalInsumos: 2, insumosCriticos: 1, tieneAlerta: true });
-  });
+    const s1 = await env.catalogo('S1');
+    const s2 = await env.catalogo('S2', { categoria: 'ESPECIAL' });
+    const s3 = await env.catalogo('S3');
+    const sB = await env.catalogo('SB');
+    await receta(s1.id, i1.id);
+    await receta(s1.id, i2.id);
+    await receta(s2.id, i3.id);
+    await receta(s3.id, i4.id);
+    for (const i of insumos) await receta(sB.id, i.id);
 
-  it('filtra por estado de la sede y busca por sede, región o insumo', async () => {
-    const { service } = construir();
-    const alerta: any = await service.obtenerStockAgenciasResumen({ page: 1, estadoUbicacion: 'alerta' } as any);
-    expect(alerta.items.map((a: any) => a.agencia.id)).toEqual(['a2', 'a1']); // por defecto, alfabético por nombre
-    const optimas: any = await service.obtenerStockAgenciasResumen({ page: 1, estadoUbicacion: 'optimo' } as any);
-    expect(optimas.items.map((a: any) => a.agencia.id)).toEqual(['a3']);
-    const porInsumo: any = await service.obtenerStockAgenciasResumen({ page: 1, search: 'acido' } as any);
-    expect(porInsumo.items.map((a: any) => a.agencia.id)).toEqual(['a3']);
-    const porRegion: any = await service.obtenerStockAgenciasResumen({ page: 1, search: 'norte' } as any);
-    expect(porRegion.total).toBe(2);
-    expect((await service.obtenerStockAgenciasResumen({ page: 1, search: 'a' } as any) as any).total).toBe(3);
-  });
+    const agencia = async (clave: string, regionId: string, texto: string, servicioIds: number[]) => {
+      const a = await env.agencia(clave, { regionId });
+      await env.prisma.agencia.update({ where: { id: a.id }, data: { region: texto, servicioIds, tieneServiciosEspeciales: false } });
+      return a;
+    };
+    ag = {
+      uno: await agencia('UNO', r1.id, `Norte-${env.marca}`, [s1.id]),
+      dos: await agencia('DOS', r1.id, `Norte-${env.marca}`, [s1.id]),
+      tres: await agencia('TRES', r1.id, `Sur-${env.marca}`, [s3.id]),
+      cuatro: await agencia('CUATRO', r2.id, `Sur-${env.marca}`, []),
+      bodeguera: await agencia('BODEGUERA', regionRB.id, `Centro-${env.marca}`, [sB.id]),
+    };
 
-  it('ordena solo por columnas permitidas', async () => {
-    const { service } = construir();
-    const porCriticos: any = await service.obtenerStockAgenciasResumen({ page: 1, sortField: 'criticos', sortOrder: 'desc' } as any);
-    expect(porCriticos.items.map((a: any) => a.agencia.id)).toEqual(['a2', 'a1', 'a3']); // 1, 1, 0 (empate: id descendente)
-    const inyeccion: any = await service.obtenerStockAgenciasResumen({ page: 1, sortField: 'agencia.password', sortOrder: 'desc' } as any);
-    // una columna que no está en la lista se ignora y se usa el orden por defecto (nombre ascendente)
-    expect(inyeccion.items.map((a: any) => a.agencia.id)).toEqual(['a2', 'a3', 'a1']);
-  });
+    const crear = async (clave: string, rol: string, opts: Record<string, unknown> = {}) => {
+      ids[clave] = (await env.usuario(clave, rol, opts)).id;
+    };
+    await crear('coordMant', 'COORD_MANTENIMIENTO', { regionId: r1.id });
+    await crear('asistenteR1', 'ASISTENTE_BODEGA', { bodegaId: bodegaR1.id });
+    await crear('lider', 'LIDER', { agenciaId: ag.uno.id, regionId: r1.id });
+    await crear('asistenteB', 'ASISTENTE_BODEGA', { bodegaId: bodegaB.id });
+    await crear('ana', 'PULIDOR', { agenciaId: ag.uno.id, name: 'Ana', lastname: 'Paz' });
+    await crear('beto', 'PULIDOR', { regionId: r1.id, name: 'Beto', lastname: 'Ruiz' });
 
-  it('paginado con agenciaId: la ficha y una página de SUS insumos, con búsqueda, estado y orden', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockAgenciasResumen({ page: 1, pageSize: 1, agenciaId: 'a1', sortField: 'estado', sortOrder: 'asc' } as any);
-    expect(r.agencia).toMatchObject({ agencia: { id: 'a1' }, totalInsumos: 2, tieneAlerta: true });
-    expect(r.agencia).not.toHaveProperty('insumos');
-    expect(r).toMatchObject({ total: 2, totalPages: 2, hasNextPage: true });
-    expect(r.items[0]).toMatchObject({ insumoId: 'i1', estado: 'Sin Stock' }); // el más grave primero
-    const filtrado: any = await service.obtenerStockAgenciasResumen({ page: 1, agenciaId: 'a1', estado: 'optimo' } as any);
-    expect(filtrado.items.map((i: any) => i.insumoId)).toEqual(['i2']);
-    const buscado: any = await service.obtenerStockAgenciasResumen({ page: 1, agenciaId: 'a1', search: 'jabon' } as any);
-    expect(buscado.items.map((i: any) => i.insumoId)).toEqual(['i1']);
-  });
-
-  it('una agencia fuera del alcance devuelve una página vacía, sin ficha', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockAgenciasResumen({ page: 1, agenciaId: 'no-existe' } as any);
-    expect(r).toMatchObject({ total: 0, items: [], agencia: null });
-  });
-
-  it('el asistente de bodega sigue limitado a su región', async () => {
-    const { service, prisma } = construir({ rol: 'ASISTENTE_BODEGA' });
-    await service.obtenerStockAgenciasResumen({ page: 1 } as any, 'u1');
-    expect(JSON.stringify(prisma.agencia.findMany.mock.calls[0][0].where)).toContain('"regionId":"r1"');
-  });
-
-  it('el coordinador de mantenimiento ve agencias de su región y los filtros del cliente solo pueden reducirla', async () => {
-    const { service, prisma } = construir({ rol: 'COORD_MANTENIMIENTO' });
-    await service.obtenerStockAgenciasResumen({ page: 1, agenciaId: 'a-otra', region: 'Sur' } as any, 'u1');
-    const where = prisma.agencia.findMany.mock.calls[0][0].where;
-    expect(where.regionId).toBe('r1');
-    expect(where.AND).toEqual([{ id: 'a-otra' }, { region: 'Sur' }]);
-  });
-
-  it('el líder queda acotado a las agencias de su región (para poder despachar), no a toda la red', async () => {
-    const { service, prisma } = construir({
-      rol: 'LIDER',
-      usuario: { regionId: null, region: null, agenciaId: 'a1', agencia: { regionId: 'r1', region: 'Norte' } },
-    });
-    await service.obtenerStockAgenciasResumen({ page: 1 } as any, 'u1');
-    expect(JSON.stringify(prisma.agencia.findMany.mock.calls[0][0].where)).toContain('"regionId":"r1"');
-  });
-});
-
-describe('obtenerStockPulidoresResumen', () => {
-  it('modo heredado: kits con todos sus insumos', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockPulidoresResumen({}, undefined);
-    expect(r).toMatchObject({ totalPulidores: 2, pulidoresEnAlerta: 1, insumosCriticosTotal: 1 });
-    expect(r.pulidores.find((p: any) => p.id === 'p1').insumos.length).toBeGreaterThan(0);
-  });
-
-  it('paginado: fichas sin insumos, con filtro por tipo y por estado', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockPulidoresResumen({ page: 1, pageSize: 10 } as any);
-    expect(r).toMatchObject({ total: 2, page: 1 });
-    expect(r.metricas).toEqual({ totalPulidores: 2, pulidoresEnAlerta: 1, insumosCriticosTotal: 1 });
-    expect(r.items[0]).not.toHaveProperty('insumos');
-    expect((await service.obtenerStockPulidoresResumen({ page: 1, tipoPulidor: 'PULIDOR_MOVIL' } as any) as any).items.map((p: any) => p.id)).toEqual(['p2']);
-    expect((await service.obtenerStockPulidoresResumen({ page: 1, estadoUbicacion: 'alerta' } as any) as any).items.map((p: any) => p.id)).toEqual(['p1']);
-    expect((await service.obtenerStockPulidoresResumen({ page: 1, search: 'ruiz' } as any) as any).items.map((p: any) => p.id)).toEqual(['p2']);
-  });
-
-  it('con pulidorId: la ficha y una página de los insumos de su kit', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockPulidoresResumen({ page: 1, pulidorId: 'p1', sortField: 'stock', sortOrder: 'asc' } as any);
-    expect(r.pulidor).toMatchObject({ id: 'p1', tipoPulidor: 'PULIDOR_FIJO' });
-    expect(r.items[0].stockActual).toBeLessThanOrEqual(r.items[r.items.length - 1].stockActual);
-    expect(r.total).toBe(r.items.length);
-  });
-
-  it('un pulidor solo ve su propio kit', async () => {
-    const { service, prisma } = construir({ rol: 'PULIDOR' });
-    await service.obtenerStockPulidoresResumen({ page: 1 } as any, 'p2');
-    expect(prisma.user.findMany.mock.calls[0][0].where.id).toBe('p2');
-  });
-
-  it('el coordinador de mantenimiento ve kits de su región sin poder sustituirla desde los filtros', async () => {
-    const { service, prisma } = construir({ rol: 'COORD_MANTENIMIENTO' });
-    await service.obtenerStockPulidoresResumen({ page: 1, regionId: 'r-otra', pulidorId: 'p-ajeno' } as any, 'u1');
-    const where = prisma.user.findMany.mock.calls[0][0].where;
-    expect(where.OR).toEqual([{ regionId: 'r1' }, { agencia: { regionId: 'r1' } }]);
-    expect(where.AND).toEqual([
-      { id: 'p-ajeno' },
-      { OR: [{ regionId: 'r-otra' }, { agencia: { regionId: 'r-otra' } }] },
-    ]);
-  });
-
-  it('mantiene el alcance regional del asistente obtenido desde su bodega', async () => {
-    const { service, prisma } = construir({
-      rol: 'ASISTENTE_BODEGA',
-      usuario: { regionId: null, bodega: { regionId: 'r1' } },
-    });
-    await service.obtenerStockPulidoresResumen({ page: 1 } as any, 'u1');
-    expect(prisma.user.findMany.mock.calls[0][0].where.OR).toEqual([
-      { regionId: 'r1' },
-      { agencia: { regionId: 'r1' } },
-    ]);
-  });
-});
-
-describe('obtenerStockBodegasResumen', () => {
-  it('modo heredado: todos los insumos y las métricas de siempre', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockBodegasResumen({}, 'u1');
-    expect(r.insumos).toHaveLength(4);
-    expect(r.metricas).toMatchObject({ totalInsumos: 4, insumosBajoMinimo: 3, insumosOptimos: 1 });
-  });
-
-  it('paginado: página con búsqueda, estado y orden; las métricas cuentan todos los insumos', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockBodegasResumen({ page: 1, pageSize: 2, sortField: 'estado', sortOrder: 'asc' } as any, 'u1');
-    expect(r).toMatchObject({ total: 4, page: 1, pageSize: 2, totalPages: 2, hasNextPage: true });
-    expect(r.metricas.totalInsumos).toBe(4);
-    expect(r.insumos).toBe(r.items);
-    expect(r.items.map((i: any) => i.estado)).toEqual(['Agotado', 'Crítico']);
-
-    const critico: any = await service.obtenerStockBodegasResumen({ page: 1, estado: 'critico' } as any, 'u1');
-    expect(critico.items.map((i: any) => i.insumoId)).toEqual(['i2']);
-    const buscado: any = await service.obtenerStockBodegasResumen({ page: 1, search: 'acido' } as any, 'u1');
-    expect(buscado.items.map((i: any) => i.insumoId)).toEqual(['i4']);
-    const porStock: any = await service.obtenerStockBodegasResumen({ page: 1, sortField: 'stock', sortOrder: 'desc' } as any, 'u1');
-    expect(porStock.items.map((i: any) => i.insumoId)).toEqual(['i4', 'i3', 'i2', 'i1']);
-  });
-});
-
-describe('DTO de los resúmenes', () => {
-  it('no fijan page/pageSize y conservan los filtros que antes pasaban sin declarar', async () => {
-    for (const Clase of [StockResumenAgenciasDto, StockResumenPulidoresDto, StockResumenBodegasDto]) {
-      const vacio: any = plainToInstance(Clase as any, {});
-      expect(vacio.page).toBeUndefined();
-      expect(await validate(vacio)).toHaveLength(0);
+    const stockAg = (a: any, i: any, cantidad: number) => env.stock({ insumoId: i.id, tipoUbicacion: 'AGENCIA', agenciaId: a.id, cantidad });
+    await stockAg(ag.uno, i1, 0);
+    await stockAg(ag.uno, i2, 10);
+    await stockAg(ag.dos, i1, 3);
+    await stockAg(ag.dos, i2, 1);
+    await stockAg(ag.tres, i4, 5);
+    const stockKit = (pulidor: string, tipo: 'PULIDOR_FIJO' | 'PULIDOR_MOVIL', i: any, cantidad: number) =>
+      env.stock({ insumoId: i.id, tipoUbicacion: tipo, pulidorId: ids[pulidor], cantidad });
+    await stockKit('ana', 'PULIDOR_FIJO', i3, 0);
+    await stockKit('ana', 'PULIDOR_FIJO', i4, 9);
+    await stockKit('beto', 'PULIDOR_MOVIL', i3, 8);
+    for (const [i, cantidad] of [[i1, 0], [i2, 8], [i3, 11], [i4, 50]] as const) {
+      await env.stock({ insumoId: i.id, tipoUbicacion: 'BODEGA_CENTRAL', bodegaId: bodegaB.id, cantidad });
     }
-    const ag: any = plainToInstance(StockResumenAgenciasDto, { agenciaId: 'a', region: 'Norte', page: '1', estadoUbicacion: 'alerta' });
-    expect(await validate(ag)).toHaveLength(0);
-    expect(ag).toMatchObject({ agenciaId: 'a', region: 'Norte', page: 1 });
-    expect((await validate(plainToInstance(StockResumenAgenciasDto, { estadoUbicacion: 'raro' }))).length).toBeGreaterThan(0);
-    expect((await validate(plainToInstance(StockResumenPulidoresDto, { tipoPulidor: 'otro' }))).length).toBeGreaterThan(0);
-    expect(plainToInstance(StockResumenPulidoresDto, { pulidorId: 'p', regionId: 'r' })).toMatchObject({ pulidorId: 'p', regionId: 'r' });
-    expect(plainToInstance(StockResumenBodegasDto, { bodegaId: 'b' })).toMatchObject({ bodegaId: 'b' });
-  });
-});
-
-describe('insumos requeridos por servicios (agencia y kit de pulidor)', () => {
-  const insumosCalculados = [
-    { id: 'i1', codigoSKU: 'SKU-1', nombre: 'Jabón', tipoProducto: 'Líquido', estado: 'AGOTADO', stockActual: 0, stockMinimo: 2, serviciosEstimados: 0, serviciosAsociados: [{ nombre: 'Lavado básico' }] },
-    { id: 'i2', codigoSKU: 'SKU-2', nombre: 'Cera', tipoProducto: 'Líquido', estado: 'OPTIMO', stockActual: 30, stockMinimo: 2, serviciosEstimados: 12, serviciosAsociados: [{ nombre: 'Encerado' }, { nombre: 'Lavado básico' }] },
-    { id: 'i3', codigoSKU: 'SKU-3', nombre: 'Ácido', tipoProducto: 'Químico', estado: 'BAJO', stockActual: 2, stockMinimo: 2, serviciosEstimados: 1, serviciosAsociados: [{ nombre: 'Pulido' }] },
-    { id: 'i4', codigoSKU: 'SKU-4', nombre: 'Guantes', tipoProducto: 'Consumible', estado: 'NO_NECESARIO', stockActual: 5, stockMinimo: 1, serviciosEstimados: 0, serviciosAsociados: [] },
-  ];
-  const base = { agencia: { id: 'a1' }, resumen: { totalInsumosEnSede: 4, insumosAgotados: 1 }, insumos: insumosCalculados };
-  const { service } = construir();
-  const paginar = (dto: any) => (service as any).paginarInsumosServicios(base, dto);
-
-  it('modo heredado: la respuesta de siempre (con el tope de 100)', () => {
-    const r = paginar(undefined);
-    expect(r.insumos).toHaveLength(4);
-    expect(r.resumen).toBe(base.resumen);
-    expect(paginar({})).toMatchObject({ insumos: insumosCalculados });
   });
 
-  it('paginado: el resumen cuenta todos los insumos y la página trae solo una parte', () => {
-    const r = paginar({ page: 1, pageSize: 2 });
-    expect(r.resumen).toBe(base.resumen);
-    expect(r).toMatchObject({ total: 4, page: 1, pageSize: 2, totalPages: 2, hasNextPage: true });
-    expect(r.insumos.map((i: any) => i.id)).toEqual(['i3', 'i2']); // por nombre: Ácido, Cera
-    expect(r.items).toBe(r.insumos);
+  afterAll(async () => {
+    await env.cerrar();
   });
 
-  it('filtra por estado, busca (también por servicio) y ordena por gravedad', () => {
-    expect(paginar({ page: 1, estado: 'agotado' }).insumos.map((i: any) => i.id)).toEqual(['i1']);
-    expect(paginar({ page: 1, search: 'encerado' }).insumos.map((i: any) => i.id)).toEqual(['i2']);
-    expect(paginar({ page: 1, search: 'lavado basico' }).insumos.map((i: any) => i.id)).toEqual(['i2', 'i1']);
-    expect(paginar({ page: 1, sortField: 'estado', sortOrder: 'asc' }).insumos.map((i: any) => i.id)).toEqual(['i1', 'i3', 'i2', 'i4']);
-    expect(paginar({ page: 1, sortField: 'capacidad', sortOrder: 'desc' }).insumos[0].id).toBe('i2');
-    expect(paginar({ page: 1, sortField: 'servicios', sortOrder: 'desc' }).insumos[0].id).toBe('i2');
-    expect(paginar({ page: 1, sortField: 'stockActual; DROP', sortOrder: 'desc' }).insumos.map((i: any) => i.id)).toEqual(['i3', 'i2', 'i4', 'i1']);
+  describe('obtenerStockAgenciasResumen', () => {
+    const resumen = (dto: Record<string, unknown>, usuario = 'coordMant') =>
+      service.obtenerStockAgenciasResumen(dto as any, ids[usuario]) as Promise<any>;
+
+    it('modo heredado: la respuesta de siempre, con todos los insumos de cada ficha', async () => {
+      const r = await resumen({});
+      expect(r).toMatchObject({ totalAgencias: 3, agenciasEnAlerta: 2, insumosCriticosTotal: 2 });
+      expect(r.agencias).toHaveLength(3);
+      const uno = r.agencias.find((a: any) => a.agencia.id === ag.uno.id);
+      expect(uno).toMatchObject({ totalInsumos: 2, insumosCriticos: 1, tieneAlerta: true });
+      expect(uno.insumos.map((i: any) => i.estado).sort()).toEqual(['Sin Stock', 'Óptimo']);
+    });
+
+    it('modo heredado por agencia (lo que usa la app móvil): una ficha con sus insumos', async () => {
+      const r = await resumen({ agenciaId: ag.dos.id });
+      expect(r.agencias).toHaveLength(1);
+      expect(r.agencias[0].insumos).toHaveLength(2);
+    });
+
+    it('paginado sin agenciaId: fichas sin insumos, métricas de toda la zona y formato estándar', async () => {
+      const r = await resumen({ page: 1, pageSize: 2 });
+      expect(r).toMatchObject({ total: 3, page: 1, pageSize: 2, totalPages: 2, hasNextPage: true });
+      expect(r.metricas).toEqual({ totalAgencias: 3, agenciasEnAlerta: 2, insumosCriticosTotal: 2 });
+      expect(r.items.map((a: any) => a.agencia.nombre)).toEqual([ag.dos.nombre, ag.tres.nombre]); // alfabético: DOS, TRES, UNO
+      expect(r.items[0]).not.toHaveProperty('insumos');
+      expect(r.items[0]).toMatchObject({ totalInsumos: 2, insumosCriticos: 1, tieneAlerta: true });
+    });
+
+    it('filtra por estado de la sede y busca por sede, región o insumo', async () => {
+      expect(idAg(await resumen({ page: 1, estadoUbicacion: 'alerta' }))).toEqual([ag.dos.id, ag.uno.id]); // alfabético por nombre
+      expect(idAg(await resumen({ page: 1, estadoUbicacion: 'optimo' }))).toEqual([ag.tres.id]);
+      expect(idAg(await resumen({ page: 1, search: `${env.marca} acido` }))).toEqual([ag.tres.id]); // sin tildes
+      expect(((await resumen({ page: 1, search: `norte-${env.marca}` })) as any).total).toBe(2);
+      expect(((await resumen({ page: 1, search: 'a' })) as any).total).toBe(3); // una letra se ignora
+    });
+
+    it('ordena solo por columnas permitidas', async () => {
+      const porCriticos = idAg(await resumen({ page: 1, sortField: 'criticos', sortOrder: 'desc' }));
+      expect(porCriticos.slice(0, 2).sort()).toEqual([ag.dos.id, ag.uno.id].sort()); // 1 y 1 críticos (el empate lo decide el id)
+      expect(porCriticos[2]).toBe(ag.tres.id); // 0 críticos
+      // Una columna que no está en la lista se ignora y se usa el orden por defecto (nombre ascendente).
+      expect(idAg(await resumen({ page: 1, sortField: 'agencia.password', sortOrder: 'desc' }))).toEqual([ag.dos.id, ag.tres.id, ag.uno.id]);
+    });
+
+    it('paginado con agenciaId: la ficha y una página de SUS insumos, con búsqueda, estado y orden', async () => {
+      const r = await resumen({ page: 1, pageSize: 1, agenciaId: ag.uno.id, sortField: 'estado', sortOrder: 'asc' });
+      expect(r.agencia).toMatchObject({ agencia: { id: ag.uno.id }, totalInsumos: 2, tieneAlerta: true });
+      expect(r.agencia).not.toHaveProperty('insumos');
+      expect(r).toMatchObject({ total: 2, totalPages: 2, hasNextPage: true });
+      expect(r.items[0]).toMatchObject({ insumoId: insumos[0].id, estado: 'Sin Stock' }); // el más grave primero
+      const filtrado = await resumen({ page: 1, agenciaId: ag.uno.id, estado: 'optimo' });
+      expect(filtrado.items.map((i: any) => i.insumoId)).toEqual([insumos[1].id]);
+      const buscado = await resumen({ page: 1, agenciaId: ag.uno.id, search: 'jabon' });
+      expect(buscado.items.map((i: any) => i.insumoId)).toEqual([insumos[0].id]);
+    });
+
+    it('una agencia fuera del alcance devuelve una página vacía, sin ficha', async () => {
+      const r = await resumen({ page: 1, agenciaId: ag.cuatro.id }); // existe, pero está en otra región
+      expect(r).toMatchObject({ total: 0, items: [], agencia: null });
+    });
+
+    it('el asistente de bodega sigue limitado a su región', async () => {
+      const r = await resumen({ page: 1 }, 'asistenteR1');
+      expect(idAg(r).sort()).toEqual([ag.dos.id, ag.tres.id, ag.uno.id].sort());
+      expect(idAg(r)).not.toContain(ag.cuatro.id);
+    });
+
+    it('el coordinador de mantenimiento ve agencias de su región y los filtros del cliente solo pueden reducirla', async () => {
+      expect(((await resumen({ page: 1, agenciaId: ag.cuatro.id })) as any).total).toBe(0); // pide una de otra región: nada
+      expect(idAg(await resumen({ page: 1, region: `Sur-${env.marca}` }))).toEqual([ag.tres.id]); // filtra dentro de la suya (CUATRO también es "Sur", pero no es de su región)
+    });
+
+    it('el líder queda acotado a las agencias de su región (para poder despachar), no a toda la red', async () => {
+      const r = await resumen({ page: 1 }, 'lider');
+      expect(idAg(r).sort()).toEqual([ag.dos.id, ag.tres.id, ag.uno.id].sort());
+    });
   });
 
-  it('obtenerInsumosServiciosAgencia entrega la página y conserva el resumen completo', async () => {
-    const { service: svc, prisma } = construir();
-    (prisma as any).agencia.findUnique = vi.fn().mockResolvedValue({ id: 'a1', codigo: 'A-01', nombre: 'Uno', region: 'Norte', servicioIds: [1] });
-    (prisma as any).catalogoServicio = {
-      findMany: vi.fn().mockResolvedValue([
-        {
-          id: 1, codigo: 'S1', nombre: 'Lavado', categoria: 'BASICO',
-          recetas: [
-            { cantidadUsada: 1, insumo: INSUMOS[0], unidadConsumo: null },
-            { cantidadUsada: 1, insumo: INSUMOS[1], unidadConsumo: null },
-            { cantidadUsada: 1, insumo: INSUMOS[2], unidadConsumo: null },
-          ],
-        },
-      ]),
-    };
-    (prisma as any).stockUbicacion = {
-      findMany: vi.fn().mockResolvedValue([
-        { insumoId: 'i1', cantidadActual: 0, cantidadMinima: 2, insumo: INSUMOS[0] },
-        { insumoId: 'i2', cantidadActual: 30, cantidadMinima: 2, insumo: INSUMOS[1] },
-        { insumoId: 'i3', cantidadActual: 1, cantidadMinima: 2, insumo: INSUMOS[2] },
-      ]),
-      create: vi.fn(),
-    };
-    const r: any = await svc.obtenerInsumosServiciosAgencia('a1', undefined, { page: 1, pageSize: 2, sortField: 'estado', sortOrder: 'asc' } as any);
-    expect(r.resumen).toMatchObject({ totalInsumosEnSede: 3, insumosAgotados: 1, insumosBajoMinimo: 1, insumosOptimos: 1 });
-    expect(r).toMatchObject({ total: 3, totalPages: 2 });
-    expect(r.insumos.map((i: any) => i.estado)).toEqual(['AGOTADO', 'BAJO']);
-    const heredado: any = await svc.obtenerInsumosServiciosAgencia('a1');
-    expect(heredado.insumos).toHaveLength(3);
-    expect(heredado.total).toBeUndefined();
+  describe('obtenerStockPulidoresResumen', () => {
+    const resumen = (dto: Record<string, unknown>, usuario = 'coordMant') =>
+      service.obtenerStockPulidoresResumen(dto as any, ids[usuario]) as Promise<any>;
+    const idsDe = (r: any) => r.items.map((p: any) => p.id);
+    const mios = (ficha: any) => ficha.insumos.filter((i: any) => i.codigoSKU.startsWith(env.marca));
+
+    it('modo heredado: kits con todos sus insumos', async () => {
+      const r = await resumen({});
+      expect(r.totalPulidores).toBe(2);
+      const ana = r.pulidores.find((p: any) => p.id === ids.ana);
+      expect(ana.insumos.length).toBeGreaterThan(0);
+      // Los insumos propios de Ana: I3 (de la receta especial) sin stock e I4 con 9.
+      expect(Object.fromEntries(mios(ana).map((i: any) => [i.insumoId, i.estado]))).toEqual({ [insumos[2].id]: 'Sin Stock', [insumos[3].id]: 'Óptimo' });
+    });
+
+    it('paginado: fichas sin insumos, con filtro por tipo y por estado', async () => {
+      const r = await resumen({ page: 1, pageSize: 10 });
+      expect(r).toMatchObject({ total: 2, page: 1 });
+      expect(r.metricas.totalPulidores).toBe(2);
+      expect(r.items[0]).not.toHaveProperty('insumos');
+      expect(idsDe(await resumen({ page: 1, tipoPulidor: 'PULIDOR_MOVIL' }))).toEqual([ids.beto]);
+      expect(idsDe(await resumen({ page: 1, tipoPulidor: 'PULIDOR_FIJO' }))).toEqual([ids.ana]);
+      expect(idsDe(await resumen({ page: 1, estadoUbicacion: 'alerta' }))).toContain(ids.ana); // I3 en cero
+      expect(idsDe(await resumen({ page: 1, search: 'ruiz' }))).toEqual([ids.beto]);
+    });
+
+    it('con pulidorId: la ficha y una página de los insumos de su kit', async () => {
+      const r = await resumen({ page: 1, pulidorId: ids.ana, sortField: 'stock', sortOrder: 'asc' });
+      expect(r.pulidor).toMatchObject({ id: ids.ana, tipoPulidor: 'PULIDOR_FIJO' });
+      const stocks = r.items.map((i: any) => i.stockActual);
+      expect(stocks).toEqual([...stocks].sort((a, b) => a - b));
+      expect(r.total).toBe(r.items.length);
+    });
+
+    it('un pulidor solo ve su propio kit', async () => {
+      const r = await resumen({ page: 1 }, 'beto');
+      expect(idsDe(r)).toEqual([ids.beto]);
+    });
+
+    it('el coordinador de mantenimiento ve kits de su región sin poder sustituirla desde los filtros', async () => {
+      expect((await resumen({ page: 1, regionId: 'region-ajena' })).total).toBe(0);
+      expect((await resumen({ page: 1, pulidorId: '00000000-0000-4000-8000-000000000000' })).pulidor).toBeNull();
+    });
+
+    it('mantiene el alcance regional del asistente obtenido desde su bodega', async () => {
+      const r = await resumen({ page: 1 }, 'asistenteR1');
+      expect(idsDe(r).sort()).toEqual([ids.ana, ids.beto].sort());
+    });
   });
 
-  it('el DTO conserva servicioIds y filtros, y no fija page/pageSize', async () => {
-    const { InsumosServiciosDto } = await import('./dto/stock-resumen.dto.js');
-    const dto: any = plainToInstance(InsumosServiciosDto, { agenciaId: 'a', servicioIds: [1, 2], estado: 'BAJO', page: '2' });
-    expect(await validate(dto)).toHaveLength(0);
-    expect(dto).toMatchObject({ agenciaId: 'a', servicioIds: [1, 2], estado: 'BAJO', page: 2 });
-    expect(plainToInstance(InsumosServiciosDto, {}).page).toBeUndefined();
-  });
-});
+  describe('obtenerStockBodegasResumen', () => {
+    const resumen = (dto: Record<string, unknown>) => service.obtenerStockBodegasResumen(dto as any, ids.asistenteB) as Promise<any>;
+    const idsDe = (r: any) => r.items.map((i: any) => i.insumoId);
 
-describe('obtenerStockAgenciasResumen — otras agencias (líder)', () => {
-  it('excluye la agencia propia de las fichas, pero no de las métricas', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockAgenciasResumen({ page: 1, excluirAgenciaId: 'a1' } as any);
-    expect(r.items.map((a: any) => a.agencia.id)).toEqual(['a2', 'a3']);
-    expect(r.total).toBe(2);
-    expect(r.metricas.totalAgencias).toBe(3);
+    it('modo heredado: todos los insumos y las métricas de siempre', async () => {
+      const r = await resumen({});
+      expect(r.bodega.id).toBe(bodegaB.id); // un asistente solo ve la bodega asignada
+      // Entre los insumos de esta bodega regional solo alertan los que usan los servicios de la región: los 4 propios.
+      expect(r.metricas).toMatchObject({ insumosBajoMinimo: 3, insumosOptimos: 1 });
+      await env.reintentar(async () => {
+        const activos = await env.prisma.insumo.count({ where: { estado: 1 } });
+        const r2 = await resumen({});
+        expect(r2.metricas.totalInsumos).toBe(activos);
+        expect(r2.metricas.insumosNoNecesarios).toBe(activos - 4);
+      });
+      const propios = r.insumos.filter((i: any) => i.codigoSKU.startsWith(env.marca));
+      expect(Object.fromEntries(propios.map((i: any) => [i.insumoId, i.estado]))).toEqual({
+        [insumos[0].id]: 'Agotado', // 0
+        [insumos[1].id]: 'Crítico', // 8, hasta el mínimo (10)
+        [insumos[2].id]: 'Bajo', // 11, hasta el umbral de alerta (10 + 20 % = 12)
+        [insumos[3].id]: 'Óptimo', // 50
+      });
+    });
+
+    it('paginado: página con búsqueda, estado y orden; las métricas cuentan todos los insumos', async () => {
+      const r = await resumen({ page: 1, pageSize: 2, search: env.marca, sortField: 'estado', sortOrder: 'asc' });
+      expect(r).toMatchObject({ total: 4, page: 1, pageSize: 2, totalPages: 2, hasNextPage: true });
+      expect(r.insumos).toBe(r.items);
+      expect(r.items.map((i: any) => i.estado)).toEqual(['Agotado', 'Crítico']);
+      expect(r.metricas.insumosBajoMinimo).toBe(3); // las métricas no dependen de la página ni del filtro
+
+      expect(idsDe(await resumen({ page: 1, search: env.marca, estado: 'critico' }))).toEqual([insumos[1].id]);
+      expect(idsDe(await resumen({ page: 1, search: `${env.marca} acido` }))).toEqual([insumos[3].id]);
+      expect(idsDe(await resumen({ page: 1, search: env.marca, sortField: 'stock', sortOrder: 'desc' }))).toEqual(
+        [insumos[3].id, insumos[2].id, insumos[1].id, insumos[0].id], // 50, 11, 8 y 0
+      );
+    });
   });
 
-  it('si la propia es la única no se excluye (la pantalla no queda vacía)', async () => {
-    const { service } = construir();
-    const r: any = await service.obtenerStockAgenciasResumen({ page: 1, excluirAgenciaId: 'a3', region: 'Sur' } as any);
-    expect(r.items.map((a: any) => a.agencia.id)).toEqual(['a3']);
+  describe('DTO de los resúmenes', () => {
+    it('no fijan page/pageSize y conservan los filtros que antes pasaban sin declarar', async () => {
+      for (const Clase of [StockResumenAgenciasDto, StockResumenPulidoresDto, StockResumenBodegasDto]) {
+        const vacio: any = plainToInstance(Clase as any, {});
+        expect(vacio.page).toBeUndefined();
+        expect(await validate(vacio)).toHaveLength(0);
+      }
+      const ag2: any = plainToInstance(StockResumenAgenciasDto, { agenciaId: 'a', region: 'Norte', page: '1', estadoUbicacion: 'alerta' });
+      expect(await validate(ag2)).toHaveLength(0);
+      expect(ag2).toMatchObject({ agenciaId: 'a', region: 'Norte', page: 1 });
+      expect((await validate(plainToInstance(StockResumenAgenciasDto, { estadoUbicacion: 'raro' }))).length).toBeGreaterThan(0);
+      expect((await validate(plainToInstance(StockResumenPulidoresDto, { tipoPulidor: 'otro' }))).length).toBeGreaterThan(0);
+      expect(plainToInstance(StockResumenPulidoresDto, { pulidorId: 'p', regionId: 'r' })).toMatchObject({ pulidorId: 'p', regionId: 'r' });
+      expect(plainToInstance(StockResumenBodegasDto, { bodegaId: 'b' })).toMatchObject({ bodegaId: 'b' });
+    });
+  });
+
+  describe('insumos requeridos por servicios (agencia y kit de pulidor)', () => {
+    // Datos ya calculados: se prueba solo la paginación en memoria, que no consulta la base.
+    const insumosCalculados = [
+      { id: 'i1', codigoSKU: 'SKU-1', nombre: 'Jabón', tipoProducto: 'Líquido', estado: 'AGOTADO', stockActual: 0, stockMinimo: 2, serviciosEstimados: 0, serviciosAsociados: [{ nombre: 'Lavado básico' }] },
+      { id: 'i2', codigoSKU: 'SKU-2', nombre: 'Cera', tipoProducto: 'Líquido', estado: 'OPTIMO', stockActual: 30, stockMinimo: 2, serviciosEstimados: 12, serviciosAsociados: [{ nombre: 'Encerado' }, { nombre: 'Lavado básico' }] },
+      { id: 'i3', codigoSKU: 'SKU-3', nombre: 'Ácido', tipoProducto: 'Químico', estado: 'BAJO', stockActual: 2, stockMinimo: 2, serviciosEstimados: 1, serviciosAsociados: [{ nombre: 'Pulido' }] },
+      { id: 'i4', codigoSKU: 'SKU-4', nombre: 'Guantes', tipoProducto: 'Consumible', estado: 'NO_NECESARIO', stockActual: 5, stockMinimo: 1, serviciosEstimados: 0, serviciosAsociados: [] },
+    ];
+    const base = { agencia: { id: 'a1' }, resumen: { totalInsumosEnSede: 4, insumosAgotados: 1 }, insumos: insumosCalculados };
+    const paginar = (dto: any) => (service as any).paginarInsumosServicios(base, dto);
+
+    it('modo heredado: la respuesta de siempre (con el tope de 100)', () => {
+      const r = paginar(undefined);
+      expect(r.insumos).toHaveLength(4);
+      expect(r.resumen).toBe(base.resumen);
+      expect(paginar({})).toMatchObject({ insumos: insumosCalculados });
+    });
+
+    it('paginado: el resumen cuenta todos los insumos y la página trae solo una parte', () => {
+      const r = paginar({ page: 1, pageSize: 2 });
+      expect(r.resumen).toBe(base.resumen);
+      expect(r).toMatchObject({ total: 4, page: 1, pageSize: 2, totalPages: 2, hasNextPage: true });
+      expect(r.insumos.map((i: any) => i.id)).toEqual(['i3', 'i2']); // por nombre: Ácido, Cera
+      expect(r.items).toBe(r.insumos);
+    });
+
+    it('filtra por estado, busca (también por servicio) y ordena por gravedad', () => {
+      expect(paginar({ page: 1, estado: 'agotado' }).insumos.map((i: any) => i.id)).toEqual(['i1']);
+      expect(paginar({ page: 1, search: 'encerado' }).insumos.map((i: any) => i.id)).toEqual(['i2']);
+      expect(paginar({ page: 1, search: 'lavado basico' }).insumos.map((i: any) => i.id)).toEqual(['i2', 'i1']);
+      expect(paginar({ page: 1, sortField: 'estado', sortOrder: 'asc' }).insumos.map((i: any) => i.id)).toEqual(['i1', 'i3', 'i2', 'i4']);
+      expect(paginar({ page: 1, sortField: 'capacidad', sortOrder: 'desc' }).insumos[0].id).toBe('i2');
+      expect(paginar({ page: 1, sortField: 'servicios', sortOrder: 'desc' }).insumos[0].id).toBe('i2');
+      expect(paginar({ page: 1, sortField: 'stockActual; DROP', sortOrder: 'desc' }).insumos.map((i: any) => i.id)).toEqual(['i3', 'i2', 'i4', 'i1']);
+    });
+
+    it('obtenerInsumosServiciosAgencia entrega la página y conserva el resumen completo', async () => {
+      // Una agencia propia con un servicio cuyas recetas usan I1, I2 y I3, cada uno con su stock y mínimo (2) en la sede.
+      const regionSede = await env.region('SEDE-SERVICIOS'); // región propia: no cuenta como agencia más de R1
+      const sede = await env.agencia('SEDE-SERVICIOS', { regionId: regionSede.id });
+      const servicio = await env.catalogo('SERV-SEDE');
+      const unidadId = (await env.prisma.insumo.findUniqueOrThrow({ where: { id: insumos[0].id } })).unidadMedidaId;
+      for (const i of insumos.slice(0, 3)) {
+        await env.prisma.recetaInsumo.create({ data: { catalogoServicioId: servicio.id, insumoId: i.id, cantidadUsada: 1, unidadConsumoId: unidadId } });
+      }
+      await env.prisma.agencia.update({ where: { id: sede.id }, data: { servicioIds: [servicio.id] } });
+      for (const [i, cantidad] of [[insumos[0], 0], [insumos[1], 30], [insumos[2], 1]] as const) {
+        await env.stock({ insumoId: i.id, tipoUbicacion: 'AGENCIA', agenciaId: sede.id, cantidad, minima: 2 });
+      }
+
+      const r: any = await service.obtenerInsumosServiciosAgencia(sede.id, undefined, { page: 1, pageSize: 2, sortField: 'estado', sortOrder: 'asc' } as any);
+      expect(r.resumen).toMatchObject({ totalInsumosEnSede: 3, insumosAgotados: 1, insumosBajoMinimo: 1, insumosOptimos: 1 });
+      expect(r).toMatchObject({ total: 3, totalPages: 2 });
+      expect(r.insumos.map((i: any) => i.estado)).toEqual(['AGOTADO', 'BAJO']);
+      const heredado: any = await service.obtenerInsumosServiciosAgencia(sede.id);
+      expect(heredado.insumos).toHaveLength(3);
+      expect(heredado.total).toBeUndefined();
+    });
+
+    it('el DTO conserva servicioIds y filtros, y no fija page/pageSize', async () => {
+      const { InsumosServiciosDto } = await import('./dto/stock-resumen.dto.js');
+      const dto: any = plainToInstance(InsumosServiciosDto, { agenciaId: 'a', servicioIds: [1, 2], estado: 'BAJO', page: '2' });
+      expect(await validate(dto)).toHaveLength(0);
+      expect(dto).toMatchObject({ agenciaId: 'a', servicioIds: [1, 2], estado: 'BAJO', page: 2 });
+      expect(plainToInstance(InsumosServiciosDto, {}).page).toBeUndefined();
+    });
+  });
+
+  describe('obtenerStockAgenciasResumen — otras agencias (líder)', () => {
+    const resumen = (dto: Record<string, unknown>) => service.obtenerStockAgenciasResumen(dto as any, ids.coordMant) as Promise<any>;
+
+    it('excluye la agencia propia de las fichas, pero no de las métricas', async () => {
+      const r = await resumen({ page: 1, excluirAgenciaId: ag.uno.id });
+      expect(idAg(r)).toEqual([ag.dos.id, ag.tres.id]);
+      expect(r.total).toBe(2);
+      expect(r.metricas.totalAgencias).toBe(3);
+    });
+
+    it('si la propia es la única no se excluye (la pantalla no queda vacía)', async () => {
+      const r = await resumen({ page: 1, excluirAgenciaId: ag.tres.id, region: `Sur-${env.marca}` });
+      expect(idAg(r)).toEqual([ag.tres.id]);
+    });
   });
 });

@@ -9,5 +9,9 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.spec.ts'],
+    // Las pruebas de integración usan la base real y se ejecutan varios archivos en paralelo: con carga, preparar los
+    // datos de una prueba o esperar un aviso en segundo plano puede tardar más de los 5 s que vitest da por defecto.
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
   },
 });

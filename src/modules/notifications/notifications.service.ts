@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsGateway } from './notifications.gateway.js';
 import { resolverPaginacion } from '../../common/utils/data-grid.helpers.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
+import { ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
 import type { ListarNotificacionesDto } from './dto/notifications.dto.js';
 
 export interface PushNotificationPayload {
@@ -221,7 +222,7 @@ export class NotificationsService {
     const destinatarios = await this.prisma.user.findMany({
       where: {
         estado: 1,
-        role: { namerol: { in: ['COORD_BODEGA', 'ASISTENTE_BODEGA', 'LIDER_AGENCIA', 'LIDER', 'BACKUP', 'ADMIN'] } },
+        role: { namerol: { in: ['COORD_BODEGA', 'ASISTENTE_BODEGA', ...ROLES_LIDER_AGENCIA, 'ADMIN'] } },
         ...(params.agenciaId
           ? {
               OR: [
