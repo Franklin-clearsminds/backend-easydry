@@ -1,9 +1,31 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
+/**
+ * Si `DATABASE_URL` no trae `connection_limit`/`pool_timeout` (p.ej. porque se pegó tal cual desde el dashboard
+ * de Supabase), se les pone un valor conservador por código: sin esto, Prisma abre hasta `num_cpus*2+1` conexiones
+ * por instancia, lo que con el Session Pooler de Supabase (un slot de su pool por conexión) puede agotar el cupo
+ * del plan free si hay más de una instancia o algún script corriendo a la vez.
+ */
+function conUrlDeConexionAcotada(url: string | undefined): string | undefined {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    if (!u.searchParams.has('connection_limit')) u.searchParams.set('connection_limit', '5');
+    if (!u.searchParams.has('pool_timeout')) u.searchParams.set('pool_timeout', '20');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
+
+  constructor() {
+    super({ datasources: { db: { url: conUrlDeConexionAcotada(process.env.DATABASE_URL) } } });
+  }
 
   async onModuleInit() {
     try {
