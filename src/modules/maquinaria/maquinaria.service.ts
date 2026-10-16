@@ -11,6 +11,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { StorageService, type InspectedEvidence } from '../storage/storage.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { CacheService } from '../../common/cache/cache.service.js';
 import { ChecklistService } from './checklist.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
@@ -145,6 +146,8 @@ export class MaquinariaService {
     private readonly storage: StorageService,
     private readonly notifications: NotificationsService,
     @Optional() checklist?: ChecklistService,
+    /** Guarda un rato el conteo de limpiezas atrasadas (badge de alerta). Sin él, cada visita lo recalcula. */
+    @Optional() private readonly cache?: CacheService,
   ) {
     this.checklist = checklist ?? new ChecklistService(prisma);
   }
@@ -1893,6 +1896,11 @@ export class MaquinariaService {
 
   /** Cuántas máquinas dentro del alcance del actor están atrasadas de limpieza (para el badge de alerta). */
   async resumenLimpiezas(actor: Actor) {
+    if (!this.cache) return this.calcularResumenLimpiezas(actor);
+    return this.cache.obtenerOCalcular(`maquinaria:limpiezas-resumen:${actor?.id ?? 'anonimo'}`, 45, () => this.calcularResumenLimpiezas(actor));
+  }
+
+  private async calcularResumenLimpiezas(actor: Actor) {
     const candidatas = await this.prisma.maquinaria.findMany({
       where: {
         ...this.scopeMaquinaria(actor),
