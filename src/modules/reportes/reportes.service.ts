@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { resolverAlcance, whereAgencias, type Alcance } from '../../common/permisos/alcance.js';
 import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
@@ -14,8 +14,10 @@ import {
   type ReporteDef,
   type TotalReporte,
 } from './reportes.definiciones.js';
-import { dividirRango, fechaEcuador, finDeDia, horaEcuador, inicioDeDia, resolverRango, type BloquePeriodo, type DivisionPeriodo, type RangoResuelto } from './reportes.periodos.js';
+import { dividirRango, etiquetaDia, fechaEcuador, finDeDia, horaEcuador, inicioDeDia, resolverRango, type BloquePeriodo, type DivisionPeriodo, type RangoResuelto } from './reportes.periodos.js';
 import type { GenerarReporteDto, RegistrarExportacionDto } from './dto/reportes.dto.js';
+import { RetosService } from '../retos/retos.service.js';
+import { ReportesArchivoService } from './reportes.archivo.js';
 
 /** Desde cuántas filas la pantalla avisa antes de exportar (no es un tope: se puede exportar igual). */
 export const UMBRALES_ADVERTENCIA = { PDF: 2000, EXCEL: 20000 } as const;
@@ -41,7 +43,9 @@ interface AgenciaFila {
 interface GrupoInfo {
   clave: string;
   titulo: string;
-  tipo: 'AGENCIA' | 'BODEGA' | 'PULIDOR' | 'GENERAL';
+  tipo: 'AGENCIA' | 'BODEGA' | 'PULIDOR' | 'RETO' | 'GENERAL';
+  /** Datos propios del grupo que van en el encabezado de su hoja (p. ej. los de un reto). */
+  datos?: { etiqueta: string; valor: string }[];
   region: string;
   cliente: string;
   agencia: string;
@@ -53,6 +57,18 @@ interface Bruta {
   /** `YYYY-MM-DD` (Ecuador); solo en reportes por periodo. */
   fecha?: string;
   fila: FilaReporte;
+}
+
+/** Un servicio del periodo, reducido a lo que miden los reportes de productividad. */
+interface ServicioProductivo {
+  origen: 'GENERAL' | 'ESPECIAL';
+  agenciaId: string;
+  fecha: string;
+  /** SI realizado, NO cancelado o rechazado, vacío si sigue en curso. */
+  resultado: 'SI' | 'NO' | '';
+  monto: number;
+  minutos: number | null;
+  operarios: string[];
 }
 
 interface Ctx {
@@ -98,7 +114,12 @@ const aprobacionGeneral = (estado: string): string => (estado === 'APROBADO' ? '
 
 @Injectable()
 export class ReportesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly retosService?: RetosService,
+    /** Suma al reporte lo que ya se archivó a Parquet. Sin él, el reporte lee solo de la base. */
+    @Optional() private readonly archivo?: ReportesArchivoService,
+  ) {}
 
   // ---------------------------------------------------------------------------------------------------------------------
   // Permisos
@@ -158,12 +179,21 @@ export class ReportesService {
 
     const verInsumos = tienePermiso(user, 'inventario.ver');
     const verServicios = tienePermiso(user, 'servicios.ver');
-    const [productos, lavadores] = await Promise.all([
+    const verEspeciales = tienePermiso(user, 'especiales.ver');
+    const [productos, lavadores, pulidores] = await Promise.all([
       verInsumos ? this.prisma.insumo.findMany({ where: { estado: 1 }, select: { id: true, codigoSKU: true, nombre: true }, orderBy: { nombre: 'asc' } }) : [],
       verServicios && ids.length
         ? this.prisma.user.findMany({
             where: { agenciaId: { in: ids }, role: { namerol: { in: ['LAVADOR', 'LIDER', 'BACKUP'] } } },
             select: { id: true, name: true, lastname: true, agenciaId: true },
+            orderBy: { name: 'asc' },
+          })
+        : [],
+      // Pulidores fijos de las agencias del alcance y móviles de sus regiones.
+      verEspeciales && (ids.length || regionIds.length)
+        ? this.prisma.user.findMany({
+            where: { role: { namerol: 'PULIDOR' }, OR: [{ agenciaId: { in: ids } }, { agenciaId: null, regionId: { in: regionIds } }] },
+            select: { id: true, name: true, lastname: true, agenciaId: true, regionId: true },
             orderBy: { name: 'asc' },
           })
         : [],
@@ -175,6 +205,7 @@ export class ReportesService {
       agencias: agencias.map((a) => ({ id: a.id, codigo: a.codigo, nombre: a.nombre, activa: a.estado === 1, regionId: a.regionId, clienteId: a.clienteId })),
       productos: productos.map((p) => ({ id: p.id, nombre: `${p.nombre} (${p.codigoSKU})` })),
       lavadores: lavadores.map((l) => ({ id: l.id, nombre: nombreDe(l), agenciaId: l.agenciaId })),
+      pulidores: pulidores.map((u) => ({ id: u.id, nombre: nombreDe(u), agenciaId: u.agenciaId, regionId: u.regionId })),
     };
   }
 
@@ -230,7 +261,7 @@ export class ReportesService {
       reporte: { id: def.id, nombre: def.nombre, modulo: def.modulo, plantilla: def.plantilla, periodo: def.periodo, agrupar: def.agrupar },
       generadoEn: new Date().toISOString(),
       generadoPor: nombreDe(user),
-      filtros: this.etiquetasDeFiltros(ctx, rango, division),
+      filtros: await this.etiquetasDeFiltrosConPersonas(ctx, rango, division),
       columnas,
       grupos: salida,
       totales,
@@ -291,6 +322,11 @@ export class ReportesService {
       case 'stock-ubicacion': return this.stockUbicacion(ctx);
       case 'alertas-stock': return this.alertasStock(ctx);
       case 'kardex': return this.kardex(ctx);
+      case 'consumo-insumos-agencia': return this.consumoInsumosAgencia(ctx);
+      case 'consumo-insumos-pulidor': return this.consumoInsumosPulidor(ctx);
+      case 'retos': return this.retos(ctx);
+      case 'productividad-agencias': return this.productividadAgencias(ctx);
+      case 'productividad-operarios': return this.productividadOperarios(ctx);
       case 'informes-inspeccion': return this.informes(ctx);
       case 'auditorias-5s': return this.auditorias5s(ctx);
       default: throw new NotFoundException('El reporte no existe.');
@@ -306,7 +342,8 @@ export class ReportesService {
     const conPrecios = (t: TotalReporte[]) => (ctx.verPrecios ? t : t.filter((x) => x.tipo !== 'dinero'));
     const totalizar = (filas: FilaReporte[]) => conPrecios(def.totales(filas));
     const visibles = new Set(columnas.map((c) => c.clave));
-    const limpiar = (f: FilaReporte): FilaReporte => Object.fromEntries(Object.entries(f).filter(([k]) => visibles.has(k)));
+    // `_id` no es una columna: lo usa la pantalla para exportar el documento de cada auditoría.
+    const limpiar = (f: FilaReporte): FilaReporte => Object.fromEntries(Object.entries(f).filter(([k]) => visibles.has(k) || k === '_id'));
 
     const porGrupo = new Map<string, Bruta[]>();
     for (const b of brutas) {
@@ -341,6 +378,18 @@ export class ReportesService {
 
     const todas = brutas.map((b) => b.fila);
     return { grupos, totales: totalizar(todas), totalFilas: todas.length, division };
+  }
+
+  /** Igual que `etiquetasDeFiltros`, y si se filtró por lavador o pulidor, con su nombre. */
+  private async etiquetasDeFiltrosConPersonas(ctx: Ctx, rango: RangoResuelto | null, division: DivisionPeriodo | null) {
+    const filtros = this.etiquetasDeFiltros(ctx, rango, division);
+    const personas: Array<[string, string | undefined]> = [['Lavador', ctx.dto.lavadorId], ['Pulidor', ctx.dto.pulidorId]];
+    for (const [etiqueta, id] of personas) {
+      if (!id || !ctx.def.extras.includes(etiqueta === 'Lavador' ? 'lavador' : 'pulidor')) continue;
+      const u = await this.prisma.user.findUnique({ where: { id }, select: { name: true, lastname: true } });
+      filtros.extras.push({ etiqueta, valor: u ? nombreDe(u) : id });
+    }
+    return filtros;
   }
 
   private etiquetasDeFiltros(ctx: Ctx, rango: RangoResuelto | null, division: DivisionPeriodo | null) {
@@ -401,7 +450,7 @@ export class ReportesService {
 
   private async serviciosGenerales(ctx: Ctx): Promise<Bruta[]> {
     const { dto } = ctx;
-    const filas = await this.prisma.servicioLavado.findMany({
+    const deBase = await this.prisma.servicioLavado.findMany({
       where: {
         deletedAt: null,
         bahia: { agenciaId: { in: ctx.ids } },
@@ -418,6 +467,8 @@ export class ReportesService {
       },
       orderBy: { horaIngreso: 'asc' },
     });
+    const archivados = this.archivo ? await this.archivo.serviciosGenerales({ agenciaIds: ctx.ids, gte: ctx.gte, lt: ctx.lt, estado: dto.estado, lavadorId: dto.lavadorId }) : [];
+    const filas = ([...deBase, ...archivados] as typeof deBase).sort((a, b) => a.horaIngreso.getTime() - b.horaIngreso.getTime());
     return filas.map((s) => {
       const asignados = s.operadoresAsignados.map((o) => nombreDe(o.operador)).filter(Boolean);
       return {
@@ -447,12 +498,13 @@ export class ReportesService {
 
   private async serviciosEspeciales(ctx: Ctx): Promise<Bruta[]> {
     const { dto } = ctx;
-    const filas = await this.prisma.servicioEspecial.findMany({
+    const deBase = await this.prisma.servicioEspecial.findMany({
       where: {
         deletedAt: null,
         agenciaId: { in: ctx.ids },
         OR: [{ fechaProgramada: { gte: ctx.gte, lt: ctx.lt } }, { fechaProgramada: null, createdAt: { gte: ctx.gte, lt: ctx.lt } }],
         ...(dto.estado ? { estado: dto.estado } : {}),
+        ...(dto.pulidorId ? { AND: [{ OR: [{ operadorId: dto.pulidorId }, { operadoresAsignados: { some: { operadorId: dto.pulidorId } } }] }] } : {}),
       },
       select: {
         id: true, codigoSE: true, ordenTrabajoOT: true, tipoServicio: true, placa: true, marca: true, modelo: true, color: true, estado: true, precio: true, agenciaId: true,
@@ -460,6 +512,9 @@ export class ReportesService {
       },
       orderBy: [{ fechaProgramada: 'asc' }, { createdAt: 'asc' }],
     });
+    const archivados = this.archivo ? await this.archivo.serviciosEspeciales({ agenciaIds: ctx.ids, gte: ctx.gte, lt: ctx.lt, estado: dto.estado, pulidorId: dto.pulidorId }) : [];
+    // Mismo orden que la base: por fecha programada (las vacías al final) y luego por creación.
+    const filas = ([...deBase, ...archivados] as typeof deBase).sort((a, b) => (a.fechaProgramada?.getTime() ?? Infinity) - (b.fechaProgramada?.getTime() ?? Infinity) || a.createdAt.getTime() - b.createdAt.getTime());
     // La decisión vigente de cada servicio especial es la última que quedó registrada en la auditoría de decisiones.
     const decisiones = filas.length
       ? await this.prisma.auditoriaDecision.findMany({
@@ -716,11 +771,13 @@ export class ReportesService {
     for (const b of bodegas) ctx.grupos.set(b.id, { clave: b.id, titulo: `Bodega · ${b.nombre}`, tipo: 'BODEGA', region: b.regionNombre, cliente: '', agencia: '', responsable: '' });
     if (!ubicaciones.length) return [];
 
-    const filas = await this.prisma.kardexMovimiento.findMany({
+    const deBase = await this.prisma.kardexMovimiento.findMany({
       where: { insumoId: insumo.id, ubicacionId: { in: ubicaciones }, fecha: { gte: ctx.gte, lt: ctx.lt } },
       include: { usuario: { select: { name: true, lastname: true } } },
       orderBy: { fecha: 'asc' },
     });
+    const archivados = this.archivo ? await this.archivo.kardex({ insumoId: insumo.id, ubicaciones, gte: ctx.gte, lt: ctx.lt }) : [];
+    const filas = ([...deBase, ...archivados] as typeof deBase).sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
     return filas.map((k) => ({
       grupo: k.ubicacionId,
       fecha: fechaEcuador(k.fecha),
@@ -737,6 +794,367 @@ export class ReportesService {
     }));
   }
 
+  /** Líneas de consumo del periodo (servicios generales y especiales), de la base y del archivo, con el insumo ya identificado. */
+  private async lineasDeConsumo(ctx: Ctx) {
+    const rangoFecha = { gte: ctx.gte, lt: ctx.lt };
+    const conSinAgencia = ctx.incluyeBodegas && ctx.regionIds.length > 0;
+    const [generalesBase, especialesBase] = await Promise.all([
+      this.prisma.consumoServicio.findMany({
+        where: { createdAt: rangoFecha, agenciaId: { in: ctx.ids } },
+        select: { insumoId: true, cantidadUsada: true, agenciaId: true, servicioId: true, createdAt: true, insumoNombre: true, insumoSKU: true, unidadSimbolo: true },
+      }),
+      this.prisma.consumoServicioEspecial.findMany({
+        where: {
+          createdAt: rangoFecha,
+          servicioEspecial: { OR: [{ agenciaId: { in: ctx.ids } }, ...(conSinAgencia ? [{ agenciaId: null, regionId: { in: ctx.regionIds } }] : [])] },
+        },
+        select: {
+          insumoId: true, cantidadUsada: true, pulidorId: true, servicioEspecialId: true, createdAt: true, insumoNombre: true, insumoSKU: true, unidadSimbolo: true,
+          servicioEspecial: { select: { agenciaId: true, regionId: true } },
+        },
+      }),
+    ]);
+    const [generalesArchivo, especialesArchivo] = this.archivo
+      ? await Promise.all([
+          this.archivo.consumosGenerales({ agenciaIds: ctx.ids, gte: ctx.gte, lt: ctx.lt }),
+          this.archivo.consumosEspeciales({ agenciaIds: ctx.ids, regionIds: ctx.regionIds, incluirSinAgencia: conSinAgencia, gte: ctx.gte, lt: ctx.lt }),
+        ])
+      : [[], []];
+
+    type Linea = { insumoId: string; cantidad: number; agenciaId: string | null; dia: string; servicioId: string; pulidorId: string | null; nombre: string; sku: string; unidad: string };
+    const generales: Linea[] = [...generalesBase, ...generalesArchivo].map((l: any) => ({
+      insumoId: l.insumoId, cantidad: num(l.cantidadUsada), agenciaId: l.agenciaId ?? null, dia: fechaEcuador(l.createdAt), servicioId: l.servicioId, pulidorId: null, nombre: l.insumoNombre, sku: l.insumoSKU, unidad: l.unidadSimbolo,
+    }));
+    const especiales: Linea[] = [...especialesBase, ...especialesArchivo].map((l: any) => ({
+      insumoId: l.insumoId, cantidad: num(l.cantidadUsada), agenciaId: l.servicioEspecial ? (l.servicioEspecial.agenciaId ?? null) : (l.agenciaId ?? null), dia: fechaEcuador(l.createdAt), servicioId: l.servicioEspecialId, pulidorId: l.pulidorId ?? null, nombre: l.insumoNombre, sku: l.insumoSKU, unidad: l.unidadSimbolo,
+    }));
+
+    // Lo que la línea guardó al consumir (nombre, SKU y unidad de ese momento) manda; los maestros completan lo que falte.
+    const ids = unicos([...generales, ...especiales].map((l) => l.insumoId));
+    const maestros = new Map<string, { nombre: string; sku: string; unidad: string }>();
+    for (let i = 0; i < ids.length; i += 1000) {
+      for (const m of await this.prisma.insumo.findMany({ where: { id: { in: ids.slice(i, i + 1000) } }, select: { id: true, nombre: true, codigoSKU: true, unidadMedida: { select: { simbolo: true } } } })) {
+        maestros.set(m.id, { nombre: m.nombre, sku: m.codigoSKU, unidad: m.unidadMedida?.simbolo ?? '' });
+      }
+    }
+    const completa = (l: Linea): Linea => {
+      const m = maestros.get(l.insumoId);
+      return { ...l, nombre: l.nombre || m?.nombre || 'Insumo', sku: l.sku || m?.sku || '', unidad: l.unidad || m?.unidad || '' };
+    };
+    return { generales: generales.map(completa), especiales: especiales.map(completa) };
+  }
+
+  private redondear(n: number): number {
+    return Math.round(n * 10000) / 10000;
+  }
+
+  /** En cada agencia y bloque del periodo, una fila por insumo con lo usado en servicios generales y en especiales. */
+  private async consumoInsumosAgencia(ctx: Ctx): Promise<Bruta[]> {
+    const { generales, especiales } = await this.lineasDeConsumo(ctx);
+    const { bloques } = dividirRango(ctx.rango!);
+    const salida: Bruta[] = [];
+    for (const b of bloques) {
+      for (const a of ctx.agencias) {
+        const acumulado = new Map<string, { sku: string; insumo: string; unidad: string; generales: number; especiales: number; servicios: Set<string> }>();
+        const acumular = (lineas: typeof generales, campo: 'generales' | 'especiales') => {
+          for (const l of lineas) {
+            if (l.agenciaId !== a.id || l.dia < b.desde || l.dia > b.hasta) continue;
+            const fila = acumulado.get(l.insumoId) ?? { sku: l.sku, insumo: l.nombre, unidad: l.unidad, generales: 0, especiales: 0, servicios: new Set<string>() };
+            fila[campo] += l.cantidad;
+            fila.servicios.add(l.servicioId);
+            acumulado.set(l.insumoId, fila);
+          }
+        };
+        acumular(generales, 'generales');
+        acumular(especiales, 'especiales');
+        [...acumulado.values()]
+          .sort((x, y) => x.insumo.localeCompare(y.insumo, 'es') || x.sku.localeCompare(y.sku))
+          .forEach((f) =>
+            salida.push({
+              grupo: a.id,
+              fecha: b.desde,
+              fila: { sku: f.sku, insumo: f.insumo, unidad: f.unidad, generales: this.redondear(f.generales), especiales: this.redondear(f.especiales), total: this.redondear(f.generales + f.especiales), servicios: f.servicios.size },
+            }),
+          );
+      }
+    }
+    return salida;
+  }
+
+  /** En cada agencia (y los pulidores móviles aparte) y bloque del periodo, una fila por pulidor e insumo con lo que usó en servicios especiales. */
+  private async consumoInsumosPulidor(ctx: Ctx): Promise<Bruta[]> {
+    const { especiales } = await this.lineasDeConsumo(ctx);
+    const conSinAgencia = ctx.incluyeBodegas && ctx.regionIds.length > 0;
+    const SIN_AGENCIA = 'sin-agencia';
+    if (conSinAgencia) ctx.grupos.set(SIN_AGENCIA, { clave: SIN_AGENCIA, titulo: 'Pulidores móviles (sin agencia)', tipo: 'GENERAL', region: '', cliente: '', agencia: '', responsable: '' });
+    const idsPulidores = unicos(especiales.map((l) => l.pulidorId));
+    const usuarios = idsPulidores.length ? await this.prisma.user.findMany({ where: { id: { in: idsPulidores } }, select: { id: true, name: true, lastname: true } }) : [];
+    const nombre = new Map(usuarios.map((u) => [u.id, nombreDe(u)]));
+    const { bloques } = dividirRango(ctx.rango!);
+    const claves = [...ctx.ids, ...(conSinAgencia ? [SIN_AGENCIA] : [])];
+    const salida: Bruta[] = [];
+    for (const b of bloques) {
+      for (const clave of claves) {
+        const acumulado = new Map<string, { pulidor: string; sku: string; insumo: string; unidad: string; cantidad: number; servicios: Set<string> }>();
+        for (const l of especiales) {
+          if ((l.agenciaId ?? SIN_AGENCIA) !== clave || l.dia < b.desde || l.dia > b.hasta) continue;
+          const llave = `${l.pulidorId}|${l.insumoId}`;
+          const fila = acumulado.get(llave) ?? { pulidor: (l.pulidorId && nombre.get(l.pulidorId)) || 'Sin nombre', sku: l.sku, insumo: l.nombre, unidad: l.unidad, cantidad: 0, servicios: new Set<string>() };
+          fila.cantidad += l.cantidad;
+          fila.servicios.add(l.servicioId);
+          acumulado.set(llave, fila);
+        }
+        [...acumulado.values()]
+          .sort((x, y) => x.pulidor.localeCompare(y.pulidor, 'es') || x.insumo.localeCompare(y.insumo, 'es'))
+          .forEach((f) => salida.push({ grupo: clave, fecha: b.desde, fila: { pulidor: f.pulidor, sku: f.sku, insumo: f.insumo, unidad: f.unidad, cantidad: this.redondear(f.cantidad), servicios: f.servicios.size } }));
+      }
+    }
+    return salida;
+  }
+
+  /**
+   * Una hoja por reto activo (o cerrado, si se pide) con su avance. El avance sale de la misma cuenta que usa la pantalla de retos,
+   * que ya limita las agencias y bahías al alcance de quien pregunta. Un reto se ve con la regla del módulo de retos (todo el país, o
+   * su región, su agencia o él mismo) y, si se filtra por región, cliente o agencia, solo si alcanza a esas agencias.
+   */
+  private async retos(ctx: Ctx): Promise<Bruta[]> {
+    if (!this.retosService || ctx.alcance.tipo === 'NINGUNO') return [];
+    const estado = ctx.dto.estado === 'FINALIZADO' ? { estado: 'FINALIZADO' } : ctx.dto.estado === 'TODOS' ? {} : { estado: 'ACTIVO' };
+    const todos = await this.prisma.reto.findMany({ where: estado, orderBy: [{ fechaInicio: 'asc' }, { createdAt: 'asc' }] });
+
+    const global = ctx.alcance.tipo === 'GLOBAL';
+    const regionPropia = String(ctx.user?.region?.nombre ?? '').trim();
+    const agenciaPropia = String(ctx.user?.agenciaId ?? '').trim();
+    const idPropio = String(ctx.user?.id ?? '').trim();
+    const regionesElegidas = new Set(ctx.agencias.map((a) => a.regionNombre).filter(Boolean));
+    const ids = new Set(ctx.ids);
+    const filtrado = !!(ctx.dto.regionId || ctx.dto.clienteId || ctx.dto.agenciaIds?.length);
+
+    const visible = (r: any): boolean => {
+      if (global) return true;
+      const sinDestino = !r.regiones.length && !r.sucursalesIds.length && !r.pulidoresIds.length && !r.lavadoresIds.length;
+      return (
+        sinDestino ||
+        r.regiones.includes('Todas') ||
+        (!!regionPropia && r.regiones.includes(regionPropia)) ||
+        (!!agenciaPropia && r.sucursalesIds.includes(agenciaPropia)) ||
+        (!!idPropio && (r.pulidoresIds.includes(idPropio) || r.lavadoresIds.includes(idPropio)))
+      );
+    };
+    const alcanza = (r: any): boolean => {
+      if (!r.regiones.length && !r.sucursalesIds.length) return true;
+      return r.regiones.includes('Todas') || r.regiones.some((x: string) => regionesElegidas.has(x)) || r.sucursalesIds.some((x: string) => ids.has(x));
+    };
+
+    const PARTICIPAN: Record<string, string> = { AGENCIA: 'Agencias', BAHIA: 'Bahías', LAVADOR: 'Lavadores', PULIDOR: 'Pulidores' };
+    const METRICAS: Record<string, string> = { SERVICIOS: 'Servicios realizados', AUTOS: 'Autos distintos', MONTO: 'Monto vendido' };
+    const SERVICIOS: Record<string, string> = { TODOS: 'Todos', GENERALES: 'Generales', ESPECIALES: 'Especiales', ESPECIFICOS: 'Específicos' };
+    const dia = (f: Date): string => f.toISOString().slice(0, 10);
+
+    const aplicables = todos.filter((r) => visible(r) && (!filtrado || alcanza(r)));
+    const salida: Bruta[] = [];
+    for (const r of aplicables) {
+      let ranking: Awaited<ReturnType<RetosService['ranking']>>;
+      try {
+        ranking = await this.retosService.ranking(r.id, ctx.user);
+      } catch {
+        continue; // el reto no es visible para este usuario
+      }
+      // Una cantidad en dinero es sensible igual que los precios.
+      const oculto = r.metrica === 'MONTO' && !ctx.verPrecios;
+      const meta = r.modoGanador === 'META' && r.meta !== null ? Number(r.meta) : null;
+      const modo = r.modoGanador === 'META'
+        ? meta === null ? 'Meta' : oculto ? 'Meta por monto' : `Meta de ${r.metrica === 'MONTO' ? '$' : ''}${meta}`
+        : r.cantidadGanadores === 1 ? 'Ranking: gana el primero' : `Ranking: ganan los ${r.cantidadGanadores} primeros`;
+      const regiones = r.regiones.filter((x: string) => x && x.toLowerCase() !== 'todas');
+      const partes = [regiones.length ? regiones.join(', ') : 'Todas las regiones'];
+      if (r.sucursalesIds.length) partes.push(`${r.sucursalesIds.length} agencia(s)`);
+      const personas = r.pulidoresIds.length + r.lavadoresIds.length;
+      if (personas) partes.push(`${personas} persona(s)`);
+
+      ctx.grupos.set(r.id, {
+        clave: r.id,
+        titulo: r.titulo,
+        tipo: 'RETO',
+        region: '',
+        cliente: '',
+        agencia: '',
+        responsable: '',
+        datos: [
+          { etiqueta: 'RETO', valor: r.titulo },
+          { etiqueta: 'ESTADO', valor: r.estado === 'FINALIZADO' ? 'Cerrado' : 'Activo' },
+          { etiqueta: 'PARTICIPAN', valor: PARTICIPAN[r.tipoReto] ?? titulo(r.tipoReto) },
+          { etiqueta: 'SE MIDE', valor: METRICAS[r.metrica] ?? titulo(r.metrica) },
+          { etiqueta: 'SERVICIOS', valor: SERVICIOS[r.tipoServicios] ?? titulo(r.tipoServicios) },
+          { etiqueta: 'MODO', valor: modo },
+          { etiqueta: 'DURACIÓN', valor: `${etiquetaDia(dia(r.fechaInicio))} al ${etiquetaDia(dia(r.fechaFin))}` },
+          { etiqueta: 'PREMIO', valor: r.premio ?? 'Sin premio' },
+          { etiqueta: 'DIRIGIDO A', valor: partes.join(' · ') },
+          { etiqueta: 'CREADO POR', valor: [r.creadorNombre, r.creadorRol ? `(${titulo(r.creadorRol)})` : ''].filter(Boolean).join(' ') || 'No registrado' },
+        ],
+      });
+
+      for (const f of ranking.participantes) {
+        const valor = Number(f.valor);
+        const situacion = meta !== null ? (valor >= meta ? 'Meta cumplida' : 'En progreso') : f.gana ? 'Ganando' : 'En carrera';
+        salida.push({
+          grupo: r.id,
+          fila: {
+            posicion: f.posicion,
+            participante: f.nombre,
+            detalle: f.detalle ?? '',
+            valor: oculto ? null : valor,
+            meta: oculto ? null : meta,
+            avance: meta ? Math.round((valor / meta) * 1000) / 10 : null,
+            situacion,
+          },
+        });
+      }
+    }
+    return salida;
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------------
+  // Productividad
+  // ---------------------------------------------------------------------------------------------------------------------
+
+  /** Servicios del periodo (generales y especiales) ya reducidos a lo que necesitan los reportes de productividad. */
+  private async serviciosParaProductividad(ctx: Ctx): Promise<ServicioProductivo[]> {
+    const [generalesBase, especialesBase] = await Promise.all([
+      this.prisma.servicioLavado.findMany({
+        where: { deletedAt: null, bahia: { agenciaId: { in: ctx.ids } }, horaIngreso: { gte: ctx.gte, lt: ctx.lt } },
+        select: {
+          estado: true, precio: true, horaIngreso: true, horaInicio: true, horaSalida: true, operadorId: true,
+          bahia: { select: { agenciaId: true } },
+          operadoresAsignados: { select: { operadorId: true } },
+        },
+      }),
+      this.prisma.servicioEspecial.findMany({
+        where: {
+          deletedAt: null,
+          agenciaId: { in: ctx.ids },
+          OR: [{ fechaProgramada: { gte: ctx.gte, lt: ctx.lt } }, { fechaProgramada: null, createdAt: { gte: ctx.gte, lt: ctx.lt } }],
+        },
+        select: {
+          estado: true, precio: true, agenciaId: true, fechaProgramada: true, createdAt: true, tiempoEfectivoSeg: true, operadorId: true,
+          operadoresAsignados: { select: { operadorId: true } },
+        },
+      }),
+    ]);
+    // Lo ya archivado también cuenta en la productividad del periodo.
+    const [archivadosGenerales, archivadosEspeciales] = this.archivo
+      ? await Promise.all([
+          this.archivo.serviciosGenerales({ agenciaIds: ctx.ids, gte: ctx.gte, lt: ctx.lt }),
+          this.archivo.serviciosEspeciales({ agenciaIds: ctx.ids, gte: ctx.gte, lt: ctx.lt, conOperadores: true }),
+        ])
+      : [[], []];
+    const generales = [...generalesBase, ...archivadosGenerales] as typeof generalesBase;
+    const especiales = [...especialesBase, ...archivadosEspeciales] as typeof especialesBase;
+
+    const salida: ServicioProductivo[] = [];
+    for (const s of generales) {
+      const inicio = s.horaInicio ?? s.horaIngreso;
+      const operarios = s.operadoresAsignados.length ? s.operadoresAsignados.map((o) => o.operadorId) : [s.operadorId];
+      salida.push({
+        origen: 'GENERAL',
+        agenciaId: s.bahia.agenciaId,
+        fecha: fechaEcuador(s.horaIngreso),
+        resultado: s.estado === 'FINALIZADO' || s.estado === 'APROBADO' ? 'SI' : s.estado === 'CANCELADO' || s.estado === 'RECHAZADO' ? 'NO' : '',
+        monto: num(s.precio),
+        minutos: s.horaSalida ? Math.max(0, (s.horaSalida.getTime() - inicio.getTime()) / 60000) : null,
+        operarios,
+      });
+    }
+    for (const s of especiales) {
+      salida.push({
+        origen: 'ESPECIAL',
+        agenciaId: s.agenciaId!,
+        fecha: fechaEcuador(s.fechaProgramada ?? s.createdAt),
+        resultado: s.estado === 'Completado' ? 'SI' : s.estado === 'Cancelado' ? 'NO' : '',
+        monto: num(s.precio),
+        minutos: s.tiempoEfectivoSeg ? s.tiempoEfectivoSeg / 60 : null,
+        operarios: s.operadoresAsignados.length ? s.operadoresAsignados.map((o) => o.operadorId) : s.operadorId ? [s.operadorId] : [],
+      });
+    }
+    return salida;
+  }
+
+  private promedio(valores: (number | null)[]): number | null {
+    const v = valores.filter((x): x is number => x !== null);
+    return v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : null;
+  }
+
+  /** Comparativa de agencias: en cada bloque del periodo, una fila por agencia con actividad, ordenadas por servicios realizados. */
+  private async productividadAgencias(ctx: Ctx): Promise<Bruta[]> {
+    const servicios = await this.serviciosParaProductividad(ctx);
+    const { bloques } = dividirRango(ctx.rango!);
+    const salida: Bruta[] = [];
+    for (const b of bloques) {
+      const filas = ctx.agencias
+        .map((a) => {
+          const propios = servicios.filter((s) => s.agenciaId === a.id && s.fecha >= b.desde && s.fecha <= b.hasta);
+          const generales = propios.filter((s) => s.origen === 'GENERAL');
+          const especiales = propios.filter((s) => s.origen === 'ESPECIAL');
+          const realizados = generales.filter((s) => s.resultado === 'SI');
+          return {
+            agencia: a.nombre,
+            region: a.regionNombre,
+            cliente: a.clienteNombre,
+            servicios: generales.length,
+            realizados: realizados.length,
+            noRealizados: generales.filter((s) => s.resultado === 'NO').length,
+            cumplimiento: generales.length ? Math.round((realizados.length / generales.length) * 1000) / 10 : null,
+            tiempo: this.promedio(realizados.map((s) => s.minutos)),
+            especiales: especiales.length,
+            especialesOk: especiales.filter((s) => s.resultado === 'SI').length,
+            monto: Math.round(propios.filter((s) => s.resultado === 'SI').reduce((acc, s) => acc + s.monto, 0) * 100) / 100,
+          };
+        })
+        .filter((f) => f.servicios > 0 || f.especiales > 0)
+        .sort((x, y) => y.realizados - x.realizados || y.especialesOk - x.especialesOk || x.agencia.localeCompare(y.agencia, 'es'));
+      filas.forEach((f, i) => salida.push({ grupo: 'unico', fecha: b.desde, fila: { posicion: i + 1, ...f } }));
+    }
+    return salida;
+  }
+
+  /** Ranking de operarios: en cada agencia y bloque del periodo, lavadores y pulidores ordenados por servicios realizados. */
+  private async productividadOperarios(ctx: Ctx): Promise<Bruta[]> {
+    const servicios = await this.serviciosParaProductividad(ctx);
+    const idsOperarios = unicos(servicios.flatMap((s) => s.operarios));
+    const usuarios = idsOperarios.length ? await this.prisma.user.findMany({ where: { id: { in: idsOperarios } }, select: { id: true, name: true, lastname: true } }) : [];
+    const nombre = new Map(usuarios.map((u) => [u.id, nombreDe(u)]));
+    const { bloques } = dividirRango(ctx.rango!);
+    const salida: Bruta[] = [];
+    for (const b of bloques) {
+      for (const a of ctx.agencias) {
+        const acumulado = new Map<string, { operario: string; rol: string; realizados: number; minutos: (number | null)[]; monto: number }>();
+        for (const s of servicios) {
+          if (s.agenciaId !== a.id || s.fecha < b.desde || s.fecha > b.hasta || s.resultado !== 'SI') continue;
+          const rol = s.origen === 'GENERAL' ? 'Lavador' : 'Pulidor';
+          for (const id of s.operarios) {
+            const clave = `${id}|${rol}`;
+            const fila = acumulado.get(clave) ?? { operario: nombre.get(id) ?? 'Sin nombre', rol, realizados: 0, minutos: [], monto: 0 };
+            fila.realizados += 1;
+            fila.minutos.push(s.minutos);
+            // Con varios operarios el servicio se reparte: cada uno acredita su parte del monto.
+            fila.monto += s.monto / s.operarios.length;
+            acumulado.set(clave, fila);
+          }
+        }
+        [...acumulado.values()]
+          .sort((x, y) => y.realizados - x.realizados || x.operario.localeCompare(y.operario, 'es'))
+          .forEach((f, i) =>
+            salida.push({
+              grupo: a.id,
+              fecha: b.desde,
+              fila: { posicion: i + 1, operario: f.operario, rol: f.rol, realizados: f.realizados, tiempo: this.promedio(f.minutos), monto: Math.round(f.monto * 100) / 100 },
+            }),
+          );
+      }
+    }
+    return salida;
+  }
+
   private async informes(ctx: Ctx): Promise<Bruta[]> {
     const desde = new Date(`${ctx.rango!.desde}T00:00:00Z`);
     const hasta = new Date(`${ctx.rango!.hasta}T00:00:00Z`);
@@ -750,7 +1168,7 @@ export class ReportesService {
       return {
         grupo: i.agenciaId,
         fecha: dia,
-        fila: { numero: i.numero, fecha: dia, tipo: titulo(i.tipoInspeccion), estado: titulo(i.estado), inspector: nombreDe(i.inspector), destinatario: i.destinatarioNombre, asunto: i.asunto, calificacion: titulo(i.calificacion) },
+        fila: { _id: i.id, numero: i.numero, fecha: dia, tipo: titulo(i.tipoInspeccion), estado: titulo(i.estado), inspector: nombreDe(i.inspector), destinatario: i.destinatarioNombre, asunto: i.asunto, calificacion: titulo(i.calificacion) },
       };
     });
   }
@@ -775,6 +1193,7 @@ export class ReportesService {
         grupo: a.agenciaId,
         fecha: dia,
         fila: {
+          _id: a.id,
           codigo: a.codigo,
           fecha: dia,
           area: titulo(a.area),

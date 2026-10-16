@@ -1,5 +1,7 @@
+import { CacheService } from '../../common/cache/cache.service.js';
+import { USUARIO_PREFIJO } from './jwt.strategy.js';
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, UnauthorizedException, Optional } from '@nestjs/common';
 import { secretoObligatorio } from '../../common/config/secretos.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -25,6 +27,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private storageService: StorageService,
+    @Optional() private cache?: CacheService,
   ) {}
 
   /**
@@ -146,6 +149,8 @@ export class AuthService {
       this.prisma.refreshSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: ahora } }),
       this.prisma.user.update({ where: { id: userId }, data: { sesionesRevocadasAt: ahora } }),
     ]);
+    // El usuario guardado en caché todavía no sabe de la revocación: se borra para que el cierre valga ya, no al vencer.
+    await this.cache?.del(`${USUARIO_PREFIJO}${userId}`);
   }
 
   /** Cierra la sesión (y toda su cadena de rotaciones) a la que pertenece este refresh token. Nunca falla: un token inválido ya no sirve. */
@@ -518,6 +523,7 @@ export class AuthService {
       where: { id: userId },
       data,
     });
+    await this.cache?.del(`${USUARIO_PREFIJO}${userId}`);
 
     return {
       success: true,

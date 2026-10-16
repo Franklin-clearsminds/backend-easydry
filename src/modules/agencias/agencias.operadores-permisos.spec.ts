@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AgenciasService } from './agencias.service.js';
 import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
@@ -149,18 +149,28 @@ describe('Gestión de Lavadores: permisos por botón (base real)', () => {
 
   describe('registrar con bahía', () => {
     it('registrar a alguien con una bahía asignada exige «Asignar a bahía» además de «Registrar»', async () => {
-      const dto = { nombre: 'Nuevo Lavador', cedula: '0999999999', rol: 'LAVADOR', agenciaId: agencia.id, bahiaId: bahia.id } as any;
+      const dto = { nombre: 'Nuevo Lavador', cedula: '0999999999', password: 'Lavado#2026Seco', rol: 'LAVADOR', agenciaId: agencia.id, bahiaId: bahia.id } as any;
 
       await expect(service.createOperador(dto, admin.id, con('operadores.registrar'))).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('registrar sin bahía (en reserva) solo exige «Registrar»', async () => {
-      const dto = { nombre: 'Reserva Lavador', cedula: '0988888888', rol: 'LAVADOR', agenciaId: agencia.id } as any;
+      const dto = { nombre: 'Reserva Lavador', cedula: '0988888888', password: 'Lavado#2026Seco', rol: 'LAVADOR', agenciaId: agencia.id } as any;
 
       const creado: any = await service.createOperador(dto, admin.id, con('operadores.registrar'));
 
       expect(creado.id).toBeTruthy();
+      // Ya no hay contraseña temporal: la define quien registra y no se devuelve.
+      expect(JSON.stringify(creado)).not.toMatch(/passwordTemporal|Lavado#2026Seco/);
       env.rastrear('User', creado.id);
+    });
+
+    it('la contraseña es obligatoria y debe cumplir la política (mayúscula, minúscula, número y carácter especial)', async () => {
+      const base = { nombre: 'Sin Clave', cedula: '0977777777', rol: 'LAVADOR', agenciaId: agencia.id } as any;
+      await expect(service.createOperador(base, admin.id, con('operadores.registrar'))).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.createOperador({ ...base, password: 'Lavado2026Seco' }, admin.id, con('operadores.registrar'))).rejects.toThrow(/carácter especial/);
+      await expect(service.createOperador({ ...base, password: 'corta#1A' }, admin.id, con('operadores.registrar'))).rejects.toBeInstanceOf(BadRequestException);
+      expect(await env.prisma.user.count({ where: { email: 'op.0977777777@easydry.internal' } })).toBe(0);
     });
   });
 });

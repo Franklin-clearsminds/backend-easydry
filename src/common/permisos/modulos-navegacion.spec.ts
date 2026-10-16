@@ -49,9 +49,8 @@ describe('pantallas derivadas de los permisos', () => {
       expect(pantallas(rol), rol).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));
     }
     expect(pantallas('SUPERVISOR')).toContain('usuarios');
-    // Reportes operativos (de momento): administradores, coordinador y asistente de bodega, coordinador y jefe comercial.
-    expect(pantallas('SUPERVISOR')).not.toContain('reportes');
-    for (const rol of ['SUPER_ADMIN', 'ADMIN', 'COORD_BODEGA', 'ASISTENTE_BODEGA', 'COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
+    // Reportes operativos: administradores, supervisor, coordinadores (bodega, comercial, servicios especiales), asistente de bodega y jefe comercial.
+    for (const rol of ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'COORD_BODEGA', 'ASISTENTE_BODEGA', 'COORD_COMERCIAL', 'COORD_SERVICIOS_ESPECIALES', 'JEFE_COMERCIAL']) {
       expect(pantallas(rol), rol).toContain('reportes');
     }
     expect(pantallas('LIDER')).not.toContain('mapa-operativo');

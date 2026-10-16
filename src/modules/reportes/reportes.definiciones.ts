@@ -5,7 +5,7 @@
  */
 
 export type TipoColumna = 'texto' | 'numero' | 'dinero' | 'fecha' | 'hora' | 'marca';
-export type FiltroExtra = 'estado' | 'lavador' | 'producto' | 'ubicacion' | 'semaforo';
+export type FiltroExtra = 'estado' | 'lavador' | 'pulidor' | 'producto' | 'ubicacion' | 'semaforo';
 export type PlantillaReporte = 'CONTROL_ESPECIAL' | 'CONTROL_GENERAL' | 'TABLA';
 export type ValorCelda = string | number | null;
 export type FilaReporte = Record<string, ValorCelda>;
@@ -44,7 +44,8 @@ export interface ReporteDef {
   /** true = se filtra por fecha; false = foto con los datos de hoy. */
   periodo: boolean;
   /** AGENCIA = una hoja/sección por agencia; UNICO = una sola lista. */
-  agrupar: 'AGENCIA' | 'UNICO';
+  /** AGENCIA = una hoja por agencia; RETO = una hoja por reto; UNICO = una sola lista. */
+  agrupar: 'AGENCIA' | 'UNICO' | 'RETO';
   plantilla: PlantillaReporte;
   extras: FiltroExtra[];
   /** Opciones del filtro «estado» (también las del semáforo en 5S). */
@@ -164,7 +165,7 @@ export const REPORTES: readonly ReporteDef[] = [
     periodo: true,
     agrupar: 'AGENCIA',
     plantilla: 'CONTROL_ESPECIAL',
-    extras: ['estado'],
+    extras: ['estado', 'pulidor'],
     estados: [
       { valor: 'Pendiente', etiqueta: 'Pendiente' },
       { valor: 'En Proceso', etiqueta: 'En proceso' },
@@ -405,6 +406,141 @@ export const REPORTES: readonly ReporteDef[] = [
       cuenta(f),
       { clave: 'entradas', etiqueta: 'Entradas', valor: Math.round(f.reduce((a, x) => a + Math.max(Number(x.cantidad) || 0, 0), 0) * 1000) / 1000, tipo: 'numero' },
       { clave: 'salidas', etiqueta: 'Salidas', valor: Math.round(f.reduce((a, x) => a + Math.abs(Math.min(Number(x.cantidad) || 0, 0)), 0) * 1000) / 1000, tipo: 'numero' },
+    ],
+  },
+  {
+    id: 'consumo-insumos-agencia',
+    nombre: 'Consumo de insumos por agencia',
+    modulo: 'Gestión de insumos',
+    descripcion: 'Cuánto se usó de cada producto en cada agencia durante el periodo, en servicios generales y especiales.',
+    permisos: ['inventario.ver'],
+    periodo: true,
+    agrupar: 'AGENCIA',
+    plantilla: 'TABLA',
+    extras: [],
+    columnas: [
+      ORD,
+      col('sku', 'SKU', 'texto', 9),
+      col('insumo', 'Insumo', 'texto', 24),
+      col('unidad', 'Unidad', 'texto', 8),
+      col('generales', 'En servicios generales', 'numero', 12),
+      col('especiales', 'En servicios especiales', 'numero', 12),
+      col('total', 'Total usado', 'numero', 10),
+      col('servicios', 'Servicios donde se usó', 'numero', 11),
+    ],
+    // Cada insumo tiene su propia unidad (ml, unidades…): sumar las cantidades de insumos distintos no significaría nada.
+    totales: (f) => [{ clave: 'insumos', etiqueta: 'Insumos distintos', valor: f.length, tipo: 'numero' }, { clave: 'servicios', etiqueta: 'Servicios con consumo', valor: sumar(f, 'servicios'), tipo: 'numero' }],
+  },
+  {
+    id: 'consumo-insumos-pulidor',
+    nombre: 'Insumos usados por cada pulidor',
+    modulo: 'Gestión de insumos',
+    descripcion: 'Qué productos y cuánto usó cada pulidor en sus servicios especiales durante el periodo, por agencia (los pulidores móviles, aparte).',
+    permisos: ['inventario.ver'],
+    periodo: true,
+    agrupar: 'AGENCIA',
+    plantilla: 'TABLA',
+    extras: [],
+    columnas: [
+      ORD,
+      col('pulidor', 'Pulidor', 'texto', 20),
+      col('sku', 'SKU', 'texto', 9),
+      col('insumo', 'Insumo', 'texto', 22),
+      col('unidad', 'Unidad', 'texto', 8),
+      col('cantidad', 'Cantidad usada', 'numero', 11),
+      col('servicios', 'Servicios donde se usó', 'numero', 11),
+    ],
+    totales: (f) => [
+      { clave: 'pulidores', etiqueta: 'Pulidores', valor: new Set(f.map((x) => x.pulidor)).size, tipo: 'numero' },
+      { clave: 'insumos', etiqueta: 'Insumos distintos', valor: new Set(f.map((x) => x.sku || x.insumo)).size, tipo: 'numero' },
+    ],
+  },
+  {
+    id: 'retos',
+    nombre: 'Retos',
+    modulo: 'Productividad y retos',
+    descripcion: 'Una hoja por reto activo con su avance: posición, participantes, valor actual y cumplimiento de la meta.',
+    permisos: ['retos.ver'],
+    periodo: false,
+    agrupar: 'RETO',
+    plantilla: 'TABLA',
+    extras: ['estado'],
+    // Sin elegir nada se muestran los retos activos; «TODOS» suma también los cerrados.
+    estados: [
+      { valor: 'FINALIZADO', etiqueta: 'Cerrados' },
+      { valor: 'TODOS', etiqueta: 'Activos y cerrados' },
+    ],
+    columnas: [
+      col('posicion', 'Posición', 'numero', 8),
+      col('participante', 'Participante', 'texto', 24),
+      col('detalle', 'Detalle', 'texto', 22),
+      col('valor', 'Valor actual', 'numero', 11),
+      col('meta', 'Meta', 'numero', 9),
+      col('avance', '% de avance', 'numero', 11),
+      col('situacion', 'Situación', 'texto', 14),
+    ],
+    totales: (f) => [
+      { clave: 'participantes', etiqueta: 'Participantes', valor: f.length, tipo: 'numero' },
+      { clave: 'ganando', etiqueta: 'Ganando o con meta cumplida', valor: f.filter((x) => x.situacion === 'Ganando' || x.situacion === 'Meta cumplida').length, tipo: 'numero' },
+    ],
+  },
+  {
+    id: 'productividad-agencias',
+    nombre: 'Productividad de agencias',
+    modulo: 'Productividad y retos',
+    descripcion: 'Comparativa de agencias por periodo: servicios, cumplimiento, tiempo promedio, servicios especiales y monto.',
+    permisos: ['productividad.ver'],
+    periodo: true,
+    agrupar: 'UNICO',
+    plantilla: 'TABLA',
+    extras: [],
+    columnas: [
+      col('posicion', 'Posición', 'numero', 8),
+      col('agencia', 'Agencia', 'texto', 22),
+      col('region', 'Región', 'texto', 11),
+      col('cliente', 'Cliente', 'texto', 14),
+      col('servicios', 'Servicios', 'numero', 9),
+      col('realizados', 'Realizados', 'numero', 10),
+      col('noRealizados', 'No realizados', 'numero', 11),
+      col('cumplimiento', '% cumplimiento', 'numero', 12),
+      col('tiempo', 'Tiempo prom. (min)', 'numero', 12),
+      col('especiales', 'Especiales', 'numero', 9),
+      col('especialesOk', 'Especiales completados', 'numero', 13),
+      col('monto', 'Monto', 'dinero', 10, { soloPrecios: true }),
+    ],
+    totales: (f) => {
+      const servicios = sumar(f, 'servicios');
+      const realizados = sumar(f, 'realizados');
+      return [
+        { clave: 'servicios', etiqueta: 'Servicios', valor: servicios, tipo: 'numero' },
+        { clave: 'realizados', etiqueta: 'Realizados', valor: realizados, tipo: 'numero' },
+        { clave: 'cumplimiento', etiqueta: '% cumplimiento', valor: servicios ? Math.round((realizados / servicios) * 1000) / 10 : 0, tipo: 'numero' },
+        { clave: 'monto', etiqueta: 'Monto', valor: sumar(f, 'monto'), tipo: 'dinero' },
+      ];
+    },
+  },
+  {
+    id: 'productividad-operarios',
+    nombre: 'Productividad de operarios',
+    modulo: 'Productividad y retos',
+    descripcion: 'Ranking de lavadores y pulidores por agencia y periodo: servicios realizados, tiempo promedio y monto.',
+    permisos: ['productividad.ver'],
+    periodo: true,
+    agrupar: 'AGENCIA',
+    plantilla: 'TABLA',
+    extras: [],
+    columnas: [
+      col('posicion', 'Posición', 'numero', 8),
+      col('operario', 'Operario', 'texto', 26),
+      col('rol', 'Rol', 'texto', 10),
+      col('realizados', 'Servicios realizados', 'numero', 13),
+      col('tiempo', 'Tiempo prom. (min)', 'numero', 13),
+      col('monto', 'Monto', 'dinero', 10, { soloPrecios: true }),
+    ],
+    totales: (f) => [
+      { clave: 'operarios', etiqueta: 'Operarios', valor: f.length, tipo: 'numero' },
+      { clave: 'realizados', etiqueta: 'Servicios realizados', valor: sumar(f, 'realizados'), tipo: 'numero' },
+      { clave: 'monto', etiqueta: 'Monto', valor: sumar(f, 'monto'), tipo: 'dinero' },
     ],
   },
   {

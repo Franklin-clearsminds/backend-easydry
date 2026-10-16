@@ -325,13 +325,15 @@ describe('matriz acordada de permisos por rol', () => {
       ).map((d) => d.id);
     };
 
-    it('los sacan solo administradores, coordinador y asistente de bodega, y coordinador y jefe comercial (de momento)', () => {
+    it('los sacan administradores, supervisor, coordinadores de bodega, comercial y de servicios especiales, asistente de bodega y jefe comercial', () => {
       const acordados = [
         'ADMIN',
         'ASISTENTE_BODEGA',
         'COORD_BODEGA',
         'COORD_COMERCIAL',
+        'COORD_SERVICIOS_ESPECIALES',
         'JEFE_COMERCIAL',
+        'SUPERVISOR',
         'SUPER_ADMIN',
       ];
       expect(rolesCon('reportes.ver')).toEqual(acordados);
@@ -340,8 +342,19 @@ describe('matriz acordada de permisos por rol', () => {
       expect(rolesCon('reportes.pdf')).toEqual(acordados);
     });
 
-    it('el supervisor, aunque es regional, ya no saca reportes', () => {
-      expect(rolesCon('reportes.ver')).not.toContain('SUPERVISOR');
+    it('el supervisor y el coordinador de servicios especiales sacan los reportes de los módulos que tienen activos', () => {
+      expect(rolesCon('reportes.ver')).toEqual(expect.arrayContaining(['SUPERVISOR', 'COORD_SERVICIOS_ESPECIALES']));
+      expect(reportesDe('COORD_SERVICIOS_ESPECIALES')).toContain('servicios-especiales');
+      expect(reportesDe('COORD_SERVICIOS_ESPECIALES')).not.toContain('insumos-inventario'); // no tiene el módulo de inventario
+      expect(reportesDe('SUPERVISOR')).toEqual(expect.arrayContaining(['servicios-generales', 'servicios-especiales', 'insumos-inventario']));
+    });
+
+    it('todos los que sacan reportes también crean informes de inspección y auditorías 5S, y ven esos reportes', () => {
+      for (const n of ['SUPERVISOR', 'COORD_SERVICIOS_ESPECIALES', 'COORD_BODEGA', 'ASISTENTE_BODEGA', 'COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
+        expect(tienePermiso(usuario(n), 'informes.crear'), `${n} informes.crear`).toBe(true);
+        expect(tienePermiso(usuario(n), 'inspecciones.crear'), `${n} inspecciones.crear`).toBe(true);
+        expect(reportesDe(n), n).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));
+      }
     });
 
     it('el alcance del rol limita los datos del reporte: regional solo su región, nacional todo el país', () => {
@@ -402,7 +415,6 @@ describe('matriz acordada de permisos por rol', () => {
         'LIDER',
         'BACKUP',
         'LAVADOR',
-        'COORD_SERVICIOS_ESPECIALES',
         'PULIDOR',
         'COORD_MANTENIMIENTO',
         'TECNICO',

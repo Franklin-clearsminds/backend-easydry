@@ -78,6 +78,11 @@ export class GenerarReporteDto {
   @IsString()
   lavadorId?: string;
 
+  @ApiPropertyOptional({ description: 'Pulidor (servicios especiales): el responsable o uno de los asignados' })
+  @IsOptional()
+  @IsString()
+  pulidorId?: string;
+
   @ApiPropertyOptional({ description: 'Insumo (kardex)' })
   @IsOptional()
   @IsString()
@@ -104,4 +109,10 @@ export class RegistrarExportacionDto extends GenerarReporteDto {
   @IsInt()
   @Min(0)
   totalFilas?: number;
+
+  @ApiPropertyOptional({ description: 'Id de la auditoría cuando se exporta su documento completo' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  documentoId?: string;
 }

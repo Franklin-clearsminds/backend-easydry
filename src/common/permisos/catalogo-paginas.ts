@@ -290,7 +290,7 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('usuarios.usuarios.editar', 'Editar usuario', ['usuarios.gestionar']),
       accion('usuarios.usuarios.estado', 'Activar o desactivar usuario', ['usuarios.gestionar']),
       accion('usuarios.usuarios.eliminar', 'Eliminar usuario', ['usuarios.gestionar']),
-      accion('usuarios.usuarios.password', 'Asignar contraseña', ['usuarios.gestionar']),
+      accion('usuarios.usuarios.password', 'Asignar y restablecer contraseñas', []),
       accion('usuarios.usuarios.backup', 'Gestionar usuarios Backup', ['backup.gestionar']),
       CEDULA, CONTACTO,
     ], ['usuarios.gestionar', 'backup.gestionar']),

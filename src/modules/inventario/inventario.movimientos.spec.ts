@@ -165,9 +165,11 @@ describe('InventarioService: movimientos globales y Kardex (base real)', () => {
       expect(nombresG(await lista({ tipoMovimientoId: consumo.id })).sort()).toEqual(['g2', 'g4']);
       expect(nombresG(await lista({ ubicacionId: bodega.id })).sort()).toEqual(['g1', 'g5']);
       // Del día -4 al día -2: g2, g3 y g4. Con un "hasta" de solo día, ese día entra completo.
+      // `hace()` se evalúa de nuevo aquí, algo después de crear las filas: el margen debe cubrir lo que tarde la prueba (con la máquina
+      // cargada pasa de 1 segundo) y seguir dejando fuera las filas vecinas, que están a un día de distancia.
       const desde = hace(4).toISOString();
       const hasta = hace(2).toISOString().slice(0, 10);
-      expect(nombresG(await lista({ fechaDesde: new Date(hace(4).getTime() - 1000).toISOString(), fechaHasta: hasta })).sort()).toEqual(['g2', 'g3', 'g4']);
+      expect(nombresG(await lista({ fechaDesde: new Date(hace(4).getTime() - 10 * 60_000).toISOString(), fechaHasta: hasta })).sort()).toEqual(['g2', 'g3', 'g4']);
       void desde;
     });
 

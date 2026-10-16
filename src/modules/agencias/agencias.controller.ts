@@ -58,6 +58,7 @@ import {
   ListUsuariosAgenciaDto,
   ToggleEstadoUsuarioDto,
   UpdateUsuarioDto,
+  AsignarPasswordDto,
   CreateUsuarioDto,
   DeleteUsuarioDto,
   ListOperadoresDto,
@@ -402,7 +403,15 @@ export class AgenciasController {
     return this.agenciasService.toggleEstadoUsuario(dto);
   }
 
-  @Permiso('usuarios.usuarios.editar', 'usuarios.usuarios.password', 'usuarios.usuarios.backup')
+  @Permiso('usuarios.usuarios.password')
+  @Post('usuarios/password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Asignar o restablecer la contraseña de un usuario de la propia zona (nunca la propia ni la de un Administrador salvo el Super Administrador)' })
+  async asignarPassword(@Body() dto: AsignarPasswordDto, @CurrentUser() user: any) {
+    return this.agenciasService.asignarPassword(dto, user);
+  }
+
+  @Permiso('usuarios.usuarios.editar', 'usuarios.usuarios.backup')
   @Post('usuarios/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar datos de usuario; Supervisor regional solo puede modificar Backups de su región' })

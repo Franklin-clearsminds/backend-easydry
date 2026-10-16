@@ -21,7 +21,7 @@ describe('un pulidor fijo por agencia (base real)', () => {
     name: 'CHRISTIAN',
     lastname: 'GRANDA',
     email: `${env.marca}-${clave}@prueba.local`,
-    password: 'Temporal12345',
+    password: 'Pulidor#Fijo9x7',
     rolNombre: 'PULIDOR',
     agenciaId,
   });

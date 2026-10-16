@@ -7,6 +7,8 @@ import {
   Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { HistoricoService } from '../archivado/historico.service.js';
+import { TABLAS_ARCHIVABLES } from '../archivado/archivado.tablas.js';
 import { OperacionesService } from '../operaciones/operaciones.service.js';
 import { ServiciosEspecialesService } from '../operaciones/servicios-especiales.service.js';
 import { StorageService } from '../storage/storage.service.js';
@@ -52,7 +54,44 @@ export class SyncService {
     private serviciosEspecialesService: ServiciosEspecialesService,
     private storageService: StorageService,
     @Optional() private notifications?: NotificationsService,
+    /** Para reconocer como ya existentes los servicios que se archivaron a Parquet. Sin él, solo mira la base. */
+    @Optional() private historico?: HistoricoService,
   ) {}
+
+  /**
+   * Idempotencia contra lo ARCHIVADO. El sync evita duplicados mirando si el `clientUuid` ya existe en la base; un servicio ya
+   * archivado (más de 12 meses) ya no está ahí, y si un teléfono reenviara esa mutación se crearía de nuevo.
+   *
+   * Buscar en el archivo en cada creación sería carísimo (casi todas son servicios nuevos), así que solo se mira si la hora de la
+   * mutación (`timestamp`, la del dispositivo) es anterior al corte: un servicio más reciente no pudo haberse archivado. Y entonces
+   * se leen solo los lotes de unos días alrededor de esa hora, no todo el archivo.
+   */
+  private async yaArchivado(tabla: 'servicio_lavado' | 'servicio_especial', criterios: Array<{ columna: string; igual: string }>, marcaDeTiempo: unknown): Promise<{ id: string; syncedAt: Date } | null> {
+    if (!this.historico) return null;
+    const cuando = new Date(Number(marcaDeTiempo));
+    if (!Number.isFinite(cuando.getTime())) return null;
+    const cfg = TABLAS_ARCHIVABLES.find((t) => t.tabla === tabla);
+    if (!cfg) return null;
+    const limite = new Date(Date.now() - cfg.ventanaDias * 24 * 60 * 60 * 1000);
+    const corte = new Date(Date.UTC(limite.getUTCFullYear(), limite.getUTCMonth(), 1));
+    if (cuando >= corte) return null;
+
+    const ventana = 30 * 24 * 60 * 60 * 1000;
+    try {
+      const fila = await this.historico.buscarUno({
+        tabla,
+        desde: new Date(cuando.getTime() - ventana),
+        hasta: new Date(cuando.getTime() + ventana),
+        grupos: [criterios.map((c) => ({ columna: c.columna, igual: c.igual }))],
+      });
+      if (!fila) return null;
+      return { id: String(fila.id), syncedAt: (fila.syncedAt as Date | null) ?? (fila.createdAt as Date) };
+    } catch (e: any) {
+      // Que el archivo no responda no debe tumbar la sincronización de todos los demás servicios.
+      this.logger.warn(`No se pudo consultar el archivo histórico para ${tabla}: ${e?.message ?? e}`);
+      return null;
+    }
+  }
 
   async processPush(body: any, userId: string, headerOpId?: string) {
     const now = new Date();
@@ -217,6 +256,19 @@ export class SyncService {
                 serverAssignedId: existing.id,
                 status: 'ALREADY_EXISTS',
                 syncedAt: existing.syncedAt.toISOString(),
+              });
+              continue;
+            }
+
+            // 1b. Lo mismo si ya se archivó (más de 12 meses): no se vuelve a crear.
+            const archivado = await this.yaArchivado('servicio_lavado', [{ columna: 'clientUuid', igual: String(mut.clientUuid) }], mut.timestamp);
+            if (archivado) {
+              results.push({
+                mutationId: mut.mutationId,
+                clientUuid: mut.clientUuid,
+                serverAssignedId: archivado.id,
+                status: 'ALREADY_EXISTS',
+                syncedAt: archivado.syncedAt.toISOString(),
               });
               continue;
             }
@@ -796,6 +848,23 @@ export class SyncService {
                 syncedAt: (
                   existing.syncedAt || existing.createdAt
                 ).toISOString(),
+              });
+              continue;
+            }
+
+            // Lo mismo si ya se archivó (más de 12 meses): por `clientUuid` o por su código de servicio.
+            const archivadoEspecial = await this.yaArchivado(
+              'servicio_especial',
+              [{ columna: 'clientUuid', igual: String(mut.clientUuid) }, ...(mutData.codigoSE ? [{ columna: 'codigoSE', igual: String(mutData.codigoSE) }] : [])],
+              mut.timestamp,
+            );
+            if (archivadoEspecial) {
+              results.push({
+                mutationId: mut.mutationId,
+                clientUuid: mut.clientUuid,
+                serverAssignedId: archivadoEspecial.id,
+                status: 'ALREADY_EXISTS',
+                syncedAt: archivadoEspecial.syncedAt.toISOString(),
               });
               continue;
             }

@@ -123,6 +123,18 @@ export class ToggleEstadoUsuarioDto {
   estado?: number;
 }
 
+export class AsignarPasswordDto {
+  @ApiProperty({ example: 'uuid-usuario' })
+  @IsString()
+  @IsNotEmpty({ message: 'El ID de usuario es obligatorio' })
+  id: string;
+
+  @ApiProperty({ example: 'Lavado#2026Seco', description: 'Nueva contraseña (mín. 10 caracteres, con mayúscula, minúscula, número y carácter especial)' })
+  @IsString()
+  @IsNotEmpty({ message: 'La contraseña es obligatoria' })
+  password: string;
+}
+
 export class UpdateUsuarioDto {
   @ApiProperty({ example: 'uuid-usuario', description: 'ID del usuario a actualizar' })
   @IsString()
@@ -315,6 +327,11 @@ export class CreateOperadorDto {
   @IsString()
   @IsNotEmpty({ message: 'El nombre completo es obligatorio' })
   nombre: string;
+
+  @ApiProperty({ example: 'Lavado#2026Seco', description: 'Contraseña inicial (mín. 10 caracteres, con mayúscula, minúscula, número y carácter especial)' })
+  @IsString()
+  @IsNotEmpty({ message: 'La contraseña es obligatoria' })
+  password: string;
 
   @ApiPropertyOptional({ example: '1723456789' })
   @IsOptional()

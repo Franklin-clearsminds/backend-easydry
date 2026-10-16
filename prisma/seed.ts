@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ROLES_BASE } from '../src/common/permisos/roles-base.js';
 import { accionesLegacy } from '../src/common/permisos/acciones-legacy.js';
+import { motivoPasswordDebil } from '../src/common/utils/password-politica.js';
 import { modulosDeCapacidades } from '../src/common/permisos/modulos-navegacion.js';
 
 /**
@@ -171,6 +172,11 @@ async function main() {
       lastname: 'EasyDry',
     },
   ];
+  // Las contraseñas de las cuentas de sistema cumplen la misma política que cualquier usuario (la del seed no es una excepción).
+  for (const [variable, c] of [['SEED_SUPERADMIN_PASSWORD', cuentas[0]], ['SEED_ADMIN_PASSWORD', cuentas[1]]] as const) {
+    const motivo = motivoPasswordDebil(c.password, c.email);
+    if (motivo) throw new Error(`${variable} no cumple la política de contraseñas: ${motivo}`);
+  }
   for (const c of cuentas) {
     const existe = await prisma.user.findUnique({ where: { email: c.email } });
     if (existe) continue;

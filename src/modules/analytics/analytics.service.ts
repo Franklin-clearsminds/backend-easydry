@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   DashboardAnalyticsDto,
@@ -12,15 +12,53 @@ import { ServiceStatus } from '@prisma/client';
 import { SIN_RESULTADOS, resolverAlcance } from '../../common/permisos/alcance.js';
 import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
+import { CacheService, huella } from '../../common/cache/cache.service.js';
+import { ServiciosFederados } from '../archivado/servicios-federados.js';
+import { HistoricoService } from '../archivado/historico.service.js';
 
 /** % máximo de descuento permitido sin autorización: por encima se considera "fuera de rango". */
 const UMBRAL_DESCUENTO_PCT = 15;
+
+const TTL_PANEL_VIVO_SEG = 45;
+const TTL_PANEL_CERRADO_SEG = 900; // un periodo cerrado puede recibir servicios sincronizados tarde desde el móvil
 
 @Injectable()
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** Solo para avisar si el periodo toca datos archivados. Sin él nunca se avisa. */
+    @Optional() private readonly historico?: HistoricoService,
+    /** Guarda unos segundos los paneles ya calculados. Sin él, cada visita los recalcula. */
+    @Optional() private readonly cache?: CacheService,
+  ) {
+    this.federados = new ServiciosFederados(prisma, historico);
+  }
+
+  /** Servicios, movimientos y consumos de la base MÁS lo archivado en Parquet que cumple el mismo filtro. */
+  private readonly federados: ServiciosFederados;
+
+  /**
+   * Un panel calculado se guarda un rato: muchos usuarios abren los mismos paneles una y otra vez y cada cálculo recorre miles de
+   * filas. La clave incluye al usuario (su rol y alcance cambian el resultado), el día (los periodos relativos como "hoy" o "este
+   * mes" cambian a medianoche) y todo el filtro. Un periodo ya cerrado casi no cambia (solo por servicios que el móvil sincroniza tarde): dura 15 minutos; el que incluye hoy, menos de un minuto.
+   */
+  private async enCache<T>(nombre: string, dto: any, user: any, calcular: () => Promise<T>): Promise<T> {
+    if (!this.cache) return calcular();
+    let ttl = TTL_PANEL_VIVO_SEG;
+    try {
+      const { hasta } = this.resolverPeriodo(dto ?? {});
+      const inicioHoy = new Date();
+      inicioHoy.setHours(0, 0, 0, 0);
+      if (hasta.getTime() < inicioHoy.getTime()) ttl = TTL_PANEL_CERRADO_SEG;
+    } catch {
+      // Un filtro que no se puede interpretar no se guarda: lo valida el cálculo.
+      return calcular();
+    }
+    const clave = `analytics:${nombre}:${user?.id ?? 'anonimo'}:${this.aFechaISO(new Date())}:${huella(dto ?? {})}`;
+    return this.cache.obtenerOCalcular(clave, ttl, async () => JSON.parse(JSON.stringify(await calcular())) as T);
+  }
 
   private filtroAgencia(user: any, dto: { agenciaId?: string; regionId?: string }): Record<string, unknown> {
     const a = resolverAlcance(user);
@@ -134,6 +172,10 @@ export class AnalyticsService {
   }
 
   async getDashboardMetrics(dto: DashboardAnalyticsDto, user: any) {
+    return this.enCache('getDashboardMetrics', dto, user, () => this.getDashboardMetricsSinCache(dto, user));
+  }
+
+  private async getDashboardMetricsSinCache(dto: DashboardAnalyticsDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
 
@@ -259,7 +301,7 @@ export class AnalyticsService {
     // Filtro por tipo de servicio (generales / especiales), combinable con todo lo anterior.
     if (dto?.categoriaServicio) where.catalogo = { categoria: dto.categoriaServicio };
 
-    const servicios = await this.prisma.servicioLavado.findMany({
+    const servicios = await this.federados.findMany('servicioLavado', {
       where,
       select: {
         horaIngreso: true, horaInicio: true, horaSalida: true, precio: true,
@@ -482,12 +524,12 @@ export class AnalyticsService {
       completadosPeriodo, completadosMes, serviciosPeriodo,
       incidentesPeriodo, mantenimientosPeriodo, stocks, movEnTransito,
     ] = await Promise.all([
-      this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: whereServicios }),
-      this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: whereServiciosMes }),
-      this.prisma.servicioLavado.aggregate({ _sum: { precio: true }, where: whereServiciosAnt }),
-      this.prisma.servicioLavado.count({ where: whereServicios }),
-      this.prisma.servicioLavado.count({ where: whereServiciosMes }),
-      this.prisma.servicioLavado.findMany({
+      this.federados.aggregate('servicioLavado', { _sum: { precio: true }, where: whereServicios }),
+      this.federados.aggregate('servicioLavado', { _sum: { precio: true }, where: whereServiciosMes }),
+      this.federados.aggregate('servicioLavado', { _sum: { precio: true }, where: whereServiciosAnt }),
+      this.federados.count('servicioLavado', { where: whereServicios }),
+      this.federados.count('servicioLavado', { where: whereServiciosMes }),
+      this.federados.findMany('servicioLavado', {
         where: whereServicios,
         select: {
           precio: true, marca: true, modelo: true, color: true, horaInicio: true, horaSalida: true,
@@ -722,7 +764,7 @@ export class AnalyticsService {
         select: { tipo: true, estado: true, montoUSD: true }
       }),
       // Anulaciones de servicios de su alcance registradas hoy
-      this.prisma.servicioLavado.count({
+      this.federados.count('servicioLavado', {
         where: { anuladoEn: { gte: startOfDay, lte: endOfDay }, ...(hayFiltro ? { bahia: { agencia: filtro } } : {}), ...this.filtroCategoria(categoriaServicio) }
       }),
       // Auditoría de decisiones en la agencia (siempre últimos 7 días)
@@ -768,8 +810,8 @@ export class AnalyticsService {
     if (solicitudesDescuento.length > 0) {
       const ids = [...new Set(solicitudesDescuento.map((s) => s.entidadRefId as string))];
       const [servicios, especiales] = await Promise.all([
-        this.prisma.servicioLavado.findMany({ where: { id: { in: ids } }, select: { id: true, precio: true } }),
-        this.prisma.servicioEspecial.findMany({ where: { id: { in: ids } }, select: { id: true, precio: true } }),
+        this.federados.servicioPorId('servicioLavado', ids, { id: true, precio: true }),
+        this.federados.servicioPorId('servicioEspecial', ids, { id: true, precio: true }),
       ]);
       const precioBase = new Map<string, number>();
       for (const s of servicios) if (s.precio !== null) precioBase.set(s.id, Number(s.precio));
@@ -926,7 +968,7 @@ export class AnalyticsService {
     const base30 = hayFiltro ? { bahia: { agencia: filtro } } : {};
     const catFiltro = this.filtroCategoria(categoriaServicio);
     const [servicios30Dias, serviciosHoy, solicitudesComerciales] = await Promise.all([
-      this.prisma.servicioLavado.findMany({
+      this.federados.findMany('servicioLavado', {
         where: { horaIngreso: { gte: hace30Dias, lte: endOfDay }, ...base30, ...catFiltro },
         select: {
           horaIngreso: true, horaInicio: true, horaSalida: true, estado: true, marca: true,
@@ -934,7 +976,7 @@ export class AnalyticsService {
           consumos: { select: { cantidadUsada: true } },
         },
       }),
-      this.prisma.servicioLavado.count({ where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, ...base30, ...catFiltro } }),
+      this.federados.count('servicioLavado', { where: { horaIngreso: { gte: startOfDay, lte: endOfDay }, ...base30, ...catFiltro } }),
       this.prisma.solicitudAprobacion.findMany({
         where: { tipo: { in: ['SERVICIO_ESPECIAL_PRECIO', 'DESCUENTO'] }, createdAt: { gte: hace30Dias, lte: endOfDay }, ...(hayFiltro ? { agencia: filtro } : {}) },
         select: { tipo: true, estado: true, createdAt: true },
@@ -1008,7 +1050,7 @@ export class AnalyticsService {
     const alcanceMaq = hayFiltro ? { agencia: filtro } : {};
 
     const [serviciosHoy, totalLavadosHoy, incidentesAbiertos, alertasPendientes, maquinariasStats, todosIncidentes30Dias, incidentesActivosList, mantenimientosVencidos] = await Promise.all([
-      this.prisma.servicioLavado.findMany({
+      this.federados.findMany('servicioLavado', {
         where: servicioWhere,
         select: {
           id: true, estado: true, horaIngreso: true, horaInicio: true, horaSalida: true, marca: true,
@@ -1017,7 +1059,7 @@ export class AnalyticsService {
           consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true } } } },
         },
       }),
-      this.prisma.servicioLavado.count({ where: servicioWhere }),
+      this.federados.count('servicioLavado', { where: servicioWhere }),
       this.prisma.incidenteTecnico.count({ where: { estado: { notIn: ['RESUELTO', 'CANCELADO'] }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}), ...incPulidor } }),
       this.prisma.alertaStock.findMany({
         where: {
@@ -1286,13 +1328,17 @@ export class AnalyticsService {
   }
 
   async getConsumoQuimicos(dto: ConsumoQuimicosAnalyticsDto, user: any) {
+    return this.enCache('getConsumoQuimicos', dto, user, () => this.getConsumoQuimicosSinCache(dto, user));
+  }
+
+  private async getConsumoQuimicosSinCache(dto: ConsumoQuimicosAnalyticsDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const { desde: fechaDesde, hasta: fechaHasta } = this.periodoDeFiltro(dto);
     const where: any = { createdAt: { gte: fechaDesde, lte: fechaHasta } };
     if (hayFiltro) { const agencias = await this.prisma.agencia.findMany({ where: filtro as any, select: { id: true } }); where.agenciaId = { in: agencias.map(a => a.id) }; }
 
-    const consumos = await this.prisma.consumoServicio.findMany({
+    const consumos = await this.federados.consumos({
       where, include: {
         insumo: { select: { id: true, codigoSKU: true, nombre: true, categoria: true, costoUnitarioUSD: true, unidadMedida: { select: { simbolo: true } } } },
         servicio: { select: { bahia: { select: { agencia: { select: { nombre: true } } } } } },
@@ -1359,13 +1405,17 @@ export class AnalyticsService {
   }
 
   async getRankingLavadores(dto: RankingLavadoresDto, user: any) {
+    return this.enCache('getRankingLavadores', dto, user, () => this.getRankingLavadoresSinCache(dto, user));
+  }
+
+  private async getRankingLavadoresSinCache(dto: RankingLavadoresDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const { desde: fechaDesde, hasta: fechaHasta } = this.periodoDeFiltro(dto);
     const where: any = { estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] }, horaIngreso: { gte: fechaDesde, lte: fechaHasta }, ...this.filtroCategoria(dto?.categoriaServicio) };
     if (hayFiltro) where.bahia = { agencia: filtro };
 
-    const servicios = await this.prisma.servicioLavado.findMany({ 
+    const servicios = await this.federados.findMany('servicioLavado', { 
       where, 
       select: { 
         operadorId: true, horaIngreso: true, horaSalida: true, 
@@ -1400,13 +1450,17 @@ export class AnalyticsService {
   }
 
   async getRankingPulidores(dto: RankingLavadoresDto, user: any) {
+    return this.enCache('getRankingPulidores', dto, user, () => this.getRankingPulidoresSinCache(dto, user));
+  }
+
+  private async getRankingPulidoresSinCache(dto: RankingLavadoresDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const { desde: fechaDesde, hasta: fechaHasta } = this.periodoDeFiltro(dto);
     const where: any = { estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] }, horaIngreso: { gte: fechaDesde, lte: fechaHasta }, ...this.filtroCategoria(dto?.categoriaServicio) };
     if (hayFiltro) where.bahia = { agencia: filtro };
 
-    const servicios = await this.prisma.servicioLavado.findMany({ 
+    const servicios = await this.federados.findMany('servicioLavado', { 
       where, 
       select: { 
         operadorId: true, 
@@ -1452,6 +1506,10 @@ export class AnalyticsService {
   // Datos reales: incidentes, mantenimientos, maquinaria, costos de reparación
   // ═══════════════════════════════════════════════════════════════════════
   async getDashboardTaller(dto: DashboardDedicadoDto, user: any) {
+    return this.enCache('getDashboardTaller', dto, user, () => this.getDashboardTallerSinCache(dto, user));
+  }
+
+  private async getDashboardTallerSinCache(dto: DashboardDedicadoDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const maqWhere = hayFiltro ? { agencia: filtro } : {};
@@ -1630,6 +1688,10 @@ export class AnalyticsService {
   // Datos reales: stock, alertas, movimientos de inventario, despachos pendientes
   // ═══════════════════════════════════════════════════════════════════════
   async getDashboardBodega(dto: DashboardDedicadoDto, user: any) {
+    return this.enCache('getDashboardBodega', dto, user, () => this.getDashboardBodegaSinCache(dto, user));
+  }
+
+  private async getDashboardBodegaSinCache(dto: DashboardDedicadoDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const { desde: desdePeriodo, hasta: endOfDay } = this.resolverPeriodo(dto);
@@ -1674,7 +1736,7 @@ export class AnalyticsService {
         include: { insumo: { select: { nombre: true, categoria: true } }, agencia: { select: { nombre: true } }, pulidor: { select: { name: true, lastname: true, agenciaId: true } } },
         orderBy: [{ nivel: 'desc' }, { createdAt: 'desc' }],
       }),
-      this.prisma.movimientoInventario.findMany({
+      this.federados.findMany('movimientoInventario', {
         where: movWhere,
         select: { 
           tipo: true, 
@@ -1703,7 +1765,7 @@ export class AnalyticsService {
 
     // Cobertura: cuántos días dura el stock actual al ritmo de consumo real (servicios) de los últimos 30 días.
     const hace30 = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-    const consumo30 = await this.prisma.consumoServicio.groupBy({
+    const consumo30 = await this.federados.consumoPorInsumo({
       by: ['insumoId'],
       where: { createdAt: { gte: hace30 }, ...(agenciaIds ? { agenciaId: { in: agenciaIds } } : {}) },
       _sum: { cantidadUsada: true },
@@ -1980,6 +2042,10 @@ export class AnalyticsService {
   // Datos reales: ServicioEspecial, tiempos efectivos, estados, tipos, calidad
   // ═══════════════════════════════════════════════════════════════════════
   async getDashboardEspeciales(dto: DashboardDedicadoDto, user: any) {
+    return this.enCache('getDashboardEspeciales', dto, user, () => this.getDashboardEspecialesSinCache(dto, user));
+  }
+
+  private async getDashboardEspecialesSinCache(dto: DashboardDedicadoDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const { desde: startOfDay, hasta: endOfDay } = this.resolverPeriodo(dto);
@@ -2003,13 +2069,13 @@ export class AnalyticsService {
 
     const [serviciosHoy, servicios30Dias, serviciosPendientes, lavados30Dias] = await Promise.all([
       incluirEspeciales
-        ? this.prisma.servicioEspecial.findMany({
+        ? this.federados.findMany('servicioEspecial', {
             where: { ...seWhere, createdAt: { gte: startOfDay, lte: endOfDay } },
             select: { estado: true, tipoServicio: true, tiempoEfectivoSeg: true, calificacionCalidad: true, precio: true, prioridad: true },
           })
         : Promise.resolve([]),
       incluirEspeciales
-        ? this.prisma.servicioEspecial.findMany({
+        ? this.federados.findMany('servicioEspecial', {
             where: { ...seWhere, createdAt: ventana },
             select: {
               estado: true, tipoServicio: true, tiempoEfectivoSeg: true,
@@ -2020,7 +2086,7 @@ export class AnalyticsService {
           })
         : Promise.resolve([]),
       incluirEspeciales
-        ? this.prisma.servicioEspecial.findMany({
+        ? this.federados.findMany('servicioEspecial', {
             where: { ...seWhere, estado: { in: ['Pendiente', 'En Proceso'] } },
             select: { estado: true, prioridad: true, tipoServicio: true, placa: true, clienteNombre: true, fechaProgramada: true },
             orderBy: [{ prioridad: 'desc' }, { fechaProgramada: 'asc' }],
@@ -2028,7 +2094,7 @@ export class AnalyticsService {
           })
         : Promise.resolve([]),
       incluirGenerales
-        ? this.prisma.servicioLavado.findMany({
+        ? this.federados.findMany('servicioLavado', {
             where: slWhere,
             select: {
               estado: true,

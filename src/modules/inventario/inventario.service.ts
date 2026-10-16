@@ -42,12 +42,18 @@ import {
   patronContiene,
   rangoFechas,
   type OrdenColumnas,
+  resolverCampoOrden,
   resolverOrden,
   resolverOrdenSql,
   resolverPaginacion,
   textoBusqueda,
   whereBusqueda,
 } from '../../common/utils/data-grid.helpers.js';
+import { HistoricoService } from '../archivado/historico.service.js';
+import { ServiciosFederados } from '../archivado/servicios-federados.js';
+import { KardexArchivo } from './kardex-archivo.js';
+import { MovimientosGlobalesArchivo } from './movimientos-globales-archivo.js';
+import { DespachosArchivo } from './despachos-archivo.js';
 
 /** Orden permitido de los catálogos de configuración (paginados): nombre público → columna. `fecha` = creación. */
 const ORDEN_TIPOS_PRODUCTO = columnasSimples({ codigo: 'codigo', nombre: 'nombre', estado: 'estado', fecha: 'createdAt' });
@@ -179,10 +185,10 @@ interface ContextoDespachos {
   esSuperAdmin: boolean;
   esAdmin: boolean;
   /** Agencia destino a la que se limita el listado (ids y patrones `ILIKE` ya escapados). */
-  agencia: { ids: string[]; patrones: string[] } | null;
+  agencia: { ids: string[]; patrones: string[]; terminos: string[] } | null;
   pulidorId: string | null;
   /** Asistente de bodega: sus envíos, los de su bodega y los de su región. */
-  regional: { usuarioId: string; bodegaId: string | null; patrones: string[] } | null;
+  regional: { usuarioId: string; bodegaId: string | null; patrones: string[]; terminos: string[] } | null;
   estado: string | null;
   guia: string | null;
   desde: Date | null;
@@ -246,6 +252,8 @@ export class InventarioService {
   constructor(
     private prisma: PrismaService,
     @Optional() private notifications?: NotificationsService,
+    /** Suma al listado de Kardex lo que ya se archivó a Parquet. Sin él, el listado lee solo de la base. */
+    @Optional() private historico?: HistoricoService,
   ) {}
 
   /** Destinatarios del aviso de "despacho en camino", según el tipo ya resuelto en `crearDespacho`. */
@@ -3682,7 +3690,15 @@ export class InventarioService {
     const orden = resolverOrdenSql(dto.sortField, dto.sortOrder, ORDEN_DESPACHOS_SQL, { campo: 'fecha', dir: 'desc' }, 'm."id"');
     const nLimite = filtro.params.length + 1;
 
-    const [filas, conteo, resumen] = await Promise.all([
+    // Si el listado toca despachos ya archivados (más de 12 meses, en estado final), se suman a los de la base con el mismo alcance,
+    // filtros, búsqueda y orden. Si no, la consulta es exactamente la de siempre.
+    const pedida = dto.sortField && Object.prototype.hasOwnProperty.call(ORDEN_DESPACHOS_SQL, dto.sortField) ? dto.sortField : null;
+    const campoOrden = pedida ?? 'fecha';
+    const dirOrden: 'asc' | 'desc' = pedida ? (String(dto.sortOrder).toLowerCase() === 'asc' ? 'asc' : 'desc') : 'desc';
+    const despachosArchivo = this.historico ? new DespachosArchivo(this.prisma, this.historico) : null;
+    const archivado = despachosArchivo ? await despachosArchivo.consultar({ ctx, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [filasBase, conteo, resumenBase] = await Promise.all([
       this.prisma.$queryRawUnsafe(
         `SELECT m."id", m."numeroGuia", m."tipo"::text AS "tipo", m."estadoDespacho"::text AS "estadoDespacho",
                 m."origenUbicacion", m."destinoUbicacion", m."fechaDespacho", m."fechaRecepcion",
@@ -3693,8 +3709,9 @@ export class InventarioService {
          ORDER BY ${orden}
          LIMIT $${nLimite} OFFSET $${nLimite + 1}`,
         ...filtro.params,
-        take,
-        skip,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        archivado ? skip + take : take,
+        archivado ? 0 : skip,
       ) as Promise<any[]>,
       this.prisma.$queryRawUnsafe(
         `SELECT COUNT(*)::int AS "total" FROM "MovimientoInventario" m WHERE ${filtro.sql}`,
@@ -3703,8 +3720,23 @@ export class InventarioService {
       dto.incluirResumen ? this.resumenDespachos(ctx) : Promise.resolve(undefined),
     ]);
 
-    const total = Number(conteo?.[0]?.total ?? 0);
-    const items = await this.armarDespachos(filas, ctx);
+    const total = Number(conteo?.[0]?.total ?? 0) + (archivado?.total ?? 0);
+    const filas = archivado && despachosArchivo ? despachosArchivo.mezclar(filasBase, archivado.filas, campoOrden, dirOrden, skip, take) : filasBase;
+    const idsArchivados = new Set((archivado?.filas ?? []).map((f) => String(f.id)));
+    const detallesArchivados = archivado && despachosArchivo ? await despachosArchivo.detallesDe(filas.filter((f) => idsArchivados.has(String(f.id))), ctx) : [];
+    const items = await this.armarDespachos(filas, ctx, detallesArchivados);
+
+    // Las tarjetas de la pantalla también cuentan lo archivado.
+    let resumen = resumenBase;
+    const porEstadoArchivado = resumenBase && despachosArchivo ? await despachosArchivo.resumen(ctx) : null;
+    if (resumenBase && porEstadoArchivado) {
+      resumen = {
+        enTransito: resumenBase.enTransito + (porEstadoArchivado['EN_TRANSITO'] ?? 0) + (porEstadoArchivado['PENDIENTE'] ?? 0),
+        recibidos: resumenBase.recibidos + (porEstadoArchivado['RECIBIDO'] ?? 0),
+        rechazados: resumenBase.rechazados + (porEstadoArchivado['RECHAZADO'] ?? 0),
+        total: resumenBase.total + Object.values(porEstadoArchivado).reduce((a, b) => a + b, 0),
+      };
+    }
     return { items, total, page, pageSize, resumen };
   }
 
@@ -3758,6 +3790,7 @@ export class InventarioService {
       agencia = {
         ids: [...new Set([filtroAgencia, ...(ag ? [ag.id] : [])])],
         patrones: [...new Set(terminos)].map(patronContiene),
+        terminos: [...new Set(terminos)],
       };
     }
 
@@ -3792,6 +3825,7 @@ export class InventarioService {
         usuarioId: viewer.id,
         bodegaId: viewer.bodegaId || null,
         patrones: [...new Set(terminos.filter(Boolean))].map(patronContiene),
+        terminos: [...new Set(terminos.filter(Boolean))],
       };
     }
 
@@ -3871,7 +3905,7 @@ export class InventarioService {
   }
 
   /** Agrega detalles, responsables y datos derivados a las filas de la página (3 consultas en total, sin importar el tamaño). */
-  private async armarDespachos(filas: any[], ctx: ContextoDespachos): Promise<any[]> {
+  private async armarDespachos(filas: any[], ctx: ContextoDespachos, detallesArchivados: any[] = []): Promise<any[]> {
     if (!filas.length) return [];
     const ids = filas.map((h) => String(h.id));
     const userIds = [
@@ -3888,7 +3922,9 @@ export class InventarioService {
     ]);
     const userPorId = new Map(users.map((u) => [u.id, u]));
     const detallesPorMov = new Map<string, any[]>();
-    for (const d of detalles) {
+    // El detalle no guarda cuándo se creó, así que su orden original se pierde al archivar: se ordena igual para los dos orígenes
+    // (por producto y luego por id) y el despacho se ve igual antes y después de archivarse.
+    for (const d of [...detalles, ...detallesArchivados].sort((a, b) => String(a.insumo?.nombre ?? '').localeCompare(String(b.insumo?.nombre ?? ''), 'es') || String(a.id).localeCompare(String(b.id)))) {
       const arr = detallesPorMov.get(d.movimientoId) || [];
       arr.push(d);
       detallesPorMov.set(d.movimientoId, arr);
@@ -4046,7 +4082,8 @@ export class InventarioService {
       if (dto.fechaHasta) where.fechaDespacho.lte = new Date(dto.fechaHasta);
     }
 
-    return this.prisma.movimientoInventario.findMany({
+    // Base y archivo (los despachos de más de 12 meses ya cerrados están en Parquet).
+    return new ServiciosFederados(this.prisma, this.historico).findMany('movimientoInventario', {
       where,
       take: PAGE_SIZE_MAX,
       orderBy: { fechaDespacho: 'desc' },
@@ -4523,11 +4560,18 @@ export class InventarioService {
     const where = this.aplicarFiltroUbicacionKardex(combinarWhere(extra, busqueda) as any, scope, 'usuarioId');
     const orderBy = resolverOrden(dto.sortField, dto.sortOrder, ORDEN_KARDEX, { campo: 'fecha', dir: 'desc' });
 
-    const [items, total] = await Promise.all([
+    // Si el rango toca datos ya archivados, se suman a los de la base con el mismo filtro, búsqueda, alcance y orden. Si no, la
+    // consulta es exactamente la de siempre.
+    const { campo: campoOrden, dir: dirOrden } = resolverCampoOrden(dto.sortField, dto.sortOrder, ORDEN_KARDEX, { campo: 'fecha', dir: 'desc' });
+    const kardexArchivo = this.historico ? new KardexArchivo(this.prisma, this.historico) : null;
+    const archivado = kardexArchivo ? await kardexArchivo.consultar({ dto, alcance: scope, desde, hasta, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [itemsBase, totalBase] = await Promise.all([
       this.prisma.kardexMovimiento.findMany({
         where: where as any,
-        skip,
-        take,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        skip: archivado ? 0 : skip,
+        take: archivado ? skip + take : take,
         orderBy: orderBy as any,
         include: {
           insumo: {
@@ -4546,6 +4590,8 @@ export class InventarioService {
       }),
       this.prisma.kardexMovimiento.count({ where: where as any }),
     ]);
+    const items = archivado && kardexArchivo ? kardexArchivo.mezclar(itemsBase as any[], archivado.filas, campoOrden, dirOrden, skip, take) : itemsBase;
+    const total = totalBase + (archivado?.total ?? 0);
 
     // El id de la ubicación no le dice nada a la app: se expone también su nombre (agencia o bodega).
     const idsUnicos = [...new Set(items.map((i: any) => i.ubicacionId).filter(Boolean))];
@@ -5312,11 +5358,18 @@ export class InventarioService {
       ? combinarWhere(whereSinTipo, { tipoMovimientoId: dto.tipoMovimientoId })
       : whereSinTipo;
 
-    const [items, total] = await Promise.all([
+    // Si el rango toca datos ya archivados, se suman a los de la base con el mismo alcance, filtros, búsqueda y orden. Si no, la
+    // consulta es exactamente la de siempre.
+    const { campo: campoOrden, dir: dirOrden } = resolverCampoOrden(dto.sortField, dto.sortOrder, ORDEN_MOVIMIENTOS_GLOBALES, { campo: 'fecha', dir: 'desc' });
+    const globalesArchivo = this.historico ? new MovimientosGlobalesArchivo(this.prisma, this.historico) : null;
+    const archivado = globalesArchivo ? await globalesArchivo.consultar({ dto, alcance: scope, desde, hasta, campo: campoOrden, dir: dirOrden, skip, take }) : null;
+
+    const [itemsBase, totalBase] = await Promise.all([
       this.prisma.movimientoInventarioGlobal.findMany({
         where,
-        skip,
-        take,
+        // Con archivo, la página se arma mezclando: de la base hacen falta las primeras `skip + take` filas.
+        skip: archivado ? 0 : skip,
+        take: archivado ? skip + take : take,
         orderBy: orderBy as any,
         include: {
           insumo: {
@@ -5336,6 +5389,8 @@ export class InventarioService {
       }),
       this.prisma.movimientoInventarioGlobal.count({ where }),
     ]);
+    const items = archivado && globalesArchivo ? globalesArchivo.mezclar(itemsBase as any[], archivado.filas, campoOrden, dirOrden, skip, take) : itemsBase;
+    const total = totalBase + (archivado?.total ?? 0);
 
     // Rutas persistidas (columnas nuevas) + fallback por tipo/ubicación
     const rutaById = new Map<string, { origen?: string | null; destino?: string | null }>();
@@ -5355,6 +5410,10 @@ export class InventarioService {
           });
         }
       } catch (_) {}
+      // Las filas archivadas ya no están en la base: su ruta guardada viene en la propia fila.
+      for (const i of items as any[]) {
+        if (!rutaById.has(i.id)) rutaById.set(i.id, { origen: i.origenUbicacion, destino: i.destinoUbicacion });
+      }
     }
 
     const ubicacionIds = [...new Set(items.map((i) => i.ubicacionId).filter(Boolean) as string[])];
@@ -5432,6 +5491,12 @@ export class InventarioService {
       for (const fila of porTipoRows) {
         porTipo[fila.tipoMovimientoId] = fila._count._all;
         totalResumen += fila._count._all;
+      }
+      // Lo archivado también cuenta en el resumen.
+      const porTipoArchivado = globalesArchivo ? await globalesArchivo.resumen({ dto, alcance: scope, desde, hasta }) : null;
+      for (const [tipo, n] of Object.entries(porTipoArchivado ?? {})) {
+        porTipo[tipo] = (porTipo[tipo] ?? 0) + n;
+        totalResumen += n;
       }
       respuesta['resumen'] = { porTipo, total: totalResumen };
     }

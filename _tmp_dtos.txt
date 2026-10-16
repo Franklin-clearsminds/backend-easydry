@@ -1,0 +1,28 @@
+describe('ListInsumosDto', () => {
+  it('no fija page/pageSize, acepta niveles válidos y rechaza otros', async () => {
+    const vacio: any = plainToInstance(ListInsumosDto, {});
+    expect(vacio.page).toBeUndefined();
+    expect(await validate(vacio)).toHaveLength(0);
+    expect(await validate(plainToInstance(ListInsumosDto, { page: '2', pageSize: 50, nivelStock: 'alerta_total', sortField: 'stock', sortOrder: 'asc' }))).toHaveLength(0);
+    expect((await validate(plainToInstance(ListInsumosDto, { nivelStock: 'inventado' }))).length).toBeGreaterThan(0);
+  });
+});
+
+describe('categoria de insumo — @IsIn', () => {
+  const base = { codigoSKU: 'SKU-1', nombre: 'Insumo', unidadMedidaId: 'u1', stockMinimoBodega: 1, stockMinimoAgencia: 1, stockOptimoBodega: 2 };
+
+  it('CreateInsumoDto acepta una categoría válida del catálogo y rechaza cualquier otra', async () => {
+    const valido = plainToInstance(CreateInsumoDto, { ...base, categoria: 'QUIMICOS_LAVADO' });
+    expect(await validate(valido)).toHaveLength(0);
+
+    const invalido = plainToInstance(CreateInsumoDto, { ...base, categoria: 'GENERAL' });
+    const errores = await validate(invalido);
+    expect(errores.some((e) => e.property === 'categoria')).toBe(true);
+  });
+
+  it('UpdateInsumoDto rechaza una categoría fuera del catálogo', async () => {
+    const invalido = plainToInstance(UpdateInsumoDto, { id: 'i1', categoria: 'OTRA' });
+    const errores = await validate(invalido);
+    expect(errores.some((e) => e.property === 'categoria')).toBe(true);
+  });
+});

@@ -85,7 +85,6 @@ model Role {
 
   users User[]
 
-  @@index([namerol])
   @@index([estado])
   @@map("roles")
 }
@@ -187,7 +186,6 @@ model User {
   auditorias5sRealizadas         Auditoria5s[]                @relation("Auditoria5sAuditor")
   sesionesRefresh                RefreshSession[]
 
-  @@index([email])
   @@index([roleId])
   @@index([agenciaId])
   @@index([regionId])
@@ -342,6 +340,7 @@ model RecetaInsumo {
   @@unique([catalogoServicioId, insumoId])
   @@index([catalogoServicioId])
   @@index([insumoId])
+  @@index([unidadConsumoId])
 }
 
 model ServicioLavado {
@@ -404,10 +403,10 @@ model ServicioLavado {
   @@index([ordenTrabajoOT])
   @@index([estado])
   @@index([bahiaId])
-  @@index([clientUuid])
   @@index([servicioCatalogoId, estado, horaSalida])
   @@index([updatedAt])
   @@index([deletedAt])
+  @@index([operadorId])
 }
 
 // -----------------------------------------------------------------------
@@ -495,6 +494,8 @@ model RecetaInsumoHistorial {
 
   @@index([catalogoServicioId])
   @@index([loteId])
+  @@index([insumoId])
+  @@index([usuarioId])
 }
 
 model SyncOutboxAudit {
@@ -527,7 +528,6 @@ model TipoEnvase {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -542,7 +542,6 @@ model TipoProducto {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -562,7 +561,6 @@ model UnidadMedida {
   createdAt           DateTime                     @default(now())
   updatedAt           DateTime                     @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -583,6 +581,7 @@ model PresentacionInsumo {
 
   @@index([insumoId])
   @@index([estado])
+  @@index([unidadId])
 }
 
 // 2.2 Catálogo de Tipos de Movimiento de Inventario
@@ -598,7 +597,6 @@ model TipoMovimientoInventario {
   createdAt   DateTime                     @default(now())
   updatedAt   DateTime                     @updatedAt
 
-  @@index([codigo])
   @@index([estado])
 }
 
@@ -615,8 +613,8 @@ model MotivoMovimientoInventario {
   createdAt        DateTime                     @default(now())
   updatedAt        DateTime                     @updatedAt
 
-  @@index([codigo])
   @@index([estado])
+  @@index([tipoMovimientoId])
 }
 
 // 2.4 Movimientos de Inventario Globales (Kardex Detallado y Trazable)
@@ -655,6 +653,10 @@ model MovimientoInventarioGlobal {
   @@index([insumoId])
   @@index([tipoMovimientoId])
   @@index([fechaMovimiento])
+  @@index([unidadId])
+  @@index([presentacionId])
+  @@index([responsableId])
+  @@index([motivoId])
 }
 
 // 3. Catálogo Maestro de Insumos
@@ -698,10 +700,10 @@ model Insumo {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([codigoSKU])
   @@index([categoria])
   @@index([tipoProductoId])
   @@index([estado])
+  @@index([unidadMedidaId])
 }
 
 // 4. Existencias Multi-Ubicación
@@ -823,7 +825,6 @@ model MovimientoInventario {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([numeroGuia])
   @@index([tipo])
   @@index([estadoDespacho])
   @@index([origenBodegaId])
@@ -831,6 +832,8 @@ model MovimientoInventario {
   @@index([destinoBodegaId])
   @@index([destinoAgenciaId])
   @@index([destinoPulidorId])
+  @@index([usuarioDespachaId])
+  @@index([usuarioRecibeId])
 }
 
 /// Lo que no llegó en una recepción parcial: queda retenido hasta que la bodega de origen lo devuelva o lo dé de baja.
@@ -855,6 +858,7 @@ model FaltanteDespacho {
 
   @@index([estado])
   @@index([movimientoId])
+  @@index([insumoId])
 }
 
 /// Fotos opcionales de la recepción, el rechazo o la resolución de un faltante de envío.
@@ -882,6 +886,9 @@ model MovimientoDetalle {
   cantidadRecibida Decimal?             @db.Decimal(10, 3)
   costoUnitarioUSD Decimal?             @db.Decimal(10, 2)
   subtotalUSD      Decimal?             @db.Decimal(10, 2)
+
+  @@index([movimientoId])
+  @@index([insumoId])
 }
 
 // 6. Alertas de Desabastecimiento
@@ -927,6 +934,8 @@ model AlertaStock {
   @@index([nivel])
   @@index([agenciaId])
   @@index([pulidorId])
+  @@index([insumoId])
+  @@index([usuarioEmisorId])
 }
 
 // =========================================================================
@@ -965,7 +974,6 @@ model SyncDevice {
   updatedAt  DateTime @updatedAt
 
   @@index([userId])
-  @@index([deviceId])
 }
 
 // =========================================================================
@@ -991,6 +999,7 @@ enum TipoNotificacion {
   USUARIO_ACTUALIZADO
   DESPACHO_CONFIRMADO
   DESPACHO_FALTANTE
+  ARCHIVADO_FALLIDO
 }
 
 model Notification {
@@ -1086,6 +1095,8 @@ model Maquinaria {
   @@index([bahiaId])
   @@index([operadorAsignadoId])
   @@index([activa])
+  @@index([creadoPorId])
+  @@index([desactivadoPorId])
 }
 
 /// Línea de tiempo append-only de cada máquina (nunca se borra).
@@ -1138,6 +1149,7 @@ model LimpiezaMaquinaria {
   @@unique([maquinariaId, fecha])
   @@index([maquinariaId])
   @@index([fecha])
+  @@index([registradoPorId])
 }
 
 model IncidenteTecnico {
@@ -1180,6 +1192,7 @@ model IncidenteTecnico {
   @@index([gravedad])
   @@index([tecnicoAsignadoId])
   @@index([destinoTallerId])
+  @@index([resueltoPorId])
 }
 
 model EvidenciaIncidente {
@@ -1243,6 +1256,8 @@ model MantenimientoMaquinaria {
   @@index([tipo])
   @@index([estado])
   @@index([fechaProgramada])
+  @@index([creadoPorId])
+  @@index([ejecutadoPorId])
 }
 
 model EvidenciaMantenimiento {
@@ -1290,6 +1305,7 @@ model MovimientoMaquinaria {
   @@index([origenAgenciaId])
   @@index([destinoAgenciaId])
   @@index([fecha])
+  @@index([usuarioId])
 }
 
 // =========================================================================
@@ -1316,6 +1332,7 @@ model KardexMovimiento {
   @@index([ubicacionId])
   @@index([tipoMovimiento])
   @@index([fecha])
+  @@index([usuarioId])
 }
 
 // =========================================================================
@@ -1344,6 +1361,8 @@ model SolicitudAprobacion {
   @@index([estado])
   @@index([agenciaId])
   @@index([tipo])
+  @@index([solicitanteId])
+  @@index([aprobadorId])
 }
 
 // =========================================================================
@@ -1366,6 +1385,7 @@ model HistorialAsignacionBahia {
   @@index([operadorId])
   @@index([bahiaId])
   @@index([fechaInicio])
+  @@index([asignadoPorId])
 }
 
 // =========================================================================
@@ -1389,6 +1409,7 @@ model BahiaOperador {
   @@index([bahiaId])
   @@index([operadorId])
   @@index([activo])
+  @@index([asignadoPorId])
 }
 
 model ServicioLavadoOperador {
@@ -1470,8 +1491,6 @@ model ServicioEspecial {
 
   consumos ConsumoServicioEspecial[]
 
-  @@index([clientUuid])
-  @@index([codigoSE])
   @@index([ordenTrabajoOT])
   @@index([estado])
   @@index([placa])
@@ -1479,6 +1498,7 @@ model ServicioEspecial {
   @@index([operadorId])
   @@index([regionId])
   @@index([operadorId, estado, fechaFin])
+  @@index([servicioCatalogoId])
 }
 
 model ServicioEspecialOperador {
@@ -1695,7 +1715,7 @@ model InformeInspeccion {
   destinatarioNombre      String
   fecha                   DateTime  @db.Date
   fechaVisita             DateTime
-  /// RUTINA | SEGUIMIENTO | EXTRAORDINARIA | CIERRE_MENSUAL
+  /// Tipo de informe: RUTINA | SEGUIMIENTO | EXTRAORDINARIA | CIERRE_MENSUAL | APERTURA_AGENCIA | CIERRE_AGENCIA | NOVEDADES
   tipoInspeccion          String    @default("RUTINA")
   /// BORRADOR | EN_REVISION | PENDIENTE_FIRMAS | APROBADO | RECHAZADO | CERRADO
   estado                  String    @default("BORRADOR")
@@ -1841,38 +1861,38 @@ model InformeHistorial {
 // (src/modules/auditorias/auditoria5s.reglas.ts). El resultado y el semáforo los calcula siempre el servidor.
 // =========================================================================
 model Auditoria5s {
-  id                 String    @id @default(uuid())
+  id                   String    @id @default(uuid())
   /// Identificador legible y único: A5S-AAAA-NNNN
-  codigo             String    @unique
-  agenciaId          String
-  agencia            Agencia   @relation(fields: [agenciaId], references: [id])
-  auditorId          String
-  auditor            User      @relation("Auditoria5sAuditor", fields: [auditorId], references: [id])
-  responsableAgencia String    @default("")
+  codigo               String    @unique
+  agenciaId            String
+  agencia              Agencia   @relation(fields: [agenciaId], references: [id])
+  auditorId            String
+  auditor              User      @relation("Auditoria5sAuditor", fields: [auditorId], references: [id])
+  responsableAgencia   String    @default("")
   /// LAVADO | ASPIRADO | SECADO | ALMACENAMIENTO | ADMINISTRACION
-  area               String
+  area                 String
   /// Formato del checklist: LISTA_20 (20 criterios 0-5) | PUNTOS_25 (25 criterios 0-4) | SI_NO_50 (cuestionario SI/NO). Cada formato se guarda por separado.
-  formato            String   @default("LISTA_20")
+  formato              String    @default("LISTA_20")
   /// Las auditorías de una misma visita (distintos formatos) comparten este id y los datos de la visita
-  grupoId            String?
+  grupoId              String?
   /// «Equipo o persona» auditada (encabezado del formato de 25 criterios)
-  equipoPersona      String   @default("")
+  equipoPersona        String    @default("")
   /// Comentarios / acciones por cada S: { SEIRI: "…", SEITON: "…" }
   comentariosCategoria Json?
-  fecha              DateTime  @db.Date
+  fecha                DateTime  @db.Date
   /// BORRADOR | EN_PROCESO | FINALIZADA | CERRADA
-  estado             String    @default("BORRADOR")
-  comentarios        String    @default("")
+  estado               String    @default("BORRADOR")
+  comentarios          String    @default("")
   /// Se fijan al finalizar (puntaje total sobre 100); mientras tanto se calculan al leer
-  puntaje            Int?
-  porcentaje         Float?
+  puntaje              Int?
+  porcentaje           Float?
   /// VERDE (≥90 %) | AMARILLO (75 a <90 %) | ROJO (<75 %)
-  semaforo           String?
-  finalizadaEn       DateTime?
-  cerradaEn          DateTime?
-  deletedAt          DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  semaforo             String?
+  finalizadaEn         DateTime?
+  cerradaEn            DateTime?
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   respuestas Auditoria5sRespuesta[]
   acciones   Auditoria5sAccion[]
@@ -1953,4 +1973,72 @@ model Auditoria5sHistorial {
   createdAt      DateTime    @default(now())
 
   @@index([auditoriaId, createdAt])
+}
+
+// -----------------------------------------------------------------------
+// Archivado de datos viejos a Parquet en S3 (ver src/modules/archivado).
+// Una corrida del job semanal puede subir varios lotes; cada lote es un archivo .parquet verificado antes de borrar de la base.
+// -----------------------------------------------------------------------
+model ArchivadoCorrida {
+  id        String          @id @default(uuid())
+  inicio    DateTime        @default(now())
+  fin       DateTime?
+  /// EN_CURSO | OK | ERROR
+  estado    String          @default("EN_CURSO")
+  /// En simulacro no se sube ni se borra nada: solo se informa qué se haría.
+  simulacro Boolean         @default(false)
+  /// Por tabla: filas archivadas, borradas, purgadas y errores.
+  resumen   Json?
+  error     String?
+  lotes     ArchivadoLote[]
+
+  @@index([inicio])
+  @@map("archivado_corridas")
+}
+
+model ArchivadoLote {
+  id             String            @id @default(uuid())
+  corridaId      String?
+  corrida        ArchivadoCorrida? @relation(fields: [corridaId], references: [id], onDelete: SetNull)
+  /// Los archivos de un mismo lote de una familia (padre e hijos) comparten grupo: se verifican y se borran juntos.
+  grupoId        String?
+  tabla          String
+  anio           Int
+  mes            Int
+  parte          Int
+  /// Clave del .parquet en el bucket.
+  clave          String
+  filas          Int
+  bytes          Int
+  sha256         String
+  /// Versión de las columnas con que se escribió el archivo (ver archivado.tablas.ts).
+  esquemaVersion Int
+  /// Fecha del evento (la que decide el mes) más antigua y más reciente del lote.
+  fechaMin       DateTime
+  fechaMax       DateTime
+  /// SUBIDO (en el bucket, aún sin verificar) | VERIFICADO | BORRADO (ya no está en la base)
+  estado         String            @default("SUBIDO")
+  createdAt      DateTime          @default(now())
+  borradoEn      DateTime?
+  /// Última vez que la verificación semanal comprobó este archivo contra el bucket.
+  verificadoEn   DateTime?
+  /// Qué falló en esa comprobación (archivo ausente, huella distinta…); vacío si todo estaba bien.
+  problema       String?
+
+  @@unique([tabla, clave])
+  @@index([tabla, anio, mes])
+  @@index([estado])
+  @@index([grupoId])
+  @@index([corridaId])
+  @@map("archivado_lotes")
+}
+
+/// Candado del archivado: una sola corrida real a la vez, aunque haya varias instancias del servidor. Es un arriendo con vencimiento:
+/// si la instancia que lo tiene se cae, vence solo y otra puede tomarlo.
+model ArchivadoCandado {
+  id          String   @id
+  propietario String
+  hasta       DateTime
+
+  @@map("archivado_candado")
 }
