@@ -11,6 +11,7 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { CacheService } from '../../common/cache/cache.service.js';
 import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto } from './dto/envases.dto.js';
 import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidades.dto.js';
 import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, InsumosOpcionesDto } from './dto/insumos.dto.js';
@@ -254,6 +255,8 @@ export class InventarioService {
     @Optional() private notifications?: NotificationsService,
     /** Suma al listado de Kardex lo que ya se archivó a Parquet. Sin él, el listado lee solo de la base. */
     @Optional() private historico?: HistoricoService,
+    /** Guarda unos segundos el resumen del dashboard (se recarga seguido). Sin él, cada visita lo recalcula. */
+    @Optional() private cache?: CacheService,
   ) {}
 
   /** Destinatarios del aviso de "despacho en camino", según el tipo ya resuelto en `crearDespacho`. */
@@ -4594,10 +4597,7 @@ export class InventarioService {
     const total = totalBase + (archivado?.total ?? 0);
 
     // El id de la ubicación no le dice nada a la app: se expone también su nombre (agencia o bodega).
-    const idsUnicos = [...new Set(items.map((i: any) => i.ubicacionId).filter(Boolean))];
-    const nombresPorId = new Map<string, string | null>(
-      await Promise.all(idsUnicos.map(async (id) => [id, await this.resolverEtiquetaUbicacion(id)] as const)),
-    );
+    const nombresPorId = await this.resolverEtiquetasUbicacion(items.map((i: any) => i.ubicacionId));
     const itemsConUbicacion = items.map((i: any) => ({ ...i, ubicacionNombre: nombresPorId.get(i.ubicacionId) ?? null }));
 
     return buildDataGridResponse(itemsConUbicacion, total, page, pageSize);
@@ -4793,45 +4793,67 @@ export class InventarioService {
   private async resolverEtiquetaUbicacion(ubicacionId?: string | null): Promise<string | null> {
     const id = (ubicacionId || '').toString().trim();
     if (!id) return null;
+    return (await this.resolverEtiquetasUbicacion([id])).get(id) ?? null;
+  }
+
+  /**
+   * Igual que `resolverEtiquetaUbicacion` pero para muchos ids a la vez: 1-2 consultas en lote en vez de hasta 3
+   * por id (bodegas, luego agencias). Pensado para listas paginadas (kardex, movimientos) donde antes se resolvía
+   * cada fila por separado y multiplicaba los viajes a la base de datos.
+   */
+  private async resolverEtiquetasUbicacion(ubicacionIds: (string | null | undefined)[]): Promise<Map<string, string | null>> {
+    const idsUnicos = [...new Set(ubicacionIds.map((v) => (v || '').toString().trim()).filter(Boolean))];
+    const resultado = new Map<string, string | null>();
+    if (idsUnicos.length === 0) return resultado;
 
     // Alias legacy usado en KardexMovimiento / StockUbicacion
-    if (id === 'BODEGA_CENTRAL' || id === 'bod_central') {
+    const aliasCentral = idsUnicos.filter((id) => id === 'BODEGA_CENTRAL' || id === 'bod_central');
+    const resto = idsUnicos.filter((id) => id !== 'BODEGA_CENTRAL' && id !== 'bod_central');
+
+    if (aliasCentral.length > 0) {
+      let etiqueta = 'Bodega Central Nacional (Central)';
       try {
         const central: any[] = await this.prisma.$queryRawUnsafe(
           `SELECT b."nombre" FROM "bodegas" b
            WHERE b."tipo" = 'CENTRAL' OR b."esCentral" = true OR b."id" = 'bod_central' OR b."codigo" = 'BOD-CENTRAL'
            LIMIT 1`,
         );
-        if (central.length > 0) return `${central[0].nombre} (Central)`;
+        if (central.length > 0) etiqueta = `${central[0].nombre} (Central)`;
       } catch (_) {}
-      return 'Bodega Central Nacional (Central)';
+      for (const id of aliasCentral) resultado.set(id, etiqueta);
     }
 
-    try {
-      const bodRows: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT b."nombre", b."tipo", b."esCentral", r."nombre" as "regionNombre"
-         FROM "bodegas" b
-         LEFT JOIN "Region" r ON b."regionId" = r."id"
-         WHERE b."id" = $1 LIMIT 1`,
-        id,
-      );
-      if (bodRows.length > 0) {
-        const b = bodRows[0];
-        const esCentral = !!b.esCentral || b.tipo === 'CENTRAL';
-        const sufijo = esCentral ? 'Central' : (b.regionNombre ? `Regional · ${b.regionNombre}` : 'Regional');
-        return `${b.nombre} (${sufijo})`;
+    if (resto.length > 0) {
+      try {
+        const bodRows: any[] = await this.prisma.$queryRawUnsafe(
+          `SELECT b."id", b."nombre", b."tipo", b."esCentral", r."nombre" as "regionNombre"
+           FROM "bodegas" b
+           LEFT JOIN "Region" r ON b."regionId" = r."id"
+           WHERE b."id" = ANY($1::text[])`,
+          resto,
+        );
+        for (const b of bodRows) {
+          const esCentral = !!b.esCentral || b.tipo === 'CENTRAL';
+          const sufijo = esCentral ? 'Central' : (b.regionNombre ? `Regional · ${b.regionNombre}` : 'Regional');
+          resultado.set(String(b.id), `${b.nombre} (${sufijo})`);
+        }
+      } catch (_) {}
+
+      const faltantes = resto.filter((id) => !resultado.has(id));
+      if (faltantes.length > 0) {
+        try {
+          const agencias = await this.prisma.agencia.findMany({
+            where: { id: { in: faltantes } },
+            select: { id: true, nombre: true, codigo: true },
+          });
+          for (const ag of agencias) resultado.set(ag.id, `Agencia ${ag.nombre}${ag.codigo ? ` [${ag.codigo}]` : ''}`);
+        } catch (_) {}
       }
-    } catch (_) {}
 
-    try {
-      const ag = await this.prisma.agencia.findUnique({
-        where: { id },
-        select: { nombre: true, codigo: true },
-      });
-      if (ag) return `Agencia ${ag.nombre}${ag.codigo ? ` [${ag.codigo}]` : ''}`;
-    } catch (_) {}
+      for (const id of resto) if (!resultado.has(id)) resultado.set(id, id);
+    }
 
-    return id;
+    return resultado;
   }
 
   private async obtenerEtiquetaBodegaCentral(): Promise<string> {
@@ -5416,13 +5438,10 @@ export class InventarioService {
       }
     }
 
-    const ubicacionIds = [...new Set(items.map((i) => i.ubicacionId).filter(Boolean) as string[])];
-    const ubicacionLabelById = new Map<string, string>();
-    await Promise.all(
-      ubicacionIds.map(async (uid) => {
-        const label = await this.resolverEtiquetaUbicacion(uid);
-        if (label) ubicacionLabelById.set(uid, label);
-      }),
+    const ubicacionLabelById = new Map<string, string>(
+      [...(await this.resolverEtiquetasUbicacion(items.map((i) => i.ubicacionId)))].filter(
+        (par): par is [string, string] => par[1] != null,
+      ),
     );
 
     const enriched = await Promise.all(
@@ -5505,6 +5524,11 @@ export class InventarioService {
   }
 
   async obtenerResumenDashboard(usuarioId?: string) {
+    if (!this.cache) return this.calcularResumenDashboard(usuarioId);
+    return this.cache.obtenerOCalcular(`inventario:dashboard-resumen:${usuarioId ?? 'global'}`, 45, () => this.calcularResumenDashboard(usuarioId));
+  }
+
+  private async calcularResumenDashboard(usuarioId?: string) {
     const ahora = new Date();
     const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
 

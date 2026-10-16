@@ -18,6 +18,7 @@ import { dividirRango, etiquetaDia, fechaEcuador, finDeDia, horaEcuador, inicioD
 import type { GenerarReporteDto, RegistrarExportacionDto } from './dto/reportes.dto.js';
 import { RetosService } from '../retos/retos.service.js';
 import { ReportesArchivoService } from './reportes.archivo.js';
+import { CacheService } from '../../common/cache/cache.service.js';
 
 /** Desde cuántas filas la pantalla avisa antes de exportar (no es un tope: se puede exportar igual). */
 export const UMBRALES_ADVERTENCIA = { PDF: 2000, EXCEL: 20000 } as const;
@@ -119,6 +120,8 @@ export class ReportesService {
     @Optional() private readonly retosService?: RetosService,
     /** Suma al reporte lo que ya se archivó a Parquet. Sin él, el reporte lee solo de la base. */
     @Optional() private readonly archivo?: ReportesArchivoService,
+    /** Guarda unos minutos las opciones de filtro (catálogo, casi no cambia). Sin él, cada apertura de Reportes recalcula todo. */
+    @Optional() private readonly cache?: CacheService,
   ) {}
 
   // ---------------------------------------------------------------------------------------------------------------------
@@ -162,6 +165,11 @@ export class ReportesService {
   // ---------------------------------------------------------------------------------------------------------------------
 
   async opciones(user: any) {
+    if (!this.cache) return this.calcularOpciones(user);
+    return this.cache.obtenerOCalcular(`reportes:opciones:${user?.id ?? 'anonimo'}`, 300, () => this.calcularOpciones(user));
+  }
+
+  private async calcularOpciones(user: any) {
     const alcance = resolverAlcance(user);
     const agencias = await this.prisma.agencia.findMany({
       where: whereAgencias(alcance) as any,
@@ -284,7 +292,18 @@ export class ReportesService {
 
     const filas = await this.prisma.agencia.findMany({
       where: { AND: condiciones } as any,
-      include: {
+      select: {
+        id: true,
+        codigo: true,
+        nombre: true,
+        direccion: true,
+        telefono: true,
+        numeroBahias: true,
+        estado: true,
+        tieneServiciosEspeciales: true,
+        servicioIds: true,
+        regionId: true,
+        region: true,
         regionRel: { select: { nombre: true } },
         cliente: { select: { nombre: true } },
         usuarios: { where: { role: { namerol: 'APROBADOR' } }, select: { name: true, lastname: true }, take: 1 },
