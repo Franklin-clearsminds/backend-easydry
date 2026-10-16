@@ -74,7 +74,9 @@
       "maquinaria.evidencias",
       "evidencias.subir",
       "evidencias.ver",
-      "sync.usar"
+      "sync.usar",
+      "agencias.ver",
+      "usuarios.ver"
     ],
     "ambito": "REGION",
     "esSistema": true,
@@ -93,7 +95,7 @@
       "registrarServicio": false,
       "verTodosServicios": false,
       "registrarIncidente": false,
-      "verOtrosSucursales": false,
+      "verOtrosSucursales": true,
       "verTodasSucursales": false,
       "gestionarInventario": false,
       "cambiarBahiaOperador": false,
@@ -789,7 +791,8 @@
       "limpiezas.ver",
       "evidencias.subir",
       "sync.usar",
-      "limpiezas.evidencias"
+      "limpiezas.evidencias",
+      "usuarios.ver"
     ],
     "ambito": "AGENCIA",
     "esSistema": true,

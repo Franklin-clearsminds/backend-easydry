@@ -218,6 +218,7 @@ export const ROLES_BASE: RolBase[] = [
     ambito: 'AGENCIA',
     capacidades: p(
       'agencias.ver',
+      'usuarios.ver',
       'catalogo.ver',
       'evidencias.ver',
       'dashboard.ver',
@@ -274,6 +275,8 @@ export const ROLES_BASE: RolBase[] = [
       'Técnico de maquinaria: trabaja en la región que tiene asignada y ejecuta y cierra las órdenes de mantenimiento que le asignan.',
     ambito: 'REGION',
     capacidades: p(
+      'agencias.ver',
+      'usuarios.ver',
       'dashboard.ver',
       'maquinaria.ver',
       'incidentes.ver',
