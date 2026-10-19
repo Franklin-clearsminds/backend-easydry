@@ -32,6 +32,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       await this.$connect();
       // Prueba activa de consulta para asegurar que PostgreSQL responde
       await this.$queryRaw`SELECT 1`;
+      // Abre unas conexiones de más ahora: abrir una conexión nueva cuesta ~100 ms y, sin esto, la primera vez que el inicio de sesión
+      // hace consultas en paralelo cada una la pagaría.
+      await Promise.all([this.$queryRaw`SELECT 1`, this.$queryRaw`SELECT 1`, this.$queryRaw`SELECT 1`]);
       this.logger.log('Conexión con PostgreSQL establecida y verificada correctamente (DB: easydry_db).');
     } catch (error: any) {
       this.logger.error('Error al conectar con la base de datos PostgreSQL:', error?.message || error);

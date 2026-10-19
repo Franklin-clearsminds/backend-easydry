@@ -6,6 +6,7 @@ import { secretoObligatorio } from '../../common/config/secretos.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcryptjs';
+import { compare as compararHash, hash as generarHash } from '@node-rs/bcrypt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
@@ -116,16 +117,19 @@ export class AuthService {
   /**
    * Intentos fallidos por correo, guardados en la base: frenan la fuerza bruta aunque el atacante cambie de IP o de dispositivo,
    * y el contador sobrevive a reinicios y se comparte entre instancias del servidor.
+   * Devuelve si ese correo tiene un contador guardado (para borrarlo solo cuando existe).
    */
-  private async verificarBloqueo(email: string): Promise<void> {
+  private async verificarBloqueo(email: string): Promise<boolean> {
     const registro = await this.prisma.loginIntento.findUnique({ where: { email } });
-    if (!registro || Date.now() - registro.desde.getTime() > VENTANA_INTENTOS_MS) return;
+    if (!registro) return false;
+    if (Date.now() - registro.desde.getTime() > VENTANA_INTENTOS_MS) return true;
     if (registro.intentos >= MAX_INTENTOS_FALLIDOS) {
       throw new HttpException(
         'Demasiados intentos fallidos. Espere unos minutos antes de volver a intentarlo.',
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
+    return true;
   }
 
   private async registrarFallo(email: string): Promise<void> {
@@ -157,13 +161,13 @@ export class AuthService {
     }
     const actual = dto.passwordActual ?? '';
     const nueva = (dto.passwordNueva ?? '').trim();
-    if (!(await bcrypt.compare(actual, user.passwordHash))) {
+    if (!(await compararHash(actual, user.passwordHash))) {
       throw new BadRequestException('La contraseña actual no es correcta.');
     }
     if (nueva === actual) throw new BadRequestException('La nueva contraseña debe ser distinta de la actual.');
     exigirPasswordSegura(nueva, user.email);
 
-    const passwordHash = await bcrypt.hash(nueva, 10);
+    const passwordHash = await generarHash(nueva, { cost: 10 });
     await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
     await this.revocarSesionesDeUsuario(user.id);
     try {
@@ -220,9 +224,8 @@ export class AuthService {
   async login(loginDto: LoginDto) {
     const { password } = loginDto;
     const email = loginDto.email.toLowerCase().trim();
-    await this.verificarBloqueo(email);
-
-    const user = await this.prisma.user.findUnique({
+    // El bloqueo por intentos y la búsqueda del usuario no dependen uno del otro: se piden a la vez.
+    const [hayIntentosPrevios, user] = await Promise.all([this.verificarBloqueo(email), this.prisma.user.findUnique({
       where: { email },
       include: {
         role: {
@@ -238,15 +241,17 @@ export class AuthService {
           select: { id: true, codigo: true, nombre: true, regionId: true, tipo: true },
         },
       },
-    });
+    })]);
 
     // Siempre se calcula un bcrypt, exista o no el correo: así el tiempo de respuesta no revela qué cuentas existen.
-    const isMatch = await bcrypt.compare(password, user?.passwordHash ?? HASH_SIN_USUARIO);
+    // Es el de la librería nativa: corre fuera del hilo principal, así varios inicios de sesión a la vez no se frenan entre sí.
+    const isMatch = await compararHash(password, user?.passwordHash ?? HASH_SIN_USUARIO);
     if (!user || !isMatch) {
       await this.registrarFallo(email);
       throw new UnauthorizedException('Credenciales inválidas');
     }
-    await this.prisma.loginIntento.deleteMany({ where: { email } });
+    // Solo se borra el contador si había uno (casi nunca): evita una consulta en cada inicio de sesión.
+    const limpiarIntentos = hayIntentosPrevios ? this.prisma.loginIntento.deleteMany({ where: { email } }) : Promise.resolve(null);
 
     if (user.estado !== 1) {
       throw new UnauthorizedException('Usuario deshabilitado o inactivo. Contacte a su administrador.');
@@ -256,17 +261,24 @@ export class AuthService {
       throw new UnauthorizedException('El rol asignado al usuario se encuentra deshabilitado.');
     }
 
-    void Promise.all([
-      this.prisma.refreshSession.deleteMany({ where: { expiresAt: { lt: new Date() } } }),
-      this.prisma.loginIntento.deleteMany({ where: { desde: { lt: new Date(Date.now() - VENTANA_INTENTOS_MS) } } }),
-    ]).catch(() => undefined);
-    const { accessToken, refreshToken } = await this.generateTokens(user);
-
-    const bahiaAsignada = await this.prisma.bahiaOperador.findFirst({
-      where: { operadorId: user.id, activo: true },
-      include: { bahia: { select: { id: true, nombre: true } } },
-      orderBy: { fechaAsignacion: 'desc' },
-    });
+    // La limpieza de sesiones y contadores vencidos no hace falta en cada inicio de sesión: con una de cada 20 alcanza.
+    if (Math.random() < 0.05) {
+      void Promise.all([
+        this.prisma.refreshSession.deleteMany({ where: { expiresAt: { lt: new Date() } } }),
+        this.prisma.loginIntento.deleteMany({ where: { desde: { lt: new Date(Date.now() - VENTANA_INTENTOS_MS) } } }),
+      ]).catch(() => undefined);
+    }
+    // Tokens (crea la sesión), bahía asignada y pantallas de la app no dependen entre sí: se piden a la vez.
+    const [{ accessToken, refreshToken }, bahiaAsignada, infoApp] = await Promise.all([
+      this.generateTokens(user),
+      this.prisma.bahiaOperador.findFirst({
+        where: { operadorId: user.id, activo: true },
+        include: { bahia: { select: { id: true, nombre: true } } },
+        orderBy: { fechaAsignacion: 'desc' },
+      }),
+      this.infoApp(user.role),
+      limpiarIntentos,
+    ]);
 
     const rolLogin = (user.role?.namerol || '').toUpperCase();
     const esPulidorLogin = rolLogin.includes('PULIDOR') || rolLogin === 'OPERADOR_SERVICIOS_ESPECIALES';
@@ -288,7 +300,7 @@ export class AuthService {
         /** Pantallas que ve el rol: salen de sus permisos (Role.capacidades) */
         permisos: modulosDeRol(user.role),
         modulos: modulosDeRol(user.role),
-        ...(await this.infoApp(user.role)),
+        ...infoApp,
         /** Acciones granulares del rol (desde Role.acciones en BD) */
         acciones: user.role?.acciones ?? null,
         /** Permisos que el backend exige (Role.capacidades) y sobre qué datos actúa el rol (Role.ambito) */
