@@ -1082,7 +1082,10 @@ export class OperacionesService {
           include: { agencia: true },
         },
         catalogo: true,
-        operador: true,
+        // Nunca `operador: true`: traería el usuario completo con su passwordHash a la respuesta.
+        operador: {
+          select: { id: true, name: true, lastname: true, email: true },
+        },
       },
     });
 
