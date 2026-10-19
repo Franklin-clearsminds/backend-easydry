@@ -3,7 +3,6 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { MaquinariaService } from './maquinaria.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { actorFromUser } from './maquinaria.permisos.js';
-import { ChecklistMantenimientoDto, GuardarPlantillaChecklistDto, MarcarPasoChecklistDto } from './dto/checklist.dto.js';
 import {
   CreateMaquinariaDto,
   UpdateMaquinariaDto,
@@ -204,42 +203,6 @@ export class MaquinariaController {
   @ApiOperation({ summary: 'Listar mantenimientos: primero los vencidos sin ejecutar, luego próximos y finalizados' })
   async listMantenimientos(@Body() dto: ListMantenimientosDto, @CurrentUser() user: any) {
     return this.maquinariaService.listMantenimientos(dto, actorFromUser(user));
-  }
-
-  // ==============================================================
-  // CHECKLIST DE MANTENIMIENTO
-  // ==============================================================
-
-  @Permiso('mantenimientos.ver')
-  @Post('checklist/plantillas/list')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Plantillas de checklist activas (una por tipo de mantenimiento) con sus pasos' })
-  async listarPlantillasChecklist() {
-    return this.maquinariaService.listarPlantillasChecklist();
-  }
-
-  @Permiso('taller.checklist.gestionar')
-  @Post('checklist/plantillas/guardar')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Guardar los pasos de un tipo como una versión nueva de la plantilla (la anterior queda inactiva)' })
-  async guardarPlantillaChecklist(@Body() dto: GuardarPlantillaChecklistDto, @CurrentUser() user: any) {
-    return this.maquinariaService.guardarPlantillaChecklist(dto, user);
-  }
-
-  @Permiso('mantenimientos.ver')
-  @Post('mantenimientos/checklist')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Checklist de una orden de mantenimiento (los pasos se copian de la plantilla activa al consultarlo)' })
-  async checklistMantenimiento(@Body() dto: ChecklistMantenimientoDto, @CurrentUser() user: any) {
-    return this.maquinariaService.obtenerChecklist(dto.mantenimientoId, actorFromUser(user));
-  }
-
-  @Permiso('taller.mantenimientos.ejecutar')
-  @Post('mantenimientos/checklist/marcar')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Marcar o desmarcar un paso del checklist (deja quién y cuándo)' })
-  async marcarPasoChecklist(@Body() dto: MarcarPasoChecklistDto, @CurrentUser() user: any) {
-    return this.maquinariaService.marcarChecklist(dto, actorFromUser(user), user);
   }
 
   @Permiso('taller.incidentes.evidencias', 'taller.mantenimientos.evidencias')

@@ -1228,7 +1228,6 @@ model MantenimientoMaquinaria {
   tecnicoId    String
   tecnico      User       @relation(fields: [tecnicoId], references: [id])
 
-  tipo            String   @default("PREVENTIVO") // "PREVENTIVO" | "CORRECTIVO"
   estado          String   @default("FINALIZADO") // "PENDIENTE" | "EN_PROCESO" | "FINALIZADO"
   observaciones   String?
   repuestosUsados Json? // Lista de repuestos e insumos aplicados
@@ -1247,13 +1246,11 @@ model MantenimientoMaquinaria {
   ejecutadoPorId       String?
   ejecutadoPor         User?                    @relation("MantenimientoEjecutadoPor", fields: [ejecutadoPorId], references: [id])
   evidencias           EvidenciaMantenimiento[]
-  checklist            ChecklistRespuesta[]
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
 
   @@index([maquinariaId])
   @@index([tecnicoId])
-  @@index([tipo])
   @@index([estado])
   @@index([fechaProgramada])
   @@index([creadoPorId])
@@ -1607,57 +1604,6 @@ model ExportacionReporte {
   @@index([reporte])
   @@index([createdAt])
   @@map("exportaciones_reporte")
-}
-
-// -----------------------------------------------------------------------
-// Checklist de mantenimiento: plantillas por tipo (las administra el coordinador de mantenimiento o un administrador).
-// Editar una plantilla crea una versión nueva: lo ya marcado en mantenimientos anteriores no cambia.
-// -----------------------------------------------------------------------
-model ChecklistPlantilla {
-  id              String          @id @default(uuid())
-  /// PREVENTIVO o CORRECTIVO
-  tipo            String
-  nombre          String
-  version         Int             @default(1)
-  activa          Boolean         @default(true)
-  creadaPorId     String?
-  creadaPorNombre String?
-  createdAt       DateTime        @default(now())
-  pasos           ChecklistPaso[]
-
-  @@unique([tipo, version])
-  @@index([tipo, activa])
-}
-
-model ChecklistPaso {
-  id          String             @id @default(uuid())
-  plantillaId String
-  plantilla   ChecklistPlantilla @relation(fields: [plantillaId], references: [id], onDelete: Cascade)
-  orden       Int
-  texto       String
-  obligatorio Boolean            @default(true)
-
-  @@index([plantillaId])
-}
-
-/// Lo que el técnico marcó en un mantenimiento concreto. Guarda una copia del texto del paso y de la versión de la plantilla.
-model ChecklistRespuesta {
-  id               String                  @id @default(uuid())
-  mantenimientoId  String
-  mantenimiento    MantenimientoMaquinaria @relation(fields: [mantenimientoId], references: [id], onDelete: Cascade)
-  plantillaId      String
-  plantillaVersion Int
-  orden            Int
-  texto            String
-  obligatorio      Boolean                 @default(true)
-  completado       Boolean                 @default(false)
-  observacion      String?
-  marcadoPorId     String?
-  marcadoPorNombre String?
-  marcadoEn        DateTime?
-  createdAt        DateTime                @default(now())
-
-  @@index([mantenimientoId])
 }
 
 /// Sesión de refresh token. `id` es el `jti` del token: cada refresh crea una sesión nueva y revoca la anterior.

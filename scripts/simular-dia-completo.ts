@@ -137,7 +137,6 @@ async function main() {
     data: {
       maquinariaId: MAQUINA_1_MANTENIMIENTO,
       tecnicoId: TECNICO,
-      tipo: 'PREVENTIVO',
       estado: 'PENDIENTE',
       fechaProgramada: t('08:00'),
       fechaMantenimiento: t('08:00'),

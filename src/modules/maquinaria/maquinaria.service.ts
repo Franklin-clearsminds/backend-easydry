@@ -12,7 +12,6 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { StorageService, type InspectedEvidence } from '../storage/storage.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { CacheService } from '../../common/cache/cache.service.js';
-import { ChecklistService } from './checklist.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
 import { normalizarRol, ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
@@ -139,47 +138,13 @@ const MAX_MULTIMEDIA = 10;
 export class MaquinariaService {
   private readonly logger = new Logger(MaquinariaService.name);
 
-  private readonly checklist: ChecklistService;
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly notifications: NotificationsService,
-    @Optional() checklist?: ChecklistService,
     /** Guarda un rato el conteo de limpiezas atrasadas (badge de alerta). Sin él, cada visita lo recalcula. */
     @Optional() private readonly cache?: CacheService,
-  ) {
-    this.checklist = checklist ?? new ChecklistService(prisma);
-  }
-
-  // ==============================================================
-  // Checklist de mantenimiento
-  // ==============================================================
-
-  /** El checklist de una orden, visible para quien puede ver ese mantenimiento (mismo alcance que el listado). */
-  async obtenerChecklist(mantenimientoId: string, actor: Actor) {
-    const visible = await this.prisma.mantenimientoMaquinaria.count({ where: { id: mantenimientoId, ...this.scopeMantenimientos(actor) } });
-    if (!visible) throw new ForbiddenException('No tienes acceso a este mantenimiento.');
-    const m = await this.cargarMantenimiento(mantenimientoId);
-    return { success: true, ...(await this.checklist.obtenerDeMantenimiento(m.id, m.tipo)) };
-  }
-
-  /** Marca un paso del checklist: el técnico asignado o un administrador, mientras la orden no esté ejecutada. */
-  async marcarChecklist(dto: { mantenimientoId: string; pasoId: string; completado: boolean; observacion?: string }, actor: Actor, usuario: any) {
-    const m = await this.cargarMantenimiento(dto.mantenimientoId);
-    this.checklist.asegurarPuedeMarcar({ tecnicoId: m.tecnicoId, estado: m.estado }, usuario);
-    await this.checklist.obtenerDeMantenimiento(m.id, m.tipo);
-    const paso = await this.checklist.marcar(dto, usuario);
-    return { success: true, data: paso };
-  }
-
-  listarPlantillasChecklist() {
-    return this.checklist.listarPlantillas();
-  }
-
-  guardarPlantillaChecklist(dto: { tipo: string; nombre?: string; pasos: Array<{ texto: string; obligatorio?: boolean }> }, usuario: any) {
-    return this.checklist.guardarPlantilla(dto, usuario);
-  }
+  ) {}
 
   // ==============================================================
   // Utilidades comunes
@@ -622,7 +587,7 @@ export class MaquinariaService {
       this.prisma.mantenimientoMaquinaria.findFirst({
         where: { maquinariaId: m.id, estado: { in: ['PENDIENTE', 'EN_PROCESO'] } },
         orderBy: { fechaProgramada: 'asc' },
-        select: { id: true, fechaProgramada: true, tipo: true, estado: true },
+        select: { id: true, fechaProgramada: true, estado: true },
       }),
       Promise.all([
         this.prisma.incidenteTecnico.count({ where: { maquinariaId: m.id } }),
@@ -1332,7 +1297,6 @@ export class MaquinariaService {
           maquinariaId: maquina.id,
           tecnicoId,
           creadoPorId: actor.id,
-          tipo: dto.tipo || 'PREVENTIVO',
           estado: 'PENDIENTE',
           observaciones: dto.observaciones,
           repuestosUsados: dto.repuestosUsados || undefined,
@@ -1348,7 +1312,6 @@ export class MaquinariaService {
         include: this.includeMantenimiento,
       });
       await this.registrarEvento(tx, maquina, 'MANTENIMIENTO_PROGRAMADO', actor.id, m.id, {
-        tipo: m.tipo,
         programadoPara: fechaProgramada,
         frecuenciaDias,
         tecnicoId,
@@ -1432,9 +1395,6 @@ export class MaquinariaService {
       );
     }
 
-    // No se cierra la orden mientras falten pasos obligatorios del checklist de su tipo.
-    await this.checklist.exigirCompleto(existing.id, existing.tipo);
-
     // Los roles habilitados deben adjuntar foto/video y PDF; el costo siempre es obligatorio.
     this.exigirPermisoParaEvidencias(dto.evidencias || [], puedeSubirEvidencias);
     const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, {
@@ -1482,7 +1442,6 @@ export class MaquinariaService {
               maquinariaId: existing.maquinariaId,
               tecnicoId: existing.tecnicoId,
               creadoPorId: existing.creadoPorId,
-              tipo: existing.tipo,
               estado: 'PENDIENTE',
               observaciones: existing.observaciones,
               fechaMantenimiento: siguiente,
@@ -1557,7 +1516,6 @@ export class MaquinariaService {
     const filtros: Record<string, unknown>[] = [this.scopeMantenimientos(actor) as Record<string, unknown>];
     if (dto.maquinariaId) filtros.push({ maquinariaId: dto.maquinariaId });
     if (dto.tecnicoId) filtros.push({ tecnicoId: dto.tecnicoId });
-    if (dto.tipo) filtros.push({ tipo: dto.tipo });
     if (dto.agenciaId) filtros.push({ maquinaria: { agenciaId: dto.agenciaId } });
     if (dto.regionId) filtros.push({ maquinaria: { agencia: { regionId: dto.regionId } } });
     if (dto.clienteId) filtros.push({ maquinaria: { agencia: { clienteId: dto.clienteId } } });

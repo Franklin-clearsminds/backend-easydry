@@ -359,11 +359,6 @@ export class RegistrarMantenimientoDto {
   @IsNotEmpty()
   maquinariaId: string;
 
-  @ApiPropertyOptional({ example: 'PREVENTIVO', enum: ['PREVENTIVO', 'CORRECTIVO'] })
-  @IsOptional()
-  @IsString()
-  tipo?: string;
-
   @ApiPropertyOptional({ example: 'Cambio de sellos, aceite y ajuste de boquilla de lanza.' })
   @IsOptional()
   @IsString()
@@ -467,7 +462,7 @@ export class ListMantenimientosDto extends PaginacionDto {
   fechaHasta?: string;
 
   @ApiPropertyOptional({
-    description: 'Orden explícito: fecha (programada), ejecucion, estado, tipo, maquina, agencia, tecnico. '
+    description: 'Orden explícito: fecha (programada), ejecucion, estado, maquina, agencia, tecnico. '
       + 'Sin orden explícito: vencidos primero, luego pendientes y luego ejecutados, cada grupo con lo más reciente primero.',
   })
   @IsOptional()
@@ -503,11 +498,6 @@ export class ListMantenimientosDto extends PaginacionDto {
   @IsOptional()
   @IsString()
   tecnicoId?: string;
-
-  @ApiPropertyOptional({ description: 'Filtro por tipo' })
-  @IsOptional()
-  @IsString()
-  tipo?: string;
 }
 
 export class AsignarIncidenteDto {

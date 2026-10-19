@@ -348,7 +348,6 @@ async function generar() {
           id: mId,
           maquinariaId: id,
           tecnicoId: tecnico.id,
-          tipo: 'PREVENTIVO',
           estado: futuro || vencido ? 'PENDIENTE' : 'FINALIZADO',
           observaciones: ejecucion ? 'Mantenimiento preventivo realizado según checklist.' : null,
           repuestosUsados: ejecucion ? [{ nombre: 'Filtro', cantidad: 1 }, { nombre: 'Aceite', cantidad: 1 }] : undefined,
