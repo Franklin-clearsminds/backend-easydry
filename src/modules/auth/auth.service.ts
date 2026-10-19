@@ -1,7 +1,7 @@
 import { CacheService } from '../../common/cache/cache.service.js';
 import { USUARIO_PREFIJO } from './jwt.strategy.js';
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, HttpException, HttpStatus, Injectable, UnauthorizedException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, UnauthorizedException, Optional } from '@nestjs/common';
 import { secretoObligatorio } from '../../common/config/secretos.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -10,6 +10,8 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { StorageService } from '../storage/storage.service.js';
+import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
+import { normalizarRol } from '../../common/permisos/alias-roles.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 import { JWT_ACCESS_DEFAULT, JWT_REFRESH_DEFAULT, JWT_SIGN_OPTIONS, JWT_VERIFY_OPTIONS } from './jwt.config.js';
 
@@ -140,6 +142,48 @@ export class AuthService {
         update: { intentos: 1, desde: ahora },
       });
     }
+  }
+
+  /**
+   * Cambio de contraseña por el propio usuario. Solo Super Administrador y Administrador: el resto la recibe de un administrador.
+   * Pide la contraseña actual, aplica la política de contraseñas, cierra todas las sesiones (también la actual) y deja constancia.
+   */
+  async cambiarPasswordPropia(userId: string, dto: { passwordActual: string; passwordNueva: string }): Promise<{ ok: true }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { role: true } });
+    if (!user) throw new UnauthorizedException('Sesión no válida.');
+    const rol = normalizarRol(user.role?.namerol);
+    if (rol !== 'SUPER_ADMIN' && rol !== 'ADMIN') {
+      throw new ForbiddenException('Tu contraseña la asigna un administrador: solicítala desde el módulo de Usuarios.');
+    }
+    const actual = dto.passwordActual ?? '';
+    const nueva = (dto.passwordNueva ?? '').trim();
+    if (!(await bcrypt.compare(actual, user.passwordHash))) {
+      throw new BadRequestException('La contraseña actual no es correcta.');
+    }
+    if (nueva === actual) throw new BadRequestException('La nueva contraseña debe ser distinta de la actual.');
+    exigirPasswordSegura(nueva, user.email);
+
+    const passwordHash = await bcrypt.hash(nueva, 10);
+    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    await this.revocarSesionesDeUsuario(user.id);
+    try {
+      await this.prisma.auditoriaDecision.create({
+        data: {
+          entidad: 'USUARIO',
+          entidadId: user.id,
+          accion: 'CAMBIAR_PASSWORD_PROPIA',
+          usuarioId: user.id,
+          usuarioNombre: `${user.name ?? ''} ${user.lastname ?? ''}`.trim() || user.email,
+          rol,
+          regla: 'ADMIN',
+          agenciaId: user.agenciaId ?? null,
+          detalle: { usuario: user.email },
+        },
+      });
+    } catch {
+      // La constancia no debe impedir el cambio.
+    }
+    return { ok: true };
   }
 
   /** Cierra todas las sesiones del usuario (cambio de contraseña) e invalida también los access tokens ya emitidos. */

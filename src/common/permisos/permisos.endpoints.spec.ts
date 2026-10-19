@@ -33,7 +33,7 @@ describe('todos los endpoints declaran su permiso (falla cerrado)', () => {
       for (const { nombre, handler } of rutas(c)) if (Reflect.getMetadata(SOLO_AUTENTICADO_KEY, handler)) solos.push(`${c.name}.${nombre}`);
     }
     expect(solos.sort()).toEqual([
-      'AuthController.getMe', 'AuthController.updateProfile',
+      'AuthController.cambiarPassword', 'AuthController.getMe', 'AuthController.updateProfile',
       // Las notificaciones son siempre del propio usuario (Q4: pantalla de cuenta, no se apaga por rol).
       'NotificationsController.list', 'NotificationsController.marcarLeida', 'NotificationsController.marcarTodasLeidas', 'NotificationsController.resumen',
       'StorageController.getPresignedUrl', 'StorageController.getUploadTicket', 'StorageController.uploadFile',
