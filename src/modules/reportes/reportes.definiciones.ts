@@ -295,7 +295,6 @@ export const REPORTES: readonly ReporteDef[] = [
       ORD,
       col('fecha', 'Fecha', 'fecha', 9),
       col('maquina', 'Máquina', 'texto', 15),
-      col('tipo', 'Tipo', 'texto', 10),
       col('estado', 'Estado', 'texto', 9),
       col('tecnico', 'Técnico', 'texto', 14),
       col('observaciones', 'Observaciones', 'texto', 22),

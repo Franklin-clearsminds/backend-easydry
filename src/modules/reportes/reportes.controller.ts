@@ -2,7 +2,7 @@ import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { GenerarReporteDto, RegistrarExportacionDto } from './dto/reportes.dto.js';
+import { GenerarReporteDto, OpcionesReportesDto, RegistrarExportacionDto } from './dto/reportes.dto.js';
 import { ReportesService } from './reportes.service.js';
 
 @ApiTags('Reportes operativos')
@@ -23,8 +23,8 @@ export class ReportesController {
   @Post('opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Regiones, clientes, agencias, productos y lavadores dentro del alcance del usuario' })
-  opciones(@CurrentUser() user: any) {
-    return this.service.opciones(user);
+  opciones(@CurrentUser() user: any, @Body() dto: OpcionesReportesDto) {
+    return this.service.opciones(user, dto?.incluir);
   }
 
   @Permiso('reportes.ver')

@@ -164,12 +164,18 @@ export class ReportesService {
   // Opciones de los filtros (siempre dentro del alcance del usuario)
   // ---------------------------------------------------------------------------------------------------------------------
 
-  async opciones(user: any) {
-    if (!this.cache) return this.calcularOpciones(user);
-    return this.cache.obtenerOCalcular(`reportes:opciones:${user?.id ?? 'anonimo'}`, 300, () => this.calcularOpciones(user));
+  /**
+   * Regiones, clientes y agencias van siempre; los productos, lavadores y pulidores (listas largas) solo si se piden en `incluir`
+   * (la pantalla los pide cuando el reporte elegido tiene ese filtro). Sin `incluir` devuelve todo, como antes.
+   */
+  async opciones(user: any, incluir?: string[]) {
+    const pide = new Set(incluir ?? ['productos', 'lavadores', 'pulidores']);
+    if (!this.cache) return this.calcularOpciones(user, pide);
+    const clave = `reportes:opciones:${user?.id ?? 'anonimo'}:${[...pide].sort().join(',')}`;
+    return this.cache.obtenerOCalcular(clave, 300, () => this.calcularOpciones(user, pide));
   }
 
-  private async calcularOpciones(user: any) {
+  private async calcularOpciones(user: any, pide: Set<string>) {
     const alcance = resolverAlcance(user);
     const agencias = await this.prisma.agencia.findMany({
       where: whereAgencias(alcance) as any,
@@ -185,9 +191,9 @@ export class ReportesService {
       clienteIds.length ? this.prisma.cliente.findMany({ where: { id: { in: clienteIds } }, select: { id: true, nombre: true }, orderBy: { nombre: 'asc' } }) : [],
     ]);
 
-    const verInsumos = tienePermiso(user, 'inventario.ver');
-    const verServicios = tienePermiso(user, 'servicios.ver');
-    const verEspeciales = tienePermiso(user, 'especiales.ver');
+    const verInsumos = pide.has('productos') && tienePermiso(user, 'inventario.ver');
+    const verServicios = pide.has('lavadores') && tienePermiso(user, 'servicios.ver');
+    const verEspeciales = pide.has('pulidores') && tienePermiso(user, 'especiales.ver');
     const [productos, lavadores, pulidores] = await Promise.all([
       verInsumos ? this.prisma.insumo.findMany({ where: { estado: 1 }, select: { id: true, codigoSKU: true, nombre: true }, orderBy: { nombre: 'asc' } }) : [],
       verServicios && ids.length
@@ -664,7 +670,6 @@ export class ReportesService {
       fila: {
         fecha: fechaEcuador(m.fechaMantenimiento),
         maquina: `${m.maquinaria.codigo} · ${m.maquinaria.nombre}`,
-        tipo: titulo(m.tipo),
         estado: titulo(m.estado),
         tecnico: nombreDe(m.tecnico),
         observaciones: m.observaciones ?? '',
