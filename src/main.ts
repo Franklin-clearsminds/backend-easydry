@@ -127,6 +127,11 @@ async function bootstrap() {
     logger.warn('CORS_ORIGIN vacío en producción: el panel web no podrá llamar a la API. Defínelo con el dominio exacto del panel.');
   }
 
+  // Redis es parte del despliegue: sin él la caché, el límite de peticiones y los sockets quedan en la memoria de cada instancia.
+  if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL?.trim()) {
+    logger.warn('REDIS_URL vacío en producción: el sistema funciona, pero sin caché compartida ni límite de peticiones común. Defínelo con la URL interna del Redis de Render.');
+  }
+
   const port = process.env.PORT || 3000;
   await app.listen(port, '0.0.0.0');
 
