@@ -3528,10 +3528,13 @@ export class InventarioService {
     }));
   }
 
-  /** Decide qué pasa con lo que no llegó: DEVOLVER lo regresa al stock del origen; BAJA lo registra como merma (dañado o perdido). */
-  async resolverFaltanteDespacho(dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, user: any) {
-    if (dto.resolucion !== 'DEVOLVER' && dto.resolucion !== 'BAJA') {
-      throw new BadRequestException('La resolución debe ser DEVOLVER o BAJA.');
+  /**
+   * Decide qué pasa con lo que no llegó: ENTREGADO confirma que sí llegó al destino y se lo suma; DEVOLVER lo regresa al stock
+   * del origen (nunca salió); BAJA lo registra como merma (dañado o perdido). Todo queda en el kardex.
+   */
+  async resolverFaltanteDespacho(dto: { id: string; resolucion: 'ENTREGADO' | 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, user: any) {
+    if (dto.resolucion !== 'ENTREGADO' && dto.resolucion !== 'DEVOLVER' && dto.resolucion !== 'BAJA') {
+      throw new BadRequestException('La resolución debe ser ENTREGADO, DEVOLVER o BAJA.');
     }
     const observacion = String(dto.observacion || '').trim();
     if (observacion.length < 10) {
@@ -3566,7 +3569,30 @@ export class InventarioService {
 
     const base = Number(f.cantidadBase);
     const origen = { bodegaId: f.origenBodegaId, agenciaId: f.origenAgenciaId };
-    if (dto.resolucion === 'DEVOLVER') {
+    if (dto.resolucion === 'ENTREGADO') {
+      // Sí llegó: el producto ya salió del origen al despachar, solo falta sumarlo al destino y corregir lo recibido de la guía.
+      const mov: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT "destinoBodegaId", "destinoAgenciaId", "destinoPulidorId" FROM "MovimientoInventario" WHERE "id" = $1 LIMIT 1`,
+        f.movimientoId,
+      );
+      const destino = mov[0] || {};
+      await this.sumarStockDestino({
+        insumoId: f.insumoId,
+        cantidad: base,
+        destinoBodegaId: destino.destinoBodegaId,
+        destinoAgenciaId: destino.destinoAgenciaId,
+        destinoPulidorId: destino.destinoPulidorId,
+        guia: f.numeroGuia,
+        usuarioId: user.id,
+      });
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE "MovimientoDetalle" SET "cantidadRecibida" = LEAST("cantidadEnviada", COALESCE("cantidadRecibida", 0) + $3::numeric)
+         WHERE "movimientoId" = $1 AND "insumoId" = $2`,
+        f.movimientoId,
+        f.insumoId,
+        Number(f.cantidadUnd),
+      );
+    } else if (dto.resolucion === 'DEVOLVER') {
       await this.devolverStockOrigen(f.insumoId, base, origen, f.numeroGuia, user.id);
     } else {
       const stock = await this.obtenerStockOrigen(f.insumoId, origen);
@@ -3599,6 +3625,29 @@ export class InventarioService {
       });
     }
     return { ok: true, resolucion: dto.resolucion };
+  }
+
+  /** Faltantes y fotos de cada guía (pendientes y resueltos): el envío se pinta como desconforme y ofrece «Resolver». */
+  private async faltantesPorMovimiento(ids: string[]): Promise<Map<string, { faltantes: any[]; evidencias: any[] }>> {
+    const porMov = new Map<string, { faltantes: any[]; evidencias: any[] }>();
+    if (!ids.length) return porMov;
+    const [faltantes, evidencias] = await Promise.all([
+      this.prisma.$queryRawUnsafe<any[]>(
+        `SELECT f."id", f."movimientoId", f."insumoId", f."cantidadUnd", f."estado", f."resolucion", f."observacionResolucion",
+                f."motivoRecepcion", f."resueltoEn", TRIM(CONCAT(u."name", ' ', u."lastname")) AS "resueltoPorNombre"
+         FROM "FaltanteDespacho" f LEFT JOIN "User" u ON u."id" = f."resueltoPorId"
+         WHERE f."movimientoId" = ANY($1::text[]) ORDER BY f."createdAt"`,
+        ids,
+      ),
+      this.prisma.$queryRawUnsafe<any[]>(
+        `SELECT "movimientoId", "faltanteId", "etapa", "url" FROM "EnvioEvidencia" WHERE "movimientoId" = ANY($1::text[]) ORDER BY "createdAt"`,
+        ids,
+      ),
+    ]);
+    for (const id of ids) porMov.set(id, { faltantes: [], evidencias: [] });
+    for (const r of faltantes) porMov.get(r.movimientoId)?.faltantes.push({ ...r, cantidadUnd: Number(r.cantidadUnd) });
+    for (const e of evidencias) porMov.get(e.movimientoId)?.evidencias.push(e);
+    return porMov;
   }
 
   /** Avisa a quien despachó, admin/super admin, coordinador de bodega (nacional), asistente de bodega
@@ -3914,7 +3963,7 @@ export class InventarioService {
     const userIds = [
       ...new Set(filas.flatMap((h) => [h.usuarioDespachaId, h.usuarioRecibeId]).filter(Boolean).map(String)),
     ];
-    const [detalles, users] = await Promise.all([
+    const [detalles, users, faltantesPorMov] = await Promise.all([
       this.prisma.movimientoDetalle.findMany({
         where: { movimientoId: { in: ids } },
         include: { insumo: { select: { id: true, codigoSKU: true, nombre: true, unidadMedida: true } } },
@@ -3922,6 +3971,7 @@ export class InventarioService {
       userIds.length
         ? this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, lastname: true } })
         : Promise.resolve([]),
+      this.faltantesPorMovimiento(ids),
     ]);
     const userPorId = new Map(users.map((u) => [u.id, u]));
     const detallesPorMov = new Map<string, any[]>();
@@ -3972,6 +4022,8 @@ export class InventarioService {
         destinoPulidorId,
         motivoRechazo: motivoRechazo || undefined,
         puedeConfirmar,
+        faltantes: faltantesPorMov.get(String(h.id))?.faltantes || [],
+        evidencias: faltantesPorMov.get(String(h.id))?.evidencias || [],
       };
     });
   }
