@@ -296,7 +296,6 @@ export const ROLES_BASE: RolBase[] = [
       'incidentes.resolver',
       'mantenimientos.ver',
       'mantenimientos.ejecutar',
-      'checklist.gestionar',
       'maquinaria.evidencias',
       'limpiezas.ver',
       'limpiezas.editar',

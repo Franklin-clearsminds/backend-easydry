@@ -335,7 +335,7 @@ export class InventarioController {
   @Post('despachos/faltantes/resolver')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Devolver al stock o dar de baja lo que no llegó en un envío' })
-  async resolverFaltante(@Body() dto: { id: string; resolucion: 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, @CurrentUser() user: any) {
+  async resolverFaltante(@Body() dto: { id: string; resolucion: 'ENTREGADO' | 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, @CurrentUser() user: any) {
     return this.inventarioService.resolverFaltanteDespacho(dto, user);
   }
 

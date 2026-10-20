@@ -1111,7 +1111,7 @@ this.federados.count('servicioLavado', {
       this.prisma.mantenimientoMaquinaria.findMany({
         where: { estado: 'PENDIENTE', fechaProgramada: { lt: new Date() }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
         orderBy: { fechaProgramada: 'asc' }, take: 15,
-        select: { id: true, tipo: true, fechaProgramada: true, maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } } },
+        select: { id: true, fechaProgramada: true, maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } } },
       }),
     ]);
 
@@ -1294,7 +1294,7 @@ this.federados.count('servicioLavado', {
         grupo: 'mantenimiento' as const,
         severidad: 'advertencia' as const,
         titulo: 'Mantenimiento vencido',
-        detalle: `${m.maquinaria?.nombre ?? 'Máquina'} (${m.tipo})`,
+        detalle: `${m.maquinaria?.nombre ?? 'Máquina'} (preventivo)`,
         origen: m.maquinaria ? `${m.maquinaria.codigo} · ${m.maquinaria.nombre}` : null,
         agencia: m.maquinaria?.agencia?.nombre ?? null,
         pulidor: null,
@@ -1339,7 +1339,7 @@ this.federados.count('servicioLavado', {
         ? this.prisma.mantenimientoMaquinaria.findMany({
             where: { estado: 'PENDIENTE', fechaProgramada: { lt: new Date() }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
             orderBy: { fechaProgramada: 'asc' }, take: LIMITE,
-            select: { id: true, tipo: true, fechaProgramada: true, maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } } },
+            select: { id: true, fechaProgramada: true, maquinaria: { select: { codigo: true, nombre: true, agencia: { select: { nombre: true, region: true } } } } },
           })
         : [],
     ]);
@@ -1571,14 +1571,14 @@ this.federados.count('servicioLavado', {
       // Mantenimientos ejecutados en 30 días
       this.prisma.mantenimientoMaquinaria.findMany({
         where: { createdAt: ventana, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
-        select: { tipo: true, estado: true, costoTotal: true, fechaEjecucion: true, proximoMantenimiento: true, maquinaria: { select: { nombre: true, tipo: true, agencia: { select: { nombre: true } }, bahia: { select: { nombre: true } } } } }
+        select: { estado: true, costoTotal: true, fechaEjecucion: true, proximoMantenimiento: true, maquinaria: { select: { nombre: true, tipo: true, agencia: { select: { nombre: true } }, bahia: { select: { nombre: true } } } } }
       }),
       // Próximos mantenimientos preventivos programados
       this.prisma.mantenimientoMaquinaria.findMany({
         where: { estado: 'PENDIENTE', fechaProgramada: { gte: startOfDay }, ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}) },
         orderBy: { fechaProgramada: 'asc' },
         take: 5,
-        select: { tipo: true, fechaProgramada: true, maquinaria: { select: { nombre: true, codigo: true, bahia: { select: { nombre: true } } } } }
+        select: { fechaProgramada: true, maquinaria: { select: { nombre: true, codigo: true, bahia: { select: { nombre: true } } } } }
       }),
       // Mantenimientos programados cuya fecha ya pasó y siguen pendientes (deuda de mantenimiento)
       this.prisma.mantenimientoMaquinaria.count({
@@ -1631,15 +1631,11 @@ this.federados.count('servicioLavado', {
     const maquinasProblematicasRank = Object.values(maquinaMasProblematica).sort((a, b) => b.total - a.total);
     const maquinasCostosasRank = Object.values(maquinaMasProblematica).filter(m => m.costoTotal > 0).sort((a, b) => b.costoTotal - a.costoTotal);
 
-    // Mantenimientos preventivos vs correctivos (cantidad y costo) + costo por agencia (fallas + mantenimiento)
-    const tipoMantenimiento: Record<string, number> = { PREVENTIVO: 0, CORRECTIVO: 0 };
-    const costoTipoMant: Record<string, number> = { PREVENTIVO: 0, CORRECTIVO: 0 };
+    // Costo de los mantenimientos + costo por agencia (fallas + mantenimiento)
     const costoAgencia: Record<string, { reparaciones: number; mantenimiento: number }> = {};
     let costoMantenimientos = 0;
     for (const m of mantenimientos30Dias) {
-      tipoMantenimiento[m.tipo] = (tipoMantenimiento[m.tipo] || 0) + 1;
       const costo = Number(m.costoTotal || 0);
-      costoTipoMant[m.tipo] = (costoTipoMant[m.tipo] || 0) + costo;
       costoMantenimientos += costo;
       const ag = m.maquinaria?.agencia?.nombre || 'Sin agencia';
       (costoAgencia[ag] ??= { reparaciones: 0, mantenimiento: 0 }).mantenimiento += costo;
@@ -1702,7 +1698,6 @@ this.federados.count('servicioLavado', {
       mttrPorAgencia: mttrPorAgenciaTop,
       incidentesPorBahia,
       costoPorAgencia: costoPorAgenciaTop,
-      costoPorTipoMantenimiento: Object.keys(costoTipoMant).map(k => ({ nombre: k, costo: Number(costoTipoMant[k].toFixed(2)) })).filter(x => x.costo > 0),
       kpis: {
         costoMantenimientos30d: Number(costoMantenimientos.toFixed(2)),
         mantenimientosVencidos,
@@ -1725,9 +1720,8 @@ this.federados.count('servicioLavado', {
       maquinasCostosasRank,
       mttrAgenciaRank: mttrPorAgencia,
       costoAgenciaRank: costoPorAgencia,
-      tipoMantenimiento: Object.keys(tipoMantenimiento).map(k => ({ nombre: k, cantidad: tipoMantenimiento[k] })),
       distribucionTipoMaquinaria: Object.keys(tipoMaq).map(k => ({ nombre: k, total: tipoMaq[k] })).sort((a, b) => b.total - a.total),
-      proxMantenimientos: proxMantenimientos.map(m => ({ nombre: m.maquinaria.nombre, codigo: m.maquinaria.codigo, tipo: m.tipo, fechaProgramada: m.fechaProgramada })),
+      proxMantenimientos: proxMantenimientos.map(m => ({ nombre: m.maquinaria.nombre, codigo: m.maquinaria.codigo, fechaProgramada: m.fechaProgramada })),
     };
   }
 

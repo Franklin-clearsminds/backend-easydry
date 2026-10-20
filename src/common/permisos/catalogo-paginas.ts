@@ -219,9 +219,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('taller.limpiezas.editar', 'Editar o eliminar limpieza', ['limpiezas.editar']),
       exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
     ]),
-    sub('taller', 'checklist', 'Checklist', ['mantenimientos.ver', 'maquinaria.ver'], [
-      accion('taller.checklist.gestionar', 'Gestionar plantillas de checklist', ['checklist.gestionar']),
-    ], ['checklist.gestionar']),
   ]),
 
   pagina('inventario', 'Inventario & Suministros', '/inventario', 'inventario', ['inventario.ver', 'agencias.ver', 'catalogo.ver'], [

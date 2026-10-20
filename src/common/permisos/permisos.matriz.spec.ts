@@ -232,14 +232,6 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('maquinaria.editar')).toEqual(['ADMIN', 'SUPER_ADMIN']);
   });
 
-  it('las plantillas de checklist las administran el coordinador de mantenimiento y los administradores', () => {
-    expect(rolesCon('checklist.gestionar')).toEqual([
-      'ADMIN',
-      'COORD_MANTENIMIENTO',
-      'SUPER_ADMIN',
-    ]);
-  });
-
   it('supervisor y coordinador de servicios especiales reportan incidentes', () => {
     expect(rolesCon('incidentes.reportar')).toEqual(
       expect.arrayContaining([

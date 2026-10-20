@@ -699,7 +699,8 @@ async function main() {
       problemasGestion.push(`${fila}: el asistente de bodega necesita una bodega que exista (${p.bodega || 'vacía'})`);
       continue;
     }
-    const email = p.correo || makeEmail(p.nombre, p.rol, p.cedula, claimedEmails);
+    // El login busca el correo en minúsculas: uno guardado con mayúsculas o espacios nunca podría iniciar sesión.
+    const email = p.correo?.trim().toLowerCase() || makeEmail(p.nombre, p.rol, p.cedula, claimedEmails);
     claimedEmails.add(email);
     const { name, lastname } = splitNombre(p.nombre);
     const existente = await prisma.user.findUnique({ where: { email } });

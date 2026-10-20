@@ -1,8 +1,6 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { ROLES_BASE } from '../src/common/permisos/roles-base.js';
 import { accionesLegacy } from '../src/common/permisos/acciones-legacy.js';
 import { motivoPasswordDebil } from '../src/common/utils/password-politica.js';
@@ -12,11 +10,12 @@ import { modulosDeCapacidades } from '../src/common/permisos/modulos-navegacion.
  * Seed idempotente de EasyDry.
  *
  * Por defecto NO borra nada: crea lo que falta (módulos, los 15 roles oficiales con sus permisos, catálogos base de inventario
- * y las cuentas Super Admin y Admin) y deja intacto lo que ya existe.
+ * y las cuentas Super Admin y Admin) y deja intacto lo que ya existe. Los roles salen de ROLES_BASE (src/common/permisos/roles-base.ts),
+ * la única fuente. Los correos y contraseñas de las dos cuentas vienen del .env, sin valores por defecto.
  *
  * Variables de entorno:
- *   SEED_SUPERADMIN_EMAIL / SEED_SUPERADMIN_PASSWORD   cuenta Super Admin (la contraseña es obligatoria)
- *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD             cuenta Admin (la contraseña es obligatoria)
+ *   SEED_SUPERADMIN_EMAIL / SEED_SUPERADMIN_PASSWORD   cuenta Super Admin (ambas obligatorias)
+ *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD             cuenta Admin (ambas obligatorias)
  *   SEED_ACTUALIZAR_ROLES=SI     restablece los permisos de los roles oficiales a los valores de fábrica
  *   SEED_RESET=SI                VACÍA toda la base antes de sembrar (en producción exige además SEED_CONFIRMAR_PRODUCCION=SI)
  */
@@ -130,43 +129,19 @@ async function main() {
     }
   }
 
-  // 2b. Roles tal como estaban en la base (prisma/roles-actuales.json), para no perder los ajustes hechos en la plataforma.
-  if (process.env.SEED_ROLES_ACTUALES === 'SI') {
-    const archivo = fileURLToPath(new URL('./roles-actuales.json', import.meta.url));
-    const guardados = JSON.parse(fs.readFileSync(archivo, 'utf8')) as Array<{
-      namerol: string; descripcion: string | null; estado: number; permisos: string[];
-      capacidades: string[]; ambito: string; esSistema: boolean; acciones: Prisma.InputJsonValue | null;
-    }>;
-    for (const r of guardados) {
-      const datos = {
-        descripcion: r.descripcion, estado: r.estado, permisos: r.permisos, capacidades: r.capacidades,
-        ambito: r.ambito, esSistema: r.esSistema, acciones: (r.acciones ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-      };
-      const existente = await prisma.role.findUnique({ where: { namerol: r.namerol } });
-      if (existente) {
-        await prisma.role.update({ where: { id: existente.id }, data: datos });
-      } else {
-        const creado = await prisma.role.create({ data: { namerol: r.namerol, ...datos } });
-        rolesMap.set(r.namerol, creado.id);
-      }
-      rolesMap.set(r.namerol, (await prisma.role.findUnique({ where: { namerol: r.namerol } }))!.id);
-    }
-    console.log(`🛡️ Roles restaurados desde roles-actuales.json (${guardados.length})`);
-  }
-
   // 3. Cuentas Super Admin y Admin
   console.log('👥 Verificando cuentas Super Admin y Admin...');
   const cuentas = [
     {
       rol: 'SUPER_ADMIN',
-      email: credencial('SEED_SUPERADMIN_EMAIL', 'superadmin@easydry.com').toLowerCase(),
+      email: credencial('SEED_SUPERADMIN_EMAIL').toLowerCase(),
       password: credencial('SEED_SUPERADMIN_PASSWORD'),
       name: 'Super',
       lastname: 'Admin',
     },
     {
       rol: 'ADMIN',
-      email: credencial('SEED_ADMIN_EMAIL', 'admin@easydry.com').toLowerCase(),
+      email: credencial('SEED_ADMIN_EMAIL').toLowerCase(),
       password: credencial('SEED_ADMIN_PASSWORD'),
       name: 'Administrador',
       lastname: 'EasyDry',
@@ -233,53 +208,6 @@ async function main() {
   ];
   if ((await prisma.tipoMovimientoInventario.count()) === 0) {
     for (const tm of tiposMovData) await prisma.tipoMovimientoInventario.create({ data: tm });
-  }
-
-  // 5. Checklist de mantenimiento: plantillas base de seguridad (solo si no hay ninguna). Se editan desde la plataforma:
-  //    cada cambio crea una versión nueva.
-  if ((await prisma.checklistPlantilla.count()) === 0) {
-    const base: Array<{ tipo: string; nombre: string; pasos: Array<[string, boolean]> }> = [
-      {
-        tipo: 'PREVENTIVO',
-        nombre: 'Checklist de mantenimiento preventivo',
-        pasos: [
-          ['Desconectar el equipo de la energía y bloquearlo antes de intervenir', true],
-          ['Revisar el estado de cables, enchufes y conexiones eléctricas', true],
-          ['Revisar mangueras, acoples y uniones: sin fugas ni desgaste', true],
-          ['Inspeccionar y limpiar los filtros; reemplazarlos si están dañados', true],
-          ['Revisar cepillos, pads y accesorios; reemplazar los desgastados', false],
-          ['Lubricar y ajustar las partes móviles según las indicaciones del fabricante', false],
-          ['Probar el funcionamiento del equipo antes de devolverlo a operación', true],
-          ['Dejar el equipo y el área de trabajo limpios y ordenados', false],
-        ],
-      },
-      {
-        tipo: 'CORRECTIVO',
-        nombre: 'Checklist de mantenimiento correctivo',
-        pasos: [
-          ['Desconectar el equipo de la energía y bloquearlo antes de intervenir', true],
-          ['Confirmar y registrar la falla reportada (qué ocurre y cuándo)', true],
-          ['Identificar el componente o la causa de la falla', true],
-          ['Reparar o reemplazar el componente defectuoso', true],
-          ['Verificar que la causa de la falla quedó resuelta', true],
-          ['Probar el funcionamiento completo del equipo antes de devolverlo a operación', true],
-          ['Registrar los repuestos utilizados', false],
-        ],
-      },
-    ];
-    for (const p of base) {
-      await prisma.checklistPlantilla.create({
-        data: {
-          tipo: p.tipo,
-          nombre: p.nombre,
-          version: 1,
-          activa: true,
-          creadaPorNombre: 'Sistema (plantilla base)',
-          pasos: { create: p.pasos.map(([texto, obligatorio], i) => ({ orden: i + 1, texto, obligatorio })) },
-        },
-      });
-    }
-    console.log('✅ Plantillas base de checklist de mantenimiento creadas');
   }
 
   console.log('=====================================================');

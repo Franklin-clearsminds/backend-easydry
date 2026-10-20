@@ -1,6 +1,7 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { CacheService } from '../../common/cache/cache.service.js';
 import { agenciasConLider } from './lideres-agencia.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
@@ -48,7 +49,11 @@ const lista = (a: string[] | undefined | null): string[] => (a ?? []).map((x) =>
 
 @Injectable()
 export class InformesInspeccionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** Guarda un rato el resumen del dashboard de auditorías. Sin él, cada visita lo recalcula. */
+    @Optional() private readonly cache?: CacheService,
+  ) {}
 
   // ───────────────────────── Alcance y permisos sobre un informe ─────────────────────────
 
@@ -179,6 +184,11 @@ export class InformesInspeccionService {
 
   /** Indicadores del dashboard de auditorías y de las tarjetas del listado, siempre dentro del alcance del usuario. */
   async resumen(user: any) {
+    if (!this.cache) return this.calcularResumen(user);
+    return this.cache.obtenerOCalcular(`informes:resumen:${user?.id ?? 'anonimo'}`, 60, () => this.calcularResumen(user));
+  }
+
+  private async calcularResumen(user: any) {
     const visible = this.whereVisible(user) as Prisma.InformeInspeccionWhereInput;
     const hoy = hoyEcuador();
     const periodoActual = hoy.toISOString().slice(0, 7);

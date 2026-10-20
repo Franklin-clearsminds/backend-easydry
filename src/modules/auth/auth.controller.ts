@@ -6,6 +6,7 @@ import { AuthService } from './auth.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
+import { CambiarPasswordDto } from './dto/cambiar-password.dto.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
 import { CLIENT_HEADER, CLIENT_WEB, REFRESH_COOKIE, REFRESH_COOKIE_PATH } from './jwt.config.js';
 
@@ -78,6 +79,18 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Perfil actualizado' })
   async updateProfile(@CurrentUser('id') userId: string, @Body() dto: UpdateProfileDto) {
     return this.authService.updateProfile(userId, dto);
+  }
+
+  @SoloAutenticado()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('cambiar-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Cambiar la contraseña propia (solo Super Administrador y Administrador; cierra todas las sesiones)' })
+  async cambiarPassword(@CurrentUser('id') userId: string, @Body() dto: CambiarPasswordDto, @Res({ passthrough: true }) res: Response) {
+    const r = await this.authService.cambiarPasswordPropia(userId, dto);
+    this.borrarCookie(res);
+    return r;
   }
 
   private esWeb(req: Request): boolean {

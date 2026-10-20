@@ -184,11 +184,6 @@ export class EditarMantenimientoDto {
   @IsNotEmpty()
   mantenimientoId: string;
 
-  @ApiPropertyOptional({ enum: ['PREVENTIVO', 'CORRECTIVO'] })
-  @IsOptional()
-  @IsIn(['PREVENTIVO', 'CORRECTIVO'])
-  tipo?: string;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

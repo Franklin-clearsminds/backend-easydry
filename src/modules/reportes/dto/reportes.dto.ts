@@ -116,3 +116,14 @@ export class RegistrarExportacionDto extends GenerarReporteDto {
   @MaxLength(64)
   documentoId?: string;
 }
+
+export const LISTAS_OPCIONALES = ['productos', 'lavadores', 'pulidores'] as const;
+
+export class OpcionesReportesDto {
+  @ApiPropertyOptional({ enum: LISTAS_OPCIONALES, isArray: true, description: 'Listas largas que se necesitan además de regiones, clientes y agencias. Sin este campo se devuelve todo.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsIn(LISTAS_OPCIONALES as unknown as string[], { each: true })
+  incluir?: string[];
+}

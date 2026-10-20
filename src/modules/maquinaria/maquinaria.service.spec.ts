@@ -64,9 +64,6 @@ function build(prismaOver: Record<string, unknown> = {}) {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
     },
-    // sin plantilla de checklist para el tipo: la orden se cierra como siempre
-    checklistRespuesta: { findMany: vi.fn().mockResolvedValue([]), createMany: vi.fn() },
-    checklistPlantilla: { findFirst: vi.fn().mockResolvedValue(null) },
     user: { findMany: vi.fn().mockResolvedValue([]) },
     $transaction: vi.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
     ...prismaOver,
@@ -96,7 +93,6 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       maquinariaId: 'm1',
       tecnicoId: 'tec-1',
       estado: 'PENDIENTE',
-      tipo: 'PREVENTIVO',
       frecuenciaDias: 30,
       fechaProgramada: new Date(Date.now() + diasHastaLaFecha * DAY),
       fechaMantenimiento: new Date(Date.now() + diasHastaLaFecha * DAY),
@@ -736,7 +732,7 @@ describe('MaquinariaService — costo de mantenimiento e incidencias', () => {
   describe('editarMantenimiento — corrección de costo restringida', () => {
     const cargado = (over: Record<string, unknown> = {}) => ({
       id: 'mt1', maquinariaId: 'm1', tecnicoId: 'tec-1', ejecutadoPorId: 'tec-1', estado: 'FINALIZADO',
-      tipo: 'PREVENTIVO', observaciones: null, repuestosUsados: null, costoTotal: 50, frecuenciaDias: 30,
+      observaciones: null, repuestosUsados: null, costoTotal: 50, frecuenciaDias: 30,
       fechaProgramada: new Date(), maquinaria: maquina(), ...over,
     });
 
