@@ -169,7 +169,9 @@ export const PAGINAS: readonly PaginaDef[] = [
   ]),
 
   pagina('aprobaciones', 'Aprobaciones del Día', '/aprobaciones', 'aprobaciones', ['servicios.ver', 'agencias.ver', 'usuarios.ver', 'solicitudes.ver'], [], [
-    accion('aprobaciones.aprobar', 'Aprobar servicio', ['servicios.decidir', 'solicitudes.crear']),
+    // Aprobar un servicio depende solo de poder decidir: si se exigiera también 'solicitudes.crear', el rol APROBADOR
+    // (que decide pero no crea solicitudes) quedaba sin el botón Aprobar aunque sí podía rechazar.
+    accion('aprobaciones.aprobar', 'Aprobar servicio', ['servicios.decidir', 'solicitudes.crear'], { migrarSi: ['servicios.decidir'] }),
     accion('aprobaciones.rechazar', 'Rechazar servicio', ['servicios.decidir']),
     accion('aprobaciones.aprobar.todos', 'Aprobar todos', ['servicios.decidir']),
     accion('aprobaciones.anular', 'Anular servicio', ['servicios.anular']),

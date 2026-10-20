@@ -60,14 +60,22 @@ export class AnalyticsService {
     return this.cache.obtenerOCalcular(clave, ttl, async () => JSON.parse(JSON.stringify(await calcular())) as T);
   }
 
-  private filtroAgencia(user: any, dto: { agenciaId?: string; regionId?: string }): Record<string, unknown> {
+  private filtroAgencia(user: any, dto: { agenciaId?: string; regionId?: string; clienteId?: string }): Record<string, unknown> {
     const a = resolverAlcance(user);
+    const clienteFilter = dto?.clienteId ? { clienteId: dto.clienteId } : {};
     switch (a.tipo) {
       case 'GLOBAL':
-        if (dto.agenciaId) return { id: dto.agenciaId };
-        return dto.regionId ? { regionId: dto.regionId } : {};
+        if (dto.agenciaId) return { id: dto.agenciaId, ...clienteFilter };
+        return {
+          ...(dto.regionId ? { regionId: dto.regionId } : {}),
+          ...clienteFilter,
+        };
       case 'REGION':
-        return { regionId: a.regionId, ...(dto.agenciaId ? { id: dto.agenciaId } : {}) };
+        return {
+          regionId: a.regionId,
+          ...(dto.agenciaId ? { id: dto.agenciaId } : {}),
+          ...clienteFilter,
+        };
       case 'AGENCIA':
         return { id: a.agenciaId };
       default:
@@ -186,7 +194,7 @@ export class AnalyticsService {
     const roleName = rolDeUsuario(user);
 
     if (roleName === 'APROBADOR') {
-      const metricas = await this.getAprobadorMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio);
+      const metricas = await this.getAprobadorMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.categoriaServicio, dto?.bahiaId);
       return { success: true, isAprobadorView: true, metricasAprobaciones: metricas, ...metricas };
     }
 
@@ -728,9 +736,18 @@ export class AnalyticsService {
   }
 
   // ═══ APROBADOR ═══════════════════════════════════════════════════════
-  private async getAprobadorMetrics(filtro: any, hayFiltro: boolean, startOfDay: Date, endOfDay: Date, _hace30Dias: Date, categoriaServicio?: string) {
+  private async getAprobadorMetrics(filtro: any, hayFiltro: boolean, startOfDay: Date, endOfDay: Date, _hace30Dias: Date, categoriaServicio?: string, bahiaId?: string) {
     const tiposOperativos = ['DESPACHO_QUIMICOS', 'COMPRA_REPUESTO', 'AJUSTE_MERMA'];
-    const whereBase = hayFiltro ? { agencia: filtro, tipo: { notIn: tiposOperativos } } : { tipo: { notIn: tiposOperativos } };
+    let whereBase: any = hayFiltro ? { agencia: filtro, tipo: { notIn: tiposOperativos } } : { tipo: { notIn: tiposOperativos } };
+
+    if (bahiaId) {
+      const servs = await this.prisma.servicioLavado.findMany({
+        where: { bahiaId },
+        select: { id: true },
+      });
+      const idsServicios = servs.map((s) => s.id);
+      whereBase = { ...whereBase, entidadRefId: { in: idsServicios } };
+    }
 
     // Los gráficos de distribución, tipos y auditoría SIEMPRE muestran los últimos 7 días completos
     // independientemente del rango de período seleccionado (HOY, SEMANA, MES…).
@@ -764,9 +781,14 @@ export class AnalyticsService {
         select: { tipo: true, estado: true, montoUSD: true }
       }),
       // Anulaciones de servicios de su alcance registradas hoy
-      this.federados.count('servicioLavado', {
-        where: { anuladoEn: { gte: startOfDay, lte: endOfDay }, ...(hayFiltro ? { bahia: { agencia: filtro } } : {}), ...this.filtroCategoria(categoriaServicio) }
+this.federados.count('servicioLavado', {
+        where: {
+          anuladoEn: { gte: startOfDay, lte: endOfDay },
+          ...(bahiaId ? { bahiaId } : (hayFiltro ? { bahia: { agencia: filtro } } : {})),
+          ...this.filtroCategoria(categoriaServicio)
+        }
       }),
+
       // Auditoría de decisiones en la agencia (siempre últimos 7 días)
       this.prisma.auditoriaDecision?.findMany
         ? this.prisma.auditoriaDecision.findMany({
@@ -893,12 +915,13 @@ export class AnalyticsService {
     };
 
     const topSolKeys = Object.keys(solicitantesCount).sort((a, b) => solicitantesCount[b] - solicitantesCount[a]).slice(0, 5);
+    const PALETA_SOLICITANTES = ['#3B82F6', '#8B5CF6', '#EC4899', '#10B981', '#F59E0B', '#06B6D4', '#F97316'];
     const chartTopSolicitantes = {
       labels: topSolKeys,
       datasets: [{
         label: 'Solicitudes Aprobadas',
         data: topSolKeys.map(k => solicitantesCount[k]),
-        backgroundColor: '#007AFF'
+        backgroundColor: PALETA_SOLICITANTES.slice(0, topSolKeys.length)
       }]
     };
 
@@ -921,12 +944,13 @@ export class AnalyticsService {
     };
 
     const topMotivosKeys = Object.keys(motivosRechazoCount).sort((a, b) => motivosRechazoCount[b] - motivosRechazoCount[a]).slice(0, 5);
+    const PALETA_RECHAZOS = ['#F43F5E', '#E11D48', '#BE123C', '#9F1239', '#881337', '#FB7185'];
     const chartMotivosRechazo = {
       labels: topMotivosKeys.length > 0 ? topMotivosKeys : ['Sin rechazos registrados'],
       datasets: [{
         label: 'Rechazos',
         data: topMotivosKeys.length > 0 ? topMotivosKeys.map(k => motivosRechazoCount[k]) : [0],
-        backgroundColor: '#F43F5E'
+        backgroundColor: topMotivosKeys.length > 0 ? PALETA_RECHAZOS.slice(0, topMotivosKeys.length) : ['#94A3B8']
       }]
     };
 
@@ -1512,9 +1536,16 @@ export class AnalyticsService {
   private async getDashboardTallerSinCache(dto: DashboardDedicadoDto, user: any) {
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
-    const maqWhere = hayFiltro ? { agencia: filtro } : {};
-    // Los incidentes se acotan por agencia (vía maquinaria) y por pulidor (vía reportante).
-    const incWhere: any = { ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}), ...this.filtroIncidentePulidor(dto?.pulidorId) };
+    const maqWhere: any = {
+      ...(hayFiltro ? { agencia: filtro } : {}),
+      ...(dto?.bahiaId ? { bahiaId: dto.bahiaId } : {}),
+    };
+    // Los incidentes se acotan por agencia (vía maquinaria), bahía y por pulidor (vía reportante).
+    const incWhere: any = {
+      ...(hayFiltro ? { maquinaria: { agencia: filtro } } : {}),
+      ...(dto?.bahiaId ? { maquinaria: { bahiaId: dto.bahiaId } } : {}),
+      ...this.filtroIncidentePulidor(dto?.pulidorId),
+    };
     const { desde: startOfDay, hasta: endOfDay } = this.resolverPeriodo(dto);
     // Incidentes y mantenimientos siguen EXACTAMENTE el período filtrado: antes la ventana era
     // «inicio del período − 30 días» y las tarjetas la rotulaban "30 días" aunque se filtrara por semestre.
@@ -1645,10 +1676,27 @@ export class AnalyticsService {
       .sort((a, b) => b.horas - a.horas);
     const mttrPorAgenciaTop = mttrPorAgencia.slice(0, 8);
 
+    // Desglose por bahía cuando se filtra por agencia o para ver la distribución técnica de bahías
+    const bahiaIncidentesMap: Record<string, { incidentes: number; costo: number }> = {};
+    for (const inc of incidentes30Dias) {
+      const bh = (inc.maquinaria as any)?.bahia?.nombre || 'Sin Bahía Asignada';
+      const bObj = (bahiaIncidentesMap[bh] ??= { incidentes: 0, costo: 0 });
+      bObj.incidentes++;
+      bObj.costo += Number(inc.costoTotal || 0);
+    }
+    const incidentesPorBahia = Object.keys(bahiaIncidentesMap)
+      .map((nombre) => ({
+        nombre,
+        incidentes: bahiaIncidentesMap[nombre].incidentes,
+        costo: Number(bahiaIncidentesMap[nombre].costo.toFixed(2)),
+      }))
+      .sort((a, b) => b.incidentes - a.incidentes);
+
     return {
       success: true,
       mttrPorGravedad,
       mttrPorAgencia: mttrPorAgenciaTop,
+      incidentesPorBahia,
       costoPorAgencia: costoPorAgenciaTop,
       kpis: {
         costoMantenimientos30d: Number(costoMantenimientos.toFixed(2)),
@@ -1727,7 +1775,7 @@ export class AnalyticsService {
     const [alertasActivas, movimientos30Dias, stocks, stocksSalud] = await Promise.all([
       this.prisma.alertaStock.findMany({
         where: alertaWhere,
-        include: { insumo: { select: { nombre: true, categoria: true } }, agencia: { select: { nombre: true } }, pulidor: { select: { name: true, lastname: true, agenciaId: true } } },
+        include: { insumo: { select: { nombre: true, categoria: true, tipoProducto: { select: { nombre: true } } } }, agencia: { select: { nombre: true } }, pulidor: { select: { name: true, lastname: true, agenciaId: true } } },
         orderBy: [{ nivel: 'desc' }, { createdAt: 'desc' }],
       }),
       this.federados.findMany('movimientoInventario', {
@@ -1737,17 +1785,17 @@ export class AnalyticsService {
           estadoDespacho: true, 
           createdAt: true, 
           destinoUbicacion: true,
-          detalles: { select: { cantidadEnviada: true, insumo: { select: { nombre: true, categoria: true } } } } 
+          detalles: { select: { cantidadEnviada: true, insumo: { select: { nombre: true, categoria: true, tipoProducto: { select: { nombre: true } } } } } } 
         },
       }),
       this.prisma.stockUbicacion.findMany({
         where: stockWhere,
-        include: { insumo: { select: { nombre: true, categoria: true } } },
+        include: { insumo: { select: { nombre: true, categoria: true, tipoProducto: { select: { nombre: true } } } } },
       }),
       this.prisma.stockUbicacion.findMany({
         where: stockSaludWhere,
         include: {
-          insumo: { select: { nombre: true, categoria: true, unidadMedida: { select: { simbolo: true } }, stockMinimoBodega: true, stockMinimoAgencia: true, stockOptimoBodega: true, stockOptimoAgencia: true } },
+          insumo: { select: { nombre: true, categoria: true, tipoProducto: { select: { nombre: true } }, unidadMedida: { select: { simbolo: true } }, stockMinimoBodega: true, stockMinimoAgencia: true, stockOptimoBodega: true, stockOptimoAgencia: true } },
           agencia: { select: { nombre: true } },
           bodega: { select: { nombre: true } },
           pulidor: { select: { name: true, lastname: true } },
@@ -1822,8 +1870,8 @@ export class AnalyticsService {
       for (const d of mov.detalles) {
         const cantidad = Number(d.cantidadEnviada || 0);
         cantidadTotalMov += cantidad;
-        const cat = d.insumo?.categoria || 'Sin Categoría';
-        consumoPorCategoria[cat] = (consumoPorCategoria[cat] || 0) + cantidad;
+        const tipoProd = d.insumo?.tipoProducto?.nombre || d.insumo?.categoria || 'Sin Tipo';
+        consumoPorCategoria[tipoProd] = (consumoPorCategoria[tipoProd] || 0) + cantidad;
         const insumo = d.insumo?.nombre || 'Insumo';
         consumoPorInsumo[insumo] = (consumoPorInsumo[insumo] || 0) + cantidad;
       }
@@ -1853,8 +1901,8 @@ export class AnalyticsService {
     for (const s of stocks) {
       const cantidad = Number(s.cantidadActual || 0);
       unidadesStock += cantidad;
-      const cat = s.insumo?.categoria || 'Sin Categoría';
-      unidadesStockPorCategoria[cat] = (unidadesStockPorCategoria[cat] || 0) + cantidad;
+      const tipoProd = s.insumo?.tipoProducto?.nombre || s.insumo?.categoria || 'Sin Tipo';
+      unidadesStockPorCategoria[tipoProd] = (unidadesStockPorCategoria[tipoProd] || 0) + cantidad;
     }
 
     // Top insumos con alerta. Recortado: el dashboard de bodega no lleva control de orden en alertas.
@@ -1902,14 +1950,14 @@ export class AnalyticsService {
   /**
    * Salud del inventario: cruza cada posición de stock contra su mínimo y su nivel ideal (óptimo).
    * Mínimo/ideal: el de la ubicación si está configurado; si no, el del insumo según sea bodega o agencia/pulidor.
-   * Clasificación: AGOTADO (0) · CRÍTICO (<50% del mínimo) · BAJO MÍNIMO (<mínimo) · BAJO IDEAL (<ideal) · ÓPTIMO · SOBRESTOCK (>150% del ideal).
+   * Clasificación: AGOTADO (0) · CRÍTICO (<50% del mínimo) · BAJO MÍNIMO (<mínimo) · BAJO IDEAL (<ideal) · ÓPTIMO.
    * Todo se reporta en UNIDADES (nunca en USD): el costo del catálogo es por envase y las existencias se
    * llevan en unidad base, así que el déficit × costo inflaba el monto y no servía para reponer.
    */
   private calcularSaludInventario(stocks: any[], alertas: any[]) {
-    const ESTADOS = ['AGOTADO', 'CRÍTICO', 'BAJO MÍNIMO', 'BAJO IDEAL', 'ÓPTIMO', 'SOBRESTOCK'] as const;
+    const ESTADOS = ['AGOTADO', 'CRÍTICO', 'BAJO MÍNIMO', 'BAJO IDEAL', 'ÓPTIMO'] as const;
     type Estado = (typeof ESTADOS)[number];
-    const vacio = (): Record<Estado, number> => ({ AGOTADO: 0, 'CRÍTICO': 0, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 0, 'ÓPTIMO': 0, SOBRESTOCK: 0 });
+    const vacio = (): Record<Estado, number> => ({ AGOTADO: 0, 'CRÍTICO': 0, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 0, 'ÓPTIMO': 0 });
     const n = (v: any) => Number(v ?? 0);
 
     const global = vacio();
@@ -1933,7 +1981,6 @@ export class AnalyticsService {
       else if (actual < minimo * 0.5) estado = 'CRÍTICO';
       else if (actual < minimo) estado = 'BAJO MÍNIMO';
       else if (actual < ideal) estado = 'BAJO IDEAL';
-      else if (actual > ideal * 1.5) estado = 'SOBRESTOCK';
       else estado = 'ÓPTIMO';
       global[estado]++;
 
@@ -1946,8 +1993,8 @@ export class AnalyticsService {
       }
       (porUbicacion[ubic] ??= vacio())[estado]++;
 
-      const cat = ins.categoria || 'Sin categoría';
-      const c = (porCategoria[cat] ??= { actual: 0, minimo: 0, ideal: 0 });
+      const tipoProd = ins.tipoProducto?.nombre || ins.categoria || 'Sin Tipo';
+      const c = (porCategoria[tipoProd] ??= { actual: 0, minimo: 0, ideal: 0 });
       c.actual += actual; c.minimo += minimo; c.ideal += ideal;
 
       // El faltante se mide en UNIDADES de la unidad de medida del insumo. No se convierte a USD: el
@@ -1961,11 +2008,11 @@ export class AnalyticsService {
       }
     }
 
-    // Alertas agrupadas por categoría del insumo y nivel (barras apiladas), no solo por severidad.
+    // Alertas agrupadas por Tipo de Producto del insumo y nivel, no solo por severidad.
     const alertasCat: Record<string, { AGOTADO: number; CRITICO: number; BAJO: number }> = {};
     for (const a of alertas) {
-      const cat = a.insumo?.categoria || 'Sin categoría';
-      const reg = (alertasCat[cat] ??= { AGOTADO: 0, CRITICO: 0, BAJO: 0 });
+      const tipoProd = a.insumo?.tipoProducto?.nombre || a.insumo?.categoria || 'Sin Tipo';
+      const reg = (alertasCat[tipoProd] ??= { AGOTADO: 0, CRITICO: 0, BAJO: 0 });
       if (a.nivel in reg) reg[a.nivel as 'AGOTADO' | 'CRITICO' | 'BAJO']++;
     }
 

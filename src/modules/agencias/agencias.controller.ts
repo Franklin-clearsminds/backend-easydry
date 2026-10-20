@@ -86,7 +86,7 @@ export class AgenciasController {
     return this.agenciasService.listRegiones(dto, user);
   }
 
-  @Permiso('agencias.ver')
+  @Permiso('agencias.ver', 'dashboard.ver')
   @Post('regiones/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Regiones para un desplegable con buscador: { value, label, sublabel } paginado' })
@@ -130,20 +130,20 @@ export class AgenciasController {
     return this.agenciasService.listClientes(dto);
   }
 
-  @Permiso('agencias.ver')
+  @Permiso('agencias.ver', 'dashboard.ver')
   @Post('clientes/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Clientes/marcas para un desplegable con buscador: { value, label } paginado' })
-  async opcionesClientes(@Body() dto: ClientesOpcionesDto) {
-    return this.agenciasService.listClientesOpciones(dto);
+  async opcionesClientes(@Body() dto: ClientesOpcionesDto, @CurrentUser() user: any) {
+    return this.agenciasService.listClientesOpciones(dto, user);
   }
 
-  @Permiso('agencias.ver')
+  @Permiso('agencias.ver', 'dashboard.ver')
   @Post('marcas/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Alias de clientes/opciones' })
-  async opcionesMarcas(@Body() dto: ClientesOpcionesDto) {
-    return this.agenciasService.listClientesOpciones(dto);
+  async opcionesMarcas(@Body() dto: ClientesOpcionesDto, @CurrentUser() user: any) {
+    return this.agenciasService.listClientesOpciones(dto, user);
   }
 
   @Permiso('agencias.clientes.crear')
@@ -215,7 +215,7 @@ export class AgenciasController {
     return this.agenciasService.listAgencias(dto, user);
   }
 
-  @Permiso('agencias.ver')
+  @Permiso('agencias.ver', 'dashboard.ver', 'maquinaria.ver')
   @Post('opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Agencias para un desplegable con buscador (mismo alcance por rol que list): { value, label, sublabel } paginado' })
@@ -291,7 +291,7 @@ export class AgenciasController {
     return this.agenciasService.listBahias(dto, user);
   }
 
-  @Permiso('agencias.ver')
+  @Permiso('agencias.ver', 'dashboard.ver', 'maquinaria.ver')
   @Post('bahias/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Bahías para un desplegable con buscador: { value, label, sublabel } paginado' })

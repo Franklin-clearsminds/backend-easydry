@@ -233,7 +233,7 @@ export class RolesService implements OnModuleInit {
     }
     const faltantes = (role.capacidades ?? []).filter((c) => !tienePermiso(actor, c));
     if (faltantes.length) {
-      throw new ForbiddenException('No puedes gestionar un rol con permisos que tu rol no tiene.');
+      throw new ForbiddenException(`No puedes gestionar un rol con permisos que tu rol no tiene: ${faltantes.join(', ')}`);
     }
   }
 

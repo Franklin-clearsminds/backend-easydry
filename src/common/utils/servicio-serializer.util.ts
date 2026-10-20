@@ -3,6 +3,16 @@
  * Garantiza compatibilidad 1-a-1 con los templates de Angular 19 (frontend-easy-dry)
  * y componentes React Native (app-easy-dry), evitando campos undefined o errores de renderizado.
  */
+/** Campos del usuario que jamás deben salir en una respuesta, aunque un `include` traiga la fila completa. */
+const CAMPOS_SENSIBLES_USUARIO = ['passwordHash', 'password', 'refreshToken', 'refreshTokenHash', 'resetToken', 'resetTokenExpira'];
+
+function usuarioSeguro(u: any): any {
+  if (!u || typeof u !== 'object') return u ?? null;
+  const copia = { ...u };
+  for (const campo of CAMPOS_SENSIBLES_USUARIO) delete copia[campo];
+  return copia;
+}
+
 export function serializeServicioLavado(s: any): any {
   if (!s) return null;
 
@@ -162,10 +172,10 @@ export function serializeServicioLavado(s: any): any {
     operadorId: s.operadorId,
     servicioCatalogoId: s.servicioCatalogoId,
     bahiaRel: s.bahia,
-    operadorRel: s.operador,
+    operadorRel: usuarioSeguro(s.operador),
     catalogoRel: s.catalogo,
     catalogo: s.catalogo || s.catalogoRel || null,
-    operador: s.operador || s.operadorRel || null,
+    operador: usuarioSeguro(s.operador || s.operadorRel || null),
     consumos: s.consumos || [],
     evidencias: s.evidencias || [],
   };

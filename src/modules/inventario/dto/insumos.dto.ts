@@ -96,6 +96,11 @@ export class UpdateInsumoDto {
   @IsString()
   id: string;
 
+  @ApiPropertyOptional({ description: 'Código SKU único del insumo' })
+  @IsOptional()
+  @IsString()
+  codigoSKU?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

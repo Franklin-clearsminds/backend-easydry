@@ -158,7 +158,7 @@ describe('AnalyticsService (base real)', () => {
       expect(supervisor.isSupervisorView).toBe(true);
     });
 
-    it('un usuario global puede acotar a la agencia o región que pida', async () => {
+it('un usuario global puede acotar a la agencia o región que pida', async () => {
       const agencia: any = await service.getDashboardMetrics({ ...ENE_5_11, agenciaId: a2.id }, act.coordBodega);
       expect(agencia.kpis.totalLavadosHoy).toBe(1);
       const region: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r2.id }, act.coordBodega);
@@ -517,7 +517,7 @@ describe('AnalyticsService (base real)', () => {
       expect(res.saludPorUbicacion.map((u: any) => u.nombre)).toEqual([a3.nombre, a4.nombre, a1.nombre]);
       expect(res.saludPorUbicacion[0]).toEqual({
         nombre: a3.nombre,
-        AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0, SOBRESTOCK: 0,
+        AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0,
         criticos: 3, problemas: 3,
       });
       expect(res.kpis.posicionesEvaluadas).toBe(8);

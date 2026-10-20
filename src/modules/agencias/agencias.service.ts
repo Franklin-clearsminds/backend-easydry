@@ -792,9 +792,18 @@ export class AgenciasService {
     });
   }
 
-  async listClientesOpciones(dto: ClientesOpcionesDto) {
+  async listClientesOpciones(dto: ClientesOpcionesDto, user?: any) {
+    const alcance = user ? resolverAlcance(user) : undefined;
+    const regionId = dto.regionId || (alcance?.tipo === 'REGION' ? alcance.regionId : undefined);
+    const whereRegion = regionId
+      ? { agencias: { some: { regionId, estado: 1 } } }
+      : undefined;
+
     return listarOpciones(dto, {
-      where: combinarWhere(dto.estado !== undefined ? { estado: dto.estado } : undefined),
+      where: combinarWhere(
+        dto.estado !== undefined ? { estado: dto.estado } : undefined,
+        whereRegion,
+      ),
       camposBusqueda: ['nombre'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>

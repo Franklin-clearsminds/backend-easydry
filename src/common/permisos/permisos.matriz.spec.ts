@@ -120,6 +120,8 @@ describe('matriz acordada de permisos por rol', () => {
     );
     expect(p).not.toContain('servicios.editar');
     expect(p).not.toContain('servicios.crear');
+    // BUG-30-PERM-01: el botón Aprobar depende de la acción 'aprobaciones.aprobar', no basta con poder rechazar.
+    expect(p).toEqual(expect.arrayContaining(['aprobaciones.aprobar', 'aprobaciones.rechazar', 'aprobaciones.anular']));
   });
 
   it('crear y editar OT generales: líder y administradores', () => {

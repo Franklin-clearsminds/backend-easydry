@@ -1928,9 +1928,14 @@ export class MaquinariaService {
           usuarioId: actor.id,
         },
       });
+      const cambiaSedeOTaller = dto.destinoAgenciaId !== maquina.agenciaId || destino.tipoUbicacion !== 'AGENCIA';
       const updated = await tx.maquinaria.update({
         where: { id: maquina.id },
-        data: { agenciaId: dto.destinoAgenciaId, bahiaId: destinoBahiaId },
+        data: {
+          agenciaId: dto.destinoAgenciaId,
+          bahiaId: destinoBahiaId,
+          ...(cambiaSedeOTaller ? { operadorAsignadoId: null } : {}),
+        },
         include: {
           agencia: { select: { id: true, nombre: true, tipoUbicacion: true, regionId: true } },
           bahia: { select: { id: true, nombre: true } },
