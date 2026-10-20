@@ -42,5 +42,10 @@ export function completarAccionesDeDatos(capacidades: readonly string[], namerol
     if (resultado.has(codigo) || !aplica(namerol)) continue;
     if (codigosNuevosActivos([...resultado, codigo]).has(codigo)) resultado.add(codigo);
   }
+  // «Ver personal completo de la agencia» incluye la cédula y el correo y teléfono del personal.
+  if (resultado.has('agencias.personal.ver') || resultado.has('pagina.operadores')) {
+    resultado.add('datos.cedula.ver');
+    resultado.add('datos.contacto.ver');
+  }
   return [...resultado];
 }

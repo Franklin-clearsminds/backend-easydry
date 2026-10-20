@@ -5,6 +5,12 @@ import { AgenciasService } from './agencias.service.js';
 import { ListUsuariosAgenciaDto } from './dto/usuarios-agencia.dto.js';
 import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
+/** El líder de fábrica ya ve cédula, correo y teléfono (viene con «Ver lavadores completo»): para probar el caso «sin la casilla» se le quitan. */
+const sinDatosPersonales = (actor: any) => ({
+  ...actor,
+  roleDetails: { ...actor.roleDetails, capacidades: actor.roleDetails.capacidades.filter((c: string) => c !== 'datos.contacto.ver' && c !== 'datos.cedula.ver') },
+});
+
 /**
  * Integración con la base real (sin mocks). Datos de partida, todos creados por esta prueba:
  *
@@ -222,7 +228,7 @@ describe('AgenciasService.listUsuariosPorAgencia (base real)', () => {
     });
 
     it('quien no es administrador no recibe correos; el administrador sí', async () => {
-      const comoLider: any = await service.listUsuariosPorAgencia(dto({}), liderA1);
+      const comoLider: any = await service.listUsuariosPorAgencia(dto({}), sinDatosPersonales(liderA1));
       expect(comoLider.length).toBeGreaterThan(0);
       expect(comoLider.every((u: any) => u.email === undefined)).toBe(true);
 

@@ -2,6 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AgenciasService } from './agencias.service.js';
 import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
+/** El líder de fábrica ya ve cédula, correo y teléfono (viene con «Ver lavadores completo»): para probar el caso «sin la casilla» se le quitan. */
+const sinDatosPersonales = (actor: any) => ({
+  ...actor,
+  roleDetails: { ...actor.roleDetails, capacidades: actor.roleDetails.capacidades.filter((c: string) => c !== 'datos.contacto.ver' && c !== 'datos.cedula.ver') },
+});
+
 /**
  * Integración con la base real (sin mocks). Datos de partida, todos creados por esta prueba:
  *
@@ -71,7 +77,7 @@ describe('Agencias: alcance por rol (base real)', () => {
     });
 
     it('solo el administrador recibe los correos del personal', async () => {
-      const comoLider: any = await service.detailAgencia(a1.id, actores.ana);
+      const comoLider: any = await service.detailAgencia(a1.id, sinDatosPersonales(actores.ana));
       const luisParaLider = comoLider.usuarios.find((u: any) => u.id === ids.luis);
       expect(luisParaLider.name).toBe('Luis');
       expect(luisParaLider).not.toHaveProperty('email');
@@ -82,7 +88,7 @@ describe('Agencias: alcance por rol (base real)', () => {
     });
 
     it('el correo y el teléfono los ve quien tenga la casilla, aunque no sea administrador', async () => {
-      const base = actores.ana;
+      const base = sinDatosPersonales(actores.ana);
       const sin: any = await service.detailAgencia(a1.id, base);
       expect(sin.usuarios.find((u: any) => u.id === ids.luis)).not.toHaveProperty('email');
 
@@ -133,7 +139,7 @@ describe('Agencias: alcance por rol (base real)', () => {
 
     it('los operadores de una bahía se leen solo dentro del alcance y sin correo para quien no es administrador', async () => {
       await expect(service.listarOperadoresDeBahia(b1.id, actores.lara)).rejects.toThrow(/alcance/);
-      const comoLider: any = await service.listarOperadoresDeBahia(b1.id, actores.ana);
+      const comoLider: any = await service.listarOperadoresDeBahia(b1.id, sinDatosPersonales(actores.ana));
       expect(comoLider).toHaveLength(1);
       expect(comoLider[0].operador.id).toBe(ids.luis);
       expect(comoLider[0].operador).not.toHaveProperty('email');

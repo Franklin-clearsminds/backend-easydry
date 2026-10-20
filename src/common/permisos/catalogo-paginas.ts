@@ -91,23 +91,24 @@ export const PAGINAS: readonly PaginaDef[] = [
     ], ['mapa.ver']),
     sub('agencias', 'agencias', 'Agencias', [], [
       accion('agencias.agencias.crear', 'Crear agencia', ['agencias.crear']),
-      accion('agencias.agencias.editar', 'Editar datos de la agencia', ['agencias.editar']),
+      accion('agencias.agencias.editar', 'Editar datos de la agencia (incluye cantidad de bahías y activar o desactivar bahías)', ['agencias.editar', 'bahias.editar'], { migrarSi: ['agencias.editar'] }),
       accion('agencias.agencias.servicios', 'Habilitar servicios de la agencia', ['agencias.editar']),
       accion('agencias.agencias.estado', 'Activar o desactivar agencia', ['agencias.estado']),
-      accion('agencias.bahias.crear', 'Crear bahía', ['bahias.crear']),
-      accion('agencias.bahias.estado', 'Activar o desactivar bahía', ['bahias.editar']),
       accion('agencias.bahias.asignar', 'Asignar lavadores a bahía', ['bahias.asignar']),
-      accion('agencias.personal.ver', 'Ver personal de la agencia', ['usuarios.ver']),
+      // Una sola casilla para el personal: con ella se ve la lista completa, con cédula, correo y teléfono.
+      accion('agencias.personal.ver', 'Ver personal completo de la agencia (con cédula, correo y teléfono)', ['usuarios.ver', 'datos.cedula.ver', 'datos.contacto.ver'], { migrarSi: ['usuarios.ver'] }),
       accion('agencias.precios.fijar', 'Fijar precios por agencia', ['agencias.precios.gestionar']),
-      PRECIOS, CEDULA, CONTACTO,
-    ], ['agencias.consultar', 'agencias.crear', 'agencias.editar', 'agencias.estado', 'bahias.crear', 'bahias.editar', 'agencias.precios.gestionar']),
+      PRECIOS,
+    ], ['agencias.consultar', 'agencias.crear', 'agencias.editar', 'agencias.estado', 'bahias.editar', 'agencias.precios.gestionar']),
     sub('agencias', 'regiones', 'Regiones', [], [
       accion('agencias.regiones.crear', 'Crear región', ['regiones.gestionar']),
+      accion('agencias.regiones.transferir', 'Transferir agencias entre regiones', ['regiones.transferir'], { migrarSi: ['agencias.crear'] }),
       accion('agencias.regiones.editar', 'Editar región', ['regiones.gestionar']),
       accion('agencias.regiones.estado', 'Activar o desactivar región', ['regiones.gestionar']),
     ], ['agencias.consultar', 'regiones.gestionar']),
     sub('agencias', 'clientes', 'Clientes', [], [
       accion('agencias.clientes.crear', 'Crear cliente', ['clientes.gestionar']),
+      accion('agencias.clientes.transferir', 'Transferir agencias entre clientes', ['agencias.transferir'], { migrarSi: ['agencias.crear'] }),
       accion('agencias.clientes.editar', 'Editar cliente', ['clientes.gestionar']),
       accion('agencias.clientes.estado', 'Activar o desactivar cliente', ['clientes.gestionar']),
     ], ['agencias.consultar', 'clientes.gestionar']),
@@ -117,31 +118,33 @@ export const PAGINAS: readonly PaginaDef[] = [
     ], ['usuarios.ver']),
   ]),
 
-  pagina('operadores', 'Gestión de Lavadores', '/operadores', 'operadores', ['operadores.ver', 'agencias.ver'], [], [
+  // Con la página activa se ve todo del lavador: ficha, productividad, cédula, correo y teléfono (no hay casilla de lectura aparte).
+  pagina('operadores', 'Gestión de Lavadores', '/operadores', 'operadores', ['operadores.ver', 'agencias.ver', 'datos.cedula.ver', 'datos.contacto.ver'], [], [
     accion('operadores.registrar', 'Registrar lavador o pulidor', ['operadores.gestionar']),
     accion('operadores.editar', 'Editar datos', ['operadores.gestionar']),
-    accion('operadores.rol', 'Cambiar rol', ['operadores.gestionar']),
-    accion('operadores.bahia.asignar', 'Asignar a bahía', ['bahias.asignar']),
-    accion('operadores.bahia.quitar', 'Quitar de bahía', ['bahias.asignar']),
-    accion('operadores.ficha.ver', 'Ver ficha y productividad', ['operadores.ver']),
-    CEDULA, CONTACTO,
+    accion('operadores.bahia.asignar', 'Asignar y quitar de bahía', ['bahias.asignar']),
   ]),
 
   pagina('servicios', 'Servicios de Lavado', '/servicios', 'servicios', ['agencias.ver', 'catalogo.ver'], [
-    sub('servicios', 'generales', 'Servicios generales', ['servicios.ver'], [
-      accion('servicios.generales.crear', 'Registrar OT', ['servicios.crear', 'usuarios.ver'], { migrarSi: ['servicios.crear'] }),
-      accion('servicios.generales.agregar', 'Agregar servicios a una OT', ['servicios.crear']),
-      accion('servicios.generales.editar', 'Editar OT', ['servicios.editar']),
+    // Ver las evidencias (fotos y videos de inicio y fin) va con ver los servicios: no es una casilla aparte.
+    sub('servicios', 'generales', 'Servicios generales', ['servicios.ver', 'evidencias.ver'], [
+      // Subir evidencias no es una casilla aparte: va con registrar (evidencia de ingreso), agregar y finalizar (no se puede finalizar sin evidencia).
+      accion('servicios.generales.crear', 'Registrar OT (incluye subir evidencias)', ['servicios.crear', 'evidencias.subir', 'usuarios.ver'], { migrarSi: ['servicios.crear'] }),
+      accion('servicios.generales.agregar', 'Agregar servicios a una OT (incluye subir evidencias)', ['servicios.crear', 'evidencias.subir'], { migrarSi: ['servicios.crear'] }),
+      accion('servicios.generales.finalizar', 'Finalizar OT (incluye subir evidencias)', ['servicios.finalizar', 'evidencias.subir'], { migrarSi: ['servicios.editar'] }),
+      accion('servicios.generales.editar', 'Editar OT (vehículo, cliente y observaciones)', ['servicios.editar']),
       accion('servicios.generales.anular', 'Anular OT', ['servicios.anular']),
-      EVID_VER, EVID_SUBIR, PRECIOS,
-    ]),
-    sub('servicios', 'especiales', 'Servicios especiales', ['especiales.ver'], [
-      accion('servicios.especiales.crear', 'Crear OT especial', ['especiales.crear', 'usuarios.ver'], { migrarSi: ['especiales.crear'] }),
+      PRECIOS,
+    ], ['servicios.ver']),
+    sub('servicios', 'especiales', 'Servicios especiales', ['especiales.ver', 'evidencias.ver'], [
+      accion('servicios.especiales.crear', 'Crear OT especial (incluye subir evidencias)', ['especiales.crear', 'evidencias.subir', 'usuarios.ver'], { migrarSi: ['especiales.crear'] }),
       accion('servicios.especiales.reasignar', 'Reasignar pulidor', ['especiales.reasignar', 'usuarios.ver'], { migrarSi: ['especiales.reasignar'] }),
+      accion('servicios.especiales.editar', 'Editar OT especial (vehículo, cliente, prioridad y observaciones)', ['especiales.editar']),
       accion('servicios.especiales.anular', 'Anular OT especial', ['especiales.anular']),
-      accion('servicios.especiales.operar', 'Ejecutar: iniciar, pausar y completar', ['especiales.operar']),
-      EVID_VER, EVID_SUBIR, PRECIOS,
-    ]),
+      accion('servicios.especiales.operar', 'Ejecutar: iniciar, pausar y reanudar (incluye subir evidencias)', ['especiales.operar', 'evidencias.subir'], { migrarSi: ['especiales.operar'] }),
+      accion('servicios.especiales.finalizar', 'Finalizar OT especial (incluye subir evidencias)', ['especiales.finalizar', 'evidencias.subir'], { migrarSi: ['especiales.operar'] }),
+      PRECIOS,
+    ], ['especiales.ver']),
   ]),
 
   pagina('catalogo', 'Catálogo de Servicios', '/configuracion/servicios', 'configuracion/servicios', ['catalogo.ver'], [
@@ -341,11 +344,15 @@ export const nombreDeCodigo = (codigo: string): string => NOMBRE_DE.get(codigo) 
 
 // ───────────────────────── Validación y expansión ─────────────────────────
 
+/** Códigos que otra casilla otorga (p. ej. la cédula, que da «Ver lavadores completo»): no necesitan su propia página activa. */
+const OTORGADOS_POR_ACCION: ReadonlySet<string> = new Set(PAGINAS.flatMap((p) => [...p.otorga, ...p.subs.flatMap((s) => s.otorga), ...accionesDe(p).flatMap((a) => a.otorga)]));
+
 /** Códigos nuevos que no pueden estar activos porque su página o sub-página está apagada. */
 export function dependenciasRotas(codigos: Iterable<string>): { codigo: string; requiere: string }[] {
   const activos = new Set(codigos);
   const rotas: { codigo: string; requiere: string }[] = [];
   for (const c of activos) {
+    if (OTORGADOS_POR_ACCION.has(c)) continue;
     if (CODIGOS_SUBPAGINAS.has(c)) {
       const pag = PAGINA_DE_SUB.get(c)!;
       if (!activos.has(pag)) rotas.push({ codigo: c, requiere: pag });

@@ -5,7 +5,9 @@ import { esLiderDeAgencia, rolDeUsuario } from './alias-roles.js';
 import { resolverAlcance, puedeSobreAgencia } from './alcance.js';
 
 export type ReglaDecision = 'TITULAR' | 'RESPALDO' | 'ADMIN';
-export type AccionDecision = 'APROBAR' | 'RECHAZAR' | 'ANULAR' | 'EDITAR_APROBADO' | 'REINTENTAR' | 'RESOLVER';
+/** Lo que queda en el registro: las reglas de decisión más «PERMISO» (la acción la hizo quien tiene la casilla, sin regla de aprobador). */
+export type ReglaRegistro = ReglaDecision | 'PERMISO';
+export type AccionDecision = 'APROBAR' | 'RECHAZAR' | 'ANULAR' | 'EDITAR_APROBADO' | 'CAMBIAR_SERVICIO' | 'REINTENTAR' | 'RESOLVER';
 export type EntidadDecision = 'SERVICIO_LAVADO' | 'SERVICIO_ESPECIAL' | 'SOLICITUD' | 'SYNC_DLQ';
 
 export interface AgenciaRef {
@@ -136,7 +138,7 @@ export class DecisionesService {
     entidadId: string;
     accion: AccionDecision;
     user: any;
-    regla: ReglaDecision;
+    regla: ReglaRegistro;
     motivo?: string | null;
     agenciaId?: string | null;
     detalle?: Record<string, unknown>;

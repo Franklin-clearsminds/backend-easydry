@@ -24,13 +24,16 @@ export function permisoRequeridoPorMutacion(entidad: string, accion: string): Pe
 
   if (ENTIDADES_SERVICIO.has(e)) {
     if (a === 'CREATE') return { codigos: ['servicios.generales.crear'], descripcion: 'registrar órdenes de servicio' };
-    // UPDATE y COMPLETE (iniciar, editar y finalizar una OT) son edición de la OT.
-    return { codigos: ['servicios.generales.editar'], descripcion: 'editar órdenes de servicio' };
+    // Finalizar una OT: «Finalizar OT».
+    if (a === 'COMPLETE') return { codigos: ['servicios.generales.finalizar'], descripcion: 'finalizar órdenes de servicio' };
+    // UPDATE: iniciar (finalizar) o corregir datos y observaciones (editar).
+    return { codigos: ['servicios.generales.editar', 'servicios.generales.finalizar'], descripcion: 'actualizar órdenes de servicio' };
   }
   if (ENTIDADES_ESPECIAL.has(e)) {
     if (a === 'CREATE') return { codigos: ['servicios.especiales.crear'], descripcion: 'crear servicios especiales' };
-    // Iniciar, pausar, reanudar y completar lo hace el pulidor; reasignar, quien gestiona.
-    return { codigos: ['servicios.especiales.operar', 'servicios.especiales.reasignar'], descripcion: 'ejecutar servicios especiales' };
+    // Completar es «Finalizar OT especial»; iniciar, pausar y reanudar los hace el pulidor; reasignar y editar, quien gestiona.
+    if (a === 'COMPLETE') return { codigos: ['servicios.especiales.finalizar'], descripcion: 'finalizar servicios especiales' };
+    return { codigos: ['servicios.especiales.operar', 'servicios.especiales.reasignar', 'servicios.especiales.editar'], descripcion: 'ejecutar o editar servicios especiales' };
   }
   return null;
 }

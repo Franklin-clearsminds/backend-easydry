@@ -107,7 +107,7 @@ export class AgenciasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar región existente (SUPER_ADMIN, ADMIN)' })
   async updateRegion(@Body() dto: UpdateRegionDto, @CurrentUser() user: any) {
-    return this.agenciasService.updateRegion(dto);
+    return this.agenciasService.updateRegion(dto, user);
   }
 
   @Permiso('agencias.regiones.estado')
@@ -159,7 +159,7 @@ export class AgenciasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar cliente corporativo existente (SUPER_ADMIN, ADMIN)' })
   async updateCliente(@Body() dto: UpdateClienteDto, @CurrentUser() user: any) {
-    return this.agenciasService.updateCliente(dto);
+    return this.agenciasService.updateCliente(dto, user);
   }
 
   @Permiso('agencias.clientes.estado')
@@ -192,7 +192,7 @@ export class AgenciasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar marca (alias de clientes) (SUPER_ADMIN, ADMIN)' })
   async updateMarca(@Body() dto: UpdateMarcaDto, @CurrentUser() user: any) {
-    return this.agenciasService.updateCliente(dto);
+    return this.agenciasService.updateCliente(dto, user);
   }
 
   @Permiso('agencias.clientes.estado')
@@ -239,7 +239,7 @@ export class AgenciasController {
     return this.agenciasService.createAgencia(dto);
   }
 
-  @Permiso('agencias.agencias.editar', 'agencias.agencias.servicios')
+  @Permiso('agencias.agencias.editar', 'agencias.agencias.servicios', 'agencias.clientes.transferir', 'agencias.regiones.transferir')
   @Post('update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar datos de agencia (SUPER_ADMIN, ADMIN, SUPERVISOR)' })
@@ -299,7 +299,7 @@ export class AgenciasController {
     return this.agenciasService.listBahiasOpciones(dto, user);
   }
 
-  @Permiso('agencias.bahias.crear')
+  @Permiso('agencias.agencias.editar')
   @Post('bahias/create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nueva bahía operativa (SUPER_ADMIN, ADMIN)' })
@@ -307,7 +307,7 @@ export class AgenciasController {
     return this.agenciasService.createBahia(dto);
   }
 
-  @Permiso('agencias.bahias.estado')
+  @Permiso('agencias.agencias.editar')
   @Post('bahias/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar bahía operativa (ADMIN, SUPERVISOR, LIDER_AGENCIA)' })
@@ -315,7 +315,7 @@ export class AgenciasController {
     return this.agenciasService.updateBahia(dto, user);
   }
 
-  @Permiso('agencias.bahias.estado')
+  @Permiso('agencias.agencias.editar')
   @Post('bahias/toggle-activa')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Habilitar o inhabilitar bahía de lavado (ADMIN, SUPERVISOR, LIDER_AGENCIA)' })
@@ -354,7 +354,7 @@ export class AgenciasController {
     return this.agenciasService.listarOperadoresDeBahia(body.bahiaId, user);
   }
 
-  @Permiso('agencias.bahias.asignar', 'operadores.bahia.quitar')
+  @Permiso('agencias.bahias.asignar', 'operadores.bahia.asignar')
   @Post('bahias/desasignar-operador')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Desasignar un operador específico de una bahía (SUPER_ADMIN, ADMIN)' })
@@ -463,7 +463,7 @@ export class AgenciasController {
     return this.agenciasService.createOperador(dto, user?.id, user);
   }
 
-  @Permiso('operadores.editar', 'operadores.rol')
+  @Permiso('operadores.editar', 'operadores.bahia.asignar', 'agencias.bahias.asignar')
   @Post('operadores/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Actualizar operador y su asignación de bahía en BD (SUPER_ADMIN, ADMIN)' })

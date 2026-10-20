@@ -40,18 +40,16 @@ describe('La bahía es solo para lavadores (base real)', () => {
     await service.asignarOperadorABahia({ bahiaId: bahia.id, operadorId: null } as any, admin.id);
   });
 
-  it('updateOperador libera la bahía cuando el rol deja de ser lavador', async () => {
+  it('updateOperador no cambia el rol: si llega uno distinto lo ignora y el lavador conserva su bahía', async () => {
     const otra = await env.bahia('B2', agencia.id);
     const lavador = await env.usuario('lavador-cambia', 'LAVADOR', { agenciaId: agencia.id });
     await service.asignarOperadorABahia({ bahiaId: otra.id, operadorId: lavador.id } as any, admin.id);
-    expect(await env.prisma.bahiaOperador.count({ where: { operadorId: lavador.id, activo: true } })).toBe(1);
 
     await service.updateOperador({ id: lavador.id, rol: 'PULIDOR', bahiaId: otra.id } as any, admin.id);
 
     const usuario = await env.prisma.user.findUniqueOrThrow({ where: { id: lavador.id }, include: { role: true } });
-    expect(usuario.role.namerol).toBe('PULIDOR');
-    // Ya no tiene bahía asignada, ni la que venía en el formulario ni la que tenía antes.
-    expect(await env.prisma.bahiaOperador.count({ where: { operadorId: lavador.id, activo: true } })).toBe(0);
-    expect((await env.prisma.bahia.findUniqueOrThrow({ where: { id: otra.id } })).operadorActualId).toBeNull();
+    expect(usuario.role.namerol).toBe('LAVADOR');
+    expect(await env.prisma.bahiaOperador.count({ where: { operadorId: lavador.id, activo: true } })).toBe(1);
+    await service.asignarOperadorABahia({ bahiaId: otra.id, operadorId: null } as any, admin.id);
   });
 });

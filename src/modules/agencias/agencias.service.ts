@@ -441,10 +441,14 @@ export class AgenciasService {
     };
   }
 
-  async updateRegion(dto: UpdateRegionDto) {
+  async updateRegion(dto: UpdateRegionDto, user?: any) {
     const region = await this.prisma.region.findUnique({ where: { id: dto.id } });
     if (!region) {
       throw new NotFoundException(`Región con ID "${dto.id}" no encontrada`);
+    }
+    // Editar la región no basta para activarla o desactivarla: eso tiene su propia casilla.
+    if (user && dto.estado !== undefined && dto.estado !== region.estado && !tienePermiso(user, 'agencias.regiones.estado')) {
+      throw new ForbiddenException('Activar o desactivar una región requiere el permiso correspondiente.');
     }
 
     if (dto.codigo && dto.codigo.trim().toUpperCase() !== region.codigo) {
@@ -575,10 +579,14 @@ export class AgenciasService {
     });
   }
 
-  async updateCliente(dto: UpdateClienteDto) {
+  async updateCliente(dto: UpdateClienteDto, user?: any) {
     const cliente = await this.prisma.cliente.findUnique({ where: { id: dto.id } });
     if (!cliente) {
       throw new NotFoundException(`Cliente con ID "${dto.id}" no encontrado`);
+    }
+    // Editar el cliente no basta para activarlo o desactivarlo: eso tiene su propia casilla.
+    if (user && dto.estado !== undefined && dto.estado !== cliente.estado && !tienePermiso(user, 'agencias.clientes.estado')) {
+      throw new ForbiddenException('Activar o desactivar un cliente requiere el permiso correspondiente.');
     }
 
     if (dto.nombre && dto.nombre.trim() !== cliente.nombre) {
@@ -1336,10 +1344,13 @@ export class AgenciasService {
       if (!actual) throw new NotFoundException(`Agencia con ID "${dto.id}" no encontrada`);
       this.asegurarAgencia(user, actual);
       const d: any = dto;
-      if ((d.regionId !== undefined || d.clienteId !== undefined || d.marcaId !== undefined || d.region !== undefined) && !tienePermiso(user, 'agencias.crear')) {
-        throw new ForbiddenException('Cambiar la región o el cliente de una agencia es solo para administradores.');
+      if ((d.regionId !== undefined || d.region !== undefined) && !tienePermiso(user, 'regiones.transferir')) {
+        throw new ForbiddenException('Cambiar la región de una agencia es solo para administradores.');
       }
-      if ((d.numeroBahias !== undefined || d.maxLavadoresPorBahia !== undefined) && !tienePermiso(user, 'bahias.crear')) {
+      if ((d.clienteId !== undefined || d.marcaId !== undefined) && !tienePermiso(user, 'agencias.transferir')) {
+        throw new ForbiddenException('Cambiar el cliente de una agencia es solo para administradores.');
+      }
+      if ((d.numeroBahias !== undefined || d.maxLavadoresPorBahia !== undefined) && !tienePermiso(user, 'agencias.editar')) {
         throw new ForbiddenException('Cambiar la cantidad de bahías de una agencia es solo para administradores.');
       }
       if ((d.gerenteId !== undefined || d.liderOperadorId !== undefined) && !tienePermiso(user, 'usuarios.gestionar')) {
@@ -3164,7 +3175,7 @@ export class AgenciasService {
 
   /** Asignar a una bahía lo permiten Gestión de Lavadores y Gestión de Agencias (la misma acción en dos pantallas). */
   private static readonly PERMISOS_ASIGNAR_BAHIA = ['operadores.bahia.asignar', 'agencias.bahias.asignar'];
-  private static readonly PERMISOS_QUITAR_BAHIA = ['operadores.bahia.quitar', 'agencias.bahias.asignar'];
+  private static readonly PERMISOS_QUITAR_BAHIA = AgenciasService.PERMISOS_ASIGNAR_BAHIA;
 
   async createOperador(dto: CreateOperadorDto, creatorId?: string, actor?: any) {
     // Registrar con una bahía ya asignada es asignar: exige además ese permiso.
@@ -3328,33 +3339,15 @@ export class AgenciasService {
         dataToUpdate.agenciaId = agencia.id;
       }
     }
-    if (dto.rol) {
-      const rolTarget = dto.rol.trim();
-      let role = await this.prisma.role.findFirst({
-        where: { namerol: rolTarget }
-      });
-      if (!role) {
-        role = await this.prisma.role.findFirst({
-          where: {
-            namerol: rolTarget.toUpperCase().includes('PULIDOR') ? 'PULIDOR' : 'LAVADOR'
-          }
-        });
-      }
-      if (role) {
-        dataToUpdate.roleId = role.id;
-        rolNombreFinal = role.namerol;
-      }
-    }
+    // El rol de un lavador o pulidor no se cambia desde Gestión de Lavadores: se elige al registrarlo y `dto.rol` se ignora aquí.
 
     // Permisos por botón: solo se exige cada uno si ese cambio ocurre de verdad (el formulario manda todos los campos).
-    const cambiaRol = dataToUpdate.roleId !== undefined && dataToUpdate.roleId !== user.roleId;
     const cambiaDatos =
       (dataToUpdate.name !== undefined && dataToUpdate.name !== user.name) ||
       (dataToUpdate.lastname !== undefined && dataToUpdate.lastname !== user.lastname) ||
       (dataToUpdate.estado !== undefined && dataToUpdate.estado !== user.estado) ||
       (dataToUpdate.agenciaId !== undefined && dataToUpdate.agenciaId !== user.agenciaId);
     if (cambiaDatos) this.exigirPermiso(actor, ['operadores.editar'], 'editar los datos de lavadores y pulidores');
-    if (cambiaRol) this.exigirPermiso(actor, ['operadores.rol'], 'cambiar el rol de lavadores y pulidores');
     if (dto.bahiaId !== undefined) {
       const actual = user.bahiaOperadores?.[0]?.bahia;
       const sinBahia = !dto.bahiaId || /sin bah[ií]a/i.test(dto.bahiaId);

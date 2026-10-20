@@ -278,7 +278,6 @@ describe('matriz acordada de permisos por rol', () => {
       'SUPERVISOR',
       'SUPER_ADMIN',
     ]);
-    expect(rolesCon('bahias.crear')).toEqual(['ADMIN', 'SUPER_ADMIN']);
   });
 
   it('cola de errores de sincronización: gestionarla solo administradores', () => {

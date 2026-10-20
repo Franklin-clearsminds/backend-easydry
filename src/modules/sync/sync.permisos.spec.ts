@@ -9,10 +9,11 @@ describe('permiso exigido a cada acción de sincronización (puro)', () => {
   it.each([
     ['servicio_lavado', 'CREATE', ['servicios.generales.crear']],
     ['work_order', 'CREATE', ['servicios.generales.crear']],
-    ['servicio_lavado', 'UPDATE', ['servicios.generales.editar']],
-    ['servicio_lavado', 'COMPLETE', ['servicios.generales.editar']],
+    ['servicio_lavado', 'UPDATE', ['servicios.generales.editar', 'servicios.generales.finalizar']],
+    ['servicio_lavado', 'COMPLETE', ['servicios.generales.finalizar']],
     ['servicio_especial', 'CREATE', ['servicios.especiales.crear']],
-    ['special_service', 'UPDATE', ['servicios.especiales.operar', 'servicios.especiales.reasignar']],
+    ['special_service', 'COMPLETE', ['servicios.especiales.finalizar']],
+    ['special_service', 'UPDATE', ['servicios.especiales.operar', 'servicios.especiales.reasignar', 'servicios.especiales.editar']],
   ])('%s %s exige %j', (entidad, accion, codigos) => {
     expect(permisoRequeridoPorMutacion(entidad, accion)?.codigos).toEqual(codigos);
   });

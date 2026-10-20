@@ -4,8 +4,8 @@ import { AgenciasService } from './agencias.service.js';
 import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js';
 
 /**
- * Integración con la base real: en Gestión de Lavadores cada botón tiene su permiso —editar datos, cambiar el rol, asignar a una
- * bahía y quitar de una bahía— y el servidor los exige por separado aunque el formulario los mande juntos. Además, dejar a un
+ * Integración con la base real: en Gestión de Lavadores cada botón tiene su permiso —editar datos y asignar o quitar de una
+ * bahía— y el servidor los exige por separado aunque el formulario los mande juntos. Además, dejar a un
  * lavador sin bahía («en reserva») funciona de verdad.
  */
 describe('Gestión de Lavadores: permisos por botón (base real)', () => {
@@ -42,23 +42,23 @@ describe('Gestión de Lavadores: permisos por botón (base real)', () => {
   });
 
   describe('dejar a un lavador sin bahía (en reserva)', () => {
-    it('con «Quitar de bahía» queda sin bahía, tanto con null como con cadena vacía', async () => {
+    it('con «Asignar y quitar de bahía» queda sin bahía, tanto con null como con cadena vacía', async () => {
       for (const vacio of [null, '']) {
         const l = await lavadorEnBahia(`reserva${vacio === null ? 'N' : 'V'}`);
         expect(await bahiaActual(l.id)).toBe(bahia.id);
 
-        await service.updateOperador({ id: l.id, bahiaId: vacio } as any, admin.id, con('operadores.bahia.quitar'));
+        await service.updateOperador({ id: l.id, bahiaId: vacio } as any, admin.id, con('operadores.bahia.asignar'));
 
         expect(await bahiaActual(l.id)).toBeNull();
         expect((await env.prisma.bahia.findUniqueOrThrow({ where: { id: bahia.id } })).operadorActualId).toBeNull();
       }
     });
 
-    it('sin «Quitar de bahía» el servidor lo rechaza y no cambia nada', async () => {
+    it('sin el permiso de bahía el servidor lo rechaza y no cambia nada', async () => {
       const l = await lavadorEnBahia('sinQuitar');
 
       await expect(
-        service.updateOperador({ id: l.id, bahiaId: null } as any, admin.id, con('operadores.editar', 'operadores.bahia.asignar')),
+        service.updateOperador({ id: l.id, bahiaId: null } as any, admin.id, con('operadores.editar')),
       ).rejects.toBeInstanceOf(ForbiddenException);
 
       expect(await bahiaActual(l.id)).toBe(bahia.id);
@@ -68,29 +68,18 @@ describe('Gestión de Lavadores: permisos por botón (base real)', () => {
     it('dejar sin bahía a quien ya estaba sin bahía no exige nada', async () => {
       const l = await env.usuario('yaEnReserva', 'LAVADOR', { agenciaId: agencia.id });
 
-      await expect(service.updateOperador({ id: l.id, bahiaId: '' } as any, admin.id, con('operadores.rol'))).resolves.toBeDefined();
+      await expect(service.updateOperador({ id: l.id, bahiaId: '' } as any, admin.id, con('operadores.ver'))).resolves.toBeDefined();
     });
   });
 
   describe('asignar a otra bahía', () => {
-    it('con «Asignar a bahía» cambia de bahía', async () => {
+    it('con «Asignar y quitar de bahía» cambia de bahía', async () => {
       const l = await lavadorEnBahia('cambia');
 
       await service.updateOperador({ id: l.id, bahiaId: otraBahia.id } as any, admin.id, con('operadores.bahia.asignar'));
 
       expect(await bahiaActual(l.id)).toBe(otraBahia.id);
       await service.asignarOperadorABahia({ bahiaId: otraBahia.id, operadorId: null } as any, admin.id);
-    });
-
-    it('solo con «Quitar de bahía» no puede mover a otra bahía', async () => {
-      const l = await lavadorEnBahia('soloQuitar');
-
-      await expect(
-        service.updateOperador({ id: l.id, bahiaId: otraBahia.id } as any, admin.id, con('operadores.bahia.quitar')),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-
-      expect(await bahiaActual(l.id)).toBe(bahia.id);
-      await service.asignarOperadorABahia({ bahiaId: bahia.id, operadorId: null } as any, admin.id);
     });
 
     it('mandar la bahía que ya tiene no cuenta como asignar', async () => {
@@ -112,37 +101,25 @@ describe('Gestión de Lavadores: permisos por botón (base real)', () => {
     });
   });
 
-  describe('editar datos y cambiar el rol son dos permisos', () => {
-    it('con solo «Cambiar rol» puede cambiar el rol pero no los datos', async () => {
-      const l = await env.usuario('soloRol', 'LAVADOR', { agenciaId: agencia.id, name: 'Original' });
-
-      await expect(service.updateOperador({ id: l.id, nombre: 'Otro Nombre' } as any, admin.id, con('operadores.rol'))).rejects.toBeInstanceOf(ForbiddenException);
-      expect((await env.prisma.user.findUniqueOrThrow({ where: { id: l.id } })).name).toBe('Original');
-
-      await service.updateOperador({ id: l.id, rol: 'PULIDOR' } as any, admin.id, con('operadores.rol'));
-      expect((await env.prisma.user.findUniqueOrThrow({ where: { id: l.id }, include: { role: true } })).role.namerol).toBe('PULIDOR');
-    });
-
-    it('con solo «Editar datos» puede cambiar los datos pero no el rol', async () => {
+  describe('editar datos: el rol no se cambia desde esta pantalla', () => {
+    it('con «Editar datos» puede cambiar los datos', async () => {
       const l = await env.usuario('soloEditar', 'LAVADOR', { agenciaId: agencia.id, name: 'Original' });
-
-      await expect(service.updateOperador({ id: l.id, rol: 'PULIDOR' } as any, admin.id, con('operadores.editar'))).rejects.toBeInstanceOf(ForbiddenException);
-      expect((await env.prisma.user.findUniqueOrThrow({ where: { id: l.id }, include: { role: true } })).role.namerol).toBe('LAVADOR');
 
       await service.updateOperador({ id: l.id, nombre: 'Nuevo Nombre' } as any, admin.id, con('operadores.editar'));
       expect((await env.prisma.user.findUniqueOrThrow({ where: { id: l.id } })).name).toBe('Nuevo');
     });
 
-    it('mandar el mismo rol que ya tiene no exige «Cambiar rol»', async () => {
-      const l = await env.usuario('mismoRol', 'LAVADOR', { agenciaId: agencia.id });
+    it('aunque se envíe un rol distinto, el rol queda como estaba', async () => {
+      const l = await env.usuario('rolIgnorado', 'LAVADOR', { agenciaId: agencia.id });
 
-      await expect(service.updateOperador({ id: l.id, rol: 'LAVADOR' } as any, admin.id, con('operadores.editar'))).resolves.toBeDefined();
+      await service.updateOperador({ id: l.id, rol: 'PULIDOR' } as any, admin.id, con('operadores.editar'));
+      expect((await env.prisma.user.findUniqueOrThrow({ where: { id: l.id }, include: { role: true } })).role.namerol).toBe('LAVADOR');
     });
 
-    it('sin ninguno de los permisos no cambia nada', async () => {
+    it('sin el permiso no cambia nada', async () => {
       const l = await env.usuario('ninguno', 'LAVADOR', { agenciaId: agencia.id, name: 'Intacto' });
 
-      await expect(service.updateOperador({ id: l.id, nombre: 'Cambio Total', rol: 'PULIDOR' } as any, admin.id, con('operadores.ver'))).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.updateOperador({ id: l.id, nombre: 'Cambio Total' } as any, admin.id, con('operadores.ver'))).rejects.toBeInstanceOf(ForbiddenException);
       expect((await env.prisma.user.findUniqueOrThrow({ where: { id: l.id } })).name).toBe('Intacto');
     });
   });

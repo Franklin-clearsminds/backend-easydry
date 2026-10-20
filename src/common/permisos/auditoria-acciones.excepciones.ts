@@ -29,8 +29,6 @@ export const EXCEPCIONES_SERVIDOR: Record<string, string> = {
     'El vehículo en servicio (placa y OT) viaja como «ocupada» dentro de bahias/list, que Servicios usa para validar bahías ocupadas. Se oculta en el bloque del mapa.',
   'mapa.maquinaria.ver':
     "Los datos salen de maquinaria/list, que el servidor ya exige con 'maquinaria.ver', permiso que esta casilla otorga: apagarla quita ese acceso.",
-  'operadores.ficha.ver':
-    'La ficha y la productividad salen del mismo listado operadores/list que la tabla de lavadores, que exigen usuarios.ver u operadores.ver. Se oculta el botón y la columna en pantalla.',
   'pagina.agencias.agencias':
     'Es la pestaña principal: sus listados (agencias/list, bahias/list…) alimentan los desplegables de muchas pantallas y los exige el permiso de la página. Sus botones sí se exigen uno a uno.',
 };
