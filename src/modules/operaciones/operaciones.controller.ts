@@ -85,7 +85,7 @@ export class OperacionesController {
     return this.operacionesService.createMultiple(createDto, user.id, user);
   }
 
-  @Permiso('servicios.generales.editar')
+  @Permiso('servicios.generales.editar', 'servicios.generales.finalizar')
   @Post('servicios/update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

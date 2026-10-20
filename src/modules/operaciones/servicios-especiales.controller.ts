@@ -10,6 +10,7 @@ import {
   PausarServicioEspecialDto,
   ReanudarServicioEspecialDto,
   ReasignarServicioEspecialDto,
+  EditarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
 import { AnularServicioEspecialDto } from './dto/aprobaciones.dto.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -100,7 +101,7 @@ export class ServiciosEspecialesController {
     return this.service.reanudar(dto, user);
   }
 
-  @Permiso('servicios.especiales.operar')
+  @Permiso('servicios.especiales.finalizar')
   @Post('completar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Finalizar servicio especial con video final y calificación' })
@@ -110,6 +111,15 @@ export class ServiciosEspecialesController {
     @CurrentUser() user: any,
   ) {
     return this.service.completar(dto, user);
+  }
+
+  @Permiso('servicios.especiales.editar')
+  @Post('editar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Editar datos del vehículo, cliente, prioridad y observaciones de un servicio especial' })
+  @ApiResponse({ status: 200, description: 'Servicio especial actualizado' })
+  async editar(@Body() dto: EditarServicioEspecialDto, @CurrentUser() user: any) {
+    return this.service.editar(dto, user);
   }
 
   @Permiso('servicios.especiales.reasignar')

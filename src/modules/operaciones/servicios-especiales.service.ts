@@ -23,6 +23,7 @@ import {
   PausarServicioEspecialDto,
   ReanudarServicioEspecialDto,
   ReasignarServicioEspecialDto,
+  EditarServicioEspecialDto,
 } from './dto/servicios-especiales.dto.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import {
@@ -808,6 +809,53 @@ export class ServiciosEspecialesService {
     return this._formatItem(created);
   }
 
+  /**
+   * Corrige los datos del vehículo, el cliente, la prioridad y las observaciones de un servicio especial. Solo mientras no esté
+   * completado ni cancelado; el pulidor, la receta y las evidencias no se tocan desde aquí (para eso están reasignar y ejecutar).
+   */
+  async editar(dto: EditarServicioEspecialDto, currentUser?: any) {
+    const item = await this.findOneRaw(dto.id);
+    if (item.deletedAt) throw new BadRequestException('El servicio especial está anulado y no se puede modificar.');
+    const estado = String(item.estado || '').toUpperCase();
+    if (estado.includes('COMPLET') || estado.includes('FINAL') || estado.includes('CANCEL')) {
+      throw new BadRequestException('No se puede editar un servicio especial completado o cancelado.');
+    }
+    this.asegurarPuedeVer(currentUser, item);
+
+    const data: Record<string, any> = {};
+    const texto = (v: string | undefined) => String(v ?? '').trim();
+    if (dto.placa !== undefined) {
+      const placa = texto(dto.placa).toUpperCase();
+      if (!placa) throw new BadRequestException('La placa no puede quedar vacía.');
+      data.placa = placa;
+    }
+    if (dto.modelo !== undefined) data.modelo = texto(dto.modelo) || null;
+    if (dto.marca !== undefined) data.marca = texto(dto.marca) || null;
+    if (dto.color !== undefined) data.color = texto(dto.color) || null;
+    if (dto.cliente !== undefined) {
+      data.cliente = texto(dto.cliente) || null;
+      data.clienteNombre = data.cliente;
+    }
+    if (dto.prioridad !== undefined) data.prioridad = dto.prioridad;
+    if (dto.observaciones !== undefined) data.observaciones = texto(dto.observaciones) || null;
+    if (Object.keys(data).length === 0) return this._formatItem(item);
+
+    const updated = await this.prisma.servicioEspecial.update({
+      where: { id: item.id },
+      data: { ...data, version: item.version + 1 },
+      include: {
+        agencia: true,
+        operador: { select: { id: true, name: true, lastname: true, email: true } },
+        operadoresAsignados: {
+          orderBy: { orden: 'asc' },
+          include: { operador: { select: { id: true, name: true, lastname: true } } },
+        },
+        region: true,
+      },
+    });
+    return this._formatItem(updated);
+  }
+
   async reasignar(dto: ReasignarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
     const estado = String(item.estado || '').toUpperCase();
@@ -1171,6 +1219,13 @@ export class ServiciosEspecialesService {
       item.videoInicialUrl === dto.videoInicialUrl
     ) {
       return this._formatItem(item);
+    }
+
+    // Sin la evidencia de inicio (video del estado inicial del vehículo) no se puede iniciar el servicio.
+    if (currentUser && !dto.videoInicialUrl && !item.videoInicialUrl) {
+      throw new BadRequestException(
+        'La evidencia de inicio (video del estado inicial del vehículo) es obligatoria para iniciar el servicio especial.',
+      );
     }
 
     const rol = rolDeUsuario(currentUser);

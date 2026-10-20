@@ -388,6 +388,49 @@ export class ReasignarServicioEspecialDto {
   tipoServicio?: string;
 }
 
+/** Corrección de datos de un servicio especial que aún no está completado ni cancelado (casilla «Editar OT especial»). */
+export class EditarServicioEspecialDto {
+  @ApiProperty({ description: 'ID, OT o clientUuid del servicio especial' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiPropertyOptional({ example: 'ABC-1234' })
+  @IsString()
+  @IsOptional()
+  placa?: string;
+
+  @ApiPropertyOptional({ example: 'Toyota' })
+  @IsString()
+  @IsOptional()
+  marca?: string;
+
+  @ApiPropertyOptional({ example: 'Hilux' })
+  @IsString()
+  @IsOptional()
+  modelo?: string;
+
+  @ApiPropertyOptional({ example: 'Blanco' })
+  @IsString()
+  @IsOptional()
+  color?: string;
+
+  @ApiPropertyOptional({ example: 'Juan Pérez' })
+  @IsString()
+  @IsOptional()
+  cliente?: string;
+
+  @ApiPropertyOptional({ description: 'Prioridad: Baja, Media, Alta, Urgente' })
+  @IsIn(['Baja', 'Media', 'Alta', 'Urgente'])
+  @IsOptional()
+  prioridad?: string;
+
+  @ApiPropertyOptional({ example: 'Revisar rayón del costado izquierdo' })
+  @IsString()
+  @IsOptional()
+  observaciones?: string;
+}
+
 export class ReanudarServicioEspecialDto {
   @ApiProperty({ description: 'ID o clientUuid del servicio especial' })
   @IsString()

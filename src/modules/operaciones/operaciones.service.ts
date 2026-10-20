@@ -30,6 +30,11 @@ import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { Alcance, puedeSobreAgencia, resolverAlcance } from '../../common/permisos/alcance.js';
 import { esLiderDeAgencia, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 
+/** Datos del vehículo y del cliente que corrige «Editar OT» (valen para todos los servicios de la misma OT). */
+const CAMPOS_EDITABLES_OT = ['placa', 'marca', 'modelo', 'color', 'cliente'] as const;
+/** Finalizar una OT: solo «Finalizar OT» (registrar, editar, finalizar y anular son cuatro casillas distintas). */
+const PERMISOS_FINALIZAR_OT = ['servicios.generales.finalizar'];
+
 /** Columnas por las que se puede ordenar la lista de servicios (nombre público → campo de la base). */
 const ORDEN_SERVICIOS = columnasSimples({
   fecha: 'horaIngreso',
@@ -781,6 +786,11 @@ export class OperacionesService {
       fotoIngresoUrl = hermana?.fotoIngresoUrl || undefined;
       videoInicialHeredado = hermana?.videoInicialUrl || undefined;
     }
+    // Sin evidencia de ingreso no se inicia la OT: registrarla es iniciarla. Un servicio agregado a una OT que ya la tiene la hereda.
+    // (La sincronización de la app no pasa por aquí con `actor`: su evidencia llega por su propio flujo.)
+    if (actor && !fotoIngresoUrl && !videoInicialHeredado) {
+      throw new BadRequestException('La evidencia de ingreso (foto o video del vehículo) es obligatoria para registrar e iniciar la OT.');
+    }
 
     const created = await (this.prisma.servicioLavado as any).create({
       data: {
@@ -857,11 +867,130 @@ export class OperacionesService {
     return serializeServicioLavado(finalCreated);
   }
 
+  /**
+   * Cada cambio de una OT tiene su casilla: corregir los datos del vehículo y del cliente exige «Editar OT»; cambiar el estado o
+   * subir la evidencia (iniciar y finalizar) exige «Finalizar OT»; las observaciones
+   * las puede cambiar quien edita o quien finaliza. Solo se exige lo que de verdad cambia (el formulario puede mandar todos los campos).
+   */
+  private exigirPermisosDeActualizacion(actor: any, servicio: any, dto: UpdateServicioDto): void {
+    const norm = (v: unknown) => String(v ?? '').trim().toUpperCase();
+    const editaDatos =
+      CAMPOS_EDITABLES_OT.some((c) => dto[c] !== undefined && norm(dto[c]) !== norm(servicio[c])) ||
+      (dto.servicioCatalogoId !== undefined && Number(dto.servicioCatalogoId) !== Number(servicio.servicioCatalogoId));
+    const finaliza = (dto.estado !== undefined && dto.estado !== servicio.estado) || dto.fotoSalidaUrl !== undefined || dto.fotoIngresoUrl !== undefined;
+    const cambiaObservaciones = dto.observaciones !== undefined && String(dto.observaciones ?? '') !== String(servicio.observaciones ?? '');
+
+    if (editaDatos && !tienePermiso(actor, 'servicios.generales.editar')) {
+      throw new ForbiddenException('Tu rol no puede editar los datos de una orden de trabajo.');
+    }
+    if (finaliza && !tieneAlgunPermiso(actor, PERMISOS_FINALIZAR_OT)) {
+      throw new ForbiddenException('Tu rol no puede finalizar órdenes de trabajo.');
+    }
+    if (cambiaObservaciones && !tieneAlgunPermiso(actor, [...PERMISOS_FINALIZAR_OT, 'servicios.generales.editar'])) {
+      throw new ForbiddenException('Tu rol no puede cambiar las observaciones de una orden de trabajo.');
+    }
+  }
+
+  /**
+   * Cambia el servicio de una OT que aún no se finaliza. Como los insumos se descuentan al registrarla, se devuelven los del servicio
+   * anterior (con kardex) y, al terminar la actualización, se descuentan los del nuevo. Antes de tocar nada se comprueba que el stock
+   * alcance para el nuevo contando lo que se va a devolver; si no alcanza, no se cambia nada. Devuelve el precio nuevo (el de la
+   * agencia si lo tiene fijado, si no el del catálogo), que reemplaza al congelado.
+   */
+  private async cambiarServicioDeOT(servicio: any, nuevoId: number, actor: any): Promise<number | null> {
+    if (servicio.estado !== ServiceStatus.EN_ESPERA && servicio.estado !== ServiceStatus.EN_PROCESO) {
+      throw new BadRequestException('Solo se puede cambiar el servicio mientras la OT está en espera o en proceso.');
+    }
+    const agencia = servicio.bahia?.agencia;
+    if (!agencia?.id) throw new BadRequestException('La bahía de la OT no tiene agencia asignada.');
+
+    const catalogo = await this.prisma.catalogoServicio.findUnique({
+      where: { id: nuevoId },
+      include: { recetas: { include: { insumo: true, unidadConsumo: true } } },
+    });
+    if (!catalogo) throw new BadRequestException('El servicio indicado no existe en el catálogo.');
+    if (catalogo.estado === 'Inactivo') throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar.`);
+    if (catalogo.categoria !== 'GENERAL') throw new BadRequestException('Solo se puede cambiar a otro servicio general.');
+
+    const permitidos = (Array.isArray(agencia.servicioIds) ? agencia.servicioIds : []).map((id: any) => Number(id)).filter((n: number) => n > 0);
+    if (!permitidos.includes(nuevoId)) {
+      throw new BadRequestException(`El servicio "${catalogo.nombre}" no está en la lista de servicios de la agencia "${agencia.nombre}".`);
+    }
+    if (servicio.ordenTrabajoOT) await this._validarOTServicioGeneral(servicio.ordenTrabajoOT, servicio.placa, [nuevoId]);
+
+    // Stock: lo disponible más lo que se va a devolver del servicio anterior.
+    const devuelto = new Map<string, number>();
+    for (const c of servicio.consumos ?? []) {
+      if (Number(c.cantidadUsada) > 0 && c.stockUbicacionId) devuelto.set(c.insumoId, (devuelto.get(c.insumoId) ?? 0) + Number(c.cantidadUsada));
+    }
+    const faltantes: string[] = [];
+    for (const receta of catalogo.recetas) {
+      if (receta.esOpcional) continue;
+      const necesario = this._convertirAUnidadBase(Number(receta.cantidadUsada), receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null);
+      const stock = await this._getStockAgencia(receta.insumoId, agencia.id);
+      const disponible = Number(stock?.cantidadActual ?? 0) + (devuelto.get(receta.insumoId) ?? 0);
+      if (disponible < necesario) {
+        faltantes.push(`"${receta.insumo.nombre}": necesario ${necesario.toFixed(4)} ${receta.unidadConsumo?.simbolo ?? ''}, disponible ${disponible.toFixed(4)}`);
+      }
+    }
+    if (faltantes.length > 0) {
+      throw new BadRequestException(
+        `No se puede cambiar el servicio: stock insuficiente en la agencia para los insumos obligatorios del nuevo servicio:\n` +
+          faltantes.map((f) => `  • ${f}`).join('\n'),
+      );
+    }
+
+    let precio: number | null = catalogo.precio != null ? Number(catalogo.precio) : null;
+    const override = await this.prisma.precioAgenciaServicio.findUnique({
+      where: { agenciaId_catalogoServicioId: { agenciaId: agencia.id, catalogoServicioId: nuevoId } },
+      select: { precio: true },
+    });
+    if (override) precio = Number(override.precio);
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const c of servicio.consumos ?? []) {
+        const cantidad = Number(c.cantidadUsada);
+        if (cantidad <= 0 || !c.stockUbicacionId) continue;
+        const stock = await tx.stockUbicacion.findUnique({ where: { id: c.stockUbicacionId } });
+        const antes = Number(stock?.cantidadActual ?? 0);
+        await tx.stockUbicacion.update({ where: { id: c.stockUbicacionId }, data: { cantidadActual: { increment: cantidad } } });
+        await tx.kardexMovimiento.create({
+          data: {
+            insumoId: c.insumoId,
+            ubicacionId: agencia.id,
+            tipoMovimiento: 'EDICION_SERVICIO_REVERSA',
+            cantidad,
+            stockAnterior: antes,
+            stockPosterior: antes + cantidad,
+            costoUnitario: 0,
+            costoTotal: 0,
+            referenciaId: servicio.id,
+            usuarioId: servicio.operadorId,
+          },
+        });
+      }
+      await tx.consumoServicio.deleteMany({ where: { servicioId: servicio.id } });
+      await tx.servicioLavado.update({
+        where: { id: servicio.id },
+        data: { servicioCatalogoId: nuevoId, precio, version: { increment: 1 } },
+      });
+    });
+    return precio;
+  }
+
   async update(id: string, updateDto: UpdateServicioDto, isOfflineSync: boolean = false, actor?: any) {
     const servicio = await this.findOneRaw(id);
     const data: any = { ...updateDto };
     delete data.id;
     delete data.motivoCorreccion;
+    delete data.servicioCatalogoId;
+    // Cambiar el servicio solo lo hace quien llama a la API con «Editar OT»; la sincronización de la app no lo usa.
+    const nuevoServicioId =
+      actor && updateDto.servicioCatalogoId !== undefined && Number(updateDto.servicioCatalogoId) !== Number(servicio.servicioCatalogoId)
+        ? Number(updateDto.servicioCatalogoId)
+        : null;
+    const servicioAnteriorId = servicio.servicioCatalogoId;
+    const precioAnterior = servicio.precio != null ? Number(servicio.precio) : null;
 
     let motivoCorreccion: string | undefined;
     if (actor) {
@@ -871,6 +1000,7 @@ export class OperacionesService {
       if (updateDto.estado && ([ServiceStatus.APROBADO, ServiceStatus.RECHAZADO, ServiceStatus.CANCELADO] as ServiceStatus[]).includes(updateDto.estado)) {
         throw new BadRequestException('Para aprobar, rechazar o anular usa la acción correspondiente.');
       }
+      this.exigirPermisosDeActualizacion(actor, servicio, updateDto);
       if (servicio.estado === ServiceStatus.APROBADO) {
         if (!['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor))) {
           throw new ForbiddenException('Un servicio aprobado solo lo puede editar un administrador.');
@@ -889,7 +1019,25 @@ export class OperacionesService {
         throw new BadRequestException('La evidencia de salida (foto o vídeo) es obligatoria para finalizar el servicio.');
       }
     }
+    let precioNuevo: number | null = null;
+    if (nuevoServicioId !== null) {
+      precioNuevo = await this.cambiarServicioDeOT(servicio, nuevoServicioId, actor);
+    }
+
     data.version = { increment: 1 };
+
+    // Datos del vehículo y del cliente (casilla «Editar OT»): se normalizan y, abajo, se aplican a toda la OT.
+    const datosVehiculo: Record<string, string | null> = {};
+    for (const campo of CAMPOS_EDITABLES_OT) {
+      if (updateDto[campo] === undefined) continue;
+      const limpio = String(updateDto[campo] ?? '').trim();
+      if ((campo === 'placa' || campo === 'modelo') && !limpio) {
+        throw new BadRequestException(`El campo ${campo === 'placa' ? 'placa' : 'modelo'} no puede quedar vacío.`);
+      }
+      const valor = campo === 'placa' ? limpio.toUpperCase() : limpio;
+      datosVehiculo[campo] = campo === 'marca' || campo === 'color' || campo === 'cliente' ? valor || null : valor;
+      data[campo] = datosVehiculo[campo];
+    }
 
     if (updateDto.estado === ServiceStatus.FINALIZADO) {
       // Al finalizar, horaSalida pasa a ser la real (antes era estimada por tiempoEstimadoMin)
@@ -958,6 +1106,34 @@ export class OperacionesService {
       },
     });
 
+    if (nuevoServicioId !== null) {
+      // Los insumos del servicio nuevo se descuentan ahora (los del anterior ya se devolvieron): igual que al registrar la OT.
+      await this._ejecutarConsumoInsumos(await this.findOneRaw(servicio.id), false);
+      await this.decisiones.registrar({
+        entidad: 'SERVICIO_LAVADO',
+        entidadId: servicio.id,
+        accion: 'CAMBIAR_SERVICIO',
+        user: actor,
+        regla: 'PERMISO',
+        agenciaId: servicio.bahia?.agencia?.id ?? null,
+        detalle: { servicioAnteriorId, servicioNuevoId: nuevoServicioId, precioAnterior, precioNuevo },
+      });
+    }
+
+    // Una OT puede tener varios servicios del mismo vehículo: los datos del vehículo y del cliente se corrigen en todos
+    // (menos en los ya aprobados, que solo se tocan desde su propia corrección con motivo).
+    if (Object.keys(datosVehiculo).length > 0 && servicio.ordenTrabajoOT) {
+      await this.prisma.servicioLavado.updateMany({
+        where: {
+          id: { not: servicio.id },
+          ordenTrabajoOT: { equals: servicio.ordenTrabajoOT, mode: 'insensitive' },
+          deletedAt: null,
+          estado: { not: ServiceStatus.APROBADO },
+        },
+        data: { ...datosVehiculo, version: { increment: 1 } } as any,
+      });
+    }
+
     if (actor && motivoCorreccion) {
       await this.decisiones.registrar({
         entidad: 'SERVICIO_LAVADO',
@@ -1003,6 +1179,7 @@ export class OperacionesService {
       }
     }
 
+    if (nuevoServicioId !== null) return serializeServicioLavado(await this.findOneRaw(servicio.id));
     return serializeServicioLavado(updated);
   }
 
@@ -1027,8 +1204,9 @@ export class OperacionesService {
       );
     }
 
-    // Reversión de Insumos: si el servicio ya había consumido insumos (finalizado o aprobado), reponer al inventario
-    const consumioInsumos = servicio.estado === ServiceStatus.FINALIZADO || servicio.estado === ServiceStatus.APROBADO;
+    // Reversión de Insumos: los insumos se descuentan al REGISTRAR la OT, así que cualquier OT con consumos (en espera, en proceso,
+    // finalizada o aprobada) los devuelve al anularse; una OT ya anulada no los devuelve dos veces.
+    const consumioInsumos = !servicio.deletedAt;
     if (consumioInsumos && reponerInsumos && servicio.consumos?.length > 0) {
       const agenciaId = servicio.bahia?.agencia?.id;
       for (const c of servicio.consumos) {

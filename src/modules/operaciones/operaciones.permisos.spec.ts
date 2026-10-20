@@ -13,7 +13,7 @@ describe('Servicios: registrar una OT y agregar a una existente son permisos dis
   let bahia: any, lavador: any, s1: any, s2: any;
   const ot = (sufijo: string) => `${env.marca}-OT-${sufijo}`.toUpperCase();
   const dto = (servicioCatalogoId: number, ordenTrabajoOT: string) =>
-    ({ placa: 'ABC-1234', modelo: 'Corolla', servicioCatalogoId, bahiaId: bahia.id, ordenTrabajoOT }) as any;
+    ({ placa: 'ABC-1234', modelo: 'Corolla', servicioCatalogoId, bahiaId: bahia.id, ordenTrabajoOT, fotoIngresoUrl: 'https://x/ingreso.mp4' }) as any;
   /** Quien llama, con exactamente estos permisos y alcance nacional (para que el alcance de agencia no estorbe). */
   const con = (...capacidades: string[]) => ({ id: 'u', role: { namerol: 'ROL_DE_PRUEBA', capacidades, ambito: 'GLOBAL' } });
 

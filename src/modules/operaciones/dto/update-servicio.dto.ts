@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ServiceStatus } from '@prisma/client';
 
 export class UpdateServicioDto {
@@ -27,6 +28,43 @@ export class UpdateServicioDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+
+  @ApiPropertyOptional({ example: 'ABC-1234', description: 'Corrige la placa de toda la OT (casilla «Editar OT»).' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  placa?: string;
+
+  @ApiPropertyOptional({ example: 12, description: 'Cambia el servicio de la OT (casilla «Editar OT») mientras está en espera o en proceso: devuelve los insumos del anterior y descuenta los del nuevo.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  servicioCatalogoId?: number;
+
+  @ApiPropertyOptional({ example: 'Toyota' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  marca?: string;
+
+  @ApiPropertyOptional({ example: 'Hilux' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  modelo?: string;
+
+  @ApiPropertyOptional({ example: 'Blanco' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  color?: string;
+
+  @ApiPropertyOptional({ example: 'Juan Pérez' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  cliente?: string;
 
   @ApiPropertyOptional({ description: 'Motivo de la corrección. Obligatorio (y solo para administradores) al editar un servicio ya aprobado.' })
   @IsOptional()
