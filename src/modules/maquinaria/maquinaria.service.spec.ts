@@ -173,10 +173,11 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
     it('un pulidor no puede reportar una máquina que no tiene asignada', async () => {
       const { service, prisma } = build();
       prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'otro-pulidor' }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(0);
       await expect(service.reportarIncidente(
         { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
         pulidor,
-      )).rejects.toThrow(/asignadas/);
+      )).rejects.toThrow(/No tienes acceso a esta máquina/);
     });
 
     it('el supervisor de la región y el coordinador de servicios especiales sí pueden reportar (aunque no sean el operador asignado)', async () => {
@@ -470,6 +471,7 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
     it('el líder registra la limpieza de una máquina de su agencia (sin pulidor asignado) como tipo AGENCIA', async () => {
       const { service, prisma, tx } = build();
       prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: null }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(1); // la máquina está en su ámbito
       const r: any = await service.registrarLimpieza(
         { maquinariaId: 'm1', fotos: [{ url: fotoReal }], observaciones: 'Todo en orden' } as never,
         lider,
@@ -482,6 +484,7 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
     it('el líder de otra agencia no puede registrar la limpieza', async () => {
       const { service, prisma } = build();
       prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: null }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(0); // fuera de su ámbito
       const otroLider: Actor = { id: 'lider-2', rol: 'LIDER', regionId: null, agenciaId: 'ag-9' };
       await expect(
         service.registrarLimpieza({ maquinariaId: 'm1', fotos: [{ url: fotoReal }] } as never, otroLider),

@@ -158,6 +158,7 @@ model User {
   notifications                  Notification[]
   incidentesReportados           IncidenteTecnico[]           @relation("ReportadoPor")
   incidentesResueltos            IncidenteTecnico[]           @relation("ResueltoPor")
+  incidentesCancelados           IncidenteTecnico[]           @relation("CanceladoPor")
   mantenimientos                 MantenimientoMaquinaria[]
   kardexMovimientos              KardexMovimiento[]
   solicitudesCreadas             SolicitudAprobacion[]        @relation("SolicitanteAprobacion")
@@ -985,6 +986,7 @@ enum TipoNotificacion {
   INCIDENCIA_ASIGNADA
   MANTENIMIENTO_ASIGNADO
   INCIDENCIA_RESUELTA
+  INCIDENCIA_CANCELADA
   MANTENIMIENTO_VENCIDO
   STOCK_CRITICO
   APROBACION_PENDIENTE
@@ -1173,6 +1175,12 @@ model IncidenteTecnico {
   resueltoPorId String?
   resueltoPor   User?   @relation("ResueltoPor", fields: [resueltoPorId], references: [id])
 
+  /// Quién canceló la incidencia, cuándo y por qué (queda también en la línea de tiempo de la máquina).
+  canceladoPorId     String?
+  canceladoPor       User?     @relation("CanceladoPor", fields: [canceladoPorId], references: [id])
+  fechaCancelacion   DateTime?
+  motivoCancelacion  String?
+
   tecnicoAsignadoId String?
   tecnicoAsignado   User?     @relation("TecnicoAsignadoIncidente", fields: [tecnicoAsignadoId], references: [id])
   fechaAsignacion   DateTime?
@@ -1225,8 +1233,9 @@ model MantenimientoMaquinaria {
   id           String     @id @default(uuid())
   maquinariaId String
   maquinaria   Maquinaria @relation(fields: [maquinariaId], references: [id], onDelete: Cascade)
-  tecnicoId    String
-  tecnico      User       @relation(fields: [tecnicoId], references: [id])
+  /// Sin técnico mientras nadie lo ha tomado: se programa primero y se asigna después.
+  tecnicoId    String?
+  tecnico      User?      @relation(fields: [tecnicoId], references: [id])
 
   estado          String   @default("FINALIZADO") // "PENDIENTE" | "EN_PROCESO" | "FINALIZADO"
   observaciones   String?

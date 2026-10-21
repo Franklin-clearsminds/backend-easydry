@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray, IsInt, IsBoolean, Min, ArrayMinSize } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsIn, IsArray, IsInt, IsBoolean, Min, ArrayMinSize, MinLength, MaxLength } from 'class-validator';
 import { PaginacionDto } from './trazabilidad.dto.js';
 import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 import { Type } from 'class-transformer';
@@ -276,6 +276,20 @@ export class ResolverIncidenteDto {
   @IsOptional()
   @IsArray()
   evidencias?: Array<{ tipo: string; url: string; descripcion?: string }>;
+}
+
+export class CancelarIncidenteDto {
+  @ApiProperty({ description: 'ID del incidente' })
+  @IsString()
+  @IsNotEmpty()
+  incidenteId: string;
+
+  @ApiProperty({ example: 'Falsa alarma: el equipo funcionaba bien tras revisarlo.' })
+  @IsString()
+  @IsNotEmpty({ message: 'Indica por qué se cancela la incidencia.' })
+  @MinLength(5, { message: 'Explica el motivo con al menos 5 caracteres.' })
+  @MaxLength(1000)
+  motivo: string;
 }
 
 export class ListIncidentesDto extends PaginacionDto {

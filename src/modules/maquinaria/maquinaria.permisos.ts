@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { esLiderDeAgencia, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { ambitoDeUsuario } from '../../common/permisos/capacidades.js';
 
 /** Roles del módulo de maquinaria (nombres normalizados, tal cual están en la tabla roles). */
 export const ROL = {
@@ -36,6 +37,8 @@ export interface Actor {
   rol: string;
   regionId: string | null;
   agenciaId: string | null;
+  /** Ámbito del rol (GLOBAL, REGION, AGENCIA, PROPIO). Si falta, rige el alcance clásico por rol. */
+  ambito?: string;
 }
 
 export function actorFromUser(user: any): Actor {
@@ -43,6 +46,7 @@ export function actorFromUser(user: any): Actor {
   return {
     id: String(user?.id || ''),
     rol,
+    ambito: ambitoDeUsuario(user),
     regionId: user?.regionId || null,
     agenciaId: user?.agenciaId || null,
   };
@@ -63,7 +67,7 @@ export const esPulidor = (actor: Actor): boolean => actor.rol === ROL.PULIDOR;
  * Admin y super admin no tienen restricción regional.
  */
 export function assertRegion(actor: Actor, regionDeLaMaquina: string | null | undefined): void {
-  if (esAdmin(actor)) return;
+  if (esAdmin(actor) || actor.ambito === 'GLOBAL') return;
   if (!actor.regionId) {
     throw new ForbiddenException('Tu usuario no tiene una región asignada.');
   }

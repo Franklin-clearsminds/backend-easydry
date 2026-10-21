@@ -1110,6 +1110,28 @@ export class StorageService implements OnModuleInit {
     );
   }
 
+  /**
+   * ¿Puede el usuario ver los archivos de esta máquina (carpeta `maquinaria/{código}/`)? Todo el país, todas;
+   * región, las de su región; agencia, las de su agencia; el pulidor y el ámbito propio, solo las asignadas a él.
+   * Si no se encuentra la máquina por ese código no hay a quién compararla y rige solo el permiso.
+   */
+  public async maquinaSegmentoEnAlcance(user: any, segmento: string): Promise<boolean> {
+    const alcance = resolverAlcance(user);
+    if (alcance.tipo === 'GLOBAL') return true;
+    if (!this.prisma) return false;
+    const maquina = await this.prisma.maquinaria.findFirst({
+      where: { codigo: { equals: String(segmento || ''), mode: 'insensitive' } },
+      select: { agenciaId: true, operadorAsignadoId: true, agencia: { select: { regionId: true } } },
+    });
+    if (!maquina) return true;
+    if (rolDeUsuario(user) === 'PULIDOR' || alcance.tipo === 'PROPIO') {
+      return !!user?.id && maquina.operadorAsignadoId === String(user.id);
+    }
+    if (alcance.tipo === 'REGION') return !!maquina.agencia?.regionId && maquina.agencia.regionId === alcance.regionId;
+    if (alcance.tipo === 'AGENCIA') return !!maquina.agenciaId && maquina.agenciaId === alcance.agenciaId;
+    return false;
+  }
+
   private safeSegment(value: string | undefined, fallback: string): string {
     const normalized = String(value || fallback)
       .trim()

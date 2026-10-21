@@ -8,8 +8,11 @@ const usuario = (namerol: string, extra: Record<string, unknown> = {}) => {
   return { id: `id-${namerol}`, roleDetails: { namerol, capacidades: r.capacidades, ambito: r.ambito }, ...extra };
 };
 
-function armar(agencias: Array<{ id: string; nombre: string }> = []) {
-  const prisma: any = { agencia: { findMany: vi.fn().mockResolvedValue(agencias) } };
+function armar(agencias: Array<{ id: string; nombre: string }> = [], maquina: unknown = null) {
+  const prisma: any = {
+    agencia: { findMany: vi.fn().mockResolvedValue(agencias) },
+    maquinaria: { findFirst: vi.fn().mockResolvedValue(maquina) },
+  };
   const servicio = Object.create(StorageService.prototype) as StorageService;
   (servicio as any).prisma = prisma;
   (servicio as any).publicUrlPrefix = 'https://bucket.s3.amazonaws.com';
@@ -62,6 +65,52 @@ describe('evidencias privadas: presigned-url', () => {
     await expect(controlador.getPresignedUrl(llave, usuario('LIDER', { agenciaId: 'a1' }))).resolves.toBeDefined();
     await expect(controlador.getPresignedUrl(llave, usuario('TECNICO'))).resolves.toBeDefined(); // el técnico tiene evidencias.ver
     await expect(controlador.getPresignedUrl(llave, usuario('LAVADOR', { agenciaId: 'a1' }))).rejects.toThrow(/No tienes permiso/);
+  });
+});
+
+describe('archivos de maquinaria: presigned-url', () => {
+  const conPermisos = (...capacidades: string[]) => ({ id: 'u1', roleDetails: { namerol: 'LIDER', capacidades, ambito: 'GLOBAL' } });
+
+  it('la foto y la ficha técnica las ve quien puede ver maquinaria', async () => {
+    const { controlador } = armar();
+    const foto = 'maquinaria/hd-20022/perfil/foto/a.jpg';
+    await expect(controlador.getPresignedUrl(foto, conPermisos('maquinaria.ver'))).resolves.toBeDefined();
+    await expect(controlador.getPresignedUrl(foto, conPermisos('incidentes.ver'))).rejects.toThrow(/No tienes permiso/);
+  });
+
+  it('las evidencias de incidentes y limpiezas piden su permiso, no el de ver maquinaria', async () => {
+    const { controlador } = armar();
+    const inc = 'maquinaria/hd-20022/incidentes/i1/reporte/fotos/a.jpg';
+    const limp = 'maquinaria/hd-20022/limpiezas/2026-10-15/a.jpg';
+    await expect(controlador.getPresignedUrl(inc, conPermisos('incidentes.ver'))).resolves.toBeDefined();
+    await expect(controlador.getPresignedUrl(limp, conPermisos('limpiezas.ver'))).resolves.toBeDefined();
+    await expect(controlador.getPresignedUrl(inc, conPermisos('maquinaria.ver'))).rejects.toThrow(/No tienes permiso/);
+  });
+});
+
+describe('archivos de maquinaria: alcance por ámbito', () => {
+  const foto = 'maquinaria/hd-20022/perfil/foto/a.jpg';
+  const maquina = { agenciaId: 'a1', operadorAsignadoId: null, agencia: { regionId: 'r1' } };
+  const rol = (ambito: string, extra: Record<string, unknown> = {}) => ({
+    id: 'u1', ...extra, roleDetails: { namerol: 'ROL_X', capacidades: ['maquinaria.ver'], ambito },
+  });
+
+  it('todo el país ve las máquinas de cualquier región', async () => {
+    const { controlador, prisma } = armar([], { ...maquina, agencia: { regionId: 'otra' } });
+    await expect(controlador.getPresignedUrl(foto, rol('GLOBAL'))).resolves.toBeDefined();
+    expect(prisma.maquinaria.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('región: solo las de su región', async () => {
+    const { controlador } = armar([], maquina);
+    await expect(controlador.getPresignedUrl(foto, rol('REGION', { regionId: 'r1' }))).resolves.toBeDefined();
+    await expect(controlador.getPresignedUrl(foto, rol('REGION', { regionId: 'r2' }))).rejects.toThrow(/fuera de tu alcance/);
+  });
+
+  it('agencia: solo las de su agencia', async () => {
+    const { controlador } = armar([], maquina);
+    await expect(controlador.getPresignedUrl(foto, rol('AGENCIA', { agenciaId: 'a1' }))).resolves.toBeDefined();
+    await expect(controlador.getPresignedUrl(foto, rol('AGENCIA', { agenciaId: 'a2' }))).rejects.toThrow(/fuera de tu alcance/);
   });
 });
 

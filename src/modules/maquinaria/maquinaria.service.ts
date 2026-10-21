@@ -30,6 +30,7 @@ import {
   ListMaquinariaDto,
   ReportarIncidenteDto,
   ResolverIncidenteDto,
+  CancelarIncidenteDto,
   ListIncidentesDto,
   RegistrarMantenimientoDto,
   EjecutarMantenimientoDto,
@@ -237,6 +238,12 @@ export class MaquinariaService {
 
   private scopeMaquinaria(actor: Actor): Prisma.MaquinariaWhereInput {
     if (esAdmin(actor) || actor.rol === ROL.COORD_BODEGA) return {};
+    // El ámbito del rol manda: todo el país ve toda la maquinaria; región, la de su región; agencia, la
+    // de su agencia. El pulidor sigue viendo solo lo que tiene asignado a él (su kit), salvo que su
+    // ámbito sea más amplio que la agencia.
+    if (actor.ambito === 'GLOBAL') return {};
+    if (actor.ambito === 'REGION') return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
+    if (actor.ambito === 'AGENCIA' && !esOperador(actor)) return { agenciaId: actor.agenciaId ?? NADA };
     if (esCoordMantenimiento(actor) || esSupervisor(actor) || esTecnico(actor) || esCoordComercial(actor)) {
       return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
     }
@@ -250,7 +257,7 @@ export class MaquinariaService {
   }
 
   private scopeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
-    if (esAdmin(actor)) return {};
+    if (esAdmin(actor) || actor.ambito === 'GLOBAL') return {};
     if (esCoordMantenimiento(actor)) {
       // El coordinador ve todo lo de su región (tiene que verlo para poder asignarlo), y además lo
       // que tiene asignado a su propio nombre aunque lo muevan de región después (ver bloqueo de
@@ -260,14 +267,16 @@ export class MaquinariaService {
         { tecnicoAsignadoId: actor.id },
       ] };
     }
-    if (esSupervisor(actor)) {
-      return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
-    }
     if (esTecnico(actor)) {
       // El técnico solo ve las incidencias que el coordinador de mantenimiento de su región le
       // asignó a él por nombre, no todas las de la región (eso es del coordinador/supervisor).
       return { tecnicoAsignadoId: actor.id };
     }
+    // Los demás roles: el ámbito del rol decide (región o agencia).
+    if (esSupervisor(actor) || actor.ambito === 'REGION') {
+      return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    }
+    if (actor.ambito === 'AGENCIA' && !esOperador(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     if (esCoordServiciosEspeciales(actor)) return { maquinaria: { operadorAsignado: { role: { namerol: 'PULIDOR' } } } };
     // Mismo criterio que scopeMaquinaria: el líder ve las incidencias de toda su agencia.
     if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
@@ -278,7 +287,7 @@ export class MaquinariaService {
   }
 
   private scopeMantenimientos(actor: Actor): Prisma.MantenimientoMaquinariaWhereInput {
-    if (esAdmin(actor)) return {};
+    if (esAdmin(actor) || actor.ambito === 'GLOBAL') return {};
     if (esCoordMantenimiento(actor)) {
       // El coordinador ve todos los de su región (tiene que verlos para poder asignarlos), y además
       // los que tiene asignados a su propio nombre aunque lo muevan de región después (ver bloqueo
@@ -294,6 +303,9 @@ export class MaquinariaService {
       // la región), tampoco pierde de vista su trabajo si lo mueven de región mientras lo tiene abierto.
       return { tecnicoId: actor.id };
     }
+    // Los demás roles: el ámbito del rol decide (región o agencia).
+    if (actor.ambito === 'REGION') return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    if (actor.ambito === 'AGENCIA' && !esOperador(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     // Mismo criterio que scopeMaquinaria: el pulidor ve los mantenimientos de lo que tiene asignado
     // a él, y el líder los de toda su agencia (ve y reporta cualquier máquina de su sede).
     if (esOperador(actor)) return { maquinaria: { operadorAsignadoId: actor.id } };
@@ -897,6 +909,7 @@ export class MaquinariaService {
     },
     reportadoPor: { select: { id: true, name: true, lastname: true, email: true } },
     resueltoPor: { select: { id: true, name: true, lastname: true, email: true } },
+    canceladoPor: { select: { id: true, name: true, lastname: true, email: true } },
     tecnicoAsignado: { select: { id: true, name: true, lastname: true, email: true } },
     destinoTaller: { select: { id: true, nombre: true, tipoUbicacion: true } },
     evidencias: { where: { activa: true }, orderBy: { creadaEn: 'asc' as const } },
@@ -941,16 +954,10 @@ export class MaquinariaService {
 
     const maquina = await this.cargarMaquina(dto.maquinariaId);
     this.assertActiva(maquina);
-    // El operador asignado reporta lo suyo; el líder reporta cualquier máquina de su agencia (supervisa
-    // toda la sede, no solo lo que quedó a su nombre); supervisor (su región) y coordinador de servicios
-    // especiales (sus pulidores) también reportan, con el mismo alcance que usan para ver la máquina
-    // (scopeMaquinaria).
+    // Reporta quien tiene el permiso sobre las máquinas que puede ver según su ámbito (país, región o
+    // agencia); el pulidor, solo las asignadas a él (su alcance es ese mismo).
     if (maquina.operadorAsignadoId !== actor.id) {
-      if (esLider(actor) || esSupervisor(actor) || esCoordServiciosEspeciales(actor)) {
-        await this.assertPuedeVerMaquina(actor, maquina.id);
-      } else {
-        throw new ForbiddenException('Solo puedes reportar las máquinas que tienes asignadas.');
-      }
+      await this.assertPuedeVerMaquina(actor, maquina.id);
     }
 
     const inputs: EvidenciaInputDto[] = [...(dto.evidencias || [])];
@@ -1114,6 +1121,7 @@ export class MaquinariaService {
           solucion,
           ...(autoAsignar ? { tecnicoAsignadoId: actor.id, fechaAsignacion: ahora } : {}),
           ...(nuevoEstado === 'RESUELTO' ? { resueltoPorId: actor.id, fechaSolucion: ahora, costoTotal: dto.costoTotal } : {}),
+          ...(nuevoEstado === 'CANCELADO' ? { canceladoPorId: actor.id, fechaCancelacion: ahora, motivoCancelacion: dto.solucion } : {}),
           evidencias: {
             create: evidencias.map((e) => this.evidenciaData(e, 'INCIDENTE', 'REPARACION', actor.id)),
           },
@@ -1144,6 +1152,48 @@ export class MaquinariaService {
         inc.titulo,
         { type: 'INCIDENTE_REPARADO', incidenteId: inc.id, maquinariaId: maquina.id },
         { tipo: 'INCIDENCIA_RESUELTA', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
+      );
+    }
+    return { success: true, data: this.ubicacionIncidente(updated) };
+  }
+
+  /**
+   * Cancela una incidencia (falsa alarma, duplicada…): exige el motivo y deja registrado quién la canceló y cuándo,
+   * tanto en la incidencia como en la línea de tiempo de la máquina. Alcance: las incidencias que el actor puede ver.
+   */
+  async cancelarIncidente(dto: CancelarIncidenteDto, actor: Actor) {
+    const inc = await this.cargarIncidente(dto.incidenteId);
+    const maquina = inc.maquinaria as unknown as MaquinaCtx;
+    if (inc.estado === 'RESUELTO' || inc.estado === 'CANCELADO') {
+      throw new BadRequestException('La incidencia ya está cerrada.');
+    }
+    const enAlcance = await this.prisma.incidenteTecnico.count({ where: { id: inc.id, ...this.scopeIncidentes(actor) } });
+    if (!enAlcance) throw new ForbiddenException('No tienes acceso a esta incidencia.');
+
+    const motivo = dto.motivo.trim();
+    const ahora = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.incidenteTecnico.update({
+        where: { id: inc.id },
+        data: { estado: 'CANCELADO', canceladoPorId: actor.id, fechaCancelacion: ahora, motivoCancelacion: motivo },
+        include: this.includeIncidente,
+      });
+      await this.registrarEvento(tx, maquina, 'INCIDENTE_CANCELADO', actor.id, inc.id, {
+        reportadoEn: inc.fechaReporte,
+        canceladoEn: ahora,
+        motivo,
+        estadoAnterior: inc.estado,
+      });
+      return u;
+    });
+
+    if (inc.reportadoPorId !== actor.id) {
+      void this.notifications.notificarUsuarios(
+        [inc.reportadoPorId],
+        `Incidencia cancelada: ${maquina.codigo}`,
+        `${inc.titulo}. Motivo: ${motivo}`,
+        { type: 'INCIDENTE_CANCELADO', incidenteId: inc.id, maquinariaId: maquina.id },
+        { tipo: 'INCIDENCIA_CANCELADA', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
       );
     }
     return { success: true, data: this.ubicacionIncidente(updated) };
@@ -1278,8 +1328,9 @@ export class MaquinariaService {
     assertRegion(actor, this.regionDe(maquina));
     this.assertActiva(maquina);
 
-    const tecnicoId = dto.tecnicoId || actor.id;
-    await this.validarResponsable(tecnicoId, this.regionDe(maquina));
+    // El técnico es opcional: sin él queda «sin técnico asignado» hasta que alguien lo asigne.
+    const tecnicoId = dto.tecnicoId || null;
+    if (tecnicoId) await this.validarResponsable(tecnicoId, this.regionDe(maquina));
     const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, {});
 
     const fechaProgramada = dto.fechaProgramada ? new Date(dto.fechaProgramada) : new Date();
@@ -1319,7 +1370,7 @@ export class MaquinariaService {
       return m;
     });
 
-    if (tecnicoId !== actor.id) {
+    if (tecnicoId && tecnicoId !== actor.id) {
       void this.notifications.notificarUsuarios(
         [tecnicoId],
         `Mantenimiento asignado: ${maquina.codigo}`,
@@ -1673,14 +1724,19 @@ export class MaquinariaService {
   }
 
   /**
-   * Quién puede registrar la limpieza de esta máquina hoy: únicamente el líder de su agencia o el
-   * pulidor (fijo o móvil) asignado — quien de verdad la limpia. Ni admin ni super admin registran
-   * limpiezas: solo auditan (con `limpiezas.ver`/`limpiezas.editar`) lo que estos registraron.
+   * Quién puede registrar la limpieza de esta máquina: quien tiene el permiso (casilla del rol) sobre una
+   * máquina de su ámbito (país, región o agencia), y el pulidor sobre la que tiene asignada. Ni admin ni
+   * super admin registran limpiezas: solo auditan (con `limpiezas.ver`/`limpiezas.editar`) lo que otros registraron.
    */
-  private assertPuedeLimpiar(actor: Actor, m: Pick<MaquinaCtx, 'agenciaId' | 'operadorAsignadoId'>, regla: 'AGENCIA' | 'PULIDOR' | null): void {
-    if (regla === 'PULIDOR' && esOperador(actor) && actor.id === m.operadorAsignadoId) return;
-    if (regla === 'AGENCIA' && esLider(actor) && actor.agenciaId === m.agenciaId) return;
-    throw new ForbiddenException('No puedes registrar la limpieza de esta máquina.');
+  private async assertPuedeLimpiar(actor: Actor, m: Pick<MaquinaCtx, 'id' | 'operadorAsignadoId'>): Promise<void> {
+    const sinAcceso = new ForbiddenException('No puedes registrar la limpieza de esta máquina.');
+    if (esAdmin(actor)) throw sinAcceso;
+    if (esOperador(actor) && actor.id === m.operadorAsignadoId) return;
+    try {
+      await this.assertPuedeVerMaquina(actor, m.id);
+    } catch {
+      throw sinAcceso;
+    }
   }
 
   /**
@@ -1695,7 +1751,7 @@ export class MaquinariaService {
     if (!regla) {
       throw new BadRequestException('Esta máquina no tiene agencia ni pulidor asignado: no le aplica una regla de limpieza.');
     }
-    this.assertPuedeLimpiar(actor, maquina, regla);
+    await this.assertPuedeLimpiar(actor, maquina);
 
     let fecha = startOfDay(new Date());
     if (dto.fecha) {
@@ -1963,7 +2019,7 @@ export class MaquinariaService {
   async listMovimientos(dto: ListMovimientosMaquinariaDto, actor: Actor) {
     const where: Prisma.MovimientoMaquinariaWhereInput = {
       ...(dto.maquinariaId ? { maquinariaId: dto.maquinariaId } : {}),
-      ...(esAdmin(actor) ? {} : { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } }),
+      maquinaria: this.scopeMaquinaria(actor),
     };
     const { page, pageSize, skip } = this.pagina(dto);
 
@@ -2003,7 +2059,7 @@ export class MaquinariaService {
       where: {
         tipoUbicacion: { in: ['TALLER_NACIONAL', 'TALLER_REGIONAL'] },
         estado: 1,
-        ...(esAdmin(actor) ? {} : { regionId: actor.regionId ?? SIN_REGION }),
+        ...(esAdmin(actor) || actor.ambito === 'GLOBAL' ? {} : { regionId: actor.regionId ?? SIN_REGION }),
       },
       select: {
         id: true,
@@ -2024,7 +2080,8 @@ export class MaquinariaService {
 
   async historial(dto: HistorialMaquinariaDto, actor: Actor) {
     const m = await this.cargarMaquina(dto.maquinariaId);
-    assertRegion(actor, this.regionDe(m));
+    // Ve la línea de tiempo de toda máquina que puede ver (su ámbito: país, región o agencia).
+    await this.assertPuedeVerMaquina(actor, m.id);
 
     const where: Prisma.MaquinariaEventoWhereInput = { maquinariaId: m.id };
     if (dto.tipos?.length) where.tipo = { in: dto.tipos };

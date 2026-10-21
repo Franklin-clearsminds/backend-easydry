@@ -37,6 +37,7 @@ const CLAVE_PERFIL = /^usuarios\/[^/]+\/perfil\//i;
 const CLAVE_PUBLICA =
   /^(?:thumbs\/|view\/)?(?:catalogo\/insumos\/|usuarios\/[^/]+\/perfil\/)/i;
 /** Evidencias de una agencia (servicios, inventario…): `agencias/<nombre de la agencia>/…`. Privadas: solo con sesión y dentro del alcance. */
+const CLAVE_MAQUINA_CODIGO = /^(?:thumbs\/|view\/)?(?:agencias\/)?maquinaria\/([^/]+)\//i;
 const CLAVE_AGENCIA = /^(?:thumbs\/|view\/)?agencias\/([^/]+)\//i;
 /**
  * La evidencia de maquinaria (incluye sus miniaturas y las rutas antiguas) es privada:
@@ -132,15 +133,20 @@ export class StorageController {
     if (!rawKey) throw new BadRequestException('Parámetro key es obligatorio.');
     const key = this.storageService.keyFromUrl(rawKey) ?? rawKey;
     if (CLAVE_MAQUINARIA.test(key)) {
-      if (
-        !tieneAlgunPermiso(user, [
-          'maquinaria.trazabilidad',
-          'mantenimientos.ver',
-        ])
-      ) {
+      // Cada carpeta de la máquina la ve quien tiene el permiso de esa pantalla: la foto y la ficha técnica
+      // (perfil) son parte de ver la máquina; las demás, de incidentes, mantenimientos o limpiezas.
+      const permisosMaquinaria = ['maquinaria.trazabilidad', 'mantenimientos.ver'];
+      if (/\/perfil\//i.test(key)) permisosMaquinaria.push('maquinaria.ver');
+      else if (/\/limpiezas\//i.test(key)) permisosMaquinaria.push('limpiezas.ver');
+      else if (/\/incidentes\//i.test(key)) permisosMaquinaria.push('incidentes.ver');
+      if (!tieneAlgunPermiso(user, permisosMaquinaria)) {
         throw new ForbiddenException(
           'No tienes permiso para ver la evidencia de maquinaria.',
         );
+      }
+      const maquina = CLAVE_MAQUINA_CODIGO.exec(key);
+      if (maquina && !(await this.storageService.maquinaSegmentoEnAlcance(user, maquina[1]))) {
+        throw new ForbiddenException('Esta máquina está fuera de tu alcance.');
       }
     } else if (CLAVE_ENVIO.test(key)) {
       // Fotos de recepción, rechazo y resolución de un envío: quien ve envíos o los resuelve.
