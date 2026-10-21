@@ -69,6 +69,7 @@ import {
   esSupervisor,
   esOperador,
   esLider,
+  esRolPropio,
   esTecnico,
   ROL,
   ROLES_OPERADOR,
@@ -238,12 +239,6 @@ export class MaquinariaService {
 
   private scopeMaquinaria(actor: Actor): Prisma.MaquinariaWhereInput {
     if (esAdmin(actor) || actor.rol === ROL.COORD_BODEGA) return {};
-    // El ámbito del rol manda: todo el país ve toda la maquinaria; región, la de su región; agencia, la
-    // de su agencia. El pulidor sigue viendo solo lo que tiene asignado a él (su kit), salvo que su
-    // ámbito sea más amplio que la agencia.
-    if (actor.ambito === 'GLOBAL') return {};
-    if (actor.ambito === 'REGION') return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
-    if (actor.ambito === 'AGENCIA' && !esOperador(actor)) return { agenciaId: actor.agenciaId ?? NADA };
     if (esCoordMantenimiento(actor) || esSupervisor(actor) || esTecnico(actor) || esCoordComercial(actor)) {
       return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
     }
@@ -253,11 +248,18 @@ export class MaquinariaService {
     // lo que tiene asignado a él personalmente, como su kit de insumos.
     if (esLider(actor)) return { agenciaId: actor.agenciaId ?? NADA };
     if (esOperador(actor)) return { operadorAsignadoId: actor.id };
-    return { id: NADA };
+    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
+    switch (actor.ambito) {
+      case 'GLOBAL': return {};
+      case 'REGION': return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
+      case 'AGENCIA': return { agenciaId: actor.agenciaId ?? NADA };
+      case 'PROPIO': return { operadorAsignadoId: actor.id };
+      default: return { id: NADA };
+    }
   }
 
   private scopeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
-    if (esAdmin(actor) || actor.ambito === 'GLOBAL') return {};
+    if (esAdmin(actor)) return {};
     if (esCoordMantenimiento(actor)) {
       // El coordinador ve todo lo de su región (tiene que verlo para poder asignarlo), y además lo
       // que tiene asignado a su propio nombre aunque lo muevan de región después (ver bloqueo de
@@ -267,27 +269,32 @@ export class MaquinariaService {
         { tecnicoAsignadoId: actor.id },
       ] };
     }
+    if (esSupervisor(actor)) {
+      return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+    }
     if (esTecnico(actor)) {
       // El técnico solo ve las incidencias que el coordinador de mantenimiento de su región le
       // asignó a él por nombre, no todas las de la región (eso es del coordinador/supervisor).
       return { tecnicoAsignadoId: actor.id };
     }
-    // Los demás roles: el ámbito del rol decide (región o agencia).
-    if (esSupervisor(actor) || actor.ambito === 'REGION') {
-      return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
-    }
-    if (actor.ambito === 'AGENCIA' && !esOperador(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     if (esCoordServiciosEspeciales(actor)) return { maquinaria: { operadorAsignado: { role: { namerol: 'PULIDOR' } } } };
     // Mismo criterio que scopeMaquinaria: el líder ve las incidencias de toda su agencia.
     if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     if (esOperador(actor)) {
       return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
     }
-    return { id: NADA };
+    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
+    switch (actor.ambito) {
+      case 'GLOBAL': return {};
+      case 'REGION': return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+      case 'AGENCIA': return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
+      case 'PROPIO': return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
+      default: return { id: NADA };
+    }
   }
 
   private scopeMantenimientos(actor: Actor): Prisma.MantenimientoMaquinariaWhereInput {
-    if (esAdmin(actor) || actor.ambito === 'GLOBAL') return {};
+    if (esAdmin(actor)) return {};
     if (esCoordMantenimiento(actor)) {
       // El coordinador ve todos los de su región (tiene que verlos para poder asignarlos), y además
       // los que tiene asignados a su propio nombre aunque lo muevan de región después (ver bloqueo
@@ -303,14 +310,18 @@ export class MaquinariaService {
       // la región), tampoco pierde de vista su trabajo si lo mueven de región mientras lo tiene abierto.
       return { tecnicoId: actor.id };
     }
-    // Los demás roles: el ámbito del rol decide (región o agencia).
-    if (actor.ambito === 'REGION') return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
-    if (actor.ambito === 'AGENCIA' && !esOperador(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
     // Mismo criterio que scopeMaquinaria: el pulidor ve los mantenimientos de lo que tiene asignado
     // a él, y el líder los de toda su agencia (ve y reporta cualquier máquina de su sede).
     if (esOperador(actor)) return { maquinaria: { operadorAsignadoId: actor.id } };
     if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
-    return { id: NADA };
+    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
+    switch (actor.ambito) {
+      case 'GLOBAL': return {};
+      case 'REGION': return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+      case 'AGENCIA': return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
+      case 'PROPIO': return { maquinaria: { operadorAsignadoId: actor.id } };
+      default: return { id: NADA };
+    }
   }
 
   /** Falla si el actor no puede ver esta máquina (mismo criterio que la lista). */
@@ -957,7 +968,14 @@ export class MaquinariaService {
     // Reporta quien tiene el permiso sobre las máquinas que puede ver según su ámbito (país, región o
     // agencia); el pulidor, solo las asignadas a él (su alcance es ese mismo).
     if (maquina.operadorAsignadoId !== actor.id) {
-      await this.assertPuedeVerMaquina(actor, maquina.id);
+      if (esLider(actor) || esSupervisor(actor) || esCoordServiciosEspeciales(actor)) {
+        await this.assertPuedeVerMaquina(actor, maquina.id);
+      } else if (esRolPropio(actor)) {
+        // Rol propio: reporta lo que su ámbito le deja ver (la misma lista que consulta).
+        await this.assertPuedeVerMaquina(actor, maquina.id);
+      } else {
+        throw new ForbiddenException('Solo puedes reportar las máquinas que tienes asignadas.');
+      }
     }
 
     const inputs: EvidenciaInputDto[] = [...(dto.evidencias || [])];
@@ -1724,19 +1742,24 @@ export class MaquinariaService {
   }
 
   /**
-   * Quién puede registrar la limpieza de esta máquina: quien tiene el permiso (casilla del rol) sobre una
-   * máquina de su ámbito (país, región o agencia), y el pulidor sobre la que tiene asignada. Ni admin ni
-   * super admin registran limpiezas: solo auditan (con `limpiezas.ver`/`limpiezas.editar`) lo que otros registraron.
+   * Quién puede registrar la limpieza de esta máquina: el líder de su agencia, el pulidor asignado y un rol propio
+   * (creado desde Roles) con el permiso sobre una máquina de su ámbito. Ni admin ni super admin registran limpiezas:
+   * solo auditan (con `limpiezas.ver`/`limpiezas.editar`) lo que otros registraron.
    */
-  private async assertPuedeLimpiar(actor: Actor, m: Pick<MaquinaCtx, 'id' | 'operadorAsignadoId'>): Promise<void> {
+  private async assertPuedeLimpiar(actor: Actor, m: Pick<MaquinaCtx, 'id' | 'agenciaId' | 'operadorAsignadoId'>, regla: 'AGENCIA' | 'PULIDOR' | null): Promise<void> {
     const sinAcceso = new ForbiddenException('No puedes registrar la limpieza de esta máquina.');
     if (esAdmin(actor)) throw sinAcceso;
-    if (esOperador(actor) && actor.id === m.operadorAsignadoId) return;
-    try {
-      await this.assertPuedeVerMaquina(actor, m.id);
-    } catch {
-      throw sinAcceso;
+    if (regla === 'PULIDOR' && esOperador(actor) && actor.id === m.operadorAsignadoId) return;
+    if (regla === 'AGENCIA' && esLider(actor) && actor.agenciaId === m.agenciaId) return;
+    if (esRolPropio(actor)) {
+      try {
+        await this.assertPuedeVerMaquina(actor, m.id);
+        return;
+      } catch {
+        throw sinAcceso;
+      }
     }
+    throw sinAcceso;
   }
 
   /**
@@ -1751,7 +1774,7 @@ export class MaquinariaService {
     if (!regla) {
       throw new BadRequestException('Esta máquina no tiene agencia ni pulidor asignado: no le aplica una regla de limpieza.');
     }
-    await this.assertPuedeLimpiar(actor, maquina);
+    await this.assertPuedeLimpiar(actor, maquina, regla);
 
     let fecha = startOfDay(new Date());
     if (dto.fecha) {

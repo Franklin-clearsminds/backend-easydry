@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { auditar } from './auditoria-permisos.js';
+import { auditar, cargarPantallas } from './auditoria-permisos.js';
+import { esCodigoPermiso } from './catalogo-permisos.js';
 import { SIN_PANTALLA, SIN_SERVIDOR } from './auditoria-acciones.baseline.js';
 import { EXCEPCIONES_PANTALLA, EXCEPCIONES_SERVIDOR } from './auditoria-acciones.excepciones.js';
 
@@ -50,6 +51,19 @@ describe('auditoría de las casillas del editor de roles', () => {
     it('la línea base de pantallas no conserva casillas que ya usa alguna pantalla', () => {
       const resueltas = SIN_PANTALLA.filter((c) => (resultados.find((r) => r.codigo === c)?.pantalla ?? 0) > 0);
       expect(resueltas, 'ya las usa una pantalla: bórralas de SIN_PANTALLA').toEqual([]);
+    });
+
+    it('ninguna pantalla consulta un permiso que ya no existe en el catálogo', () => {
+      // Si una casilla desaparece del catálogo (por ejemplo al fusionarla con otra), las pantallas que la consultaban
+      // se quedan siempre en falso y su botón o pestaña nunca se ve. Aquí se detecta el código muerto.
+      const { web, app } = cargarPantallas();
+      const texto = `${web ?? ''}\n${app ?? ''}`;
+      const usados = new Set<string>();
+      for (const llamada of texto.matchAll(/puede(?:Alguno)?\(([^)]*)\)/g)) {
+        for (const codigo of llamada[1].matchAll(/'([a-z0-9._-]+)'/g)) usados.add(codigo[1]);
+      }
+      const muertos = [...usados].filter((c) => !esCodigoPermiso(c)).sort();
+      expect(muertos, 'códigos que la web consulta y ya no están en el catálogo').toEqual([]);
     });
   });
 });

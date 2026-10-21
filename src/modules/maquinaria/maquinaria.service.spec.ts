@@ -173,11 +173,10 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
     it('un pulidor no puede reportar una máquina que no tiene asignada', async () => {
       const { service, prisma } = build();
       prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'otro-pulidor' }));
-      prisma.maquinaria.count = vi.fn().mockResolvedValue(0);
       await expect(service.reportarIncidente(
         { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
         pulidor,
-      )).rejects.toThrow(/No tienes acceso a esta máquina/);
+      )).rejects.toThrow(/asignadas/);
     });
 
     it('el supervisor de la región y el coordinador de servicios especiales sí pueden reportar (aunque no sean el operador asignado)', async () => {
@@ -281,6 +280,27 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
         { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
         lider,
       )).rejects.toThrow(ForbiddenException);
+    });
+
+    it('un rol propio reporta cualquier máquina de su ámbito, no solo la asignada a él', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ agenciaId: 'ag-2', operadorAsignadoId: 'pul-9' }));
+      prisma.maquinaria.count = vi.fn().mockResolvedValue(1);
+      const rolPropio: Actor = { id: 'u-propio', rol: 'ROL_ACTIVOS_Y_TALLER', regionId: null, agenciaId: null, ambito: 'GLOBAL' };
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [{ url: 'maquinaria/mq-01/incidentes/i1/reporte/a.jpg' }] } as never,
+        rolPropio,
+      )).resolves.toBeDefined();
+      expect(prisma.maquinaria.count).toHaveBeenCalledTimes(1);
+    });
+
+    it('un rol oficial conserva su regla: el técnico no reporta lo que no tiene asignado', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUnique.mockResolvedValue(maquina({ operadorAsignadoId: 'otro-pulidor' }));
+      await expect(service.reportarIncidente(
+        { maquinariaId: 'm1', titulo: 't', descripcion: 'd', evidencias: [] } as never,
+        tecnico,
+      )).rejects.toThrow(/asignadas/);
     });
   });
 
@@ -779,5 +799,43 @@ describe('MaquinariaService — costo de mantenimiento e incidencias', () => {
       await service.editarIncidente({ incidenteId: 'inc-1', costoTotal: 42 } as never, coordCosta);
       expect(tx.incidenteTecnico.update.mock.calls[0][0].data.costoTotal).toBe(42);
     });
+  });
+});
+describe('MaquinariaService — alcance de un rol propio (manda el ámbito del rol)', () => {
+  // Un rol creado desde la pantalla de Roles no es ninguno de los oficiales del módulo: antes caía en «no ve nada».
+  const propio = (ambito: string, extra: Partial<Actor> = {}): Actor => ({
+    id: 'u-propio',
+    rol: 'ROL_ACTIVOS_Y_TALLER',
+    regionId: null,
+    agenciaId: null,
+    ambito,
+    ...extra,
+  });
+
+  it('con ámbito GLOBAL (país) ve toda la maquinaria', () => {
+    const { service } = build();
+    expect((service as any).scopeMaquinaria(propio('GLOBAL'))).toEqual({});
+  });
+
+  it('REGION y AGENCIA acotan por los datos del usuario', () => {
+    const { service } = build();
+    expect((service as any).scopeMaquinaria(propio('REGION', { regionId: 'costa' }))).toEqual({ agencia: { regionId: 'costa' } });
+    expect((service as any).scopeMaquinaria(propio('AGENCIA', { agenciaId: 'ag-1' }))).toEqual({ agenciaId: 'ag-1' });
+  });
+
+  it('PROPIO solo deja ver lo que tiene asignado', () => {
+    const { service } = build();
+    expect((service as any).scopeMaquinaria(propio('PROPIO'))).toEqual({ operadorAsignadoId: 'u-propio' });
+  });
+
+  it('sin ámbito no ve nada (falla cerrado)', () => {
+    const { service } = build();
+    expect((service as any).scopeMaquinaria(propio(undefined as never))).toEqual({ id: '__ninguno__' });
+  });
+
+  it('el mismo criterio aplica a incidentes y mantenimientos', () => {
+    const { service } = build();
+    expect((service as any).scopeIncidentes(propio('REGION', { regionId: 'costa' }))).toEqual({ maquinaria: { agencia: { regionId: 'costa' } } });
+    expect((service as any).scopeMantenimientos(propio('AGENCIA', { agenciaId: 'ag-1' }))).toEqual({ maquinaria: { agenciaId: 'ag-1' } });
   });
 });

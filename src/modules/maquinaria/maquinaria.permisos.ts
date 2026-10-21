@@ -37,7 +37,10 @@ export interface Actor {
   rol: string;
   regionId: string | null;
   agenciaId: string | null;
-  /** Ámbito del rol (GLOBAL, REGION, AGENCIA, PROPIO). Si falta, rige el alcance clásico por rol. */
+  /**
+   * Ámbito del rol (GLOBAL, REGION, AGENCIA, PROPIO). Manda cuando el rol no es uno de los oficiales del módulo:
+   * un rol creado desde Roles ve lo mismo que su ámbito, no lo que diga su nombre.
+   */
   ambito?: string;
 }
 
@@ -46,9 +49,10 @@ export function actorFromUser(user: any): Actor {
   return {
     id: String(user?.id || ''),
     rol,
-    ambito: ambitoDeUsuario(user),
-    regionId: user?.regionId || null,
+    // Misma regla que `resolverAlcance`: el asistente de bodega toma la región de su bodega.
+    regionId: user?.regionId || user?.bodega?.regionId || null,
     agenciaId: user?.agenciaId || null,
+    ambito: ambitoDeUsuario(user),
   };
 }
 
@@ -62,11 +66,16 @@ export const esTecnico = (actor: Actor): boolean => actor.rol === ROL.TECNICO;
 export const esLider = (actor: Actor): boolean => esLiderDeAgencia(actor.rol);
 export const esPulidor = (actor: Actor): boolean => actor.rol === ROL.PULIDOR;
 
+const ROLES_OFICIALES = new Set<string>(Object.values(ROL));
+/** Rol creado desde la pantalla de Roles (no es uno de los oficiales del módulo): su alcance lo define su ámbito. */
+export const esRolPropio = (actor: Actor): boolean => !ROLES_OFICIALES.has(actor.rol);
+
 /**
  * El coordinador (y el técnico) solo operan en la región de la máquina.
  * Admin y super admin no tienen restricción regional.
  */
 export function assertRegion(actor: Actor, regionDeLaMaquina: string | null | undefined): void {
+  // Ámbito país: no hay región que respetar.
   if (esAdmin(actor) || actor.ambito === 'GLOBAL') return;
   if (!actor.regionId) {
     throw new ForbiddenException('Tu usuario no tiene una región asignada.');

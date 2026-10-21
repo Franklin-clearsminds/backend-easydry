@@ -99,7 +99,9 @@ export class InventarioController {
   // INSUMOS (Catálogo Maestro)
   // ==============================================================
 
-  @Permiso('inventario.ver')
+  // El formulario de Envíos necesita estos listados para armar el despacho: se abren también con sus permisos,
+  // sin regalar el módulo de Inventario (mismo criterio que maquinaria/list con las pestañas del taller).
+  @Permiso('inventario.ver', 'despachos.ver', 'envios.crear')
   @Post('insumos/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar catálogo maestro de insumos con filtros (auto-filtrado por servicios/agencia)' })
@@ -200,7 +202,7 @@ export class InventarioController {
     return this.inventarioService.obtenerStockAgenciasResumen(dto, user?.id);
   }
 
-  @Permiso('inventario.ver')
+  @Permiso('inventario.ver', 'despachos.ver', 'envios.crear')
   @Post('bodegas/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar bodegas del sistema (Central y Regionales)' })

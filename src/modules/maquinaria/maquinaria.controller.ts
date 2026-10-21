@@ -47,7 +47,9 @@ export class MaquinariaController {
   // MAQUINARIA
   // ==============================================================
 
-  @Permiso('maquinaria.ver')
+  // El listado alimenta también Taller (incidentes, mantenimientos, limpiezas) y el Mapa: esas pantallas lo piden sin
+  // necesitar el módulo de Maquinaria completo, así que sus permisos también lo abren.
+  @Permiso('maquinaria.ver', 'incidentes.ver', 'mantenimientos.ver', 'limpiezas.ver', 'mapa.maquinaria.ver')
   @Post('list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar maquinaria. Cada rol ve solo lo suyo: región, asignadas o admin (todas).' })
@@ -214,7 +216,7 @@ export class MaquinariaController {
     return this.maquinariaService.listMantenimientos(dto, actorFromUser(user));
   }
 
-  @Permiso('taller.incidentes.reportar', 'taller.incidentes.resolver', 'taller.mantenimientos.ejecutar', 'taller.mantenimientos.editar')
+  @Permiso('maquinaria.evidencias')
   @Post('evidencias/agregar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Agregar o reemplazar evidencia de una incidencia o mantenimiento (nunca se borra)' })
