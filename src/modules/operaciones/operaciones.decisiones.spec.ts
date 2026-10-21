@@ -132,43 +132,6 @@ describe('OperacionesService: decisiones sobre servicios (base real)', () => {
     });
   });
 
-  describe('aprobar todos', () => {
-    it('exige indicar la agencia: nunca aprueba todo el país', async () => {
-      const id = await nuevo('a2');
-      await expect(service.aprobarTodosServicios(actores.admin, undefined)).rejects.toThrow(/Indica la agencia/);
-      expect((await enBase(id)).estado).toBe('FINALIZADO');
-    });
-
-    it('solo toca la agencia indicada, registra a quien decidió, deja un registro por servicio y omite los que no tienen foto de salida', async () => {
-      // Una agencia propia (con su aprobador) para que el conteo no dependa de los servicios de otras pruebas.
-      const region = await env.region('MASIVA');
-      const agencia = await env.agencia('MASIVA', { regionId: region.id });
-      const bahia = await env.bahia('MASIVA', agencia.id);
-      const aprobador = await env.usuario('aprobador-masiva', 'APROBADOR', { agenciaId: agencia.id });
-      const lavador = await env.usuario('lav-masiva', 'LAVADOR', { agenciaId: agencia.id });
-      const conFoto = () =>
-        env.servicioLavado({ bahiaId: bahia.id, operadorId: lavador.id, catalogoId: catalogo.id, estado: 'FINALIZADO', datos: { fotoSalidaUrl: 'salida.jpg' } });
-      const mios = [(await conFoto()).id, (await conFoto()).id];
-      const sinFoto = (await env.servicioLavado({ bahiaId: bahia.id, operadorId: lavador.id, catalogoId: catalogo.id, estado: 'FINALIZADO' })).id;
-      const deOtraAgencia = await nuevo('a1'); // no debe tocarse
-
-      const r: any = await service.aprobarTodosServicios(await env.actor(aprobador.id), agencia.id);
-
-      expect(r).toMatchObject({ aprobadosCount: 2, omitidosSinFotoCount: 1 });
-      expect((await enBase(sinFoto)).estado).toBe('FINALIZADO'); // sin foto de salida no se aprueba en bloque
-      for (const id of mios) {
-        expect(await enBase(id)).toMatchObject({ estado: 'APROBADO', decididoPorId: aprobador.id, reglaDecision: 'TITULAR' });
-        expect(await auditoria(id)).toHaveLength(1); // un registro por servicio
-      }
-      expect((await enBase(deOtraAgencia)).estado).toBe('FINALIZADO');
-    });
-
-    it('un aprobador no cierra otra agencia y un administrador no cierra una que tiene aprobador', async () => {
-      await expect(service.aprobarTodosServicios(actores.aprobador, a3.id)).rejects.toThrow(/tu agencia/);
-      await expect(service.aprobarTodosServicios(actores.admin, a1.id)).rejects.toThrow(/aprobador designado/);
-    });
-  });
-
   describe('anular', () => {
     it('exige motivo y guarda quién, cuándo y por qué', async () => {
       const id = await nuevo('a1', 'EN_PROCESO');

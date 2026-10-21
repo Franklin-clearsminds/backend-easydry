@@ -119,7 +119,7 @@ export class EstadoCatalogoServicioDto {
 }
 
 export class SiguienteCodigoServicioDto {
-  @ApiPropertyOptional({ example: 'GENERAL', description: 'GENERAL → SER-###; ESPECIAL o EXTRA → ESP-###' })
+  @ApiPropertyOptional({ example: 'GENERAL', description: 'GENERAL → SER-###; ESPECIAL → ESP-###' })
   @IsOptional()
   @IsString()
   categoria?: string;

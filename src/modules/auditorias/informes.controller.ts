@@ -26,10 +26,10 @@ export class InformesInspeccionController {
     return this.informes.list(dto, user);
   }
 
-  @Permiso('informes.ver', 'auditorias.ver')
+  @Permiso('informes.ver')
   @Post('resumen')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Indicadores de los informes (tarjetas y dashboard de auditorías)' })
+  @ApiOperation({ summary: 'Indicadores de los informes (tarjetas de la pantalla de informes)' })
   resumen(@CurrentUser() user: any) {
     return this.informes.resumen(user);
   }

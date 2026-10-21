@@ -1,7 +1,7 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
-import { CerrarRetoDto, CreateRetoDto, DeleteRetoDto, ListRetosDto, PersonasRetoDto, RankingRetoDto } from './dto/retos.dto.js';
+import { CerrarRetoDto, CreateRetoDto, DeleteRetoDto, ListRetosDto, PersonasRetoDto, RankingRetoDto, UpdateRetoDto } from './dto/retos.dto.js';
 import { RetosService } from './retos.service.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
@@ -49,6 +49,14 @@ export class RetosController {
   @ApiOperation({ summary: 'Crear un reto de productividad' })
   create(@Body() dto: CreateRetoDto, @CurrentUser() user: any) {
     return this.retosService.create(dto, user);
+  }
+
+  @Permiso('productividad.retos.editar')
+  @Post('update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Editar título, descripción, premio y vigencia de un reto activo' })
+  update(@Body() dto: UpdateRetoDto, @CurrentUser() user: any) {
+    return this.retosService.actualizar(dto, user);
   }
 
   @Permiso('productividad.retos.eliminar')

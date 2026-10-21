@@ -8,7 +8,7 @@ import { QueryServiciosDto } from './dto/query-servicios.dto.js';
 import { DetailServicioDto } from './dto/detail-servicio.dto.js';
 import { AsignarRecetaDto, ListRecetaDto, EliminarRecetaItemDto, SimularConsumoDto } from './dto/receta.dto.js';
 import { ListConsumosServicioDto } from './dto/consumos-servicio.dto.js';
-import { AprobarServicioDto, RechazarServicioDto, AprobarTodosDto, AnularServicioDto } from './dto/aprobaciones.dto.js';
+import { AprobarServicioDto, RechazarServicioDto, AnularServicioDto } from './dto/aprobaciones.dto.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
@@ -138,23 +138,6 @@ export class OperacionesController {
     @CurrentUser() user: any,
   ) {
     return this.operacionesService.rechazarServicio(dto.id, dto.motivo, user);
-  }
-
-  @Permiso('aprobaciones.aprobar.todos')
-  @Post('servicios/aprobar-todos')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Aprobación masiva de todos los servicios FINALIZADOS de una agencia (Cierre diario)' })
-  @ApiResponse({ status: 200, description: 'Conteo de servicios aprobados' })
-  async aprobarTodos(
-    @Body() dto: AprobarTodosDto,
-    @CurrentUser() user: any,
-  ) {
-    return this.operacionesService.aprobarTodosServicios(
-      user,
-      dto.agenciaId || dto.sucursalId,
-      dto.fecha,
-      dto.requiereFotoSalida !== false,
-    );
   }
 
   // ──────────────────────────────────────────────────────────────────

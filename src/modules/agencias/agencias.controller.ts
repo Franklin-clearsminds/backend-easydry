@@ -60,7 +60,6 @@ import {
   UpdateUsuarioDto,
   AsignarPasswordDto,
   CreateUsuarioDto,
-  DeleteUsuarioDto,
   ListOperadoresDto,
   CreateOperadorDto,
   UpdateOperadorDto,
@@ -425,14 +424,6 @@ export class AgenciasController {
   @ApiOperation({ summary: 'Crear usuarios; Supervisor regional solo puede crear Backups de su región' })
   async createUsuario(@Body() dto: CreateUsuarioDto, @CurrentUser() user: any) {
     return this.agenciasService.createUsuario(dto, user);
-  }
-
-  @Permiso('usuarios.usuarios.eliminar')
-  @Post('usuarios/delete')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Eliminar usuario de la base de datos (SUPER_ADMIN, ADMIN)' })
-  async deleteUsuario(@Body() dto: DeleteUsuarioDto, @CurrentUser() user: any) {
-    return this.agenciasService.deleteUsuario(dto);
   }
 
   // =========================================================================

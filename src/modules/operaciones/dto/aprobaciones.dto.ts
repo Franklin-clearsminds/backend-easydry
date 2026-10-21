@@ -25,28 +25,6 @@ export class RechazarServicioDto {
   motivo: string;
 }
 
-export class AprobarTodosDto {
-  @ApiPropertyOptional({ description: 'ID de la agencia a cerrar y aprobar' })
-  @IsString()
-  @IsOptional()
-  agenciaId?: string;
-
-  @ApiPropertyOptional({ description: 'Alias de agenciaId (compatibilidad con frontend)' })
-  @IsString()
-  @IsOptional()
-  sucursalId?: string;
-
-  @ApiPropertyOptional({ description: 'Fecha YYYY-MM-DD para limitar el cierre (opcional)' })
-  @IsString()
-  @IsOptional()
-  fecha?: string;
-
-  @ApiPropertyOptional({ description: 'Exigir que el servicio cuente con foto de salida para ser aprobado (Quality Gate)', default: true })
-  @IsOptional()
-  requiereFotoSalida?: boolean;
-}
-
-
 export class AnularServicioDto {
   @ApiProperty({ description: 'ID o clientUuid del servicio a anular' })
   @IsString()

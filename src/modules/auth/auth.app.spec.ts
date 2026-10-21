@@ -43,13 +43,17 @@ describe('acceso y pantallas de la app (infoApp, base real)', () => {
     const info = await infoApp(lider);
     expect(info.puedeUsarApp).toBe(true);
     expect(info.pantallasApp.length).toBeGreaterThan(0);
-    // Cada pantalla está marcada para la app Y su rol tiene permiso para ella.
+    // Cada pantalla está marcada para la app Y su rol tiene permiso para ella (salvo los retos, que da su propia casilla).
+    const conRetos = lider.capacidades.includes('sistema.app.retos');
     for (const p of info.pantallasApp) {
+      if (p === 'productividad' && conRetos) continue;
       expect(marcadas).toContain(p);
       expect(modulosDeRol(lider)).toContain(p);
     }
     // Y no falta ninguna que cumpla las dos condiciones.
-    expect([...info.pantallasApp].sort()).toEqual(modulosDeRol(lider).filter((m) => marcadas.includes(m)).sort());
+    const esperadas = modulosDeRol(lider).filter((m) => marcadas.includes(m));
+    if (conRetos) esperadas.push('productividad');
+    expect([...info.pantallasApp].sort()).toEqual(esperadas.sort());
   });
 
   it('una pantalla de la web que no está marcada para la app nunca aparece en el celular', async () => {
@@ -68,7 +72,16 @@ describe('acceso y pantallas de la app (infoApp, base real)', () => {
     const info = await infoApp(lavador);
     expect(info.puedeUsarApp).toBe(true);
     expect(info.pantallasApp).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));
-    for (const p of ['servicios', 'inventario', 'taller-tecnico', 'auditorias']) expect(info.pantallasApp).not.toContain(p);
+    for (const p of ['servicios', 'inventario', 'taller-tecnico']) expect(info.pantallasApp).not.toContain(p);
+  });
+
+  it('«Ver retos en la app móvil» basta para ver los retos en el celular, aunque Productividad sea una pantalla solo de la web', async () => {
+    expect(noMarcadas).toContain('productividad');
+    const con = await infoApp({ namerol: 'CON_RETOS', capacidades: ['sync.usar', 'retos.ver', 'sistema.app.retos'] });
+    expect(con.puedeUsarApp).toBe(true);
+    expect(con.pantallasApp).toContain('productividad');
+    const sin = await infoApp({ namerol: 'SIN_RETOS', capacidades: ['sync.usar', 'retos.ver', 'pagina.productividad'] });
+    expect(sin.pantallasApp).not.toContain('productividad');
   });
 
   it('el super admin entra y ve todas las pantallas marcadas', async () => {

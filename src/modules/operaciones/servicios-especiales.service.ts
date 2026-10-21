@@ -47,6 +47,7 @@ const ORDEN_ESPECIALES = columnasSimples({
   region: 'region.nombre',
   operador: 'operador.name',
   estado: 'estado',
+  precio: 'precio',
   tiempoPausa: 'tiempoPausaTotalSeg',
   tiempoEfectivo: 'tiempoEfectivoSeg',
 });
@@ -515,8 +516,10 @@ export class ServiciosEspecialesService {
     creatorId?: string,
     currentUser?: any,
   ) {
-    // Quien crea lo decide su casilla («Crear OT especial»), no el nombre del rol.
-    if (!tienePermiso(currentUser, 'servicios.especiales.crear')) {
+    // Quien crea lo deciden sus casillas, no el nombre del rol: «para mí» y «asignarla a otro pulidor» son independientes.
+    const paraMi = tienePermiso(currentUser, 'servicios.especiales.crear');
+    const paraOtro = tienePermiso(currentUser, 'servicios.especiales.asignar');
+    if (!paraMi && !paraOtro) {
       throw new ForbiddenException(
         'Tu rol no puede crear órdenes de servicios especiales.',
       );
@@ -636,6 +639,10 @@ export class ServiciosEspecialesService {
           .filter(Boolean),
       ),
     ];
+    // Con solo «para mí» la OT queda a nombre del creador aunque no mande a nadie. Siempre debe haber un pulidor.
+    const creadorId = creatorId || currentUser?.id;
+    if (!operadoresIds.length && paraMi && !paraOtro && creadorId) operadoresIds = [String(creadorId)];
+    operadoresIds = this.validarAsignacionAlCrear(operadoresIds, creadorId, paraMi, paraOtro, currentUser);
     if (finalAgenciaId) {
       const pulidorFijo = await this.prisma.user.findFirst({
         where: {
@@ -664,22 +671,23 @@ export class ServiciosEspecialesService {
         estado: 1,
         role: { namerol: 'PULIDOR' },
       },
-      select: { id: true, regionId: true },
+      select: { id: true, regionId: true, agencia: { select: { regionId: true } } },
     });
     if (operadores.length !== operadoresIds.length) {
       throw new BadRequestException(
         'Todos los asignados deben ser pulidores activos.',
       );
     }
+    // La región del pulidor es la suya o, si es fijo de una agencia, la de esa agencia. Debe ser la de la agencia donde se programa la OT.
     if (
       finalRegionId &&
-      operadores.some(
-        (operador: any) =>
-          operador.regionId && operador.regionId !== finalRegionId,
-      )
+      operadores.some((operador: any) => {
+        const regionPulidor = operador.regionId || operador.agencia?.regionId || null;
+        return regionPulidor !== finalRegionId;
+      })
     ) {
       throw new BadRequestException(
-        'Solo se pueden asignar servicios especiales a pulidores de su misma región.',
+        'Solo se pueden asignar servicios especiales a pulidores de la misma región de la agencia donde se programa la OT (un pulidor sin región no se puede asignar).',
       );
     }
     const operadorIdFinal = operadoresIds[0];
@@ -810,6 +818,29 @@ export class ServiciosEspecialesService {
   }
 
   /**
+   * Reglas de a quién se le puede asignar una OT especial al crearla:
+   *  - asignársela a uno mismo exige «Crear OT especial (para mí)» y ser pulidor; si se asigna a otros, el creador va primero y es el responsable;
+   *  - asignarla solo a otros exige «…asignarla a otro pulidor» y no puede incluir al creador (para eso está «para mí»);
+   *  - con alcance de agencia solo se puede asignar a uno mismo: no hay otros pulidores que elegir.
+   */
+  private validarAsignacionAlCrear(operadoresIds: string[], creadorId: string | undefined, paraMi: boolean, paraOtro: boolean, actor: any): string[] {
+    const yo = creadorId ? String(creadorId) : '';
+    const incluyeCreador = !!yo && operadoresIds.includes(yo);
+    const otros = operadoresIds.filter((id) => id !== yo);
+    if (incluyeCreador && !paraMi) {
+      throw new ForbiddenException('Tu rol no puede crear órdenes especiales para sí mismo: usa «asignarla a otro pulidor».');
+    }
+    if (!incluyeCreador && operadoresIds.length > 0 && !paraOtro) {
+      throw new ForbiddenException('Tu rol solo puede crear órdenes especiales para sí mismo.');
+    }
+    if (otros.length > 0 && actor && resolverAlcance(actor).tipo === 'AGENCIA') {
+      throw new ForbiddenException('Con alcance de agencia solo puedes asignarte a ti mismo.');
+    }
+    // El creador que se la asigna a sí mismo es el responsable (va primero); los demás lo acompañan.
+    return incluyeCreador ? [yo, ...otros] : operadoresIds;
+  }
+
+  /**
    * Corrige los datos del vehículo, el cliente, la prioridad y las observaciones de un servicio especial. Solo mientras no esté
    * completado ni cancelado; el pulidor, la receta y las evidencias no se tocan desde aquí (para eso están reasignar y ejecutar).
    */
@@ -838,6 +869,39 @@ export class ServiciosEspecialesService {
     }
     if (dto.prioridad !== undefined) data.prioridad = dto.prioridad;
     if (dto.observaciones !== undefined) data.observaciones = texto(dto.observaciones) || null;
+
+    // Cambiar el servicio: como en las OT generales, se recalcula el precio y la receta. Los insumos de una OT especial se descuentan
+    // del kit del pulidor responsable al finalizarla, así que aquí solo se comprueba que su kit alcance para el nuevo servicio.
+    if (dto.servicioCatalogoId != null && Number(dto.servicioCatalogoId) !== Number(item.servicioCatalogoId)) {
+      const catalogo = await this.prisma.catalogoServicio.findUnique({
+        where: { id: Number(dto.servicioCatalogoId) },
+        select: { id: true, nombre: true, categoria: true, estado: true, precio: true },
+      });
+      if (!catalogo) throw new BadRequestException('El servicio indicado no existe en el catálogo.');
+      if (catalogo.estado === 'Inactivo') throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar.`);
+      if (catalogo.categoria !== 'ESPECIAL') throw new BadRequestException('Solo se puede cambiar a otro servicio especial.');
+      if (item.operadorId) {
+        data.recetaInsumos = await this.assertPulidorTieneInsumosParaOT(
+          item.operadorId,
+          null,
+          catalogo.nombre,
+          item.agenciaId || undefined,
+          currentUser?.id,
+          'editar',
+        );
+      }
+      let precio: number | null = catalogo.precio != null ? Number(catalogo.precio) : null;
+      if (item.agenciaId) {
+        const delaAgencia = await this.prisma.precioAgenciaServicio.findUnique({
+          where: { agenciaId_catalogoServicioId: { agenciaId: item.agenciaId, catalogoServicioId: catalogo.id } },
+          select: { precio: true },
+        });
+        if (delaAgencia) precio = Number(delaAgencia.precio);
+      }
+      data.servicioCatalogoId = catalogo.id;
+      data.tipoServicio = catalogo.nombre;
+      data.precio = precio;
+    }
     if (Object.keys(data).length === 0) return this._formatItem(item);
 
     const updated = await this.prisma.servicioEspecial.update({
@@ -870,6 +934,10 @@ export class ServiciosEspecialesService {
     }
 
     this.asegurarPuedeVer(currentUser, item);
+    // Reasignar va dentro de «Editar OT especial», pero solo con «asignarla a otro pulidor».
+    if (currentUser && !tienePermiso(currentUser, 'servicios.especiales.asignar')) {
+      throw new ForbiddenException('Tu rol no puede reasignar el pulidor: necesita «Crear OT especial y asignarla a otro pulidor».');
+    }
 
     const normalizarOperadorId = (id: string | null | undefined) => {
       const raw = id == null ? '' : String(id).trim();
@@ -882,6 +950,13 @@ export class ServiciosEspecialesService {
           .filter(Boolean),
       ),
     ];
+
+    if (!operadoresIds.length) {
+      throw new BadRequestException('La OT especial siempre debe tener un pulidor asignado.');
+    }
+    if (currentUser && resolverAlcance(currentUser).tipo === 'AGENCIA' && operadoresIds.some((id) => id !== String(currentUser.id))) {
+      throw new ForbiddenException('Con alcance de agencia solo puedes asignarte a ti mismo.');
+    }
 
     // Un pulidor fijo debe permanecer como responsable principal; se pueden añadir otros asignados.
     if (item.agenciaId) {
@@ -921,8 +996,14 @@ export class ServiciosEspecialesService {
         })
       : [];
     if (operadores.length !== operadoresIds.length) {
+      const validos = new Set(operadores.map((o) => o.id));
+      const invalidos = await this.prisma.user.findMany({
+        where: { id: { in: operadoresIds.filter((id) => !validos.has(id)) } },
+        select: { name: true, lastname: true },
+      });
+      const nombres = invalidos.map((u) => `${u.name || ''} ${u.lastname || ''}`.trim()).filter(Boolean).join(', ');
       throw new BadRequestException(
-        'Todos los asignados deben ser pulidores activos.',
+        `Todos los asignados deben ser pulidores activos${nombres ? `: ${nombres} no lo es` : ''}.`,
       );
     }
     const regionServicio = item.regionId || item.agencia?.regionId || null;
@@ -931,11 +1012,11 @@ export class ServiciosEspecialesService {
       operadores.some((destino) => {
         const regionDestino =
           destino.regionId || destino.agencia?.regionId || null;
-        return regionDestino && regionDestino !== regionServicio;
+        return regionDestino !== regionServicio;
       })
     ) {
       throw new BadRequestException(
-        'Solo se puede reasignar a pulidores de la misma región del servicio.',
+        'Solo se puede reasignar a pulidores de la misma región del servicio (un pulidor sin región no se puede asignar).',
       );
     }
 
@@ -1013,12 +1094,14 @@ export class ServiciosEspecialesService {
     tipoServicio?: string,
     agenciaId?: string,
     emisorId?: string,
-    contexto: 'crear' | 'reasignar' = 'crear',
+    contexto: 'crear' | 'reasignar' | 'editar' = 'crear',
   ): Promise<any[]> {
     const prefijo =
       contexto === 'reasignar'
         ? 'No se puede reasignar'
-        : 'No puede crear la OT';
+        : contexto === 'editar'
+          ? 'No se puede cambiar el servicio'
+          : 'No puede crear la OT';
     let items: any[] = Array.isArray(recetaInsumos) ? [...recetaInsumos] : [];
 
     if (items.length === 0 && tipoServicio?.trim()) {

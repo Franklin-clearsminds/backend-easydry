@@ -49,7 +49,7 @@ export class ServiciosEspecialesController {
     return this.service.historialDecisiones(body.id, user);
   }
 
-  @Permiso('servicios.especiales.crear')
+  @Permiso('servicios.especiales.crear', 'servicios.especiales.asignar')
   @Post('crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear nuevo servicio especial de detailing' })
@@ -122,7 +122,7 @@ export class ServiciosEspecialesController {
     return this.service.editar(dto, user);
   }
 
-  @Permiso('servicios.especiales.reasignar')
+  @Permiso('servicios.especiales.editar')
   @Post('reasignar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reasignar servicio especial a otro pulidor' })

@@ -4,7 +4,7 @@ import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js
 
 /**
  * Integración con la base real (sin mocks). Datos de partida, creados por esta prueba:
- *  - Servicios: EXPRESS (GENERAL), PREMIUM (GENERAL), PULIDO (ESPECIAL), EXTRA1 (EXTRA), FUERA (GENERAL, de ninguna sede).
+ *  - Servicios: EXPRESS (GENERAL), PREMIUM (GENERAL), PULIDO (ESPECIAL), FUERA (GENERAL, de ninguna sede).
  *  - Sede NORTE: tiene EXPRESS y PULIDO, con servicios especiales.
  *  - Sede SIN-ESP: tiene EXPRESS y PULIDO, pero no atiende especiales.
  *  - Sede VACIA: sin servicios configurados.
@@ -16,7 +16,6 @@ describe('CatalogosService.listServicios — alcance (base real)', () => {
   let express: any;
   let premium: any;
   let pulido: any;
-  let extra1: any;
   let fuera: any;
   let norte: any;
   let sinEsp: any;
@@ -29,7 +28,6 @@ describe('CatalogosService.listServicios — alcance (base real)', () => {
     express = await env.catalogo('EXPRESS');
     premium = await env.catalogo('PREMIUM');
     pulido = await env.catalogo('PULIDO', { categoria: 'ESPECIAL' });
-    extra1 = await env.catalogo('EXTRA1', { categoria: 'EXTRA' as never });
     fuera = await env.catalogo('FUERA');
 
     const configurar = (a: { id: string }, ids: number[], nombres: string[], especiales: boolean) =>
@@ -58,13 +56,13 @@ describe('CatalogosService.listServicios — alcance (base real)', () => {
   it('Admin y Súper Admin ven todo el catálogo aunque tengan sede', async () => {
     for (const namerol of ['ADMIN', 'SUPER_ADMIN']) {
       const { ids } = await buscar({}, { namerol, agenciaId: norte.id });
-      expect(ids).toEqual(ordenados(express, premium, pulido, extra1, fuera));
+      expect(ids).toEqual(ordenados(express, premium, pulido, fuera));
     }
   });
 
   it('cualquier otro rol con sede queda limitado a su sede, por id y por nombre', async () => {
     const { ids, respuesta } = await buscar({}, { namerol: 'LAVADOR', agenciaId: norte.id });
-    expect(ids).toEqual(ordenados(express, pulido)); // PREMIUM, EXTRA1 y FUERA no son de la sede
+    expect(ids).toEqual(ordenados(express, pulido)); // PREMIUM y FUERA no son de la sede
     expect(respuesta.agencia).toMatchObject({ nombre: norte.nombre, servicioIds: [express.id, pulido.id], tieneServiciosEspeciales: true });
   });
 
@@ -80,7 +78,7 @@ describe('CatalogosService.listServicios — alcance (base real)', () => {
 
   it('un rol de sede sin agencia no ve nada; otro rol sin sede ve todo', async () => {
     expect((await buscar({}, { namerol: 'APROBADOR' })).ids).toEqual([]);
-    expect((await buscar({}, { namerol: 'COORD_BODEGA' })).ids).toEqual(ordenados(express, premium, pulido, extra1, fuera));
+    expect((await buscar({}, { namerol: 'COORD_BODEGA' })).ids).toEqual(ordenados(express, premium, pulido, fuera));
   });
 
   it('la agencia del usuario manda: el cliente no puede pedir los servicios de otra sede', async () => {
@@ -89,7 +87,7 @@ describe('CatalogosService.listServicios — alcance (base real)', () => {
   });
 
   it('ADMIN ve todo el catálogo y APROBADOR queda acotado a su sede', async () => {
-    expect((await buscar({}, { namerol: 'ADMIN', agenciaId: norte.id })).ids).toHaveLength(5);
+    expect((await buscar({}, { namerol: 'ADMIN', agenciaId: norte.id })).ids).toHaveLength(4);
     expect((await buscar({}, { namerol: 'APROBADOR', agenciaId: norte.id })).ids).toEqual(ordenados(express, pulido));
   });
 
@@ -98,9 +96,9 @@ describe('CatalogosService.listServicios — alcance (base real)', () => {
     expect(ids).toEqual(ordenados(express));
   });
 
-  it('categoria admite varias separadas por coma (especiales + extras)', async () => {
-    const { ids } = await buscar({ categoria: 'especial, extra' }, { namerol: 'ADMIN' });
-    expect(ids).toEqual(ordenados(pulido, extra1));
+  it('categoria admite varias separadas por coma (generales + especiales)', async () => {
+    const { ids } = await buscar({ categoria: 'especial, general' }, { namerol: 'ADMIN' });
+    expect(ids).toEqual(ordenados(express, premium, pulido, fuera));
   });
 });
 
@@ -131,14 +129,13 @@ describe('CatalogosService.siguienteCodigo (base real)', () => {
     expect(await service.siguienteCodigo('GENERAL')).toEqual({ codigo: esperado });
   });
 
-  it('especiales y extras usan el prefijo ESP', async () => {
+  it('especiales usan el prefijo ESP', async () => {
     const esperado = `ESP-${String((await mayorExistente('ESP')) + 1).padStart(3, '0')}`;
-    expect(await service.siguienteCodigo('EXTRA')).toEqual({ codigo: esperado });
     expect(await service.siguienteCodigo('ESPECIAL')).toEqual({ codigo: esperado });
   });
 
   it('el código sugerido nunca está ya en uso', async () => {
-    for (const categoria of ['GENERAL', 'EXTRA']) {
+    for (const categoria of ['GENERAL', 'ESPECIAL']) {
       const { codigo } = await service.siguienteCodigo(categoria);
       expect(await env.prisma.catalogoServicio.count({ where: { codigo } })).toBe(0);
     }

@@ -44,6 +44,7 @@ const ORDEN_SERVICIOS = columnasSimples({
   modelo: 'modelo',
   cliente: 'cliente',
   estado: 'estado',
+  precio: 'precio',
   servicio: 'catalogo.nombre',
   operador: 'operador.name',
   agencia: 'bahia.agencia.nombre',
@@ -2148,107 +2149,5 @@ export class OperacionesService {
     await this.notificarDecisionServicio(servicio, agencia, 'RECHAZADO');
 
     return serializeServicioLavado(updated);
-  }
-
-  /** Cierre del día de UNA agencia (la agencia es obligatoria). Misma regla de quién puede decidir. */
-  async aprobarTodosServicios(
-    actor: any,
-    agenciaId: string | undefined,
-    fecha?: string,
-    requiereFotoSalida: boolean = true,
-  ) {
-    if (!agenciaId) {
-      throw new BadRequestException('Indica la agencia cuyo día quieres cerrar: no se puede aprobar todo el país de una vez.');
-    }
-    const agencia = await this.prisma.agencia.findUnique({ where: { id: agenciaId }, select: { id: true, nombre: true, regionId: true } });
-    if (!agencia) throw new NotFoundException('Agencia no encontrada.');
-    const regla = await this.decisiones.reglaParaDecidir(actor, { id: agencia.id, regionId: agencia.regionId });
-
-    const baseWhere: any = {
-      estado: ServiceStatus.FINALIZADO,
-      deletedAt: null,
-      bahia: { agenciaId: agencia.id },
-    };
-
-    if (fecha) {
-      const start = new Date(`${fecha}T00:00:00.000Z`);
-      const end = new Date(`${fecha}T23:59:59.999Z`);
-      baseWhere.createdAt = { gte: start, lte: end };
-    }
-
-    const whereParaAprobar: any = { ...baseWhere };
-    let omitidosSinFotoCount = 0;
-
-    if (requiereFotoSalida) {
-      whereParaAprobar.fotoSalidaUrl = { not: null };
-
-      // Contar cuántos servicios finalizados no cumplen con la foto de salida
-      omitidosSinFotoCount = await this.prisma.servicioLavado.count({
-        where: {
-          ...baseWhere,
-          fotoSalidaUrl: null,
-        },
-      });
-    }
-
-    const pendientes = await this.prisma.servicioLavado.findMany({ where: whereParaAprobar, select: { id: true, placa: true, ordenTrabajoOT: true, operadorId: true } });
-    const ids = pendientes.map((s) => s.id);
-    const batchResult = ids.length
-      ? await this.prisma.servicioLavado.updateMany({
-          where: { id: { in: ids }, estado: ServiceStatus.FINALIZADO },
-          data: {
-            estado: ServiceStatus.APROBADO,
-            observacionGerente: 'Aprobación masiva de cierre diario (Quality Gate)',
-            aprobadoPor: this.nombreDe(actor),
-            decididoPorId: String(actor.id),
-            reglaDecision: regla,
-            fechaAprobacion: new Date(),
-            version: { increment: 1 },
-          },
-        })
-      : { count: 0 };
-
-    if (ids.length) {
-      await this.decisiones.registrarLote({
-        entidad: 'SERVICIO_LAVADO',
-        entidadIds: ids,
-        accion: 'APROBAR',
-        user: actor,
-        regla,
-        motivo: 'Aprobación masiva de cierre diario',
-        agenciaId: agencia.id,
-      });
-
-      if (this.notifications) {
-        const [lideres, porRol] = await Promise.all([
-          this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } }, select: { id: true } }),
-          this.notifications.resolverDestinatariosPorRol({
-            global: ['ADMIN', 'SUPER_ADMIN'],
-            regionales: ['SUPERVISOR'],
-            regionId: agencia.regionId,
-          }),
-        ]);
-        const operadorIds = [...new Set(pendientes.map((s) => s.operadorId).filter(Boolean))] as string[];
-        const destinatarios = [...operadorIds, ...lideres.map((l) => l.id), ...porRol];
-        void this.notifications.notificarUsuarios(
-          destinatarios,
-          'Servicios aprobados (cierre de día)',
-          `Se aprobaron ${batchResult.count} servicios de la agencia "${agencia.nombre}" en el cierre de día.`,
-          { type: 'SERVICIO_DECIDIDO', agenciaId: agencia.id },
-          { tipo: 'SERVICIO_DECIDIDO', entidadTipo: 'AGENCIA', entidadId: agencia.id },
-        );
-      }
-    }
-
-    return {
-      ok: true,
-      aprobadosCount: batchResult.count,
-      omitidosSinFotoCount,
-      mensaje: `Se aprobaron exitosamente ${batchResult.count} servicios de lavado.${
-        omitidosSinFotoCount > 0
-          ? ` Se omitieron ${omitidosSinFotoCount} servicios por no contar con evidencia fotográfica de salida obligatoria.`
-          : ''
-      }`,
-    };
   }
 }

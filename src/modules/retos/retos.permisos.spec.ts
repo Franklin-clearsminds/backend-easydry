@@ -203,6 +203,27 @@ describe('RetosService (base real)', () => {
     });
   });
 
+  describe('actualizar', () => {
+    it('lo edita su creador o alguien con alcance nacional; nadie más', async () => {
+      const mio = await retoDirecto({ creadoPorId: ids.coord });
+      await expect(service.actualizar({ id: mio.id, titulo: '  Nuevo título ', premio: 'Cena' } as any, actores.coord)).resolves.toMatchObject({ titulo: 'Nuevo título', premio: 'Cena' });
+
+      const ajeno = await retoDirecto({ creadoPorId: ids.lia });
+      await expect(service.actualizar({ id: ajeno.id, titulo: 'X' } as any, actores.coord)).rejects.toThrow(/creador o alguien con alcance nacional/);
+      await expect(service.actualizar({ id: ajeno.id, titulo: 'Corregido por admin' } as any, actores.admin)).resolves.toMatchObject({ titulo: 'Corregido por admin' });
+    });
+
+    it('no edita un reto cerrado ni deja la fecha fin antes del inicio o de hoy', async () => {
+      const cerrado = await retoDirecto({ creadoPorId: ids.coord, estado: 'FINALIZADO' });
+      await expect(service.actualizar({ id: cerrado.id, titulo: 'X' } as any, actores.coord)).rejects.toThrow(/reto activo/);
+
+      const activo = await retoDirecto({ creadoPorId: ids.coord });
+      await expect(service.actualizar({ id: activo.id, fechaInicio: '2030-02-01', fechaFin: '2030-01-01' } as any, actores.coord)).rejects.toThrow(/anterior a la fecha de inicio/);
+      await expect(service.actualizar({ id: activo.id, fechaFin: '2000-01-01' } as any, actores.admin)).rejects.toThrow(/anterior/);
+      await expect(service.actualizar({ id: activo.id, titulo: '   ' } as any, actores.coord)).rejects.toThrow(/título/);
+    });
+  });
+
   describe('delete', () => {
     it('lo elimina su creador o alguien con alcance nacional; nadie más', async () => {
       const mio = await retoDirecto({ creadoPorId: ids.coord });

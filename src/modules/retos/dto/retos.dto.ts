@@ -46,6 +46,37 @@ export class ListRetosDto extends PaginacionOpcionalDto {
   vigencia?: 'ACTIVOS' | 'VENCIDOS' | 'TODOS';
 }
 
+/** Lo que se puede corregir de un reto activo: texto, premio y vigencia. Participantes, métrica y ganadores no cambian (el ranking depende de ellos). */
+export class UpdateRetoDto {
+  @IsString()
+  @IsNotEmpty()
+  id!: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(160)
+  titulo?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  descripcion?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  premio?: string;
+
+  @IsOptional()
+  @IsDateString()
+  fechaInicio?: string;
+
+  @IsOptional()
+  @IsDateString()
+  fechaFin?: string;
+}
+
 export class CreateRetoDto {
   @IsString()
   @IsNotEmpty()

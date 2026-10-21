@@ -65,7 +65,6 @@ import {
   ToggleEstadoUsuarioDto,
   UpdateUsuarioDto,
   CreateUsuarioDto,
-  DeleteUsuarioDto,
   ListOperadoresDto,
   CreateOperadorDto,
   UpdateOperadorDto,
@@ -2873,33 +2872,6 @@ export class AgenciasService {
         bodegaId: newUser.bodegaId,
         servicioIds: Array.isArray(newUser.servicioIds) ? newUser.servicioIds : [],
       },
-    };
-  }
-
-  async deleteUsuario(dto: DeleteUsuarioDto) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.id } });
-    if (!user) {
-      throw new NotFoundException(`Usuario con ID "${dto.id}" no encontrado`);
-    }
-
-    try {
-      await this.prisma.user.delete({ where: { id: dto.id } });
-    } catch (e) {
-      // Si el usuario tiene registros vinculados (auditorías, servicios históricos), desactivar y desvincular
-      await this.prisma.user.update({
-        where: { id: dto.id },
-        data: {
-          estado: 0,
-          agenciaId: null,
-          regionId: null,
-          agenciasIds: [],
-        },
-      });
-    }
-
-    return {
-      message: `Usuario ${user.name} ${user.lastname} eliminado correctamente`,
-      id: dto.id,
     };
   }
 

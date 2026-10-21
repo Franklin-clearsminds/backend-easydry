@@ -5,7 +5,7 @@ import { HistoricoService } from '../archivado/historico.service.js';
 import { CacheService } from '../../common/cache/cache.service.js';
 import { RetosArchivo } from './retos-archivo.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
-import { CerrarRetoDto, CreateRetoDto, ListRetosDto } from './dto/retos.dto.js';
+import { CerrarRetoDto, CreateRetoDto, ListRetosDto, UpdateRetoDto } from './dto/retos.dto.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
 import { resolverAlcance } from '../../common/permisos/alcance.js';
@@ -516,12 +516,44 @@ export class RetosService {
   // Cierre y baja
   // ---------------------------------------------------------------------------
 
-  /** Cierran o eliminan un reto su creador o quien actúa en todo el país (administradores, jefe comercial). */
-  private asegurarPuedeGestionar(reto: { creadoPorId: string | null }, user: any, accion: 'cerrar' | 'eliminar'): void {
+  /** Editan, cierran o eliminan un reto su creador o quien actúa en todo el país (administradores, jefe comercial). */
+  private asegurarPuedeGestionar(reto: { creadoPorId: string | null }, user: any, accion: 'editar' | 'cerrar' | 'eliminar'): void {
     const esCreador = !!reto.creadoPorId && String(reto.creadoPorId) === String(user?.id || '');
     if (!esCreador && resolverAlcance(user).tipo !== 'GLOBAL') {
       throw new ForbiddenException(`Solo el creador o alguien con alcance nacional puede ${accion} este reto.`);
     }
+  }
+
+  /** Corrige título, descripción, premio y vigencia de un reto que sigue activo. Quien lo edita: su creador o alcance nacional. */
+  async actualizar(dto: UpdateRetoDto, user: any) {
+    const existing = await this.prisma.reto.findUnique({ where: { id: dto.id } });
+    if (!existing) throw new NotFoundException('Reto no encontrado.');
+    this.asegurarPuedeGestionar(existing, user, 'editar');
+    if (existing.estado !== 'ACTIVO') {
+      throw new BadRequestException('Solo se puede editar un reto activo: uno cerrado ya tiene su ganador registrado.');
+    }
+
+    const data: Record<string, unknown> = {};
+    if (dto.titulo !== undefined) {
+      const titulo = dto.titulo.trim();
+      if (!titulo) throw new BadRequestException('El título del reto no puede quedar vacío.');
+      data['titulo'] = titulo;
+    }
+    if (dto.descripcion !== undefined) data['descripcion'] = dto.descripcion.trim() || null;
+    if (dto.premio !== undefined) data['premio'] = dto.premio.trim() || null;
+
+    const inicio = dto.fechaInicio ? new Date(dto.fechaInicio) : existing.fechaInicio;
+    const fin = dto.fechaFin ? new Date(dto.fechaFin) : existing.fechaFin;
+    if (dto.fechaInicio) data['fechaInicio'] = inicio;
+    if (dto.fechaFin) data['fechaFin'] = fin;
+    if (fin < inicio) throw new BadRequestException('La fecha de fin no puede ser anterior a la fecha de inicio.');
+    // Un reto activo con fecha fin pasada se cerraría solo esa madrugada: para terminarlo antes, se usa «Cerrar reto».
+    if (dto.fechaFin && fin < hoyEcuador()) {
+      throw new BadRequestException('La fecha de fin no puede ser anterior a hoy. Para terminar el reto ahora, ciérralo.');
+    }
+    if (Object.keys(data).length === 0) return existing;
+
+    return this.prisma.reto.update({ where: { id: existing.id }, data });
   }
 
   async delete(id: string, user: any) {

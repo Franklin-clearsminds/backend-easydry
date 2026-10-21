@@ -211,13 +211,6 @@ export class UpdateUsuarioDto {
   servicioIds?: number[];
 }
 
-export class DeleteUsuarioDto {
-  @ApiProperty({ example: 'uuid-usuario', description: 'ID del usuario a eliminar' })
-  @IsString()
-  @IsNotEmpty({ message: 'El ID de usuario es obligatorio' })
-  id: string;
-}
-
 export class CreateUsuarioDto {
   @ApiProperty({ example: 'Carlos' })
   @IsString()

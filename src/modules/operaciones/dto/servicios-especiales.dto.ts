@@ -429,6 +429,11 @@ export class EditarServicioEspecialDto {
   @IsString()
   @IsOptional()
   observaciones?: string;
+
+  @ApiPropertyOptional({ description: 'Id del servicio especial del catálogo al que se cambia la OT (recalcula precio e insumos)' })
+  @IsInt()
+  @IsOptional()
+  servicioCatalogoId?: number;
 }
 
 export class ReanudarServicioEspecialDto {

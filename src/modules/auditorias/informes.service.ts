@@ -51,7 +51,7 @@ const lista = (a: string[] | undefined | null): string[] => (a ?? []).map((x) =>
 export class InformesInspeccionService {
   constructor(
     private readonly prisma: PrismaService,
-    /** Guarda un rato el resumen del dashboard de auditorías. Sin él, cada visita lo recalcula. */
+    /** Guarda un rato el resumen de los informes. Sin él, cada visita lo recalcula. */
     @Optional() private readonly cache?: CacheService,
   ) {}
 
@@ -182,7 +182,7 @@ export class InformesInspeccionService {
     };
   }
 
-  /** Indicadores del dashboard de auditorías y de las tarjetas del listado, siempre dentro del alcance del usuario. */
+  /** Indicadores de las tarjetas del listado de informes, siempre dentro del alcance del usuario. */
   async resumen(user: any) {
     if (!this.cache) return this.calcularResumen(user);
     return this.cache.obtenerOCalcular(`informes:resumen:${user?.id ?? 'anonimo'}`, 60, () => this.calcularResumen(user));

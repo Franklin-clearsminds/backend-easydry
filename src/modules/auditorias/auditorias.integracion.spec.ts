@@ -56,7 +56,7 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       for (const clave of ['lider', 'lavador', 'pulidor']) {
         expect(tienePermiso(u[clave], 'informes.ver'), clave).toBe(true);
         expect(tienePermiso(u[clave], 'inspecciones.ver'), clave).toBe(true);
-        for (const c of ['informes.crear', 'informes.firmar', 'informes.revisar', 'inspecciones.crear', 'inspecciones.acciones', 'inspecciones.verificar', 'auditorias.ver']) {
+        for (const c of ['informes.crear', 'informes.firmar', 'informes.revisar', 'inspecciones.crear', 'inspecciones.acciones', 'inspecciones.verificar']) {
           expect(tienePermiso(u[clave], c), `${clave} ${c}`).toBe(false);
         }
       }
@@ -66,7 +66,6 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       for (const clave of ['aprobador', 'tecnico', 'supervisor', 'admin']) {
         expect(tienePermiso(u[clave], 'informes.crear'), clave).toBe(true);
         expect(tienePermiso(u[clave], 'inspecciones.crear'), clave).toBe(true);
-        expect(tienePermiso(u[clave], 'auditorias.ver'), clave).toBe(true);
       }
       expect(tienePermiso(u.aprobador, 'informes.revisar')).toBe(false);
       expect(tienePermiso(u.tecnico, 'inspecciones.verificar')).toBe(false);

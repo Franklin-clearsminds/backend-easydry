@@ -19,7 +19,7 @@ describe('categoria de catálogo de servicio — @IsIn', () => {
   });
 
   it('UpdateCatalogoServicioDto rechaza una categoría fuera del catálogo', async () => {
-    const invalido = plainToInstance(UpdateCatalogoServicioDto, { id: 1, categoria: 'EXTRA' });
+    const invalido = plainToInstance(UpdateCatalogoServicioDto, { id: 1, categoria: 'QUIMICOS_LAVADO' });
     const errores = await validate(invalido);
     expect(errores.some((e) => e.property === 'categoria')).toBe(true);
   });

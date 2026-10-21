@@ -41,15 +41,21 @@ export class AuthService {
     // Entra a la app quien sincroniza (sync.usar) o, sin operar, solo consulta los resultados de auditoría (líder, lavador, pulidor).
     const puedeUsarApp =
       role?.namerol === 'SUPER_ADMIN' ||
-      !!role?.capacidades?.some((c) => c === 'sync.usar' || c === 'informes.ver' || c === 'inspecciones.ver');
+      !!role?.capacidades?.some((c) => c === 'sync.usar' || c === 'informes.ver' || c === 'inspecciones.ver' || c === 'sistema.app.retos');
+    // Los retos del celular los da la casilla «Ver retos en la app móvil» (sistema.app.retos), no el módulo web de Productividad.
+    const verRetosEnApp = !!role?.capacidades?.includes('sistema.app.retos');
     const pantallas = modulosDeRol(role);
-    if (!puedeUsarApp || !pantallas.length) return { puedeUsarApp, pantallasApp: [] as string[] };
-    const enApp = await this.prisma.moduloSistema.findMany({
-      where: { codigo: { in: pantallas }, disponibleEnApp: true, estado: 1 },
-      select: { codigo: true },
-    });
+    if (!puedeUsarApp || (!pantallas.length && !verRetosEnApp)) return { puedeUsarApp, pantallasApp: [] as string[] };
+    const enApp = pantallas.length
+      ? await this.prisma.moduloSistema.findMany({
+          where: { codigo: { in: pantallas }, disponibleEnApp: true, estado: 1 },
+          select: { codigo: true },
+        })
+      : [];
     const marcadas = new Set(enApp.map((m) => m.codigo));
-    return { puedeUsarApp, pantallasApp: pantallas.filter((p) => marcadas.has(p)) };
+    const pantallasApp = pantallas.filter((p) => marcadas.has(p));
+    if (verRetosEnApp && !pantallasApp.includes('productividad')) pantallasApp.push('productividad');
+    return { puedeUsarApp, pantallasApp };
   }
 
   private async generateTokens(user: { id: string; email: string; roleId: string }, familyId: string = randomUUID()) {

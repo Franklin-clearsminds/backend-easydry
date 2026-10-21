@@ -74,7 +74,7 @@ function limpiarComentarios(c: Record<string, string> | undefined | null): Recor
 export class Auditoria5sService {
   constructor(
     private readonly prisma: PrismaService,
-    /** Guarda un rato el resumen del dashboard de auditorías 5S. Sin él, cada visita lo recalcula. */
+    /** Guarda un rato el resumen de las auditorías 5S. Sin él, cada visita lo recalcula. */
     @Optional() private readonly cache?: CacheService,
   ) {}
 

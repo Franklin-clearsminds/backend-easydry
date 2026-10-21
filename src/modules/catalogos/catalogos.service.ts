@@ -28,7 +28,7 @@ export class CatalogosService {
   private async alcanceServicios(dto?: { categoria?: string; search?: string; agenciaId?: string }, userCtx?: { agenciaId?: string; namerol?: string }) {
     const where: any = {};
     if (dto?.categoria && dto.categoria !== 'TODOS') {
-      // Admite varias categorías separadas por coma (p. ej. "ESPECIAL,EXTRA" para la pestaña de especiales).
+      // Admite varias categorías separadas por coma (p. ej. "GENERAL,ESPECIAL").
       const categorias = dto.categoria.split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
       where.categoria = categorias.length > 1 ? { in: categorias } : categorias[0];
     }
@@ -43,6 +43,8 @@ export class CatalogosService {
     const efectiveAgenciaId = acotadoPorSede || isScopedRole ? userCtx?.agenciaId : dto?.agenciaId || userCtx?.agenciaId;
 
     let agenciaCtx: { tieneServiciosEspeciales: boolean; servicioIds: number[]; nombre?: string } | null = null;
+    // Agencia cuyos precios se muestran: solo la propia de quien tiene sede (un admin filtrando por agencia no ve precios en el catálogo).
+    let agenciaPrecioId: string | null = null;
 
     // Usuario con sede (no admin) O admin filtrando por agencia → solo servicios de esa agencia
     if (efectiveAgenciaId && (acotadoPorSede || isScopedRole || !!dto?.agenciaId)) {
@@ -68,6 +70,7 @@ export class CatalogosService {
           servicioIds: ids,
           nombre: agencia.nombre,
         };
+        if (acotadoPorSede || isScopedRole) agenciaPrecioId = efectiveAgenciaId ?? null;
 
         // Por id o por nombre (la sede guarda ambos). Sin ninguno → vacío (nunca catálogo global).
         const porAgencia = [
@@ -88,11 +91,23 @@ export class CatalogosService {
       where.id = { in: [-1] };
       agenciaCtx = { tieneServiciosEspeciales: false, servicioIds: [] };
     }
-    return { where, busqueda, agenciaCtx };
+    return { where, busqueda, agenciaCtx, agenciaPrecioId };
   }
 
   async listServicios(dto?: ListCatalogoServiciosDto, userCtx?: { agenciaId?: string; namerol?: string }) {
-    const { where, busqueda, agenciaCtx } = await this.alcanceServicios(dto, userCtx);
+    const { where, busqueda, agenciaCtx, agenciaPrecioId } = await this.alcanceServicios(dto, userCtx);
+
+    // Quien tiene sede ve el precio que su agencia tiene fijado para cada servicio (`precioAgencia`, null si no hay). El precio global
+    // del catálogo es siempre 0 y no se muestra. Sin el permiso `precios.ver` el interceptor lo retira de la respuesta.
+    const conPrecioAgencia = async (servicios: any[]) => {
+      if (!agenciaPrecioId || servicios.length === 0) return servicios;
+      const filas = await this.prisma.precioAgenciaServicio.findMany({
+        where: { agenciaId: agenciaPrecioId, catalogoServicioId: { in: servicios.map((s) => s.id) } },
+        select: { catalogoServicioId: true, precio: true },
+      });
+      const porServicio = new Map(filas.map((f) => [f.catalogoServicioId, Number(f.precio)]));
+      return servicios.map((s) => ({ ...s, precioAgencia: porServicio.get(s.id) ?? null }));
+    };
 
     // cantidadSugerida viaja en la unidad base del insumo: es lo que descuenta el stock al registrar la OT.
     const conCantidadBase = (servicios: any[]) =>
@@ -128,7 +143,7 @@ export class CatalogosService {
           },
         }),
       contar: (w) => this.prisma.catalogoServicio.count({ where: w }),
-      mapear: conCantidadBase,
+      mapear: (servicios) => conPrecioAgencia(conCantidadBase(servicios)),
     });
 
     if (agenciaCtx) {
@@ -152,7 +167,7 @@ export class CatalogosService {
   }
 
   /**
-   * Siguiente código libre para un servicio nuevo: SER-### (generales) o ESP-### (especiales y extras), con el mayor número
+   * Siguiente código libre para un servicio nuevo: SER-### (generales) o ESP-### (especiales), con el mayor número
    * existente + 1 y ceros a la izquierda. El alta sigue rechazando códigos duplicados.
    */
   async siguienteCodigo(categoria?: string) {

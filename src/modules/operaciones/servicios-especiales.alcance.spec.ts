@@ -175,6 +175,87 @@ describe('servicios especiales — alcance por rol (base real)', () => {
     });
   });
 
+  describe('crear «para mí» y «asignarla a otro pulidor» son casillas distintas', () => {
+    const PARA_MI = 'servicios.especiales.crear';
+    const PARA_OTRO = 'servicios.especiales.asignar';
+    /** El mismo usuario con exactamente estas casillas y este alcance. */
+    const con = (base: any, capacidades: string[], ambito = 'REGION') => ({
+      ...base,
+      role: { ...base.role, capacidades },
+      roleDetails: { ...base.roleDetails, capacidades, ambito },
+    });
+    const crear = async (dto: any, creador: string, actor: any) => {
+      await service.create(dto, creador, actor);
+      const fila = await env.prisma.servicioEspecial.findFirstOrThrow({
+        where: { codigoSE: dto.ordenTrabajoOT.toUpperCase() },
+        include: { operadoresAsignados: { orderBy: { orden: 'asc' } } },
+      });
+      env.rastrear('ServicioEspecial', fila.id);
+      return fila;
+    };
+
+    it('solo «para mí»: sin elegir a nadie la OT queda a nombre del pulidor que la crea', async () => {
+      const fila = await crear(dtoCrear(), ids.pablo, con(actores.pablo, [PARA_MI]));
+      expect(fila.operadorId).toBe(ids.pablo);
+      expect(fila.operadoresAsignados.map((a) => a.operadorId)).toEqual([ids.pablo]);
+    });
+
+    it('solo «para mí»: puede sumar a otros pulidores y él sigue siendo el responsable', async () => {
+      const fila = await crear(dtoCrear({ operadoresIds: [ids.paco, ids.pablo] }), ids.pablo, con(actores.pablo, [PARA_MI]));
+      expect(fila.operadoresAsignados.map((a) => [a.operadorId, a.orden])).toEqual([[ids.pablo, 0], [ids.paco, 1]]);
+    });
+
+    it('solo «para mí»: no puede crear una OT solo para otro pulidor', async () => {
+      const d = dtoCrear({ operadoresIds: [ids.paco] });
+      await expect(service.create(d, ids.pablo, con(actores.pablo, [PARA_MI]))).rejects.toThrow(/solo puede crear órdenes especiales para sí mismo/);
+      expect(await env.prisma.servicioEspecial.count({ where: { codigoSE: d.ordenTrabajoOT.toUpperCase() } })).toBe(0);
+    });
+
+    it('solo «para mí»: quien no es pulidor no se la puede asignar a sí mismo', async () => {
+      await expect(service.create(dtoCrear(), ids.coord, con(actores.coord, [PARA_MI], 'GLOBAL'))).rejects.toThrow(/pulidores activos/);
+    });
+
+    it('solo «asignarla a otro»: elige otro pulidor, pero no puede incluirse a sí mismo', async () => {
+      const fila = await crear(dtoCrear({ operadoresIds: [ids.paco] }), ids.coord, con(actores.coord, [PARA_OTRO], 'GLOBAL'));
+      expect(fila.operadorId).toBe(ids.paco);
+
+      const d = dtoCrear({ operadoresIds: [ids.pablo, ids.paco] });
+      await expect(service.create(d, ids.pablo, con(actores.pablo, [PARA_OTRO]))).rejects.toThrow(/para sí mismo/);
+    });
+
+    it('solo «asignarla a otro»: siempre debe haber un pulidor asignado', async () => {
+      const d = dtoCrear();
+      await expect(service.create(d, ids.coord, con(actores.coord, [PARA_OTRO], 'GLOBAL'))).rejects.toThrow(/al menos un pulidor/);
+      expect(await env.prisma.servicioEspecial.count({ where: { codigoSE: d.ordenTrabajoOT.toUpperCase() } })).toBe(0);
+    });
+
+    it('con las dos casillas puede crearla para sí mismo o para otro', async () => {
+      const propia = await crear(dtoCrear({ operadoresIds: [ids.pablo] }), ids.pablo, con(actores.pablo, [PARA_MI, PARA_OTRO]));
+      expect(propia.operadorId).toBe(ids.pablo);
+      const ajena = await crear(dtoCrear({ operadoresIds: [ids.paco] }), ids.pablo, con(actores.pablo, [PARA_MI, PARA_OTRO]));
+      expect(ajena.operadorId).toBe(ids.paco);
+    });
+
+    it('con alcance de agencia solo puede asignársela a sí mismo, aunque tenga la casilla de asignar', async () => {
+      const deAgencia = { ...con(actores.pablo, [PARA_MI, PARA_OTRO], 'AGENCIA'), agenciaId: a1.id };
+      const d = dtoCrear({ operadoresIds: [ids.paco] });
+      await expect(service.create(d, ids.pablo, deAgencia)).rejects.toThrow(/solo puedes asignarte a ti mismo/);
+    });
+
+    it('sin ninguna de las dos casillas no crea', async () => {
+      await expect(service.create(dtoCrear(), ids.pablo, con(actores.pablo, ['servicios.especiales.operar']))).rejects.toThrow(/no puede crear/);
+    });
+
+    it('reasignar el pulidor (dentro de editar) exige la casilla de asignar a otro y nunca deja la OT sin pulidor', async () => {
+      const id = await nuevo({ operadorId: ids.pablo, asignados: [ids.pablo] });
+
+      await expect(service.reasignar({ id, operadoresIds: [ids.paco] } as any, con(actores.coord, ['servicios.especiales.editar'], 'GLOBAL'))).rejects.toThrow(/necesita «Crear OT especial y asignarla/);
+      await expect(service.reasignar({ id, operadoresIds: [] } as any, con(actores.coord, ['servicios.especiales.editar', PARA_OTRO], 'GLOBAL'))).rejects.toThrow(/siempre debe tener un pulidor/);
+      await service.reasignar({ id, operadoresIds: [ids.paco] } as any, con(actores.coord, ['servicios.especiales.editar', PARA_OTRO], 'GLOBAL'));
+      expect((await filaDe(id)).operadorId).toBe(ids.paco);
+    });
+  });
+
   describe('anular (no se borra)', () => {
     it('exige motivo y deja registrado quién, cuándo y por qué', async () => {
       const id = await nuevo();
