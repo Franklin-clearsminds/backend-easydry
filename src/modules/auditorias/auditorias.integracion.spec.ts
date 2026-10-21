@@ -84,7 +84,7 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       desarrollo: 'Todo en orden',
       novedades: [{ titulo: 'Manguera rota', categoria: 'MAQUINARIA', prioridad: 'ALTA', fotos: [] }],
       actividades: [{ nombre: 'Revisión de bahías' }],
-      planes: [{ problema: 'Cambiar manguera', areaResponsable: 'Mantenimiento', fechaCompromiso: '2020-01-01' }],
+      planes: [{ problema: 'Cambiar manguera' }],
     });
 
     it('solo se puede crear en una agencia del alcance', async () => {
@@ -117,7 +117,10 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       expect(d.calificacion).toBe('BUENO');
       expect(d.calificadoPorNombre).toBeTruthy();
       expect(d.novedades).toHaveLength(1);
-      expect(d.planes[0].estadoEfectivo).toBe('VENCIDO');
+      // El responsable del plan es la agencia del informe y su fecha es la del día en que se crea: nunca «vencido».
+      expect(d.planes[0].estadoEfectivo).toBe('PENDIENTE');
+      expect(d.planes[0].personaResponsable).toBe(d.agencia.nombre);
+      expect(d.planes[0].fechaCompromiso).toBe(new Date(Date.now() - 5 * 3600 * 1000).toISOString().slice(0, 10));
     });
 
     it('antes de aprobarse, el líder y el lavador no lo ven; quien audita sí, dentro de su alcance', async () => {
@@ -203,7 +206,7 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       LISTA.criterios.map((c) => {
         const p = puntaje(c.numero);
         return p !== null && p < 5
-          ? { criterio: c.numero, puntaje: p, hallazgo: `Hallazgo ${c.numero}`, accionCorrectiva: 'Corregir', responsable: 'Líder', fechaCompromiso: '2020-01-01', fotos: [] }
+          ? { criterio: c.numero, puntaje: p, hallazgo: `Hallazgo ${c.numero}`, accionCorrectiva: 'Corregir', fotos: [] }
           : { criterio: c.numero, puntaje: p };
       });
 
@@ -258,7 +261,9 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       expect(d.resultado.semaforo).toBe('VERDE');
       expect(d.resultado.porCategoria.map((c: any) => c.puntaje)).toEqual([20, 20, 20, 12, 20]);
       expect(d.acciones).toHaveLength(4);
-      expect(d.acciones[0]).toMatchObject({ criterio: 13, prioridad: 'MEDIA', estado: 'PENDIENTE', estadoEfectivo: 'VENCIDA' });
+      // El responsable es la agencia auditada y la fecha es la de creación: nunca «vencida».
+      expect(d.acciones[0]).toMatchObject({ criterio: 13, prioridad: 'MEDIA', estado: 'PENDIENTE', estadoEfectivo: 'PENDIENTE', responsable: d.agencia.nombre });
+      expect(d.acciones[0].fechaCompromiso).toBe(new Date(Date.now() - 5 * 3600 * 1000).toISOString().slice(0, 10));
       expect(d.acciones[0].codigo).toBe(`${d.codigo}-C13`);
     });
 

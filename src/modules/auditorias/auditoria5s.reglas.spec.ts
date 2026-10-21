@@ -183,14 +183,10 @@ describe('acciones correctivas y códigos', () => {
     expect(prioridadDePuntaje(SI_NO_50, 0)).toBe('ALTA');
   });
 
-  it('una acción abierta con compromiso pasado se muestra vencida; una cerrada nunca', () => {
-    const hoy = new Date('2026-10-14T00:00:00Z');
-    const ayer = new Date('2026-10-13T00:00:00Z');
-    expect(estadoAccionEfectivo({ estado: 'PENDIENTE', fechaCompromiso: ayer }, hoy)).toBe('VENCIDA');
-    expect(estadoAccionEfectivo({ estado: 'EN_VERIFICACION', fechaCompromiso: ayer }, hoy)).toBe('VENCIDA');
-    expect(estadoAccionEfectivo({ estado: 'CERRADA', fechaCompromiso: ayer }, hoy)).toBe('CERRADA');
-    expect(estadoAccionEfectivo({ estado: 'PENDIENTE', fechaCompromiso: hoy }, hoy)).toBe('PENDIENTE');
-    expect(estadoAccionEfectivo({ estado: 'PENDIENTE', fechaCompromiso: null }, hoy)).toBe('PENDIENTE');
+  it('una acción nunca se muestra vencida: se ve con el estado que tiene', () => {
+    expect(estadoAccionEfectivo({ estado: 'PENDIENTE' }, new Date('2026-10-01'))).toBe('PENDIENTE');
+    expect(estadoAccionEfectivo({ estado: 'EN_VERIFICACION' }, new Date('2026-10-01'))).toBe('EN_VERIFICACION');
+    expect(estadoAccionEfectivo({ estado: 'CERRADA' }, new Date('2026-10-01'))).toBe('CERRADA');
   });
 
   it('códigos legibles y correlativo', () => {

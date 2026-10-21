@@ -68,10 +68,10 @@ describe('paginarPorGrupos', () => {
 });
 
 describe('rangoFechas', () => {
-  it('un hasta de solo día incluye todo ese día', () => {
+  it('una fecha de solo día es un día de Ecuador: desde abre a las 00:00 y hasta incluye todo ese día', () => {
     expect(rangoFechas('2026-09-01', '2026-09-30')).toEqual({
-      gte: new Date('2026-09-01'),
-      lte: new Date('2026-09-30T23:59:59.999Z'),
+      gte: new Date('2026-09-01T00:00:00.000-05:00'),
+      lte: new Date('2026-09-30T23:59:59.999-05:00'),
     });
   });
 

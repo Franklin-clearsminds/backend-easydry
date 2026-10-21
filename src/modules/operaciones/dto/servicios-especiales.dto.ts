@@ -142,6 +142,14 @@ export class CreateServicioEspecialDto {
   @IsOptional()
   ordenTrabajoOT?: string;
 
+  @ApiPropertyOptional({
+    description: 'Retoque: código SE de la orden ya completada a la que se agrega (hasta 2 días después). Toma de ella la OT, el vehículo, la agencia y el pulidor.',
+    example: 'SE-2026-001',
+  })
+  @IsString()
+  @IsOptional()
+  retoqueDeCodigoSE?: string;
+
   @ApiProperty({
     description: 'Tipo de servicio especial',
     example: 'Pulido y Recubrimiento Cerámico',

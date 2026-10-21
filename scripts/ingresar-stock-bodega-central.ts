@@ -81,7 +81,7 @@ async function main() {
         },
       });
     }
-  });
+  }, { timeout: 120_000, maxWait: 20_000 }); // la base remota (Supabase) tarda más que los 5 s por defecto
 
   console.log(`✅ Guía ${guia}: ${unidades} unidades de cada uno de los ${insumos.length} insumos ingresadas en "${central.nombre}".`);
 }

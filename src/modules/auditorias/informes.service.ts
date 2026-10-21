@@ -196,7 +196,7 @@ export class InformesInspeccionService {
       informe: combinarWhere(visible, { estado: { in: ESTADOS_CON_PLANES_VISIBLES } }) as Prisma.InformeInspeccionWhereInput,
     };
 
-    const [total, esteMes, porEstado, porCalificacion, porAgenciaCalif, porPeriodo, planesAbiertos, planesVencidos, recientes, proximos] = await Promise.all([
+    const [total, esteMes, porEstado, porCalificacion, porAgenciaCalif, porPeriodo, planesAbiertos, recientes, proximos] = await Promise.all([
       this.prisma.informeInspeccion.count({ where: visible }),
       this.prisma.informeInspeccion.count({ where: combinarWhere(visible, { periodo: periodoActual }) as Prisma.InformeInspeccionWhereInput }),
       this.prisma.informeInspeccion.groupBy({ by: ['estado'], where: visible, _count: { _all: true } }),
@@ -204,7 +204,6 @@ export class InformesInspeccionService {
       this.prisma.informeInspeccion.groupBy({ by: ['agenciaId', 'calificacion'], where: visible, _count: { _all: true } }),
       this.prisma.informeInspeccion.groupBy({ by: ['periodo'], where: visible, _count: { _all: true }, orderBy: { periodo: 'desc' }, take: 6 }),
       this.prisma.informePlanAccion.count({ where: { ...planesBase, estado: { in: ESTADOS_PLAN_ABIERTO } } }),
-      this.prisma.informePlanAccion.count({ where: { ...planesBase, estado: { in: ESTADOS_PLAN_ABIERTO }, fechaCompromiso: { lt: hoy } } }),
       this.prisma.informeInspeccion.findMany({
         where: visible,
         orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }],
@@ -251,7 +250,6 @@ export class InformesInspeccionService {
       pendientesAprobacion: conteo('EN_REVISION'),
       aprobados: conteo('APROBADO') + conteo('CERRADO'),
       planesPendientes: planesAbiertos,
-      planesVencidos,
       porEstado: porEstado.map((e) => ({ estado: e.estado, total: e._count._all })),
       porCalificacion: CALIFICACIONES.map((c) => ({ calificacion: c, total: porCalificacion.find((r) => r.calificacion === c)?._count._all ?? 0 })),
       porAgencia,
@@ -279,7 +277,6 @@ export class InformesInspeccionService {
       ...(dto.agenciaId ? { agenciaId: dto.agenciaId } : {}),
     };
     if (dto.estado === 'ABIERTOS') filtros.estado = { in: ESTADOS_PLAN_ABIERTO };
-    else if (dto.estado === 'VENCIDO') Object.assign(filtros, { estado: { in: ESTADOS_PLAN_ABIERTO }, fechaCompromiso: { lt: hoy } });
     else if (dto.estado) filtros.estado = dto.estado;
 
     const { page, pageSize, skip, take } = paginacionListado(dto);
@@ -618,15 +615,15 @@ export class InformesInspeccionService {
     const existentes = new Set((await tx.informePlanAccion.findMany({ where: { informeId }, select: { id: true } })).map((x) => x.id));
     const conservar = items.filter((i) => i.id && existentes.has(i.id)).map((i) => i.id as string);
     await tx.informePlanAccion.deleteMany({ where: { informeId, id: { notIn: conservar } } });
+    // El responsable de un plan es siempre la agencia del informe y su fecha es la del día en que se crea.
+    const agencia = await tx.agencia.findUnique({ where: { id: agenciaId }, select: { nombre: true } });
+    const creacion = { areaResponsable: '', personaResponsable: agencia?.nombre ?? '', fechaCompromiso: hoyEcuador() };
     for (const [orden, p] of items.entries()) {
       const estado = p.estado ?? 'PENDIENTE';
       const data = {
         agenciaId,
         problema: texto(p.problema),
         accionRequerida: texto(p.accionRequerida),
-        areaResponsable: texto(p.areaResponsable),
-        personaResponsable: texto(p.personaResponsable),
-        fechaCompromiso: fechaDia(p.fechaCompromiso),
         prioridad: p.prioridad ?? 'MEDIA',
         estado,
         observaciones: texto(p.observaciones),
@@ -635,7 +632,7 @@ export class InformesInspeccionService {
         orden,
       };
       if (p.id && existentes.has(p.id)) await tx.informePlanAccion.update({ where: { id: p.id }, data });
-      else await tx.informePlanAccion.create({ data: { ...data, informeId } });
+      else await tx.informePlanAccion.create({ data: { ...data, ...creacion, informeId } });
     }
   }
 

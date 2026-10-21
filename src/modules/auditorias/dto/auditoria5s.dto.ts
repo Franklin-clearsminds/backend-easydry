@@ -48,8 +48,6 @@ export class RespuestaDto {
   @IsOptional() @IsString() @MaxLength(TEXTO) hallazgo?: string;
   @IsOptional() @IsString() @MaxLength(TEXTO) observaciones?: string;
   @IsOptional() @IsString() @MaxLength(TEXTO) accionCorrectiva?: string;
-  @IsOptional() @IsString() @MaxLength(120) responsable?: string;
-  @IsOptional() @IsDateString() fechaCompromiso?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) @MaxLength(600, { each: true }) fotos?: string[];
 }
 
@@ -73,8 +71,8 @@ export class GuardarAuditoria5sDto {
 export class ListAccionesDto extends PaginacionOpcionalDto {
   @IsOptional() @IsUUID() agenciaId?: string;
   @IsOptional() @IsUUID() auditoriaId?: string;
-  /** PENDIENTE | EN_PROCESO | EN_VERIFICACION | CERRADA | VENCIDA | ABIERTAS */
-  @IsOptional() @IsIn([...ESTADOS_ACCION, 'VENCIDA', 'ABIERTAS']) estado?: string;
+  /** PENDIENTE | EN_PROCESO | EN_VERIFICACION | CERRADA | ABIERTAS */
+  @IsOptional() @IsIn([...ESTADOS_ACCION, 'ABIERTAS']) estado?: string;
 }
 
 export class SeguimientoAccionDto {

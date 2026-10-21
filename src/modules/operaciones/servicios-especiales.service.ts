@@ -1,3 +1,4 @@
+import { prepararRetoqueEspecial } from './retoque-especial.js';
 import {
   Injectable,
   Optional,
@@ -525,6 +526,33 @@ export class ServiciosEspecialesService {
       );
     }
 
+    // Retoque: se liga a una OT especial ya completada (misma OT, vehículo, agencia y pulidor) con código `SE-…-R1`.
+    let retoque: Awaited<ReturnType<typeof prepararRetoqueEspecial>> | null = null;
+    if (dto.retoqueDeCodigoSE?.trim()) {
+      retoque = await prepararRetoqueEspecial(this.prisma, {
+        codigoBase: dto.retoqueDeCodigoSE,
+        servicioCatalogoId: dto.servicioCatalogoId,
+        ahora: new Date(),
+      });
+      const b = retoque.base;
+      dto = {
+        ...dto,
+        ordenTrabajoOT: b.codigoSE,
+        agenciaId: b.agenciaId ?? dto.agenciaId,
+        // El retoque es del mismo vehículo: mandan los datos de la orden original.
+        vehiculoInfo: {
+          ...(dto.vehiculoInfo || {}),
+          placa: b.placa,
+          marca: b.marca ?? dto.vehiculoInfo?.marca,
+          modelo: b.modelo ?? dto.vehiculoInfo?.modelo,
+          color: b.color ?? dto.vehiculoInfo?.color,
+          cliente: b.cliente ?? b.clienteNombre ?? dto.vehiculoInfo?.cliente,
+        },
+        operadoresIds: dto.operadoresIds?.length ? dto.operadoresIds : retoque.operadoresBase,
+        operadorId: dto.operadorId ?? b.operadorId ?? undefined,
+      };
+    }
+
     const clientUuid = dto.clientUuid || randomUUID();
     const rawOT = (dto.ordenTrabajoOT || dto.codigoSE || '')
       .trim()
@@ -539,7 +567,7 @@ export class ServiciosEspecialesService {
     // servicios generales (lavado): el mismo número puede existir una vez en cada uno (decisión
     // de producto, ver PLAN-PERMISOS-Y-ROLES.md). Por eso aquí solo se valida contra otros
     // servicios especiales, nunca contra ServicioLavado.
-    const duplicateEspecial = await this.prisma.servicioEspecial.findFirst({
+    const duplicateEspecial = retoque ? null : await this.prisma.servicioEspecial.findFirst({
       where: {
         codigoSE: { equals: rawOT, mode: 'insensitive' },
         deletedAt: null,
@@ -551,7 +579,7 @@ export class ServiciosEspecialesService {
       );
     }
 
-    const codigoSE = rawOT;
+    const codigoSE = retoque?.codigoSE ?? rawOT;
 
     const vInfo = dto.vehiculoInfo || {};
     const placa = (vInfo.placa || (dto as any).placa || '')
@@ -745,7 +773,7 @@ export class ServiciosEspecialesService {
         id: rawOT,
         clientUuid,
         codigoSE,
-        ordenTrabajoOT: codigoSE,
+        ordenTrabajoOT: retoque ? rawOT : codigoSE,
         tipoServicio: dto.tipoServicio.trim(),
         servicioCatalogoId: catalogoEspecial?.id ?? null,
         precio: precioEspecial,

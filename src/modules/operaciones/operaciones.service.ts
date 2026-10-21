@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
+import { validarLavadoresDeLaOT } from './lavadores-bahia.js';
+import { validarAgregarServicioAOT } from './retoque.js';
 import { tieneAlgunPermiso, tienePermiso } from '../../common/permisos/capacidades.js';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -193,8 +195,13 @@ export class OperacionesService {
       });
     }
 
-    const desde = params?.fechaDesde ? new Date(params.fechaDesde) : null;
-    const hasta = params?.fechaHasta ? new Date(params.fechaHasta) : null;
+    // Una fecha sola (AAAA-MM-DD) es un día de Ecuador (UTC-5): «desde» abre a las 00:00 y «hasta» incluye todo ese día.
+    const instanteEc = (valor: string | undefined, finDeDia: boolean): Date | null => {
+      if (!valor) return null;
+      return new Date(/^\d{4}-\d{2}-\d{2}$/.test(valor) ? `${valor}T${finDeDia ? '23:59:59.999' : '00:00:00.000'}-05:00` : valor);
+    };
+    const desde = instanteEc(params?.fechaDesde, false);
+    const hasta = instanteEc(params?.fechaHasta, true);
     const rangoFechas = {
       ...(desde && !Number.isNaN(desde.getTime()) ? { gte: desde } : {}),
       ...(hasta && !Number.isNaN(hasta.getTime()) ? { lte: hasta } : {}),
@@ -202,7 +209,7 @@ export class OperacionesService {
     if (Object.keys(rangoFechas).length) extra.push({ horaIngreso: rangoFechas });
 
     const busqueda = whereBusqueda(
-      ['placa', 'modelo', 'marca', 'cliente', 'ordenTrabajoOT', 'operador.name', 'operador.lastname'],
+      ['placa', 'modelo', 'marca', 'cliente', 'ordenTrabajoOT', 'catalogo.nombre', 'operador.name', 'operador.lastname'],
       params?.search,
     );
 
@@ -403,7 +410,12 @@ export class OperacionesService {
    * Una OT general puede tener varios servicios (una fila por servicio) siempre que sea
    * el mismo vehículo y no se repita un servicio ya registrado en esa OT.
    */
-  private async _validarOTServicioGeneral(ordenTrabajoOT: string, placa: string, catalogoIds: number[]) {
+  /** Misma validación para quien registra directo y para la sincronización de la app (con la hora del teléfono). */
+  async validarServicioDeOT(ordenTrabajoOT: string, placa: string, catalogoIds: number[], ahora: Date = new Date()) {
+    await this._validarOTServicioGeneral(ordenTrabajoOT, placa, catalogoIds, ahora);
+  }
+
+  private async _validarOTServicioGeneral(ordenTrabajoOT: string, placa: string, catalogoIds: number[], ahora: Date = new Date()) {
     // La OT de servicios generales (lavado) y la OT de servicios especiales viven en espacios de
     // numeración independientes: el mismo número puede existir una vez como lavado y otra vez
     // como especial (decisión de producto, ver PLAN-PERMISOS-Y-ROLES.md). Por eso aquí solo se
@@ -428,7 +440,14 @@ export class OperacionesService {
       );
     }
 
-    const repetido = existentes.find((s) => catalogoIds.includes(Number(s.servicioCatalogoId)));
+    // OT ya finalizada: solo un retoque y dentro de los 2 días siguientes.
+    await validarAgregarServicioAOT(this.prisma, { ordenTrabajoOT, catalogoIds, ahora });
+
+    // Un retoque se puede repetir en la misma OT; cualquier otro servicio no.
+    const retoques = new Set(
+      (await this.prisma.catalogoServicio.findMany({ where: { id: { in: catalogoIds }, esRetoque: true }, select: { id: true } })).map((c) => c.id),
+    );
+    const repetido = existentes.find((s) => catalogoIds.includes(Number(s.servicioCatalogoId)) && !retoques.has(Number(s.servicioCatalogoId)));
     if (repetido) {
       throw new BadRequestException(
         `El servicio "${repetido.catalogo?.nombre || repetido.servicioCatalogoId}" ya está registrado en la OT "${ordenTrabajoOT}".`,
@@ -588,26 +607,22 @@ export class OperacionesService {
       throw new BadRequestException('No se encontró el operador autenticado para registrar el servicio.');
     }
     if (operadorIdsSolicitados.length > 0) {
-      const usuariosSeleccionados = await this.prisma.user.findMany({
-        where: { id: { in: operadorIdsSolicitados } },
-        select: { id: true, agenciaId: true, estado: true },
-      });
-      if (usuariosSeleccionados.length !== operadorIdsSolicitados.length) {
-        throw new BadRequestException('Uno o más lavadores seleccionados ya no existen.');
-      }
-      if (usuariosSeleccionados.some((op) => String(op.agenciaId || '') !== String(agenciaId || ''))) {
-        throw new BadRequestException('Todos los lavadores seleccionados deben pertenecer a la agencia de la bahía.');
-      }
-      if (usuariosSeleccionados.some((op) => op.estado !== 1)) {
-        throw new BadRequestException('Uno o más lavadores seleccionados están inactivos.');
-      }
       if (createDto.operadorIds?.length) {
-        const asignacionesActivas = await this.prisma.bahiaOperador.findMany({
-          where: { bahiaId: resolvedBahiaId, operadorId: { in: operadorIdsSolicitados }, activo: true },
-          select: { operadorId: true },
+        // Varios lavadores: la agencia fija el máximo, y si la bahía tiene asignados solo se elige entre ellos.
+        await validarLavadoresDeLaOT(this.prisma, { bahiaId: resolvedBahiaId, agenciaId, operadorIds: operadorIdsSolicitados });
+      } else {
+        const usuariosSeleccionados = await this.prisma.user.findMany({
+          where: { id: { in: operadorIdsSolicitados } },
+          select: { id: true, agenciaId: true, estado: true },
         });
-        if (asignacionesActivas.length !== operadorIdsSolicitados.length) {
-          throw new BadRequestException('Todos los lavadores seleccionados deben tener una asignación activa a la bahía elegida.');
+        if (usuariosSeleccionados.length !== operadorIdsSolicitados.length) {
+          throw new BadRequestException('Uno o más lavadores seleccionados ya no existen.');
+        }
+        if (usuariosSeleccionados.some((op) => String(op.agenciaId || '') !== String(agenciaId || ''))) {
+          throw new BadRequestException('Todos los lavadores seleccionados deben pertenecer a la agencia de la bahía.');
+        }
+        if (usuariosSeleccionados.some((op) => op.estado !== 1)) {
+          throw new BadRequestException('Uno o más lavadores seleccionados están inactivos.');
         }
       }
     }

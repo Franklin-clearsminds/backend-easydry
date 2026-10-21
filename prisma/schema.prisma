@@ -119,6 +119,8 @@ model User {
   /// true = tiene una contraseña temporal: debe cambiarla antes de usar el sistema
   name         String
   lastname     String
+  /// Celular de 10 dígitos (09XXXXXXXX). Obligatorio para líderes y visible en la tabla de usuarios.
+  telefono     String?
   roleId       String
   role         Role   @relation(fields: [roleId], references: [id])
 
@@ -283,6 +285,8 @@ model CatalogoServicio {
   descripcion         String?
   precio              Decimal                 @default(0.0) @db.Decimal(10, 2)
   tiempoEstimadoMin   Int                     @default(30)
+  /// Retoque: se puede agregar a una OT ya finalizada hasta 2 días después (misma OT, fila nueva), y repetirse en ella.
+  esRetoque           Boolean                 @default(false)
   // "Activo" | "Inactivo". Un servicio Inactivo no se ofrece para nuevas OTs pero conserva su
   // historial; un servicio con órdenes asociadas no se puede eliminar, solo desactivar.
   estado              String                  @default("Activo")

@@ -24,7 +24,7 @@ export type EstadoAuditoria5s = (typeof ESTADOS_AUDITORIA_5S)[number];
 /** Quien no puede auditar solo ve el resultado: las auditorías ya finalizadas o cerradas. */
 export const ESTADOS_RESULTADO_5S: readonly EstadoAuditoria5s[] = ['FINALIZADA', 'CERRADA'];
 
-/** VENCIDA no se guarda: se calcula (compromiso pasado y acción todavía abierta). */
+/** El responsable de una acción es siempre la agencia auditada y su fecha es la de creación: no hay estado «vencida». */
 export const ESTADOS_ACCION = ['PENDIENTE', 'EN_PROCESO', 'EN_VERIFICACION', 'CERRADA'] as const;
 export const ESTADOS_ACCION_ABIERTA = ['PENDIENTE', 'EN_PROCESO', 'EN_VERIFICACION'] as const;
 
@@ -385,9 +385,8 @@ export function prioridadDePuntaje(formato: Formato5s, efectivo: number): 'BAJA'
   return 'BAJA';
 }
 
-/** Estado de una acción tal como se muestra: «VENCIDA» si el compromiso ya pasó y sigue abierta. */
-export function estadoAccionEfectivo(a: { estado: string; fechaCompromiso: Date | null }, hoy: Date): string {
-  if ((ESTADOS_ACCION_ABIERTA as readonly string[]).includes(a.estado) && a.fechaCompromiso && a.fechaCompromiso.getTime() < hoy.getTime()) return 'VENCIDA';
+/** Estado de una acción tal como se muestra: el que tiene (ya no se calcula «vencida»). */
+export function estadoAccionEfectivo(a: { estado: string }, _hoy?: Date): string {
   return a.estado;
 }
 

@@ -63,9 +63,6 @@ export class PlanAccionDto {
   @IsOptional() @IsUUID() id?: string;
   @IsString() @IsNotEmpty() @MaxLength(TEXTO_LARGO) problema!: string;
   @IsOptional() @IsString() @MaxLength(TEXTO_LARGO) accionRequerida?: string;
-  @IsOptional() @IsString() @MaxLength(120) areaResponsable?: string;
-  @IsOptional() @IsString() @MaxLength(120) personaResponsable?: string;
-  @IsOptional() @IsDateString() fechaCompromiso?: string;
   @IsOptional() @IsIn(PRIORIDADES) prioridad?: string;
   @IsOptional() @IsIn(ESTADOS_PLAN) estado?: string;
   @IsOptional() @IsString() @MaxLength(TEXTO_LARGO) observaciones?: string;
@@ -109,6 +106,6 @@ export class SeguimientoPlanDto {
 
 export class ListPlanesDto extends PaginacionOpcionalDto {
   @IsOptional() @IsUUID() agenciaId?: string;
-  /** PENDIENTE | EN_PROCESO | COMPLETADO | CANCELADO | VENCIDO | ABIERTOS (pendiente, en proceso y vencido) */
-  @IsOptional() @IsIn([...ESTADOS_PLAN, 'VENCIDO', 'ABIERTOS']) estado?: string;
+  /** PENDIENTE | EN_PROCESO | COMPLETADO | CANCELADO | ABIERTOS (pendiente y en proceso) */
+  @IsOptional() @IsIn([...ESTADOS_PLAN, 'ABIERTOS']) estado?: string;
 }

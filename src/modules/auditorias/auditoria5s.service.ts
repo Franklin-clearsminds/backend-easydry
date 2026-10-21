@@ -231,7 +231,7 @@ export class Auditoria5sService {
     const accionesBase: Prisma.Auditoria5sAccionWhereInput = { auditoria: visible };
     const formatos: FormatoId[] = dto.formato ? [dto.formato as FormatoId] : [...FORMATOS_5S];
 
-    const [total, delMes, realizadas, filas, abiertas, vencidas, ...porFormato] = await Promise.all([
+    const [total, delMes, realizadas, filas, abiertas, ...porFormato] = await Promise.all([
       this.prisma.auditoria5s.count({ where: visible }),
       this.prisma.auditoria5s.count({ where: combinarWhere(visible, { fecha: { gte: inicioMes } }) as Prisma.Auditoria5sWhereInput }),
       this.prisma.auditoria5s.count({ where: finalizadas }),
@@ -242,7 +242,6 @@ export class Auditoria5sService {
         select: { agenciaId: true, area: true, formato: true, fecha: true, porcentaje: true, agencia: { select: { nombre: true } } },
       }),
       this.prisma.auditoria5sAccion.count({ where: { ...accionesBase, estado: { in: [...ESTADOS_ACCION_ABIERTA] } } }),
-      this.prisma.auditoria5sAccion.count({ where: { ...accionesBase, estado: { in: [...ESTADOS_ACCION_ABIERTA] }, fechaCompromiso: { lt: hoy } } }),
       // Los números de pregunta se repiten entre formatos: se agrupa por separado en cada uno.
       ...formatos.map((f) =>
         this.prisma.auditoria5sRespuesta.groupBy({
@@ -312,7 +311,6 @@ export class Auditoria5sService {
       agenciasAmarillo: porAgencia.filter((a) => a.semaforo === 'AMARILLO').length,
       agenciasRojo: porAgencia.filter((a) => a.semaforo === 'ROJO').length,
       accionesPendientes: abiertas,
-      accionesVencidas: vencidas,
       porAgencia: porAgencia.slice(0, 12),
       evolucion,
       porS,
@@ -566,8 +564,6 @@ export class Auditoria5sService {
         hallazgo: texto(r.hallazgo),
         observaciones: texto(r.observaciones),
         accionCorrectiva: texto(r.accionCorrectiva),
-        responsable: texto(r.responsable),
-        fechaCompromiso: fechaDia(r.fechaCompromiso),
         fotos: lista(r.fotos),
       };
       await tx.auditoria5sRespuesta.upsert({
@@ -613,8 +609,9 @@ export class Auditoria5sService {
             criterio: resp.criterio,
             hallazgo: resp.hallazgo,
             accion: resp.accionCorrectiva,
-            responsable: resp.responsable,
-            fechaCompromiso: resp.fechaCompromiso,
+            // El responsable es la agencia auditada y la fecha es la del día en que se abre la acción.
+            responsable: a.agencia?.nombre ?? '',
+            fechaCompromiso: hoyEcuador(),
             prioridad: prioridadDePuntaje(formato, efectivo),
             evidenciaInicial: resp.fotos,
           },
@@ -658,7 +655,6 @@ export class Auditoria5sService {
       ...(dto.auditoriaId ? { auditoriaId: dto.auditoriaId } : {}),
     };
     if (dto.estado === 'ABIERTAS') filtros.estado = { in: [...ESTADOS_ACCION_ABIERTA] };
-    else if (dto.estado === 'VENCIDA') Object.assign(filtros, { estado: { in: [...ESTADOS_ACCION_ABIERTA] }, fechaCompromiso: { lt: hoy } });
     else if (dto.estado) filtros.estado = dto.estado;
 
     const { page, pageSize, skip, take } = paginacionListado(dto);

@@ -218,10 +218,12 @@ export async function paginarPorGrupos<T>(
  */
 export function rangoFechas(desde?: string | null, hasta?: string | null): { gte?: Date; lte?: Date } | undefined {
   const rango: { gte?: Date; lte?: Date } = {};
-  const d = desde ? new Date(desde) : null;
+  // Una fecha sola (AAAA-MM-DD) es un día de Ecuador (UTC-5): «desde» abre a las 00:00 y «hasta» incluye todo ese día.
+  const soloDia = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const d = desde ? new Date(soloDia(desde) ? `${desde}T00:00:00.000-05:00` : desde) : null;
   if (d && !Number.isNaN(d.getTime())) rango.gte = d;
   if (hasta) {
-    const h = new Date(/^\d{4}-\d{2}-\d{2}$/.test(hasta) ? `${hasta}T23:59:59.999Z` : hasta);
+    const h = new Date(soloDia(hasta) ? `${hasta}T23:59:59.999-05:00` : hasta);
     if (!Number.isNaN(h.getTime())) rango.lte = h;
   }
   return rango.gte || rango.lte ? rango : undefined;

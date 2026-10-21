@@ -10,7 +10,7 @@ export const TIPOS_INSPECCION = ['RUTINA', 'SEGUIMIENTO', 'EXTRAORDINARIA', 'CIE
 export const CATEGORIAS_NOVEDAD = ['INFRAESTRUCTURA', 'MAQUINARIA', 'INSUMOS', 'LIMPIEZA', 'SEGURIDAD', 'OPERACION', 'PERSONAL', 'OTROS'] as const;
 export const PRIORIDADES = ['BAJA', 'MEDIA', 'ALTA', 'CRITICA'] as const;
 export const ESTADOS_NOVEDAD = ['ABIERTA', 'EN_SEGUIMIENTO', 'RESUELTA'] as const;
-/** VENCIDO no se guarda: se calcula (compromiso pasado y plan todavía abierto). Se admite en filtros. */
+/** El responsable de un plan es siempre la agencia del informe y su fecha es la de creación: no hay estado «vencido». */
 export const ESTADOS_PLAN = ['PENDIENTE', 'EN_PROCESO', 'COMPLETADO', 'CANCELADO'] as const;
 export const CALIFICACIONES = ['EXCELENTE', 'BUENO', 'REGULAR', 'MALO'] as const;
 /** Estados en que un informe ya es resultado final: lo único que ven quienes no pueden auditar. */
@@ -43,11 +43,8 @@ export function correlativoDe(numero: string | null | undefined): number {
   return m ? Number(m[1]) : 0;
 }
 
-/** Estado de un plan tal como se muestra: «VENCIDO» si el compromiso ya pasó y el plan sigue abierto. */
-export function estadoPlanEfectivo(plan: { estado: string; fechaCompromiso: Date | null }, hoy: Date): string {
-  if ((plan.estado === 'PENDIENTE' || plan.estado === 'EN_PROCESO') && plan.fechaCompromiso && plan.fechaCompromiso.getTime() < hoy.getTime()) {
-    return 'VENCIDO';
-  }
+/** Estado de un plan tal como se muestra: el que tiene (ya no se calcula «vencido»). */
+export function estadoPlanEfectivo(plan: { estado: string }, _hoy?: Date): string {
   return plan.estado;
 }
 

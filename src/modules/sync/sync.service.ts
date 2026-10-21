@@ -24,6 +24,7 @@ import { serializeServicioLavado } from '../../common/utils/servicio-serializer.
 import { tienePermiso, tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
 import { mensajeSinPermiso, permisoRequeridoPorMutacion, SinPermisoMutacionException } from './sync-permisos.js';
 import { esLiderDeAgencia, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { validarLavadoresDeLaOT } from '../operaciones/lavadores-bahia.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 import {
   resolverAlcance,
@@ -470,6 +471,12 @@ export class SyncService {
               }
             }
 
+            // Agregar un servicio a una OT existente: si ya está finalizada, solo un retoque y dentro de los
+            // 2 días siguientes (se mide con la hora en que el teléfono registró el servicio).
+            if (otMutacion && servicioCatalogoId) {
+              await this.operacionesService.validarServicioDeOT(otMutacion, placa, [Number(servicioCatalogoId)], sanitizedHoraIngreso);
+            }
+
             // Servicios agregados a una OT existente heredan la evidencia de ingreso de la OT.
             const hermanaOT = otMutacion
               ? await this.prisma.servicioLavado.findFirst({
@@ -514,6 +521,25 @@ export class SyncService {
               }
             }
 
+            // Varios lavadores en la misma OT (app nueva): la agencia fija el máximo y, si la bahía tiene
+            // lavadores asignados, solo se elige entre ellos. La app vieja manda uno solo (operadorId).
+            const operadoresOT: string[] = Array.isArray(mut.data?.operadoresIds)
+              ? [...new Set<string>(mut.data.operadoresIds.map((id: unknown) => String(id)).filter(Boolean))]
+              : [];
+            if (operadoresOT.length > 0 && bahiaId) {
+              const bahiaDeLaOT = await this.prisma.bahia.findUnique({
+                where: { id: bahiaId },
+                select: { agenciaId: true },
+              });
+              await validarLavadoresDeLaOT(this.prisma, {
+                bahiaId,
+                agenciaId: bahiaDeLaOT?.agenciaId,
+                operadorIds: operadoresOT,
+              });
+            }
+            const operadorPrincipalId = String(operadoresOT[0] || mut.data?.operadorId || userId);
+            const operadoresAsignadosOT = operadoresOT.length > 0 ? operadoresOT : [operadorPrincipalId];
+
             let nuevoServicio: any;
             try {
               nuevoServicio = await this.prisma.servicioLavado.create({
@@ -532,7 +558,10 @@ export class SyncService {
                   estado: estadoInicial,
                   bahiaId,
                   servicioCatalogoId,
-                  operadorId: String(mut.data?.operadorId || userId),
+                  operadorId: operadorPrincipalId,
+                  operadoresAsignados: {
+                    create: operadoresAsignadosOT.map((id) => ({ operadorId: id })),
+                  },
                   horaIngreso: sanitizedHoraIngreso,
                   horaSalida:
                     estadoFinal === ServiceStatus.FINALIZADO ? now : null,
@@ -815,10 +844,10 @@ export class SyncService {
             });
             continue;
           }
-          // Las incidencias de maquinaria ya no se crean ni se cierran por sincronización offline:
-          // el reporte exige conexión (hora del servidor, máquina asignada y evidencia verificada en S3).
+          // Las incidencias no viajan por este lote: la app las guarda en SQLite y las envía a
+          // POST /incidentes/reportar (con el mismo clientUuid y la hora del teléfono) cuando hay conexión.
           throw new BadRequestException(
-            'Las incidencias de maquinaria requieren conexión a internet. Repórtalas o ciérralas en línea.',
+            'Las incidencias de maquinaria se envían por /incidentes/reportar, no por el lote de sincronización.',
           );
         } else if (
           entity === 'servicio_especial' ||
@@ -904,6 +933,7 @@ export class SyncService {
               {
                 clientUuid: mut.clientUuid,
                 codigoSE,
+                retoqueDeCodigoSE: mutData.retoqueDeCodigoSE || undefined,
                 ordenTrabajoOT: String(mutData.ordenTrabajoOT || codigoSE),
                 tipoServicio,
                 servicioCatalogoId:

@@ -242,6 +242,11 @@ export class ReportarIncidenteDto {
   @IsOptional()
   @IsString()
   destinoTallerId?: string;
+
+  @ApiPropertyOptional({ description: 'Hora del reporte según el teléfono (ISO). El servidor la valida contra su reloj.' })
+  @IsOptional()
+  @IsString()
+  fechaReporte?: string;
 }
 
 export class ResolverIncidenteDto {

@@ -33,13 +33,11 @@ describe('estados del informe de inspección', () => {
 
 describe('planes de acción', () => {
   const hoy = new Date('2026-10-14T00:00:00Z');
-  it('un plan abierto con compromiso pasado se muestra vencido', () => {
-    const pasado = new Date('2026-10-01T00:00:00Z');
-    expect(estadoPlanEfectivo({ estado: 'PENDIENTE', fechaCompromiso: pasado }, hoy)).toBe('VENCIDO');
-    expect(estadoPlanEfectivo({ estado: 'EN_PROCESO', fechaCompromiso: pasado }, hoy)).toBe('VENCIDO');
-    expect(estadoPlanEfectivo({ estado: 'COMPLETADO', fechaCompromiso: pasado }, hoy)).toBe('COMPLETADO');
-    expect(estadoPlanEfectivo({ estado: 'PENDIENTE', fechaCompromiso: new Date('2026-10-20T00:00:00Z') }, hoy)).toBe('PENDIENTE');
-    expect(estadoPlanEfectivo({ estado: 'PENDIENTE', fechaCompromiso: null }, hoy)).toBe('PENDIENTE');
+  it('un plan nunca se muestra vencido: se ve con el estado que tiene', () => {
+    const pasado = new Date('2026-09-01');
+    expect(estadoPlanEfectivo({ estado: 'PENDIENTE' }, new Date('2026-10-01'))).toBe('PENDIENTE');
+    expect(estadoPlanEfectivo({ estado: 'EN_PROCESO' }, new Date('2026-10-01'))).toBe('EN_PROCESO');
+    expect(pasado).toBeInstanceOf(Date);
   });
 });
 

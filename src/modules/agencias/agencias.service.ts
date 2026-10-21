@@ -1,3 +1,4 @@
+import { normalizarCelularEc } from '../../common/utils/telefono-ec.js';
 import {
   Injectable,
   Optional,
@@ -237,7 +238,9 @@ export class AgenciasService {
       const { email, telefono, phone, cedula, ...resto } = fila;
       return {
         ...resto,
-        ...(conContacto ? { ...(email !== undefined ? { email } : {}), ...(telefono !== undefined ? { telefono } : {}), ...(phone !== undefined ? { phone } : {}) } : {}),
+        ...(conContacto ? { ...(email !== undefined ? { email } : {}), ...(phone !== undefined ? { phone } : {}) } : {}),
+        // El teléfono lo ve todo el que tiene acceso a la sección de usuarios (no depende de la casilla de contacto).
+        ...(telefono !== undefined ? { telefono } : {}),
         ...(conCedula && cedula !== undefined ? { cedula } : {}),
       };
     };
@@ -2526,11 +2529,21 @@ export class AgenciasService {
         : [];
     }
 
+    // Si el formulario manda el teléfono: celular de 10 dígitos, obligatorio para los líderes.
+    let telefonoActualizado: string | null | undefined;
+    if (dto.telefono !== undefined) {
+      const rolFinal = roleIdToSet
+        ? (await this.prisma.role.findUnique({ where: { id: roleIdToSet }, select: { namerol: true } }))?.namerol
+        : user.role?.namerol;
+      telefonoActualizado = normalizarCelularEc(dto.telefono, esLiderDeAgencia(rolFinal ?? '')) || null;
+    }
+
     const updatedUser = await this.prisma.user.update({
       where: { id: dto.id },
       data: {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.lastname !== undefined && { lastname: dto.lastname }),
+        ...(telefonoActualizado !== undefined && { telefono: telefonoActualizado }),
         ...(dto.email !== undefined && { email: dto.email.toLowerCase().trim() }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
         ...(roleIdToSet !== undefined && { roleId: roleIdToSet }),
@@ -2829,10 +2842,15 @@ export class AgenciasService {
       }
     }
 
+    // Celular de 10 dígitos; obligatorio para los líderes.
+    const rolDelNuevo = await this.prisma.role.findUnique({ where: { id: roleIdToSet }, select: { namerol: true } });
+    const telefonoNuevo = normalizarCelularEc(dto.telefono, esLiderDeAgencia(rolDelNuevo?.namerol ?? ''));
+
     const newUser = await this.prisma.user.create({
       data: {
         name: dto.name,
         lastname: dto.lastname || '',
+        telefono: telefonoNuevo || null,
         email: emailNorm,
         passwordHash,
         roleId: roleIdToSet,
@@ -2973,6 +2991,15 @@ export class AgenciasService {
         ? { OR: [{ regionId: dto.regionId }, { agencia: { regionId: dto.regionId } }] }
         : undefined,
       dto.clienteId ? { agencia: { clienteId: dto.clienteId } } : undefined,
+      // Fecha de ingreso: un día solo (AAAA-MM-DD) es un día de Ecuador (UTC-5).
+      dto.fechaDesde || dto.fechaHasta
+        ? {
+            createdAt: {
+              ...(dto.fechaDesde ? { gte: new Date(`${dto.fechaDesde}T00:00:00.000-05:00`) } : {}),
+              ...(dto.fechaHasta ? { lte: new Date(`${dto.fechaHasta}T23:59:59.999-05:00`) } : {}),
+            },
+          }
+        : undefined,
       whereBusqueda(['name', 'lastname', 'email', 'agencia.nombre', 'role.namerol', 'region.nombre'], dto.search),
     ];
     const whereBase = combinarWhere(...filtros);
@@ -3029,7 +3056,7 @@ export class AgenciasService {
       id: u.id,
       nombre: fullName || u.name,
       cedula: cedula,
-      telefono: '',
+      telefono: u.telefono ?? '',
       rol: u.role?.namerol || 'LAVADOR',
       sucursal: u.agencia?.nombre || 'Sin Agencia',
       sucursalId: u.agenciaId || u.agencia?.id || null,
@@ -3400,6 +3427,7 @@ const ORDEN_USUARIOS = columnasSimples({
 const SELECT_USUARIO_LISTA = {
   id: true,
   email: true,
+  telefono: true,
   name: true,
   lastname: true,
   estado: true,

@@ -75,6 +75,7 @@ import {
   ROLES_OPERADOR,
   startOfDay,
 } from './maquinaria.permisos.js';
+import { horaDeReporte } from './hora-reporte.js';
 import {
   limpiezaAtrasada as limpiezaAtrasadaUtil,
   reglaLimpieza as reglaLimpiezaUtil,
@@ -994,7 +995,8 @@ export class MaquinariaService {
     const gravedad = dto.gravedad || 'MEDIA';
     const primeraFoto = evidencias.find((e) => e.kind !== 'DOCUMENTO');
 
-    // La hora del reporte es la del servidor: el reporte siempre se hace con conexión.
+    // La hora del reporte es la del teléfono (puede haberse hecho sin conexión); si no es creíble, la del servidor.
+    const fechaReporte = horaDeReporte(dto.fechaReporte);
     const incidente = await this.prisma.$transaction(async (tx) => {
       const inc = await tx.incidenteTecnico.create({
         data: {
@@ -1007,7 +1009,7 @@ export class MaquinariaService {
           estado: 'ABIERTO',
           fotoEvidenciaUrl: primeraFoto?.url,
           destinoTallerId: dto.destinoTallerId || undefined,
-          fechaReporte: new Date(),
+          fechaReporte,
           evidencias: { create: evidencias.map((e) => this.evidenciaData(e, 'INCIDENTE', 'REPORTE', actor.id)) },
         },
         include: this.includeIncidente,
@@ -1821,11 +1823,20 @@ export class MaquinariaService {
     return { success: true, data: registro };
   }
 
+  /** Rango por el día de la limpieza (la fecha se guarda como día, a medianoche UTC): desde y hasta, ambos inclusive. */
+  private rangoFechaLimpieza(desde?: string, hasta?: string): Prisma.LimpiezaMaquinariaWhereInput {
+    const fecha: { gte?: Date; lte?: Date } = {};
+    if (desde) fecha.gte = new Date(`${desde}T00:00:00.000Z`);
+    if (hasta) fecha.lte = new Date(`${hasta}T23:59:59.999Z`);
+    return Object.keys(fecha).length ? { fecha } : {};
+  }
+
   /** Historial de limpiezas de una máquina (o de todas dentro del alcance del actor), más reciente primero. */
   async listLimpiezas(dto: ListLimpiezasDto, actor: Actor) {
     const where: Prisma.LimpiezaMaquinariaWhereInput = {
       maquinaria: this.scopeMaquinaria(actor),
       ...(dto.maquinariaId ? { maquinariaId: dto.maquinariaId } : {}),
+      ...this.rangoFechaLimpieza(dto.fechaDesde, dto.fechaHasta),
     };
     const { page, pageSize, skip, take } = this.pagina(dto);
     const [items, total] = await Promise.all([
@@ -1918,6 +1929,7 @@ export class MaquinariaService {
     const where: Prisma.LimpiezaMaquinariaWhereInput = {
       maquinaria: this.scopeMaquinaria(actor),
       ...(dto.maquinariaId ? { maquinariaId: dto.maquinariaId } : {}),
+      ...this.rangoFechaLimpieza(dto.fechaDesde, dto.fechaHasta),
     };
     const items = await this.prisma.limpiezaMaquinaria.findMany({
       where,

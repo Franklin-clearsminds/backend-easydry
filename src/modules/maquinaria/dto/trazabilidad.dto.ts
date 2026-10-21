@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsInt, IsNumber, IsArray, IsIn, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsInt, IsNumber, IsArray, IsIn, Min, Max, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -262,6 +262,18 @@ export class ListLimpiezasDto extends PaginacionDto {
   @IsOptional()
   @IsString()
   maquinariaId?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-01', description: 'Desde (AAAA-MM-DD), inclusive' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'fechaDesde debe ser AAAA-MM-DD' })
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-31', description: 'Hasta (AAAA-MM-DD), inclusive' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'fechaHasta debe ser AAAA-MM-DD' })
+  fechaHasta?: string;
 }
 
 export class ExportarLimpiezasDto {
@@ -269,6 +281,18 @@ export class ExportarLimpiezasDto {
   @IsOptional()
   @IsString()
   maquinariaId?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-01', description: 'Desde (AAAA-MM-DD), inclusive' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'fechaDesde debe ser AAAA-MM-DD' })
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-31', description: 'Hasta (AAAA-MM-DD), inclusive' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'fechaHasta debe ser AAAA-MM-DD' })
+  fechaHasta?: string;
 }
 
 export class EditarLimpiezaDto {

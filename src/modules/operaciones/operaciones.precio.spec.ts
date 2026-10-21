@@ -61,6 +61,8 @@ describe('OperacionesService.create — precio congelado (base real)', () => {
   it('asigna a la OT todos los lavadores activos seleccionados y vinculados a la bahía', async () => {
     const c = await servicioConPrecio(10);
     const ids = lavadores.map((l) => l.id);
+    // La agencia fija cuántos lavadores caben por bahía: con 3 seleccionados necesita permitir 3.
+    await env.prisma.agencia.update({ where: { id: a1.id }, data: { maxLavadoresPorBahia: ids.length } });
     const creado: any = await service.create(dto(c.id, { operadorIds: ids }), lavadores[0].id);
 
     const fila = await enBase(creado.id);
@@ -71,8 +73,9 @@ describe('OperacionesService.create — precio congelado (base real)', () => {
   it('rechaza un lavador que no está vinculado a la bahía elegida, y no crea nada', async () => {
     const c = await servicioConPrecio(10);
     const sinVinculo = await env.usuario('lav-sin-vinculo', 'LAVADOR', { agenciaId: a1.id });
+    await env.prisma.agencia.update({ where: { id: a1.id }, data: { maxLavadoresPorBahia: 3 } });
     const d = dto(c.id, { operadorIds: [lavadores[0].id, sinVinculo.id] });
-    await expect(service.create(d, lavadores[0].id)).rejects.toThrow(/asignación activa a la bahía/);
+    await expect(service.create(d, lavadores[0].id)).rejects.toThrow(/solo puedes elegir entre ellos/);
     expect(await env.prisma.servicioLavado.count({ where: { ordenTrabajoOT: d.ordenTrabajoOT.toUpperCase() } })).toBe(0);
   });
 

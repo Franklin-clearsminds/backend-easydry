@@ -1,5 +1,5 @@
 import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
-import { IsString, IsNotEmpty, IsOptional, IsArray, IsNumber, IsInt, IsIn, IsBoolean, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsArray, IsNumber, IsInt, IsIn, IsBoolean, Min, Max, MaxLength, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DataGridQueryDto } from '../../../common/dto/data-grid.dto.js';
@@ -105,6 +105,18 @@ export class ListUsuariosAgenciaDto extends DataGridQueryDto {
   @IsIn(['todos', 'lavadores', 'supervisores', 'bodega', 'admins', 'inactivos'])
   segmento?: string;
 
+  @ApiPropertyOptional({ example: '2026-10-01', description: 'Fecha de ingreso desde (AAAA-MM-DD, día de Ecuador), inclusive. Solo modo paginado.' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/, { message: 'fechaDesde debe ser AAAA-MM-DD' })
+  fechaDesde?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-31', description: 'Fecha de ingreso hasta (AAAA-MM-DD, día de Ecuador), inclusive. Solo modo paginado.' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/, { message: 'fechaHasta debe ser AAAA-MM-DD' })
+  fechaHasta?: string;
+
   @ApiPropertyOptional({ description: 'Incluye los conteos por segmento con los mismos filtros (sin el segmento). Solo modo paginado.' })
   @IsOptional()
   @IsBoolean()
@@ -150,6 +162,12 @@ export class UpdateUsuarioDto {
   @IsOptional()
   @IsString()
   lastname?: string;
+
+  @ApiPropertyOptional({ example: '0991234567', description: 'Celular de 10 dígitos (09XXXXXXXX). Obligatorio para los líderes.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  telefono?: string;
 
   @ApiPropertyOptional({ example: 'carlos@easydry.com' })
   @IsOptional()
@@ -221,6 +239,12 @@ export class CreateUsuarioDto {
   @IsOptional()
   @IsString()
   lastname?: string;
+
+  @ApiPropertyOptional({ example: '0991234567', description: 'Celular de 10 dígitos (09XXXXXXXX). Obligatorio para los líderes.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  telefono?: string;
 
   @ApiProperty({ example: 'carlos@easydry.com' })
   @IsString()
