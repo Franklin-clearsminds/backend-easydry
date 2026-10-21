@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Logger } from '@nestjs/common';
+import { networkInterfaces } from 'node:os';
 import helmet from 'helmet';
 import { origenPermitido } from './common/config/cors.js';
 import { secretoObligatorio, verificarSecretosDistintos } from './common/config/secretos.js';
@@ -136,7 +137,10 @@ async function bootstrap() {
   await app.listen(port, '0.0.0.0');
 
   logger.log(`Servidor EasyDry backend ejecutándose en: http://localhost:${port}/api/v1`);
-  logger.log(`Acceso LAN (app Expo): http://192.168.100.6:${port}/api/v1`);
+  const ipLan = Object.values(networkInterfaces())
+    .flat()
+    .find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+  if (ipLan) logger.log(`Acceso LAN (app Expo): http://${ipLan}:${port}/api/v1`);
   if (swaggerActivo) logger.log(`Documentación Swagger interactiva disponible en: http://localhost:${port}/api/docs`);
 }
 bootstrap();
