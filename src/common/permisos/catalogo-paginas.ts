@@ -17,6 +17,13 @@ export interface AccionDef {
   migrarSi?: string[];
   /** La misma casilla aparece en varias páginas (precios, evidencias…). */
   compartida?: boolean;
+  /** Bloque al que pertenece la casilla dentro de la página (Consultar, Operar, Evidencias…). */
+  grupo?: string;
+  /**
+   * Acciones que van de la mano y se marcan juntas. Si se otorga la primera, las demás se agregan solas: no tiene
+   * sentido, por ejemplo, dejar reportar un incidente sin poder subir la foto que lo respalda.
+   */
+  implica?: string[];
 }
 
 export interface SubPaginaDef {
@@ -37,8 +44,13 @@ export interface PaginaDef {
   ruta: string;
   /** Código del módulo del menú (`modulos_sistema.codigo`); null = no aparece en el menú. */
   modulo: string | null;
-  /** Permisos clásicos que habilita la página (lectura base y datos de apoyo). */
+  /** Permisos clásicos de apoyo (lista de agencias, catálogo…): se otorgan al activar la página. */
   otorga: string[];
+  /**
+   * Permiso de lectura de la pantalla. A diferencia de `otorga`, solo se entrega cuando el rol tiene al menos una acción
+   * o sección marcada dentro de la página: activar el menú sin marcar nada no muestra datos.
+   */
+  lectura?: string[];
   subs: SubPaginaDef[];
   /** Acciones de una página sin sub-páginas. */
   acciones: AccionDef[];
@@ -49,8 +61,7 @@ const accion = (codigo: string, nombre: string, otorga: string[] = [], extra: Pa
 const PRECIOS = accion('precios.ver', 'Ver precios y costos', ['precios.ver'], { compartida: true });
 const CEDULA = accion('datos.cedula.ver', 'Ver cédula del personal', [], { compartida: true, migrarSi: ['__nunca__'] });
 const CONTACTO = accion('datos.contacto.ver', 'Ver correo y teléfono del personal', [], { compartida: true, migrarSi: ['__nunca__'] });
-const EVID_VER = accion('evidencias.ver', 'Ver evidencias (fotos y videos)', ['evidencias.ver'], { compartida: true });
-const EVID_SUBIR = accion('evidencias.subir', 'Subir evidencias', ['evidencias.subir'], { compartida: true });
+const EVID_VER = accion('evidencias.ver', 'Ver evidencias (fotos y videos)', ['evidencias.ver'], { compartida: true, grupo: 'Consultar' });
 /** Las exportaciones viven solo en Reportes Operativos; hoy las hace quien ve reportes. */
 const exportar = (codigo: string, nombre: string): AccionDef => accion(codigo, nombre, [], { migrarSi: ['reportes.ver'] });
 
@@ -63,7 +74,7 @@ const sub = (pagina: string, id: string, nombre: string, otorga: string[], accio
   ...(migrarSi ? { migrarSi } : {}),
 });
 
-const pagina = (id: string, nombre: string, ruta: string, modulo: string | null, otorga: string[], subs: SubPaginaDef[], acciones: AccionDef[] = []): PaginaDef => ({
+const pagina = (id: string, nombre: string, ruta: string, modulo: string | null, otorga: string[], subs: SubPaginaDef[], acciones: AccionDef[] = [], lectura: string[] = []): PaginaDef => ({
   id,
   codigo: `pagina.${id}`,
   nombre,
@@ -72,6 +83,7 @@ const pagina = (id: string, nombre: string, ruta: string, modulo: string | null,
   otorga,
   subs,
   acciones,
+  ...(lectura.length ? { lectura } : {}),
 });
 
 export const PAGINAS: readonly PaginaDef[] = [
@@ -86,7 +98,8 @@ export const PAGINAS: readonly PaginaDef[] = [
     // El mapa es de consulta: lo que muestra de cada bahía se enciende por bloques. Asignar o quitar lavadores se hace en Gestión de Lavadores.
     sub('agencias', 'mapa', 'Mapa Operativo', ['mapa.ver'], [
       accion('mapa.lavador.ver', 'Ver el lavador asignado a cada bahía', [], { migrarSi: ['mapa.ver'] }),
-      accion('mapa.maquinaria.ver', 'Ver la maquinaria de cada bahía', ['maquinaria.ver'], { migrarSi: ['maquinaria.ver'] }),
+      // La maquinaria del mapa sale de maquinaria/list, que acepta esta casilla: verla en el mapa no da el módulo de Maquinaria.
+      accion('mapa.maquinaria.ver', 'Ver la maquinaria de cada bahía', ['mapa.maquinaria.ver'], { migrarSi: ['maquinaria.ver'] }),
       accion('mapa.vehiculo.ver', 'Ver el vehículo en servicio de cada bahía', [], { migrarSi: ['mapa.ver'] }),
     ], ['mapa.ver']),
     sub('agencias', 'agencias', 'Agencias', [], [
@@ -175,6 +188,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     accion('aprobaciones.rechazar', 'Rechazar servicio', ['servicios.decidir']),
     accion('aprobaciones.aprobar.todos', 'Aprobar todos', ['servicios.decidir']),
     accion('aprobaciones.anular', 'Anular servicio', ['servicios.anular']),
+    EVID_VER,
   ]),
 
   pagina('productividad', 'Productividad & Retos', '/productividad', 'productividad', ['agencias.ver'], [
@@ -191,82 +205,87 @@ export const PAGINAS: readonly PaginaDef[] = [
     exportar('reportes.pdf', 'Exportar reporte a PDF'),
   ]),
 
-  pagina('maquinaria', 'Maquinaria & Equipos', '/maquinaria', 'maquinaria', ['maquinaria.ver'], [], [
-    accion('maquinaria.crear', 'Registrar máquina', ['maquinaria.crear', 'agencias.ver'], { migrarSi: ['maquinaria.crear'] }),
-    accion('maquinaria.editar', 'Editar, activar o desactivar máquina', ['maquinaria.editar']),
-    accion('maquinaria.trasladar', 'Trasladar entre agencias', ['maquinaria.gestionar', 'agencias.ver'], { migrarSi: ['maquinaria.gestionar'] }),
-    accion('maquinaria.responsable', 'Asignar responsable', ['maquinaria.gestionar']),
-    accion('maquinaria.archivos', 'Subir foto o ficha técnica', ['maquinaria.editar']),
-    accion('maquinaria.incidente.reportar', 'Reportar incidente', ['incidentes.reportar']),
-    accion('maquinaria.trazabilidad.ver', 'Ver trazabilidad', ['maquinaria.trazabilidad']),
-  ]),
+  pagina('maquinaria', 'Maquinaria & Equipos', '/maquinaria', 'maquinaria', [], [], [
+    accion('maquinaria.ver', 'Ver equipos y su estado', ['maquinaria.ver'], { grupo: 'Consultar', migrarSi: ['maquinaria.ver'] }),
+    accion('maquinaria.trazabilidad.ver', 'Ver trazabilidad de cada equipo', ['maquinaria.trazabilidad'], { grupo: 'Consultar', implica: ['maquinaria.ver'] }),
+    accion('maquinaria.crear', 'Registrar máquina', ['maquinaria.crear', 'agencias.ver'], { migrarSi: ['maquinaria.crear'], grupo: 'Operar', implica: ['maquinaria.ver'] }),
+    accion('maquinaria.editar', 'Editar, activar o desactivar máquina', ['maquinaria.editar'], { grupo: 'Operar', implica: ['maquinaria.ver'] }),
+    // Cambiar la foto o la ficha es una casilla aparte: el endpoint `update` la acepta sola (no arrastra editar los datos).
+    accion('maquinaria.archivos', 'Subir foto o ficha técnica', ['maquinaria.archivos', 'maquinaria.evidencias'], { migrarSi: ['maquinaria.editar'], grupo: 'Operar', implica: ['maquinaria.ver'] }),
+    accion('maquinaria.trasladar', 'Trasladar entre agencias o al taller', ['maquinaria.gestionar', 'agencias.ver'], { migrarSi: ['maquinaria.gestionar'], grupo: 'Operar', implica: ['maquinaria.ver'] }),
+    // Para elegir a quién asignarla, la pantalla lista usuarios (agencias/usuarios/list exige 'usuarios.ver').
+    accion('maquinaria.responsable', 'Asignar responsable o operador', ['maquinaria.gestionar', 'usuarios.ver'], { grupo: 'Operar', implica: ['maquinaria.ver'] }),
+    // Reportar una incidencia siempre lleva foto: la evidencia va incluida en la misma casilla.
+    accion('maquinaria.incidente.reportar', 'Reportar incidencia con foto', ['incidentes.reportar', 'evidencias.subir', 'evidencias.ver', 'maquinaria.evidencias'], { grupo: 'Incidencias', implica: ['maquinaria.ver'] }),
+  ], ['maquinaria.ver']),
 
   pagina('taller', 'Taller Técnico', '/taller-tecnico', 'taller-tecnico', [], [
-    sub('taller', 'incidentes', 'Incidentes', ['incidentes.ver', 'maquinaria.ver'], [
-      accion('taller.incidentes.reportar', 'Reportar incidente', ['incidentes.reportar']),
-      accion('taller.incidentes.asignar', 'Asignar técnico', ['maquinaria.gestionar', 'usuarios.ver'], { migrarSi: ['maquinaria.gestionar'] }),
-      accion('taller.incidentes.resolver', 'Resolver incidente', ['incidentes.resolver']),
-      accion('taller.incidentes.cancelar', 'Cancelar incidente', ['incidentes.resolver']),
-      accion('taller.incidentes.evidencias', 'Subir evidencias', ['maquinaria.evidencias']),
-      EVID_VER, EVID_SUBIR, PRECIOS,
+    // La pestaña lista equipos con maquinaria/list, que acepta su permiso: abrir Incidentes no regala el módulo de Maquinaria.
+    sub('taller', 'incidentes', 'Incidentes', ['incidentes.ver'], [
+      // Reportar y resolver incluyen la evidencia: sin la foto no hay incidencia que valga, así que no se separan.
+      accion('taller.incidentes.reportar', 'Reportar incidencia con foto', ['incidentes.reportar', 'evidencias.subir', 'evidencias.ver', 'maquinaria.evidencias'], { grupo: 'Operar' }),
+      accion('taller.incidentes.asignar', 'Asignar técnico', ['maquinaria.gestionar', 'usuarios.ver'], { migrarSi: ['maquinaria.gestionar'], grupo: 'Operar' }),
+      accion('taller.incidentes.resolver', 'Resolver incidencia con evidencia', ['incidentes.resolver', 'evidencias.subir', 'evidencias.ver', 'maquinaria.evidencias'], { grupo: 'Operar' }),
+      accion('taller.incidentes.cancelar', 'Cancelar incidencia', ['incidentes.resolver'], { grupo: 'Operar' }),
+      PRECIOS,
     ], ['incidentes.ver']),
-    sub('taller', 'mantenimientos', 'Mantenimientos', ['mantenimientos.ver', 'maquinaria.ver'], [
-      accion('taller.mantenimientos.programar', 'Programar mantenimiento', ['maquinaria.gestionar', 'usuarios.ver'], { migrarSi: ['maquinaria.gestionar'] }),
-      accion('taller.mantenimientos.ejecutar', 'Ejecutar mantenimiento', ['mantenimientos.ejecutar']),
-      accion('taller.mantenimientos.editar', 'Editar mantenimiento', ['mantenimientos.ejecutar']),
-      accion('taller.mantenimientos.evidencias', 'Subir evidencias', ['maquinaria.evidencias']),
-      EVID_VER, EVID_SUBIR, PRECIOS,
+    sub('taller', 'mantenimientos', 'Mantenimientos', ['mantenimientos.ver'], [
+      accion('taller.mantenimientos.programar', 'Programar mantenimiento', ['maquinaria.gestionar', 'usuarios.ver'], { migrarSi: ['maquinaria.gestionar'], grupo: 'Operar' }),
+      accion('taller.mantenimientos.ejecutar', 'Ejecutar mantenimiento con evidencia', ['mantenimientos.ejecutar', 'evidencias.subir', 'evidencias.ver', 'maquinaria.evidencias'], { grupo: 'Operar' }),
+      accion('taller.mantenimientos.editar', 'Editar mantenimiento', ['mantenimientos.ejecutar'], { grupo: 'Operar' }),
+      PRECIOS,
     ], ['mantenimientos.ver']),
     sub('taller', 'limpiezas', 'Limpiezas', ['limpiezas.ver'], [
-      accion('taller.limpiezas.registrar', 'Registrar limpieza', ['limpiezas.evidencias']),
-      accion('taller.limpiezas.editar', 'Editar o eliminar limpieza', ['limpiezas.editar']),
+      accion('taller.limpiezas.registrar', 'Registrar limpieza con foto', ['limpiezas.evidencias', 'evidencias.ver'], { grupo: 'Operar' }),
+      accion('taller.limpiezas.editar', 'Editar o eliminar limpieza', ['limpiezas.editar'], { grupo: 'Operar' }),
       exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
     ]),
   ]),
 
-  pagina('inventario', 'Inventario & Suministros', '/inventario', 'inventario', ['inventario.ver', 'agencias.ver', 'catalogo.ver'], [
+  pagina('inventario', 'Inventario & Suministros', '/inventario', 'inventario', ['agencias.ver', 'catalogo.ver'], [
     sub('inventario', 'productos', 'Productos', [], [
-      accion('inventario.productos.gestionar', 'Crear o editar insumo', ['inventario.catalogos.gestionar']),
-      accion('inventario.productos.compra', 'Registrar compra', ['compras.registrar']),
-      accion('inventario.productos.despachar', 'Despachar insumo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
+      accion('inventario.productos.gestionar', 'Crear o editar insumo', ['inventario.catalogos.gestionar'], { grupo: 'Catálogo' }),
+      accion('inventario.productos.compra', 'Registrar compra', ['compras.registrar'], { grupo: 'Operar' }),
+      accion('inventario.productos.despachar', 'Despachar insumo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
       PRECIOS,
     ], ['inventario.ver']),
     sub('inventario', 'bodegas', 'Bodegas', [], [
-      accion('inventario.bodegas.gestionar', 'Crear o editar bodega', ['bodegas.gestionar']),
-      accion('inventario.bodegas.estado', 'Activar o desactivar bodega', ['bodegas.gestionar']),
-      accion('inventario.bodegas.eliminar', 'Eliminar bodega', ['bodegas.gestionar']),
-      accion('inventario.bodegas.reajustar', 'Reajustar stock', ['stock.ajustar']),
-      accion('inventario.bodegas.despachar', 'Despachar desde la bodega', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
+      accion('inventario.bodegas.gestionar', 'Crear o editar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
+      accion('inventario.bodegas.estado', 'Activar o desactivar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
+      accion('inventario.bodegas.eliminar', 'Eliminar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
+      accion('inventario.bodegas.reajustar', 'Reajustar stock', ['stock.ajustar'], { grupo: 'Stock' }),
+      accion('inventario.bodegas.despachar', 'Despachar desde la bodega', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
     ], ['inventario.ver']),
     sub('inventario', 'agencias', 'Agencias', [], [
-      accion('inventario.agencias.despachar', 'Despachar a la agencia', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
-      accion('inventario.agencias.reajustar', 'Reajustar stock de la agencia', ['stock.ajustar']),
+      accion('inventario.agencias.despachar', 'Despachar a la agencia', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
+      accion('inventario.agencias.reajustar', 'Reajustar stock de la agencia', ['stock.ajustar'], { grupo: 'Stock' }),
     ], ['inventario.ver']),
     sub('inventario', 'pulidores', 'Kits de pulidores', ['inventario.kits.ver'], [
-      accion('inventario.pulidores.despachar', 'Despachar al pulidor', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
-      accion('inventario.pulidores.reajustar', 'Reajustar el kit', ['stock.ajustar']),
+      accion('inventario.pulidores.despachar', 'Despachar al pulidor', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
+      accion('inventario.pulidores.reajustar', 'Reajustar el kit', ['stock.ajustar'], { grupo: 'Stock' }),
     ]),
     sub('inventario', 'stock-bajo', 'Stock bajo', [], [
-      accion('inventario.stockbajo.despachar', 'Despachar desde stock bajo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
+      accion('inventario.stockbajo.despachar', 'Despachar desde stock bajo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
     ], ['inventario.ver']),
     sub('inventario', 'alertas', 'Alertas de reabastecimiento', ['alertas.ver'], [
-      accion('inventario.alertas.crear', 'Crear alerta', ['alertas.crear']),
-      accion('inventario.alertas.atender', 'Atender alerta', ['alertas.atender']),
+      accion('inventario.alertas.crear', 'Crear alerta', ['alertas.crear'], { grupo: 'Operar' }),
+      accion('inventario.alertas.atender', 'Atender alerta', ['alertas.atender'], { grupo: 'Operar' }),
     ]),
     sub('inventario', 'movimientos', 'Movimientos (kardex)', [], [PRECIOS], ['inventario.ver']),
     sub('inventario', 'consumo', 'Consumo por servicios', ['consumos.ver'], [PRECIOS]),
     sub('inventario', 'configuracion', 'Configuración', [], [
-      accion('inventario.config.tipos', 'Gestionar tipos de producto', ['inventario.catalogos.gestionar']),
-      accion('inventario.config.unidades', 'Gestionar unidades y presentaciones', ['inventario.catalogos.gestionar']),
+      accion('inventario.config.tipos', 'Gestionar tipos de producto', ['inventario.catalogos.gestionar'], { grupo: 'Catálogo' }),
+      accion('inventario.config.unidades', 'Gestionar unidades y presentaciones', ['inventario.catalogos.gestionar'], { grupo: 'Catálogo' }),
     ], ['inventario.ver']),
-  ]),
+  ], [], ['inventario.ver']),
 
-  pagina('envios', 'Envíos & Confirmación', '/envios', 'envios', ['despachos.ver', 'agencias.ver'], [], [
-    accion('envios.crear', 'Crear despacho', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'] }),
-    accion('envios.confirmar', 'Confirmar recepción', ['despachos.recibir']),
-    accion('envios.faltantes', 'Resolver faltantes de envíos', ['despachos.ver'], { migrarSi: ['despachos.crear'] }),
-    accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir']),
-  ]),
+  pagina('envios', 'Envíos & Confirmación', '/envios', 'envios', ['agencias.ver'], [], [
+    accion('despachos.ver', 'Ver envíos y su estado', ['despachos.ver'], { grupo: 'Consultar', migrarSi: ['despachos.ver'] }),
+    accion('envios.crear', 'Crear y despachar envío', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar', implica: ['despachos.ver'] }),
+    accion('envios.confirmar', 'Confirmar recepción', ['despachos.recibir'], { grupo: 'Operar', implica: ['despachos.ver'] }),
+    accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir'], { grupo: 'Operar', implica: ['despachos.ver', 'envios.confirmar'] }),
+    accion('envios.faltantes', 'Resolver faltantes de envíos', ['despachos.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar', implica: ['despachos.ver'] }),
+  ], ['despachos.ver']),
 
   // Auditorías: tres pantallas del menú. Quien no puede auditar (líder, lavador, pulidor) solo ve el resultado de su inspección 5S y sus informes.
   pagina('auditorias', 'Dashboard de Auditorías', '/auditorias', 'auditorias', ['auditorias.ver'], []),
@@ -327,6 +346,29 @@ export const CODIGOS_NUEVOS: ReadonlySet<string> = new Set([
 ]);
 
 export const esCodigoNuevo = (codigo: string): boolean => CODIGOS_NUEVOS.has(codigo);
+
+/** Acciones que se marcan juntas: código → códigos que se activan con él. */
+const IMPLICACIONES = new Map<string, string[]>(
+  PAGINAS.flatMap((p) => accionesDe(p).filter((a) => a.implica?.length).map((a) => [a.codigo, a.implica!] as const)),
+);
+
+/** Si se otorga una acción, se otorgan también las que van de la mano (en cascada). */
+export function expandirImplicaciones(codigos: Iterable<string>): Set<string> {
+  const out = new Set(codigos);
+  let cambio = true;
+  while (cambio) {
+    cambio = false;
+    for (const [codigo, implica] of IMPLICACIONES) {
+      if (!out.has(codigo)) continue;
+      for (const dependiente of implica) {
+        if (out.has(dependiente)) continue;
+        out.add(dependiente);
+        cambio = true;
+      }
+    }
+  }
+  return out;
+}
 
 /** Códigos de acción que cuelgan de cada sub-página o de cada página (para validar dependencias). */
 const PADRES_DE_ACCION = new Map<string, string[]>();
@@ -391,13 +433,30 @@ export function codigosNuevosActivos(codigos: Iterable<string>): Set<string> {
   return activos;
 }
 
-/** Permisos clásicos (los que exigen los endpoints) que salen de lo activo. */
+/**
+ * Permisos clásicos (los que exigen los endpoints) que salen de lo activo.
+ *
+ * Regla de lectura explícita: una página con contenido configurable NO entrega su permiso de lectura solo por estar
+ * activa; necesita al menos una acción marcada o una de sus secciones (sub-página) activa. Así, activar «Envíos» en el
+ * menú sin marcar ninguna casilla no muestra datos, y cada sección se abre marcando lo que el rol puede hacer en ella.
+ * Las pantallas de consulta pura —sin sub-páginas ni acciones— sí se abren con su interruptor.
+ */
 export function permisosClasicosDe(codigos: Iterable<string>): Set<string> {
   const activos = codigosNuevosActivos(codigos);
   const out = new Set<string>();
+
+  const paginaAporta = (p: PaginaDef): boolean => {
+    if (!p.subs.length && !p.acciones.length) return true;
+    if (p.acciones.some((a) => activos.has(a.codigo))) return true;
+    return p.subs.some((s) => activos.has(s.codigo));
+  };
+
   for (const p of PAGINAS) {
     if (!activos.has(p.codigo)) continue;
+    // Los datos de apoyo se necesitan para pintar la pantalla y no exponen el contenido del módulo.
     p.otorga.forEach((c) => out.add(c));
+    // La lectura del módulo sí exige haber marcado algo dentro de la página.
+    if (paginaAporta(p)) (p.lectura ?? []).forEach((c) => out.add(c));
     for (const a of p.acciones) if (activos.has(a.codigo)) a.otorga.forEach((c) => out.add(c));
     for (const s of p.subs) {
       if (!activos.has(s.codigo)) continue;
@@ -410,7 +469,7 @@ export function permisosClasicosDe(codigos: Iterable<string>): Set<string> {
 
 /** Lo que se guarda en el rol: los códigos nuevos activos más los permisos clásicos que de ellos se derivan. */
 export function capacidadesDesdeNuevos(codigos: Iterable<string>): string[] {
-  const activos = codigosNuevosActivos(codigos);
+  const activos = codigosNuevosActivos(expandirImplicaciones(codigos));
   return [...new Set([...activos, ...permisosClasicosDe(activos)])];
 }
 
@@ -425,8 +484,8 @@ export function nuevosDesdeClasicos(
   paginaVisible: (pagina: PaginaDef) => boolean,
 ): string[] {
   const tiene = new Set(clasicos);
-  const todos = (lista: string[]) => lista.length > 0 && lista.every((c) => tiene.has(c));
-  const alguno = (lista: string[]) => lista.some((c) => tiene.has(c));
+  const todos = (lista?: string[]) => Array.isArray(lista) && lista.length > 0 && lista.every((c) => tiene.has(c));
+  const alguno = (lista?: string[]) => Array.isArray(lista) && lista.some((c) => tiene.has(c));
   const nuevos = new Set<string>();
   for (const p of PAGINAS) {
     if (!paginaVisible(p)) continue;
@@ -456,8 +515,8 @@ export function arbolPaginas() {
       id: s.id,
       codigo: s.codigo,
       nombre: s.nombre,
-      acciones: s.acciones.map((a) => ({ codigo: a.codigo, nombre: a.nombre, compartida: !!a.compartida })),
+      acciones: s.acciones.map((a) => ({ codigo: a.codigo, nombre: a.nombre, compartida: !!a.compartida, grupo: a.grupo, implica: a.implica })),
     })),
-    acciones: p.acciones.map((a) => ({ codigo: a.codigo, nombre: a.nombre, compartida: !!a.compartida })),
+    acciones: p.acciones.map((a) => ({ codigo: a.codigo, nombre: a.nombre, compartida: !!a.compartida, grupo: a.grupo, implica: a.implica })),
   }));
 }

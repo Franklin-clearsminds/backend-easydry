@@ -68,6 +68,7 @@ import {
   esSupervisor,
   esOperador,
   esLider,
+  esRolPropio,
   esTecnico,
   ROL,
   ROLES_OPERADOR,
@@ -246,7 +247,14 @@ export class MaquinariaService {
     // lo que tiene asignado a él personalmente, como su kit de insumos.
     if (esLider(actor)) return { agenciaId: actor.agenciaId ?? NADA };
     if (esOperador(actor)) return { operadorAsignadoId: actor.id };
-    return { id: NADA };
+    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
+    switch (actor.ambito) {
+      case 'GLOBAL': return {};
+      case 'REGION': return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
+      case 'AGENCIA': return { agenciaId: actor.agenciaId ?? NADA };
+      case 'PROPIO': return { operadorAsignadoId: actor.id };
+      default: return { id: NADA };
+    }
   }
 
   private scopeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
@@ -274,7 +282,14 @@ export class MaquinariaService {
     if (esOperador(actor)) {
       return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
     }
-    return { id: NADA };
+    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
+    switch (actor.ambito) {
+      case 'GLOBAL': return {};
+      case 'REGION': return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+      case 'AGENCIA': return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
+      case 'PROPIO': return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
+      default: return { id: NADA };
+    }
   }
 
   private scopeMantenimientos(actor: Actor): Prisma.MantenimientoMaquinariaWhereInput {
@@ -298,7 +313,14 @@ export class MaquinariaService {
     // a él, y el líder los de toda su agencia (ve y reporta cualquier máquina de su sede).
     if (esOperador(actor)) return { maquinaria: { operadorAsignadoId: actor.id } };
     if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
-    return { id: NADA };
+    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
+    switch (actor.ambito) {
+      case 'GLOBAL': return {};
+      case 'REGION': return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
+      case 'AGENCIA': return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
+      case 'PROPIO': return { maquinaria: { operadorAsignadoId: actor.id } };
+      default: return { id: NADA };
+    }
   }
 
   /** Falla si el actor no puede ver esta máquina (mismo criterio que la lista). */
@@ -947,6 +969,9 @@ export class MaquinariaService {
     // (scopeMaquinaria).
     if (maquina.operadorAsignadoId !== actor.id) {
       if (esLider(actor) || esSupervisor(actor) || esCoordServiciosEspeciales(actor)) {
+        await this.assertPuedeVerMaquina(actor, maquina.id);
+      } else if (esRolPropio(actor)) {
+        // Rol propio: reporta lo que su ámbito le deja ver (la misma lista que consulta).
         await this.assertPuedeVerMaquina(actor, maquina.id);
       } else {
         throw new ForbiddenException('Solo puedes reportar las máquinas que tienes asignadas.');

@@ -31,6 +31,7 @@ describe('catálogo de páginas', () => {
     const otorgados = new Set<string>();
     for (const p of PAGINAS) {
       p.otorga.forEach((c) => otorgados.add(c));
+      (p.lectura ?? []).forEach((c) => otorgados.add(c));
       p.subs.forEach((s) => s.otorga.forEach((c) => otorgados.add(c)));
       todasLasAcciones().forEach((a) => a.otorga.forEach((c) => otorgados.add(c)));
     }
@@ -65,6 +66,66 @@ describe('dependencias entre página, sub-página y acción', () => {
     expect(clasicos.has('agencias.ver')).toBe(true);
     expect(clasicos.has('catalogo.ver')).toBe(true);
     expect(clasicos.has('inventario.ver')).toBe(false);
+  });
+
+  it('encender una página sin marcar nada no da lectura del módulo', () => {
+    // Activos y Taller: el menú encendido no muestra datos hasta que se marca una casilla.
+    expect(permisosClasicosDe(['pagina.envios']).has('despachos.ver')).toBe(false);
+    expect(permisosClasicosDe(['pagina.maquinaria']).has('maquinaria.ver')).toBe(false);
+    expect(permisosClasicosDe(['pagina.inventario']).has('inventario.ver')).toBe(false);
+
+    // Con una sección de inventario o una acción de envíos, la lectura aparece.
+    expect(permisosClasicosDe(['pagina.inventario', 'pagina.inventario.productos']).has('inventario.ver')).toBe(true);
+    expect(permisosClasicosDe(['pagina.envios', 'despachos.ver']).has('despachos.ver')).toBe(true);
+
+    // Los datos de apoyo no exponen el contenido del módulo: la pantalla puede pintar sus selectores.
+    expect(permisosClasicosDe(['pagina.envios']).has('agencias.ver')).toBe(true);
+  });
+
+  it('marcar una acción arrastra la lectura que necesita', () => {
+    const conEditar = capacidadesDesdeNuevos(['pagina.maquinaria', 'maquinaria.editar']);
+    expect(conEditar).toContain('maquinaria.ver');
+    expect(conEditar).toContain('maquinaria.editar');
+
+    const conResolver = capacidadesDesdeNuevos(['pagina.taller', 'pagina.taller.incidentes', 'taller.incidentes.resolver']);
+    expect(conResolver).toContain('maquinaria.evidencias');
+    expect(conResolver).toContain('evidencias.subir');
+  });
+
+  it('las secciones del taller y el mapa no regalan la lectura del módulo de Maquinaria', () => {
+    // «Ver equipos» es la única casilla que abre el módulo: si el taller también lo diera, la casilla no se podría apagar
+    // (al guardar volvería a aparecer marcada). Las pestañas del taller listan equipos con maquinaria/list, que ya acepta su permiso.
+    const soloTaller = permisosClasicosDe(['pagina.taller', 'pagina.taller.incidentes', 'pagina.taller.mantenimientos', 'pagina.taller.limpiezas']);
+    expect(soloTaller.has('maquinaria.ver')).toBe(false);
+
+    const conMapa = permisosClasicosDe(['pagina.agencias', 'pagina.agencias.mapa', 'mapa.maquinaria.ver']);
+    expect(conMapa.has('maquinaria.ver')).toBe(false);
+
+    expect(permisosClasicosDe(['pagina.maquinaria', 'maquinaria.ver']).has('maquinaria.ver')).toBe(true);
+  });
+
+  it('ninguna página concede casillas de otra página (cada casilla se apaga donde se enciende)', () => {
+    // Si una página diera una casilla de otra, apagarla en su pantalla no serviría: al guardar volvería a encenderse.
+    const duenio = new Map<string, string>();
+    for (const p of PAGINAS) {
+      for (const a of [...p.acciones, ...p.subs.flatMap((s) => s.acciones)]) {
+        if (!a.compartida) duenio.set(a.codigo, p.id);
+      }
+    }
+    const choques: string[] = [];
+    for (const p of PAGINAS) {
+      const concedidos = [
+        ...p.otorga,
+        ...(p.lectura ?? []),
+        ...p.acciones.flatMap((a) => a.otorga),
+        ...p.subs.flatMap((s) => [...s.otorga, ...s.acciones.flatMap((a) => a.otorga)]),
+      ];
+      for (const c of concedidos) {
+        const otra = duenio.get(c);
+        if (otra && otra !== p.id) choques.push(`${p.id} concede ${c}, que es una casilla de ${otra}`);
+      }
+    }
+    expect(choques).toEqual([]);
   });
 
   it('una casilla compartida (precios) sigue activa si al menos una de sus sub-páginas lo está', () => {
