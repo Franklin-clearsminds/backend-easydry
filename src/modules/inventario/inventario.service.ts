@@ -1061,9 +1061,8 @@ export class InventarioService {
     if (!insumoId || (!bodegaId && !agenciaId && !pulidorId)) {
       throw new BadRequestException('Indica el insumo y la ubicación (bodega, agencia o pulidor) a reajustar.');
     }
-    const casillaReajuste = pulidorId ? 'inventario.pulidores.reajustar' : agenciaId ? 'inventario.agencias.reajustar' : 'inventario.bodegas.reajustar';
-    if (!tienePermiso(currentUser, casillaReajuste)) {
-      throw new ForbiddenException('Tu rol no puede reajustar el stock de ' + (pulidorId ? 'los kits de pulidores.' : agenciaId ? 'las agencias.' : 'las bodegas.'));
+    if (!tienePermiso(currentUser, 'inventario.reajustar')) {
+      throw new ForbiddenException('Tu rol no puede reajustar el stock.');
     }
 
     // Alcance del asistente: su bodega asignada, o agencias y pulidores de su región.
@@ -1850,7 +1849,25 @@ export class InventarioService {
       throw new BadRequestException('La Bodega Central Nacional no puede ser eliminada');
     }
 
-    await this.prisma.$executeRawUnsafe(`DELETE FROM "bodegas" WHERE "id" = $1`, dto.id);
+    // No se elimina una bodega que aún guarda insumos: quedarían registros de stock sin bodega.
+    const conStock = await this.prisma.stockUbicacion.findMany({
+      where: { bodegaId: dto.id, cantidadActual: { gt: 0 } },
+      select: { insumo: { select: { nombre: true } } },
+      take: 5,
+    });
+    if (conStock.length > 0) {
+      const total = await this.prisma.stockUbicacion.count({ where: { bodegaId: dto.id, cantidadActual: { gt: 0 } } });
+      const ejemplos = conStock.map((r) => r.insumo?.nombre).filter(Boolean).join(', ');
+      throw new BadRequestException(
+        `No se puede eliminar la bodega "${existing[0].nombre}": todavía tiene stock de ${total} insumo(s) (${ejemplos}${total > conStock.length ? ', …' : ''}). Despáchalo o reajústalo a cero antes de eliminarla.`,
+      );
+    }
+
+    // Sin stock: sus filas en cero se retiran junto con la bodega (no deben quedar huérfanas).
+    await this.prisma.$transaction([
+      this.prisma.stockUbicacion.deleteMany({ where: { bodegaId: dto.id } }),
+      this.prisma.$executeRawUnsafe(`DELETE FROM "bodegas" WHERE "id" = $1`, dto.id),
+    ]);
 
     return {
       id: dto.id,

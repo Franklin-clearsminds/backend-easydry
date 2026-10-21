@@ -1,22 +1,35 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
-import { ROLES_BASE } from '../src/common/permisos/roles-base.js';
-import { accionesLegacy } from '../src/common/permisos/acciones-legacy.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { motivoPasswordDebil } from '../src/common/utils/password-politica.js';
-import { modulosDeCapacidades } from '../src/common/permisos/modulos-navegacion.js';
+
+/** Los roles oficiales con los permisos tal como se configuraron en «Roles y permisos» (prisma/data/roles.json). */
+interface RolSeed {
+  namerol: string;
+  descripcion: string | null;
+  estado: number;
+  ambito: Prisma.RoleCreateInput['ambito'];
+  permisos: string[];
+  capacidades: string[];
+  acciones: Prisma.InputJsonValue;
+}
+const RUTA_ROLES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 'roles.json');
+const ROLES_SEED = JSON.parse(fs.readFileSync(RUTA_ROLES, 'utf8')) as RolSeed[];
 
 /**
  * Seed idempotente de EasyDry.
  *
  * Por defecto NO borra nada: crea lo que falta (módulos, los 15 roles oficiales con sus permisos, catálogos base de inventario
- * y las cuentas Super Admin y Admin) y deja intacto lo que ya existe. Los roles salen de ROLES_BASE (src/common/permisos/roles-base.ts),
- * la única fuente. Los correos y contraseñas de las dos cuentas vienen del .env, sin valores por defecto.
+ * y las cuentas Super Admin y Admin) y deja intacto lo que ya existe. Los roles salen de prisma/data/roles.json: los permisos
+ * tal como están configurados en «Roles y permisos» (páginas, sub-páginas y acciones). Los correos y contraseñas de las dos cuentas vienen del .env, sin valores por defecto.
  *
  * Variables de entorno:
  *   SEED_SUPERADMIN_EMAIL / SEED_SUPERADMIN_PASSWORD   cuenta Super Admin (ambas obligatorias)
  *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD             cuenta Admin (ambas obligatorias)
- *   SEED_ACTUALIZAR_ROLES=SI     restablece los permisos de los roles oficiales a los valores de fábrica
+ *   SEED_ACTUALIZAR_ROLES=SI     restablece los permisos de los roles oficiales a los de prisma/data/roles.json
  *   SEED_RESET=SI                VACÍA toda la base antes de sembrar (en producción exige además SEED_CONFIRMAR_PRODUCCION=SI)
  */
 const prisma = new PrismaClient();
@@ -95,15 +108,15 @@ async function main() {
   console.log('🛡️ Sembrando roles oficiales con permisos, ámbito y acciones...');
   const actualizarRoles = reset || process.env.SEED_ACTUALIZAR_ROLES === 'SI';
   const rolesMap = new Map<string, string>();
-  for (const r of ROLES_BASE) {
+  for (const r of ROLES_SEED) {
     const datos = {
       descripcion: r.descripcion,
-      estado: 1,
-      permisos: modulosDeCapacidades(r.capacidades, r.namerol),
+      estado: r.estado ?? 1,
+      permisos: r.permisos,
       capacidades: r.capacidades,
       ambito: r.ambito,
       esSistema: true,
-      acciones: accionesLegacy(r.capacidades, r.ambito) as unknown as Prisma.InputJsonValue,
+      acciones: r.acciones,
     };
     const existente = await prisma.role.findUnique({ where: { namerol: r.namerol } });
     if (!existente) {
@@ -115,13 +128,11 @@ async function main() {
     } else {
       // Se respetan los permisos que el Super Admin haya ajustado; solo se marca como rol oficial.
       // El ámbito NO es una preferencia ajustable: es una invariante estructural del rol (define qué
-      // región/agencia/registros propios puede ver y asignar), así que el seed lo fuerza siempre,
-      // aunque no se pida actualizar el resto de permisos. Si difiere, también se recalculan las
-      // acciones legacy con las capacidades actuales (las del Super Admin) y el ámbito correcto.
+      // región/agencia/registros propios puede ver y asignar), así que el seed lo fuerza siempre.
       const datosForzados: Prisma.RoleUpdateInput = { esSistema: true };
       if (existente.ambito !== r.ambito) {
         datosForzados.ambito = r.ambito;
-        datosForzados.acciones = accionesLegacy(existente.capacidades, r.ambito) as unknown as Prisma.InputJsonValue;
+        datosForzados.acciones = r.acciones;
       }
       await prisma.role.update({ where: { id: existente.id }, data: datosForzados });
       rolesMap.set(r.namerol, existente.id);

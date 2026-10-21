@@ -66,6 +66,10 @@ const EVID_VER = accion('evidencias.ver', 'Ver evidencias (fotos y videos)', ['e
 const REPORTAR_INCIDENTE = accion('taller.incidentes.reportar', 'Reportar incidencia con foto', ['incidentes.reportar', 'evidencias.subir', 'evidencias.ver', 'maquinaria.evidencias'], { compartida: true, grupo: 'Operar' });
 const PROGRAMAR_MANTENIMIENTO = accion('taller.mantenimientos.programar', 'Programar mantenimiento', ['maquinaria.gestionar', 'usuarios.ver'], { compartida: true, grupo: 'Operar', migrarSi: ['maquinaria.gestionar'] });
 const REGISTRAR_LIMPIEZA = accion('taller.limpiezas.registrar', 'Registrar limpieza con foto', ['limpiezas.evidencias', 'evidencias.ver'], { compartida: true, grupo: 'Operar' });
+/** Despachar y reajustar stock aparecen en varias pestañas de Inventario, pero son una sola casilla compartida cada una. */
+const DESPACHAR_INSUMOS = accion('inventario.despachar', 'Despachar insumos', ['despachos.crear', 'usuarios.ver'], { compartida: true, migrarSi: ['despachos.crear'], grupo: 'Operar' });
+const REAJUSTAR_STOCK = accion('inventario.reajustar', 'Reajustar stock', ['stock.ajustar'], { compartida: true, grupo: 'Stock' });
+const CREAR_ALERTA = accion('inventario.alertas.crear', 'Crear alerta', ['alertas.crear', 'alertas.ver'], { compartida: true, grupo: 'Operar' });
 /** Las exportaciones viven solo en Reportes Operativos; hoy las hace quien ve reportes. */
 const exportar = (codigo: string, nombre: string): AccionDef => accion(codigo, nombre, [], { migrarSi: ['reportes.ver'] });
 
@@ -253,46 +257,46 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('inventario', 'productos', 'Productos', [], [
       accion('inventario.productos.gestionar', 'Crear o editar insumo', ['inventario.catalogos.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.productos.compra', 'Registrar compra', ['compras.registrar'], { grupo: 'Operar' }),
-      accion('inventario.productos.despachar', 'Despachar insumo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
-      PRECIOS,
+      DESPACHAR_INSUMOS,
     ], ['inventario.ver']),
     sub('inventario', 'bodegas', 'Bodegas', [], [
       accion('inventario.bodegas.gestionar', 'Crear o editar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.bodegas.estado', 'Activar o desactivar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.bodegas.eliminar', 'Eliminar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
-      accion('inventario.bodegas.reajustar', 'Reajustar stock', ['stock.ajustar'], { grupo: 'Stock' }),
-      accion('inventario.bodegas.despachar', 'Despachar desde la bodega', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
+      REAJUSTAR_STOCK,
+      DESPACHAR_INSUMOS,
     ], ['inventario.ver']),
     sub('inventario', 'agencias', 'Agencias', [], [
-      accion('inventario.agencias.despachar', 'Despachar a la agencia', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
-      accion('inventario.agencias.reajustar', 'Reajustar stock de la agencia', ['stock.ajustar'], { grupo: 'Stock' }),
+      DESPACHAR_INSUMOS,
+      REAJUSTAR_STOCK,
     ], ['inventario.ver']),
-    sub('inventario', 'pulidores', 'Kits de pulidores', ['inventario.kits.ver'], [
-      accion('inventario.pulidores.despachar', 'Despachar al pulidor', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
-      accion('inventario.pulidores.reajustar', 'Reajustar el kit', ['stock.ajustar'], { grupo: 'Stock' }),
+    sub('inventario', 'pulidores', 'Pulidores', ['inventario.kits.ver'], [
+      DESPACHAR_INSUMOS,
+      REAJUSTAR_STOCK,
     ]),
-    sub('inventario', 'stock-bajo', 'Stock bajo', [], [
-      accion('inventario.stockbajo.despachar', 'Despachar desde stock bajo', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
+    sub('inventario', 'stock-bajo', 'Stock Bajo', [], [
+      DESPACHAR_INSUMOS,
+      CREAR_ALERTA,
     ], ['inventario.ver']),
-    sub('inventario', 'alertas', 'Alertas de reabastecimiento', ['alertas.ver'], [
-      accion('inventario.alertas.crear', 'Crear alerta', ['alertas.crear'], { grupo: 'Operar' }),
+    sub('inventario', 'alertas', 'Alertas de Reabastecimiento', ['alertas.ver'], [
+      CREAR_ALERTA,
       accion('inventario.alertas.atender', 'Atender alerta', ['alertas.atender'], { grupo: 'Operar' }),
     ]),
     sub('inventario', 'movimientos', 'Movimientos (kardex)', [], [PRECIOS], ['inventario.ver']),
-    sub('inventario', 'consumo', 'Consumo por servicios', ['consumos.ver'], [PRECIOS]),
+    sub('inventario', 'consumo', 'Consumo por Servicio', ['consumos.ver'], []),
     sub('inventario', 'configuracion', 'Configuración', [], [
       accion('inventario.config.tipos', 'Gestionar tipos de producto', ['inventario.catalogos.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.config.unidades', 'Gestionar unidades y presentaciones', ['inventario.catalogos.gestionar'], { grupo: 'Catálogo' }),
     ], ['inventario.ver']),
   ], [], ['inventario.ver']),
 
-  pagina('envios', 'Envíos & Confirmación', '/envios', 'envios', ['agencias.ver'], [], [
-    accion('despachos.ver', 'Ver envíos y su estado', ['despachos.ver'], { grupo: 'Consultar', migrarSi: ['despachos.ver'] }),
-    accion('envios.crear', 'Crear y despachar envío', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar', implica: ['despachos.ver'] }),
-    accion('envios.confirmar', 'Confirmar recepción', ['despachos.recibir'], { grupo: 'Operar', implica: ['despachos.ver'] }),
-    accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir'], { grupo: 'Operar', implica: ['despachos.ver', 'envios.confirmar'] }),
-    accion('envios.faltantes', 'Resolver faltantes de envíos', ['despachos.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar', implica: ['despachos.ver'] }),
-  ], ['despachos.ver']),
+  // Activar la página basta para ver todos los envíos de su ámbito: no hay casilla aparte de «ver».
+  pagina('envios', 'Envíos & Confirmación', '/envios', 'envios', ['agencias.ver', 'despachos.ver'], [], [
+    accion('envios.crear', 'Crear y despachar envío', ['despachos.crear', 'usuarios.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
+    accion('envios.confirmar', 'Confirmar recepción', ['despachos.recibir'], { grupo: 'Operar' }),
+    accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir'], { grupo: 'Operar', implica: ['envios.confirmar'] }),
+    accion('envios.faltantes', 'Resolver faltantes de envíos', ['despachos.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
+  ]),
 
   // Auditorías: tres pantallas del menú. Quien no puede auditar (líder, lavador, pulidor) solo ve el resultado de su inspección 5S y sus informes.
 

@@ -70,13 +70,13 @@ describe('dependencias entre página, sub-página y acción', () => {
 
   it('encender una página sin marcar nada no da lectura del módulo', () => {
     // Activos y Taller: el menú encendido no muestra datos hasta que se marca una casilla.
-    expect(permisosClasicosDe(['pagina.envios']).has('despachos.ver')).toBe(false);
     expect(permisosClasicosDe(['pagina.maquinaria']).has('maquinaria.ver')).toBe(false);
     expect(permisosClasicosDe(['pagina.inventario']).has('inventario.ver')).toBe(false);
 
-    // Con una sección de inventario o una acción de envíos, la lectura aparece.
+    // Con una sección de inventario, la lectura aparece.
     expect(permisosClasicosDe(['pagina.inventario', 'pagina.inventario.productos']).has('inventario.ver')).toBe(true);
-    expect(permisosClasicosDe(['pagina.envios', 'despachos.ver']).has('despachos.ver')).toBe(true);
+    // Envíos es distinto: activar la página basta para ver todos sus envíos (no hay casilla aparte de «ver»).
+    expect(permisosClasicosDe(['pagina.envios']).has('despachos.ver')).toBe(true);
 
     // Los datos de apoyo no exponen el contenido del módulo: la pantalla puede pintar sus selectores.
     expect(permisosClasicosDe(['pagina.envios']).has('agencias.ver')).toBe(true);

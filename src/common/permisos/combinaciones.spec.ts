@@ -47,17 +47,11 @@ const REQUISITOS: Record<string, string[]> = {
   'inventario.productos.gestionar': ['inventario.ver'],
   'inventario.productos.compra': ['inventario.ver'],
   // Despachar necesita el insumo, el destino (usuarios para pulidores) y el permiso de despacho.
-  'inventario.productos.despachar': ['inventario.ver', 'despachos.crear', 'usuarios.ver'],
+  'inventario.despachar': ['inventario.ver', 'despachos.crear', 'usuarios.ver'],
+  'inventario.reajustar': ['inventario.ver'],
   'inventario.bodegas.gestionar': ['inventario.ver'],
   'inventario.bodegas.estado': ['inventario.ver'],
   'inventario.bodegas.eliminar': ['inventario.ver'],
-  'inventario.bodegas.reajustar': ['inventario.ver'],
-  'inventario.bodegas.despachar': ['inventario.ver', 'despachos.crear', 'usuarios.ver'],
-  'inventario.agencias.despachar': ['inventario.ver', 'despachos.crear', 'usuarios.ver'],
-  'inventario.agencias.reajustar': ['inventario.ver'],
-  'inventario.pulidores.despachar': ['inventario.ver', 'despachos.crear', 'usuarios.ver'],
-  'inventario.pulidores.reajustar': ['inventario.ver'],
-  'inventario.stockbajo.despachar': ['inventario.ver', 'despachos.crear', 'usuarios.ver'],
   // Las alertas se leen con la sección; crear o atender es la casilla.
   'inventario.alertas.crear': ['alertas.ver', 'inventario.ver'],
   'inventario.alertas.atender': ['alertas.ver', 'inventario.ver'],
@@ -65,7 +59,6 @@ const REQUISITOS: Record<string, string[]> = {
   'inventario.config.unidades': ['inventario.ver'],
 
   // ── Envíos & Confirmación ───────────────────────────────────────────────
-  'despachos.ver': [],
   // Crear un envío arma la lista de insumos y bodegas (inventario), elige agencia y pulidor.
   'envios.crear': ['despachos.ver', 'despachos.crear', 'usuarios.ver', 'agencias.ver'],
   'envios.confirmar': ['despachos.ver', 'despachos.recibir'],

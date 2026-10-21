@@ -162,7 +162,7 @@ export class InventarioController {
     );
   }
 
-  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
+  @Permiso('inventario.reajustar')
   @Post('stock/ajuste')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ajuste manual de stock por conteo físico, merma o daño (deja trazabilidad)' })
@@ -171,7 +171,7 @@ export class InventarioController {
     return this.inventarioService.ajusteStock(dto, user.id);
   }
 
-  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
+  @Permiso('inventario.reajustar')
   @Post('stock/reajuste')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -184,7 +184,7 @@ export class InventarioController {
     return this.inventarioService.reajustarStock(dto, user);
   }
 
-  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
+  @Permiso('inventario.reajustar')
   @Post('stock/resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard rápido: totales de stock, bajo mínimo y alertas pendientes' })
@@ -274,7 +274,7 @@ export class InventarioController {
     return this.inventarioService.registrarCompra(dto, user.id);
   }
 
-  @Permiso('inventario.productos.despachar', 'inventario.bodegas.despachar', 'inventario.agencias.despachar', 'inventario.pulidores.despachar', 'inventario.stockbajo.despachar', 'envios.crear')
+  @Permiso('inventario.despachar', 'envios.crear')
   @Post('movimientos/despachos/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -286,7 +286,7 @@ export class InventarioController {
     return this.inventarioService.crearDespacho(dto, user.id);
   }
 
-  @Permiso('inventario.productos.despachar', 'inventario.bodegas.despachar', 'inventario.agencias.despachar', 'inventario.pulidores.despachar', 'inventario.stockbajo.despachar', 'envios.crear')
+  @Permiso('inventario.despachar', 'envios.crear')
   @Post('despachos/crear')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Generar despacho químico a agencia o pulidor (Ruta canónica frontend)' })
@@ -528,7 +528,7 @@ export class InventarioController {
   // MOVIMIENTOS GLOBALES & REGISTRO CENTRALIZADO (Kardex Atómico)
   // ==============================================================
 
-  @Permiso('inventario.bodegas.reajustar', 'inventario.agencias.reajustar', 'inventario.pulidores.reajustar')
+  @Permiso('inventario.reajustar')
   @Post('movimientos/registrar')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
