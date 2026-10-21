@@ -21,7 +21,10 @@
   * **Deltas Seguros:** Ventana de solapamiento de 5 segundos (`safeSince`) y scoping por agencia/rol.
   * **Subida Multimedia Desacoplada:** Tickets prefirmados para fotos sin sobrecargar payloads JSON.
   * **Resolución de Conflictos:** "Gana la Operación en Campo" (el trabajo físico prevalece sobre cancelaciones administrativas).
-* **Notificaciones en Tiempo Real:** Gateway WebSocket (`@nestjs/websockets` + `socket.io`) con autenticación por JWT en el handshake, respaldado por persistencia en PostgreSQL (`Notification`). Cubre 8 eventos operativos (limpiezas pendientes/atrasadas de maquinaria, mantenimientos vencidos, etc.), con envío "fire-and-forget" que nunca bloquea ni revienta la operación principal si falla.
+* **Notificaciones en Tiempo Real:** Gateway WebSocket (`@nestjs/websockets` + `socket.io`, namespace `/notifications`) con autenticación por JWT en el handshake, respaldado por persistencia en PostgreSQL (`Notification`). El envío es "fire-and-forget": nunca bloquea ni revienta la operación principal si falla. La app móvil recibe sus avisos por push de Expo.
+* **Caché y escalado (Redis opcional):** con `REDIS_URL` se comparten entre instancias la caché, el límite de peticiones, los sockets (`RedisIoAdapter`) y los candados de las tareas programadas. Sin Redis todo funciona igual con la memoria de cada proceso (una sola instancia), y si Redis cae el sistema sigue sin caché.
+* **Evidencias en S3 privado:** fotos, videos y PDF suben con URL prefirmada; solo los avatares y el catálogo de insumos son públicos. El resto se entrega firmado y con permiso.
+* **Archivado a Parquet (DuckDB):** los datos históricos se mueven de PostgreSQL a archivos `.parquet` en S3 y se leen de forma transparente por rango de fechas. Está apagado por defecto (ver sección *Archivado histórico*).
 
 ---
 
@@ -40,12 +43,16 @@ backend-easydry/
 │   │   ├── inventario/          # Insumos (con categoría validada), presentaciones, stock por agencia y alertas
 │   │   ├── catalogos/           # Servicios ofertados (GENERAL/ESPECIAL), categorías, recetas estándar
 │   │   ├── agencias/            # Gestión de Regiones, Agencias, usuarios y alcance (GLOBAL/REGION/AGENCIA)
-│   │   ├── maquinaria/          # Maquinaria, limpieza (con evidencia fotográfica), mantenimientos e incidentes
+│   │   ├── maquinaria/          # Maquinaria, limpieza (con evidencia fotográfica), mantenimientos (todos preventivos) e incidentes
 │   │   ├── analytics/           # Dashboards, consumo de químicos y ranking de lavadores (cantidad + tiempo promedio)
 │   │   ├── notifications/       # Persistencia + Gateway WebSocket de notificaciones (8 eventos operativos)
 │   │   ├── retos/                # Retos comerciales/operativos: creación, listado y cierre con ganador
 │   │   ├── schedule/             # Cron jobs: recordatorios y escalamiento de limpieza, mantenimientos vencidos
 │   │   ├── aprobaciones/         # Flujo de aprobación gerencial de servicios finalizados
+│   │   ├── auditorias/           # Auditorías 5S e informes con adjuntos
+│   │   ├── reportes/             # Reportes operativos (Excel/PDF) filtrados por ámbito, con generación en segundo plano
+│   │   ├── storage/              # Tickets prefirmados de S3, privacidad de archivos y variantes (thumbs/view)
+│   │   ├── archivado/            # Archivado de datos históricos a Parquet en S3 y lectura federada con DuckDB
 │   │   └── roles/                # Catálogo de roles y capacidades (RBAC)
 │   ├── common/                   # Decoradores de permisos, guards, utilidades de alcance y paginación compartida
 │   ├── config/                   # Validaciones de variables de entorno
@@ -66,27 +73,19 @@ backend-easydry/
    cp .env.example .env
    ```
 
-2. Configura los valores correspondientes en tu archivo `.env`:
-   ```env
-   # Base de Datos Central (PostgreSQL)
-   DATABASE_URL="postgresql://postgres:postgres@localhost:5432/easydry_db?schema=public"
+2. Completa el `.env`. La plantilla `.env.example` documenta cada variable; estas son las que importan:
 
-   # Seguridad y Autenticación JWT
-   JWT_SECRET="EasyDrySecretKey2026*OfflineSync"
-   JWT_ACCESS_EXPIRATION="15m"
-   JWT_REFRESH_SECRET="EasyDryRefreshSecretKey2026*OfflineSync"
-   JWT_REFRESH_EXPIRATION="15d"
-
-   # Clave de Cifrado AES-256-CBC (Exactamente 32 bytes)
-   ENCRYPTION_KEY="EasyDrySecretKey2026*OfflineSync32B"
-
-   # Configuración de Red y Servidor
-   PORT=3000
-   NODE_ENV="development"
-   CORS_ORIGIN="http://localhost:5173,http://localhost:8081,http://localhost:19006,exp://"
-   UPLOAD_DIR="./uploads"
-   MAX_FILE_SIZE_MB=10
-   ```
+   | Grupo | Variables | Notas |
+   |---|---|---|
+   | Base de datos | `DATABASE_URL` | PostgreSQL. Con varias instancias fija `connection_limit` por instancia o usa PgBouncer. |
+   | Redis (opcional) | `REDIS_URL`, `REDIS_PREFIX` | Vacío = memoria local de cada proceso. `docker compose up -d redis` lo levanta en local. |
+   | Seguridad | `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY`, `JWT_ACCESS_EXPIRATION`, `JWT_REFRESH_EXPIRATION` | **Obligatorias en producción**: el servidor no arranca sin ellas. Los valores de la plantilla son solo de desarrollo. |
+   | Red | `PORT`, `NODE_ENV`, `CORS_ORIGIN`, `TRUST_PROXY`, `COOKIE_SAMESITE` | `CORS_ORIGIN` debe incluir el dominio del panel (también lo valida el WebSocket). El refresh token del navegador va en una cookie HttpOnly; con web y API en dominios distintos usa `COOKIE_SAMESITE=none` (HTTPS). |
+   | Almacenamiento | `AWS_REGION`, `AWS_S3_BUCKET_NAME`, `AWS_S3_PUBLIC_URL_PREFIX`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT` | S3 es obligatorio (sin respaldo local). En AWS usa un IAM Role y deja vacías las dos claves. |
+   | Seed | `SEED_SUPERADMIN_EMAIL/PASSWORD`, `SEED_ADMIN_EMAIL/PASSWORD` | Obligatorias, sin valores por defecto. Las contraseñas cumplen la política (10+ caracteres, mayúscula, minúscula, número y especial). |
+   | Importación | `IMPORT_PASSWORD_INICIAL` | Contraseña inicial de los usuarios nuevos del Excel. |
+   | Archivado | `ARCHIVADO_ACTIVO`, `ARCHIVADO_SIMULACRO` | Ver *Archivado histórico*. |
+   | Swagger | `SWAGGER_ENABLED` | Apagado en producción salvo que se active a propósito. |
 
 ---
 
@@ -122,15 +121,19 @@ pnpm run prisma:generate
 npx prisma generate
 ```
 
-#### B. Poblar catálogos maestros y usuarios demo
+#### B. Sembrar roles y cuentas iniciales
+El seed (`prisma/seed.ts`) es idempotente: no borra nada por defecto y solo crea lo que falta. Siembra los roles oficiales, las pantallas del sistema y **únicamente** las cuentas `SUPER_ADMIN` y `ADMIN`, con los correos y contraseñas del `.env` (`SEED_*`).
 ```bash
 pnpm run prisma:seed
 # o directamente:
 npx prisma db seed
 ```
+`SEED_ACTUALIZAR_ROLES=SI` restablece los permisos de los roles oficiales a los de fábrica; `SEED_RESET=SI` **vacía toda la base** (en producción exige además `SEED_CONFIRMAR_PRODUCCION=SI`).
 
-#### C. Crear retos y órdenes de prueba
-Solo para desarrollo local: crea/reutiliza un reto de agencias y uno de pulidores, con órdenes sintéticas finalizadas del mes actual. El script es idempotente y solo actualiza registros con IDs/OT `DEMO-RETO`; no borra datos operativos.
+Los demás usuarios (lavadores, pulidores, líderes, aprobadores, etc.) se cargan con el importador del Excel `DATOS AGENCIAS.xlsx` (`pnpm run prisma:import-agencias`, ver [USUARIOS-DEMO.md](../USUARIOS-DEMO.md)) o se crean desde el módulo **Usuarios** de la web.
+
+#### C. Datos de prueba (solo desarrollo local)
+`pnpm run seed:demo` genera datos operativos de prueba. Además, `pnpm run seed:retos-demo`: crea/reutiliza un reto de agencias y uno de pulidores, con órdenes sintéticas finalizadas del mes actual. El script es idempotente y solo actualiza registros con IDs/OT `DEMO-RETO`; no borra datos operativos.
 ```bash
 pnpm run seed:retos-demo
 ```
@@ -184,17 +187,26 @@ Todos los endpoints requieren autenticación con `Bearer Token`:
 
 ## 🔔 Notificaciones en Tiempo Real (`/notifications`)
 
-Sistema de notificaciones respaldado en PostgreSQL (tabla `Notification`) y empujado al cliente por WebSocket:
+Sistema de notificaciones respaldado en PostgreSQL (tabla `Notification`) y empujado a la web por WebSocket:
 
 | Método / Canal | Endpoint / Evento | Descripción |
 |---|---|---|
-| `POST` | `/api/v1/notifications/list` | Historial paginado de notificaciones propias del usuario autenticado, más recientes primero. |
+| `POST` | `/api/v1/notifications/list` | Historial paginado de notificaciones propias, más recientes primero. |
 | `POST` | `/api/v1/notifications/resumen` | Cantidad de notificaciones sin leer (badge de la campanita). |
 | `POST` | `/api/v1/notifications/marcar-leida` | Marca una notificación puntual como leída. |
 | `POST` | `/api/v1/notifications/marcar-todas-leidas` | Marca todas las notificaciones propias como leídas. |
-| `WebSocket` | `ws://localhost:3000` (namespace raíz) | El cliente se conecta enviando el JWT en `handshake.auth.token`; el servidor valida la sesión igual que el `JwtStrategy` HTTP y empuja el evento `notification:new` al socket del usuario destinatario en tiempo real. |
+| `WebSocket` | `ws://localhost:3000/notifications` (namespace `/notifications`) | El cliente envía el JWT en `handshake.auth.token`; el servidor valida origen, token, usuario activo y sesión no revocada, y empuja `notification:new` solo a los sockets del destinatario. |
 
-Eventos cubiertos: limpieza de maquinaria pendiente del día, limpieza atrasada (con escalamiento único a quien audita la agencia), mantenimiento de maquinaria vencido, y otros hitos operativos del flujo de servicios. El envío es *fire-and-forget*: si falla (ej. el socket ya no está conectado), solo se registra una advertencia en el log — nunca interrumpe la operación que la originó.
+El envío es *fire-and-forget*: si falla (por ejemplo, el socket ya no está conectado) solo se registra una advertencia en el log. Con `REDIS_URL` configurado, el adaptador de Redis reparte los eventos entre todas las instancias del backend.
+
+---
+
+## 🗄️ Archivado histórico (Parquet + DuckDB)
+
+Los datos viejos se mueven de PostgreSQL a `archivo-historico/<tabla>/anio=YYYY/mes=MM/part-000N.parquet` en S3: se sube, se verifica conteo y checksum y solo entonces se borra de la base. Lo archivado es inmutable y las búsquedas por rango de fechas lo leen de forma transparente (base primero, archivo después). Las evidencias (fotos y videos) no se mueven; se manejan con reglas de ciclo de vida de S3 (`infra/`).
+
+* La corrida es semanal (domingo 03:00) y está **apagada por defecto**: `ARCHIVADO_ACTIVO=true` la enciende y `ARCHIVADO_SIMULACRO=false` hace que suba y borre de verdad (por defecto solo informa qué haría).
+* **Antes de la primera corrida real, haz un respaldo completo de la base.**
 
 ---
 
@@ -208,21 +220,9 @@ pnpm test
 
 ---
 
-## 👥 Usuarios Demo Oficiales
+## 👥 Cuentas y primer acceso
 
-Todas las cuentas demo utilizan la contraseña unificada: **`Admin123*`**
-
-| Rol | Correo Corporativo | Alcance Operativo |
-|---|---|---|
-| **Super Administrador** | `superadmin@easydry.com` | Red Nacional Global (Inmutable) |
-| **Administrador** | `admin@easydry.com` | Red Nacional Global |
-| **Líder de Agencia** | `operador.bahia01@easydry.com` | EasyDry Quito Norte |
-| **Supervisor Regional** | `supervisor.costa@easydry.com` | Región Costa |
-| **Aprobador** | `gerente.norte@easydry.com` | EasyDry Quito Norte |
-| **Coordinador Bodega** | `distribuidor@easydry.com` | Bodega Central |
-| **Técnico Maquinaria** | `tecnico@easydry.com` | Taller Central Nacional |
-
-> Para consultar el detalle completo de los 14 roles del sistema, revisa el archivo [USUARIOS-DEMO.md](../USUARIOS-DEMO.md).
+El sistema **no trae usuarios ni contraseñas de ejemplo**. Las cuentas salen del seed (Super Admin y Admin), del importador del Excel o del módulo Usuarios de la web. Consulta [USUARIOS-DEMO.md](../USUARIOS-DEMO.md) para el detalle de los tres caminos y [FUNCIONALIDAD-POR-ROL.md](../FUNCIONALIDAD-POR-ROL.md) para lo que puede hacer cada rol.
 
 ---
 
