@@ -50,6 +50,10 @@ const PRECIOS = accion('precios.ver', 'Ver precios y costos', ['precios.ver'], {
 const CEDULA = accion('datos.cedula.ver', 'Ver cédula del personal', [], { compartida: true, migrarSi: ['__nunca__'] });
 const CONTACTO = accion('datos.contacto.ver', 'Ver correo y teléfono del personal', [], { compartida: true, migrarSi: ['__nunca__'] });
 const EVID_VER = accion('evidencias.ver', 'Ver evidencias (fotos y videos)', ['evidencias.ver'], { compartida: true });
+/** Acciones que viven en dos páginas (Maquinaria y Taller): una sola casilla, con el mismo código en ambas. */
+const REPORTAR_INCIDENTE = accion('taller.incidentes.reportar', 'Reportar incidente (incluye subir evidencias)', ['incidentes.reportar', 'maquinaria.evidencias', 'evidencias.subir'], { compartida: true });
+const PROGRAMAR_MANTENIMIENTO = accion('taller.mantenimientos.programar', 'Programar mantenimiento', ['maquinaria.gestionar', 'usuarios.ver'], { compartida: true, migrarSi: ['maquinaria.gestionar'] });
+const REGISTRAR_LIMPIEZA = accion('taller.limpiezas.registrar', 'Registrar limpieza (incluye subir fotos)', ['limpiezas.evidencias'], { compartida: true });
 const EVID_SUBIR = accion('evidencias.subir', 'Subir evidencias', ['evidencias.subir'], { compartida: true });
 /** Las exportaciones viven solo en Reportes Operativos; hoy las hace quien ve reportes. */
 const exportar = (codigo: string, nombre: string): AccionDef => accion(codigo, nombre, [], { migrarSi: ['reportes.ver'] });
@@ -137,8 +141,10 @@ export const PAGINAS: readonly PaginaDef[] = [
       PRECIOS,
     ], ['servicios.ver']),
     sub('servicios', 'especiales', 'Servicios especiales', ['especiales.ver', 'evidencias.ver'], [
-      accion('servicios.especiales.crear', 'Crear OT especial (incluye subir evidencias)', ['especiales.crear', 'evidencias.subir', 'usuarios.ver'], { migrarSi: ['especiales.crear'] }),
-      accion('servicios.especiales.reasignar', 'Reasignar pulidor', ['especiales.reasignar', 'usuarios.ver'], { migrarSi: ['especiales.reasignar'] }),
+      // Crear una OT especial tiene dos casillas independientes: para uno mismo y para otro pulidor (un rol puede tener una, la otra o las dos).
+      accion('servicios.especiales.crear', 'Crear OT especial (para mí)', ['especiales.crear'], { migrarSi: ['especiales.crear'] }),
+      accion('servicios.especiales.asignar', 'Crear OT especial y asignarla a otro pulidor (también reasigna al editar)', ['especiales.asignar', 'especiales.reasignar', 'usuarios.ver'], { migrarSi: ['especiales.asignar'] }),
+      // Reasignar el pulidor va dentro de editar, pero solo con la casilla de asignar a otro pulidor.
       accion('servicios.especiales.editar', 'Editar OT especial (vehículo, cliente, prioridad y observaciones)', ['especiales.editar']),
       accion('servicios.especiales.anular', 'Anular OT especial', ['especiales.anular']),
       accion('servicios.especiales.operar', 'Ejecutar: iniciar, pausar y reanudar (incluye subir evidencias)', ['especiales.operar', 'evidencias.subir'], { migrarSi: ['especiales.operar'] }),
@@ -155,7 +161,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('catalogo.generales.recetas.ver', 'Ver recetas de insumos', ['recetas.ver']),
       accion('catalogo.generales.recetas.editar', 'Editar recetas de insumos', ['recetas.gestionar']),
       accion('catalogo.generales.recetas.historial', 'Ver historial de recetas', ['recetas.historial']),
-      PRECIOS,
     ], ['catalogo.ver']),
     sub('catalogo', 'especiales', 'Servicios especiales', [], [
       accion('catalogo.especiales.crear', 'Crear servicio', ['catalogo.gestionar']),
@@ -164,7 +169,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('catalogo.especiales.recetas.ver', 'Ver recetas de insumos', ['recetas.ver']),
       accion('catalogo.especiales.recetas.editar', 'Editar recetas de insumos', ['recetas.gestionar']),
       accion('catalogo.especiales.recetas.historial', 'Ver historial de recetas', ['recetas.historial']),
-      PRECIOS,
     ], ['catalogo.ver']),
   ]),
 
@@ -173,7 +177,6 @@ export const PAGINAS: readonly PaginaDef[] = [
     // (que decide pero no crea solicitudes) quedaba sin el botón Aprobar aunque sí podía rechazar.
     accion('aprobaciones.aprobar', 'Aprobar servicio', ['servicios.decidir', 'solicitudes.crear'], { migrarSi: ['servicios.decidir'] }),
     accion('aprobaciones.rechazar', 'Rechazar servicio', ['servicios.decidir']),
-    accion('aprobaciones.aprobar.todos', 'Aprobar todos', ['servicios.decidir']),
     accion('aprobaciones.anular', 'Anular servicio', ['servicios.anular']),
   ]),
 
@@ -181,6 +184,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     sub('productividad', 'productividad', 'Productividad', ['productividad.ver'], []),
     sub('productividad', 'retos', 'Retos', ['retos.ver'], [
       accion('productividad.retos.crear', 'Crear reto', ['retos.crear']),
+      accion('productividad.retos.editar', 'Editar reto', ['retos.editar'], { migrarSi: ['retos.crear'] }),
       accion('productividad.retos.cerrar', 'Cerrar reto', ['retos.cerrar'], { migrarSi: ['retos.crear'] }),
       accion('productividad.retos.eliminar', 'Eliminar reto', ['retos.eliminar']),
     ]),
@@ -197,28 +201,28 @@ export const PAGINAS: readonly PaginaDef[] = [
     accion('maquinaria.trasladar', 'Trasladar entre agencias', ['maquinaria.gestionar', 'agencias.ver'], { migrarSi: ['maquinaria.gestionar'] }),
     accion('maquinaria.responsable', 'Asignar responsable', ['maquinaria.gestionar']),
     accion('maquinaria.archivos', 'Subir foto o ficha técnica', ['maquinaria.editar']),
-    accion('maquinaria.incidente.reportar', 'Reportar incidente', ['incidentes.reportar']),
+    REPORTAR_INCIDENTE,
+    PROGRAMAR_MANTENIMIENTO,
     accion('maquinaria.trazabilidad.ver', 'Ver trazabilidad', ['maquinaria.trazabilidad']),
+    REGISTRAR_LIMPIEZA,
   ]),
 
   pagina('taller', 'Taller Técnico', '/taller-tecnico', 'taller-tecnico', [], [
     sub('taller', 'incidentes', 'Incidentes', ['incidentes.ver', 'maquinaria.ver'], [
-      accion('taller.incidentes.reportar', 'Reportar incidente', ['incidentes.reportar']),
+      REPORTAR_INCIDENTE,
       accion('taller.incidentes.asignar', 'Asignar técnico', ['maquinaria.gestionar', 'usuarios.ver'], { migrarSi: ['maquinaria.gestionar'] }),
-      accion('taller.incidentes.resolver', 'Resolver incidente', ['incidentes.resolver']),
+      accion('taller.incidentes.resolver', 'Resolver incidente (incluye subir evidencias)', ['incidentes.resolver', 'maquinaria.evidencias', 'evidencias.subir']),
       accion('taller.incidentes.cancelar', 'Cancelar incidente', ['incidentes.resolver']),
-      accion('taller.incidentes.evidencias', 'Subir evidencias', ['maquinaria.evidencias']),
-      EVID_VER, EVID_SUBIR, PRECIOS,
+      EVID_VER, PRECIOS,
     ], ['incidentes.ver']),
     sub('taller', 'mantenimientos', 'Mantenimientos', ['mantenimientos.ver', 'maquinaria.ver'], [
-      accion('taller.mantenimientos.programar', 'Programar mantenimiento', ['maquinaria.gestionar', 'usuarios.ver'], { migrarSi: ['maquinaria.gestionar'] }),
-      accion('taller.mantenimientos.ejecutar', 'Ejecutar mantenimiento', ['mantenimientos.ejecutar']),
+      PROGRAMAR_MANTENIMIENTO,
+      accion('taller.mantenimientos.ejecutar', 'Ejecutar mantenimiento (incluye subir evidencias)', ['mantenimientos.ejecutar', 'maquinaria.evidencias', 'evidencias.subir']),
       accion('taller.mantenimientos.editar', 'Editar mantenimiento', ['mantenimientos.ejecutar']),
-      accion('taller.mantenimientos.evidencias', 'Subir evidencias', ['maquinaria.evidencias']),
-      EVID_VER, EVID_SUBIR, PRECIOS,
+      EVID_VER, PRECIOS,
     ], ['mantenimientos.ver']),
     sub('taller', 'limpiezas', 'Limpiezas', ['limpiezas.ver'], [
-      accion('taller.limpiezas.registrar', 'Registrar limpieza', ['limpiezas.evidencias']),
+      REGISTRAR_LIMPIEZA,
       accion('taller.limpiezas.editar', 'Editar o eliminar limpieza', ['limpiezas.editar']),
       exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
     ]),
@@ -269,7 +273,6 @@ export const PAGINAS: readonly PaginaDef[] = [
   ]),
 
   // Auditorías: tres pantallas del menú. Quien no puede auditar (líder, lavador, pulidor) solo ve el resultado de su inspección 5S y sus informes.
-  pagina('auditorias', 'Dashboard de Auditorías', '/auditorias', 'auditorias', ['auditorias.ver'], []),
 
   pagina('informes', 'Informes de Inspección', '/informes-inspeccion', 'informes-inspeccion', ['informes.ver'], [], [
     accion('informes.crear', 'Crear y editar informes', ['informes.crear']),
@@ -291,7 +294,6 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('usuarios.usuarios.crear', 'Crear usuario', ['usuarios.gestionar']),
       accion('usuarios.usuarios.editar', 'Editar usuario', ['usuarios.gestionar']),
       accion('usuarios.usuarios.estado', 'Activar o desactivar usuario', ['usuarios.gestionar']),
-      accion('usuarios.usuarios.eliminar', 'Eliminar usuario', ['usuarios.gestionar']),
       accion('usuarios.usuarios.password', 'Asignar y restablecer contraseñas', []),
       accion('usuarios.usuarios.backup', 'Gestionar usuarios Backup', ['backup.gestionar']),
       CEDULA, CONTACTO,

@@ -54,7 +54,9 @@ describe('matriz acordada de permisos por rol', () => {
     const admin = ROLES_BASE.find((r) => r.namerol === 'ADMIN')!.capacidades;
     expect(admin).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'roles.gestionar' && c !== 'especiales.crear')));
     expect(admin).not.toContain('roles.gestionar');
+    // El admin no crea OT especiales para sí mismo (eso es del pulidor), pero sí las asigna y reasigna a otros pulidores.
     expect(admin).not.toContain('especiales.crear');
+    expect(admin).toContain('especiales.asignar');
     expect(rolesCon('roles.gestionar')).toEqual(['SUPER_ADMIN']);
   });
 
@@ -72,7 +74,7 @@ describe('matriz acordada de permisos por rol', () => {
     for (const rol of noAudita) {
       const caps = ROLES_BASE.find((r) => r.namerol === rol)!.capacidades;
       expect(caps, rol).toEqual(expect.arrayContaining(['informes.ver', 'inspecciones.ver']));
-      for (const c of ['informes.crear', 'informes.firmar', 'informes.seguimiento', 'informes.revisar', 'informes.eliminar', 'inspecciones.crear', 'inspecciones.acciones', 'inspecciones.verificar', 'inspecciones.eliminar', 'auditorias.ver']) {
+      for (const c of ['informes.crear', 'informes.firmar', 'informes.seguimiento', 'informes.revisar', 'informes.eliminar', 'inspecciones.crear', 'inspecciones.acciones', 'inspecciones.verificar', 'inspecciones.eliminar']) {
         expect(caps, `${rol} no debe tener ${c}`).not.toContain(c);
       }
     }

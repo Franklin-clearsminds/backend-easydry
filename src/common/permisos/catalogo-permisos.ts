@@ -52,11 +52,12 @@ export const CATALOGO_PERMISOS = [
   def('Servicios', 'servicios.editar', 'Editar servicios (OT)', 'Corregir los datos del vehículo, el cliente y las observaciones de una orden de trabajo aún no aprobada.'),
   def('Servicios', 'servicios.finalizar', 'Finalizar servicios (OT)', 'Finalizar una orden de trabajo en proceso o en cola, con su evidencia.'),
   def('Servicios', 'servicios.anular', 'Anular servicios (OT)', 'Anular un servicio con motivo; queda registro de quién y por qué.'),
-  def('Servicios', 'servicios.decidir', 'Aprobar y rechazar servicios', 'Aprobar, rechazar y aprobar todos. Regla de aprobador designado en el servicio.'),
+  def('Servicios', 'servicios.decidir', 'Aprobar y rechazar servicios', 'Aprobar y rechazar un servicio. Regla de aprobador designado en el servicio.'),
   def('Servicios', 'consumos.ver', 'Ver consumo de insumos por servicio', 'Consumo de insumos de cada servicio.'),
   def('Servicios', 'solicitudes.ver', 'Ver solicitudes de aprobación', 'Listado de solicitudes de aprobación.'),
   def('Servicios', 'solicitudes.crear', 'Crear solicitudes de aprobación', 'Solicitar una aprobación.'),
   def('Servicios', 'especiales.ver', 'Ver servicios especiales', 'Listado y detalle de servicios especiales, pulidores y su stock.'),
+  def('Servicios', 'especiales.asignar', 'Crear servicios especiales para otro pulidor', 'Crear una OT especial asignándola a otro pulidor, y reasignarla al editarla.'),
   def('Servicios', 'especiales.crear', 'Crear servicios especiales', 'Registrar y asignar servicios especiales.'),
   def('Servicios', 'especiales.editar', 'Editar servicios especiales', 'Corregir los datos del vehículo, el cliente, la prioridad y las observaciones de un servicio especial que no está completado ni cancelado.'),
   def('Servicios', 'especiales.operar', 'Ejecutar servicios especiales', 'Iniciar, pausar y reanudar (solo el pulidor asignado).'),
@@ -73,6 +74,7 @@ export const CATALOGO_PERMISOS = [
 
   def('Retos', 'retos.ver', 'Ver retos', 'Consultar los retos visibles para su región o sede.'),
   def('Retos', 'retos.crear', 'Crear retos', 'Crear retos (un coordinador solo para su región).'),
+  def('Retos', 'retos.editar', 'Editar retos', 'Corregir título, descripción, premio y vigencia de un reto activo (su creador, o alguien con alcance nacional).'),
   def('Retos', 'retos.cerrar', 'Cerrar retos', 'Cerrar un reto registrando ganador y resultado.'),
   def('Retos', 'retos.eliminar', 'Eliminar retos', 'Eliminar retos propios (un administrador, cualquiera).'),
 
@@ -104,7 +106,6 @@ export const CATALOGO_PERMISOS = [
   def('Maquinaria', 'limpiezas.ver', 'Ver limpiezas de maquinaria', 'Auditoría de limpiezas registradas (fecha, quién y fotos) dentro de su ámbito.'),
   def('Maquinaria', 'limpiezas.editar', 'Editar o eliminar limpiezas', 'Corregir las observaciones o eliminar un registro de limpieza dentro de su ámbito.'),
 
-  def('Auditorías', 'auditorias.ver', 'Ver el dashboard de auditorías', 'Indicadores de las inspecciones de su ámbito: estados, calificaciones y planes de acción.'),
   def('Auditorías', 'informes.ver', 'Ver informes de inspección', 'Listado y detalle de los informes de su ámbito. Quien no puede auditar solo ve los informes ya aprobados o cerrados de su agencia.'),
   def('Auditorías', 'informes.crear', 'Crear y editar informes de inspección', 'Hacer inspecciones: crear informes, editar sus borradores, registrar novedades, actividades y planes de acción, adjuntar evidencias y enviarlos a revisión.'),
   def('Auditorías', 'informes.firmar', 'Registrar observaciones y calificación del informe', 'Registrar las observaciones del jefe de taller y la calificación del servicio de un informe de inspección.'),

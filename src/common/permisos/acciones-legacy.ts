@@ -14,7 +14,6 @@ export interface AccionesLegacy {
   cambiarBahiaOperador: boolean;
   aprobarServicios: boolean;
   rechazarServicios: boolean;
-  cerrarDia: boolean;
   registrarServicio: boolean;
   verTodosServicios: boolean;
   verMaquinaria: boolean;
@@ -42,7 +41,6 @@ export function accionesLegacy(capacidades: readonly string[], ambito: string): 
     cambiarBahiaOperador: tiene('bahias.asignar'),
     aprobarServicios: tiene('servicios.decidir'),
     rechazarServicios: tiene('servicios.decidir'),
-    cerrarDia: tiene('servicios.decidir'),
     registrarServicio: tiene('servicios.crear', 'especiales.crear'),
     verTodosServicios: tiene('servicios.ver'),
     verMaquinaria: tiene('maquinaria.ver'),

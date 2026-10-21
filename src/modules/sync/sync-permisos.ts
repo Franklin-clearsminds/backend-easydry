@@ -30,10 +30,10 @@ export function permisoRequeridoPorMutacion(entidad: string, accion: string): Pe
     return { codigos: ['servicios.generales.editar', 'servicios.generales.finalizar'], descripcion: 'actualizar órdenes de servicio' };
   }
   if (ENTIDADES_ESPECIAL.has(e)) {
-    if (a === 'CREATE') return { codigos: ['servicios.especiales.crear'], descripcion: 'crear servicios especiales' };
+    if (a === 'CREATE') return { codigos: ['servicios.especiales.crear', 'servicios.especiales.asignar'], descripcion: 'crear servicios especiales' };
     // Completar es «Finalizar OT especial»; iniciar, pausar y reanudar los hace el pulidor; reasignar y editar, quien gestiona.
     if (a === 'COMPLETE') return { codigos: ['servicios.especiales.finalizar'], descripcion: 'finalizar servicios especiales' };
-    return { codigos: ['servicios.especiales.operar', 'servicios.especiales.reasignar', 'servicios.especiales.editar'], descripcion: 'ejecutar o editar servicios especiales' };
+    return { codigos: ['servicios.especiales.operar', 'servicios.especiales.editar'], descripcion: 'ejecutar o editar servicios especiales' };
   }
   return null;
 }

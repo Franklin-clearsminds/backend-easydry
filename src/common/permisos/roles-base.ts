@@ -52,7 +52,6 @@ const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
 const ROLES_SOLO_VEN_AUDITORIA = ['LIDER', 'BACKUP', 'LAVADOR', 'PULIDOR'];
 const ROLES_REVISAN_INFORMES = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR'];
 const CAPACIDADES_AUDITOR: CodigoPermiso[] = p(
-  'auditorias.ver',
   'informes.ver',
   'informes.crear',
   'informes.firmar',
@@ -158,6 +157,7 @@ export const ROLES_BASE: RolBase[] = [
       'servicios.ver',
       'retos.ver',
       'retos.crear',
+      'retos.editar',
       'retos.cerrar',
       'retos.eliminar',
       'sync.usar',
@@ -177,6 +177,7 @@ export const ROLES_BASE: RolBase[] = [
       'servicios.ver',
       'retos.ver',
       'retos.crear',
+      'retos.editar',
       'retos.cerrar',
       'retos.eliminar',
       'limpiezas.ver',
@@ -238,6 +239,7 @@ export const ROLES_BASE: RolBase[] = [
       'reportes.ver',
       'especiales.ver',
       'especiales.crear',
+      'especiales.asignar',
       'especiales.editar',
       'especiales.reasignar',
       'especiales.anular',

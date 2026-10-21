@@ -11,9 +11,9 @@ describe('permiso exigido a cada acción de sincronización (puro)', () => {
     ['work_order', 'CREATE', ['servicios.generales.crear']],
     ['servicio_lavado', 'UPDATE', ['servicios.generales.editar', 'servicios.generales.finalizar']],
     ['servicio_lavado', 'COMPLETE', ['servicios.generales.finalizar']],
-    ['servicio_especial', 'CREATE', ['servicios.especiales.crear']],
+    ['servicio_especial', 'CREATE', ['servicios.especiales.crear', 'servicios.especiales.asignar']],
     ['special_service', 'COMPLETE', ['servicios.especiales.finalizar']],
-    ['special_service', 'UPDATE', ['servicios.especiales.operar', 'servicios.especiales.reasignar', 'servicios.especiales.editar']],
+    ['special_service', 'UPDATE', ['servicios.especiales.operar', 'servicios.especiales.editar']],
   ])('%s %s exige %j', (entidad, accion, codigos) => {
     expect(permisoRequeridoPorMutacion(entidad, accion)?.codigos).toEqual(codigos);
   });

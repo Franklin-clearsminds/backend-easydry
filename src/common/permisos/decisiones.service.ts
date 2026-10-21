@@ -1,8 +1,9 @@
 import { BadRequestException, ForbiddenException, Global, Injectable, Module } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../modules/prisma/prisma.service.js';
-import { esLiderDeAgencia, rolDeUsuario } from './alias-roles.js';
+import { rolDeUsuario } from './alias-roles.js';
 import { resolverAlcance, puedeSobreAgencia } from './alcance.js';
+import { tieneAlgunPermiso } from './capacidades.js';
 
 export type ReglaDecision = 'TITULAR' | 'RESPALDO' | 'ADMIN';
 /** Lo que queda en el registro: las reglas de decisión más «PERMISO» (la acción la hizo quien tiene la casilla, sin regla de aprobador). */
@@ -16,15 +17,19 @@ export interface AgenciaRef {
 }
 
 const ROLES_ADMIN = ['SUPER_ADMIN', 'ADMIN'];
+/** Casillas que habilitan decidir: las mismas que exigen los endpoints de aprobar, rechazar y anular. */
+const PERMISOS_DECIDIR = ['aprobaciones.aprobar', 'aprobaciones.rechazar'];
+const PERMISOS_ANULAR = ['aprobaciones.anular', 'servicios.generales.anular'];
 const MOTIVO_MIN = 5;
 
 /**
  * Reglas de quién puede decidir sobre un servicio (aprobar, rechazar, anular) y registro de la decisión.
  *
  *  - Aprobar / rechazar: el APROBADOR de la agencia. Solo si la agencia NO tiene aprobador designado (usuario activo con rol
- *    APROBADOR asignado a ella) deciden, como respaldo, ADMIN y SUPER_ADMIN (cualquier agencia) y el SUPERVISOR (su región).
- *  - Anular: antes de la aprobación, el LIDER y el APROBADOR de la agencia y los administradores; ya aprobado, solo los
- *    administradores. Siempre con motivo.
+ *    APROBADOR asignado a ella) deciden, como respaldo, los demás roles que tengan las casillas de aprobar o rechazar y alcance
+ *    sobre esa agencia (administradores en todas, supervisor en su región, etc.).
+ *  - Anular: ya aprobado, solo los administradores; antes de la aprobación, cualquier rol con la casilla de anular y alcance
+ *    sobre la agencia. Siempre con motivo.
  */
 @Injectable()
 export class DecisionesService {
@@ -57,8 +62,9 @@ export class DecisionesService {
     const rol = rolDeUsuario(user);
     if (rol === 'APROBADOR') return !!user?.agenciaId && user.agenciaId === agencia.id;
     if (agenciaTieneAprobador) return false;
-    if (ROLES_ADMIN.includes(rol)) return true;
-    return rol === 'SUPERVISOR' && puedeSobreAgencia(resolverAlcance(user), agencia);
+    // Sin aprobador designado decide, como respaldo, cualquier rol con las casillas de aprobar o rechazar
+    // y alcance sobre esa agencia: administradores en todas, un supervisor en su región, otro rol en su ámbito.
+    return tieneAlgunPermiso(user, PERMISOS_DECIDIR) && puedeSobreAgencia(resolverAlcance(user), agencia);
   }
 
   /** Devuelve con qué regla puede decidir el usuario, o lanza 403 explicando por qué no puede. */
@@ -69,13 +75,12 @@ export class DecisionesService {
       throw new ForbiddenException('Solo puedes aprobar o rechazar servicios de tu agencia.');
     }
 
-    const esAdmin = ROLES_ADMIN.includes(rol);
-    const esSupervisor = rol === 'SUPERVISOR';
-    if (!esAdmin && !esSupervisor) {
+    if (!tieneAlgunPermiso(user, PERMISOS_DECIDIR)) {
       throw new ForbiddenException('Tu rol no puede aprobar ni rechazar servicios.');
     }
-    if (esSupervisor && !puedeSobreAgencia(resolverAlcance(user), agencia)) {
-      throw new ForbiddenException('Esa agencia no pertenece a tu región.');
+    const alcance = resolverAlcance(user);
+    if (!puedeSobreAgencia(alcance, agencia)) {
+      throw new ForbiddenException(alcance.tipo === 'REGION' ? 'Esa agencia no pertenece a tu región.' : 'Esa agencia está fuera de tu alcance.');
     }
     if (await this.tieneAprobadorDesignado(agencia.id)) {
       throw new ForbiddenException('Esta agencia tiene un aprobador designado: solo él puede aprobar o rechazar sus servicios.');
@@ -90,11 +95,11 @@ export class DecisionesService {
     if (aprobado) {
       throw new ForbiddenException('Un servicio aprobado solo lo puede anular un administrador.');
     }
-    if (esLiderDeAgencia(rol) || rol === 'APROBADOR') {
-      if (user?.agenciaId && user.agenciaId === agencia.id) return 'TITULAR';
-      throw new ForbiddenException('Solo puedes anular servicios de tu agencia.');
+    if (!tieneAlgunPermiso(user, PERMISOS_ANULAR)) {
+      throw new ForbiddenException('Tu rol no puede anular servicios.');
     }
-    throw new ForbiddenException('Tu rol no puede anular servicios.');
+    if (puedeSobreAgencia(resolverAlcance(user), agencia)) return 'TITULAR';
+    throw new ForbiddenException('Solo puedes anular servicios dentro de tu alcance.');
   }
 
   /** Motivo obligatorio (mínimo unas palabras) para anular o corregir. */

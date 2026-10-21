@@ -42,7 +42,7 @@ export const EXCEPCIONES_PANTALLA: Record<string, string> = {
   'datos.cedula.ver': 'El servidor omite la cédula del personal en la respuesta si falta la casilla: la pantalla muestra lo que llega.',
   'datos.contacto.ver': 'El servidor omite correo y teléfono del personal en la respuesta si falta la casilla: la pantalla muestra lo que llega.',
   'evidencias.ver': 'Las fotos y videos se piden por URL prefirmada y el servidor decide si se entrega: la pantalla muestra el estado «sin permiso».',
-  'evidencias.subir': 'La subida de archivos la valida el servidor (storage/upload-permissions); cada pantalla oculta su botón con su propia casilla de evidencias (taller.incidentes.evidencias, taller.mantenimientos.evidencias…).',
+  'evidencias.subir': 'La subida de archivos la valida el servidor (storage/upload-permissions); cada pantalla oculta su botón con su propia casilla de evidencias (las de reportar o resolver incidente, ejecutar mantenimiento y registrar limpieza).',
   'sistema.sync.usar': 'La sincronización no tiene botón: la app la usa en segundo plano y el servidor la rechaza si falta la casilla.',
   'sistema.sync.errores': 'La cola de errores de sincronización se gestiona desde soporte, sin pantalla propia: el servidor la exige.',
 };

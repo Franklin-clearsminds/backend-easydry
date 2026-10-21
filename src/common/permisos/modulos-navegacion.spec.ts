@@ -41,11 +41,10 @@ describe('pantallas derivadas de los permisos', () => {
   });
 
   it('pantallas de los roles oficiales', () => {
-    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'auditorias', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
-    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'auditorias', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
-    // El líder (y su reemplazo), el pulidor y el lavador no auditan: no tienen el dashboard de auditorías.
+    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
+    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
+    // El líder (y su reemplazo), el pulidor y el lavador solo consultan sus informes y auditorías 5S.
     for (const rol of ['LIDER', 'BACKUP', 'PULIDOR', 'LAVADOR']) {
-      expect(pantallas(rol), rol).not.toContain('auditorias');
       expect(pantallas(rol), rol).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));
     }
     expect(pantallas('SUPERVISOR')).toContain('usuarios');
