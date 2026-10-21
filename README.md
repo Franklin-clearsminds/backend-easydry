@@ -122,23 +122,17 @@ npx prisma generate
 ```
 
 #### B. Sembrar roles y cuentas iniciales
-El seed (`prisma/seed.ts`) es idempotente: no borra nada por defecto y solo crea lo que falta. Siembra los roles oficiales, las pantallas del sistema y **únicamente** las cuentas `SUPER_ADMIN` y `ADMIN`, con los correos y contraseñas del `.env` (`SEED_*`).
+El seed (`prisma/seed.ts`) es idempotente: no borra nada por defecto y solo crea lo que falta. Siembra los roles oficiales (desde `prisma/data/roles.json`), las pantallas del sistema y **únicamente** las cuentas `SUPER_ADMIN` y `ADMIN`, con los correos y contraseñas del `.env` (`SEED_*`).
 ```bash
 pnpm run prisma:seed
 # o directamente:
 npx prisma db seed
 ```
-`SEED_ACTUALIZAR_ROLES=SI` restablece los permisos de los roles oficiales a los de fábrica; `SEED_RESET=SI` **vacía toda la base** (en producción exige además `SEED_CONFIRMAR_PRODUCCION=SI`).
+`SEED_ACTUALIZAR_ROLES=SI` restablece los permisos de los roles oficiales a los de `prisma/data/roles.json` (los permisos tal como están en «Roles y permisos»); `SEED_RESET=SI` **vacía toda la base** (en producción exige además `SEED_CONFIRMAR_PRODUCCION=SI`).
 
 Los demás usuarios (lavadores, pulidores, líderes, aprobadores, etc.) se cargan con el importador del Excel `DATOS AGENCIAS.xlsx` (`pnpm run prisma:import-agencias`, ver [USUARIOS-DEMO.md](../USUARIOS-DEMO.md)) o se crean desde el módulo **Usuarios** de la web.
 
-#### C. Datos de prueba (solo desarrollo local)
-`pnpm run seed:demo` genera datos operativos de prueba. Además, `pnpm run seed:retos-demo`: crea/reutiliza un reto de agencias y uno de pulidores, con órdenes sintéticas finalizadas del mes actual. El script es idempotente y solo actualiza registros con IDs/OT `DEMO-RETO`; no borra datos operativos.
-```bash
-pnpm run seed:retos-demo
-```
-
-#### D. Crear una nueva migración (Durante el desarrollo de nuevas entidades)
+#### C. Crear una nueva migración (Durante el desarrollo de nuevas entidades)
 Cuando agregues o modifiques modelos en `prisma/schema.prisma`:
 ```bash
 # Genera el archivo SQL en prisma/migrations/<timestamp>_<nombre>/ y lo aplica localmente

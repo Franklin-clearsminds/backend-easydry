@@ -26,16 +26,8 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:status": "prisma migrate status",
     "prisma:seed": "prisma db seed",
-    "seed:dashboard": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/seed-dashboard.ts",
-    "seed:retos-demo": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx scripts/seed-retos-demo.ts",
-    "seed:demo": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx scripts/seed-datos-demo.ts",
-    "roles:migrar-paginas": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx scripts/migrar-roles-paginas.ts",
-    "ingresar-stock-central": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx scripts/ingresar-stock-bodega-central.ts",
     "prisma:import-agencias": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/import-datos-agencias.ts",
-    "audit:permisos": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx scripts/auditar-permisos.ts",
-    "prisma:studio": "prisma studio",
-    "simulate:notifications": "node --env-file-if-exists=.env --require ./scripts/tsx-windows-userinfo.cjs --import tsx scripts/simulate-notifications.ts",
-    "test:s3": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx scripts/test-s3.ts"
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
