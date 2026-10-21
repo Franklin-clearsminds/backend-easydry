@@ -14,7 +14,7 @@ import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.j
 import { ambitoDeUsuario, tienePermiso } from '../../common/permisos/capacidades.js';
 import { accionesLegacy } from '../../common/permisos/acciones-legacy.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
-import { arbolPaginas, capacidadesDesdeNuevos, dependenciasRotas, esCodigoNuevo, nombreDeCodigo } from '../../common/permisos/catalogo-paginas.js';
+import { arbolPaginas, capacidadesDesdeNuevos, dependenciasRotas, esCodigoNuevo, expandirImplicaciones, nombreDeCodigo } from '../../common/permisos/catalogo-paginas.js';
 import { capacidadesConPaginas, tienePaginas } from '../../common/permisos/migracion-paginas.js';
 import { MODULOS_NAVEGACION, PERMISOS_POR_MODULO, modulosDeCapacidades, modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 
@@ -204,7 +204,7 @@ export class RolesService implements OnModuleInit {
     if (!tienePaginas(unicos)) return capacidadesConPaginas(unicos);
 
     // Con páginas, manda el catálogo: una sub-página o acción solo puede estar activa si su página lo está.
-    const nuevos = unicos.filter(esCodigoNuevo);
+    const nuevos = expandirImplicaciones(unicos.filter(esCodigoNuevo));
     const rotas = dependenciasRotas(nuevos);
     if (rotas.length) {
       const detalle = rotas.map((r) => `"${nombreDeCodigo(r.codigo)}" requiere "${nombreDeCodigo(r.requiere)}"`).join('; ');
