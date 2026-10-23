@@ -48,6 +48,11 @@ export class CreateAgenciaDto {
   @IsInt()
   maxLavadoresPorBahia?: number = 1;
 
+  @ApiPropertyOptional({ example: true, description: 'Permite registrar más de una OT en proceso en la misma bahía' })
+  @IsOptional()
+  @IsBoolean()
+  permiteVariasOtPorBahia?: boolean;
+
   @ApiPropertyOptional({ example: 'uuid-cliente', description: 'ID del cliente corporativo al que pertenece la agencia' })
   @IsOptional()
   @IsString()
@@ -148,6 +153,11 @@ export class UpdateAgenciaDto {
   @IsOptional()
   @IsInt()
   maxLavadoresPorBahia?: number;
+
+  @ApiPropertyOptional({ example: true, description: 'Permite registrar más de una OT en proceso en la misma bahía' })
+  @IsOptional()
+  @IsBoolean()
+  permiteVariasOtPorBahia?: boolean;
 
   @ApiPropertyOptional({ example: 'uuid-cliente', description: 'ID del cliente corporativo' })
   @IsOptional()

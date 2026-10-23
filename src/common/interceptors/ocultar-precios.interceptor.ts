@@ -11,6 +11,7 @@ const CAMPOS_PRECIO = new Set([
   'costoUnitarioUSD',
   'costoUnitario',
   'costoTotal',
+  'costoTotalUSD',
   'subtotalUSD',
 ]);
 

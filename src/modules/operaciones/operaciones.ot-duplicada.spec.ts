@@ -91,4 +91,35 @@ describe('OT duplicada y bahía ocupada — validación en el servidor (base rea
     // Y el listado de bahías informa de la ocupación antes de crear.
     expect(await env.prisma.servicioLavado.count({ where: { bahiaId: otra.id, estado: 'EN_PROCESO' } })).toBe(2);
   });
+
+  it('si la agencia no permite varias OT por bahía, una bahía ocupada rechaza la OT nueva (pero no al ampliar la misma OT ni en la sincronización)', async () => {
+    const lider = await env.actor((await env.usuario('lider-bahia', 'LIDER', { agenciaId: a1.id })).id);
+    const exclusiva = await env.bahia('B3', a1.id);
+    await env.prisma.bahiaOperador.create({ data: { bahiaId: exclusiva.id, operadorId: lavador.id } });
+    await env.prisma.agencia.update({ where: { id: a1.id }, data: { permiteVariasOtPorBahia: false } });
+    try {
+      const enBahia = { bahiaId: exclusiva.id, estado: 'EN_PROCESO', fotoIngresoUrl: 'https://bucket.test/servicios/generales/exclusiva/ingreso.mp4' }; // un actor siempre aporta la evidencia de ingreso
+      await service.create(dto(s1.id, { ...enBahia, ordenTrabajoOT: ot('exclusiva'), placa: 'EXC-0001' }), lavador.id, lider);
+
+      // Otra OT, otro vehículo, misma bahía: se rechaza y no se crea nada.
+      const otra = dto(s2.id, { ...enBahia, ordenTrabajoOT: ot('exclusiva-2'), placa: 'EXC-0002' });
+      await expect(service.create(otra, lavador.id, lider)).rejects.toThrow(/no permite más de una OT por bahía/);
+      expect(await env.prisma.servicioLavado.count({ where: { ordenTrabajoOT: ot('exclusiva-2') } })).toBe(0);
+
+      // Ampliar la MISMA OT del mismo vehículo con otro servicio no es conflicto.
+      const ampliada: any = await service.create(dto(s2.id, { ...enBahia, ordenTrabajoOT: ot('exclusiva'), placa: 'EXC-0001' }), lavador.id, lider);
+      expect(ampliada.id).toBeTruthy();
+
+      // La sincronización de la app (sin actor) nunca se rechaza aquí: sus datos ya existen en el teléfono.
+      const sincronizada: any = await service.create(otra, lavador.id);
+      expect(sincronizada.id).toBeTruthy();
+
+      // Con la opción activada vuelve a ser solo informativo.
+      await env.prisma.agencia.update({ where: { id: a1.id }, data: { permiteVariasOtPorBahia: true } });
+      const permitida: any = await service.create(dto(s1.id, { ...enBahia, ordenTrabajoOT: ot('exclusiva-3'), placa: 'EXC-0003' }), lavador.id, lider);
+      expect(permitida.id).toBeTruthy();
+    } finally {
+      await env.prisma.agencia.update({ where: { id: a1.id }, data: { permiteVariasOtPorBahia: true } });
+    }
+  });
 });

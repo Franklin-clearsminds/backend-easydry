@@ -1,4 +1,6 @@
-import { Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { CODIGOS_RETOQUE } from '../../common/utils/retoque-catalogo.js';
+import { aUnidadDelInsumo } from '../../common/utils/costo-insumo.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { normalizarRol, ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
@@ -109,18 +111,17 @@ export class CatalogosService {
       return servicios.map((s) => ({ ...s, precioAgencia: porServicio.get(s.id) ?? null }));
     };
 
-    // cantidadSugerida viaja en la unidad base del insumo: es lo que descuenta el stock al registrar la OT.
+    // cantidadSugerida viaja en la unidad propia del insumo (la de sus existencias): es lo que descuenta el stock al registrar la OT.
     const conCantidadBase = (servicios: any[]) =>
       servicios.map((servicio) => ({
         ...servicio,
         recetas: servicio.recetas.map((receta: any) => {
-          const factor = receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : 1;
           return {
             ...receta,
             productoSKU: receta.insumo?.codigoSKU,
             productoNombre: receta.insumo?.nombre,
             unidadMedida: receta.insumo?.unidadMedida?.simbolo || receta.unidadConsumo?.simbolo || 'u',
-            cantidadSugerida: Number(receta.cantidadUsada) * (factor || 1),
+            cantidadSugerida: aUnidadDelInsumo(Number(receta.cantidadUsada), receta.unidadConsumo?.factorBase, receta.insumo?.unidadMedida?.factorBase),
           };
         }),
       }));
@@ -232,6 +233,13 @@ export class CatalogosService {
     }
     this.exigir(user, existing.categoria, 'editar');
     if (dto.categoria && dto.categoria.trim().toUpperCase() !== existing.categoria) this.exigir(user, dto.categoria, 'editar');
+    if (CODIGOS_RETOQUE.includes(existing.codigo)) {
+      const cambiaCodigo = !!dto.codigo && dto.codigo.trim().toUpperCase() !== existing.codigo;
+      const cambiaCategoria = !!dto.categoria && dto.categoria.trim().toUpperCase() !== existing.categoria;
+      if (cambiaCodigo || cambiaCategoria) {
+        throw new BadRequestException('El servicio de retoque es parte de la configuración del sistema: no se puede cambiar su código ni su categoría.');
+      }
+    }
 
     if (dto.codigo && dto.codigo.trim().toUpperCase() !== existing.codigo) {
       const codigoUpper = dto.codigo.trim().toUpperCase();
@@ -271,6 +279,9 @@ export class CatalogosService {
       throw new NotFoundException(`Servicio de catálogo con ID ${id} no encontrado`);
     }
     this.exigir(user, existing.categoria, 'estado');
+    if (CODIGOS_RETOQUE.includes(existing.codigo) && existing.estado === 'Activo') {
+      throw new BadRequestException('El servicio de retoque es parte de la configuración del sistema: no se puede desactivar.');
+    }
     const estado = existing.estado === 'Activo' ? 'Inactivo' : 'Activo';
     return this.prisma.catalogoServicio.update({ where: { id }, data: { estado } });
   }

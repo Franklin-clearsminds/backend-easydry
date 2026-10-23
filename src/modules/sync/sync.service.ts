@@ -24,6 +24,7 @@ import { serializeServicioLavado } from '../../common/utils/servicio-serializer.
 import { tienePermiso, tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
 import { mensajeSinPermiso, permisoRequeridoPorMutacion, SinPermisoMutacionException } from './sync-permisos.js';
 import { esLiderDeAgencia, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { aUnidadDelInsumo } from '../../common/utils/costo-insumo.js';
 import { validarLavadoresDeLaOT } from '../operaciones/lavadores-bahia.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 import {
@@ -327,6 +328,9 @@ export class SyncService {
                 'No se pudo resolver el servicio en el catálogo offline.',
               );
             }
+            if (catalogo.esRetoque && !esLiderDeAgencia(rolDeUsuario(currentUser))) {
+              throw new ForbiddenException('El retoque solo lo pueden registrar los líderes de agencia.');
+            }
             if (esLiderDeAgencia(rolDeUsuario(currentUser)) && catalogo.categoria !== 'GENERAL') {
               throw new BadRequestException('Tu rol solo puede registrar servicios generales.');
             }
@@ -540,6 +544,12 @@ export class SyncService {
             const operadorPrincipalId = String(operadoresOT[0] || mut.data?.operadorId || userId);
             const operadoresAsignadosOT = operadoresOT.length > 0 ? operadoresOT : [operadorPrincipalId];
 
+            // El precio queda atado a la OT al crearla (override de la agencia o precio del catálogo): si luego cambian los
+            // precios, esta OT no se modifica. Igual que en el registro desde la web.
+            const precioCongelado = servicioCatalogoId
+              ? await this.operacionesService.precioEfectivo(servicioCatalogoId, catalogo?.precio, targetAgenciaId)
+              : null;
+
             let nuevoServicio: any;
             try {
               nuevoServicio = await this.prisma.servicioLavado.create({
@@ -558,6 +568,7 @@ export class SyncService {
                   estado: estadoInicial,
                   bahiaId,
                   servicioCatalogoId,
+                  precio: precioCongelado ?? undefined,
                   operadorId: operadorPrincipalId,
                   operadoresAsignados: {
                     create: operadoresAsignadosOT.map((id) => ({ operadorId: id })),
@@ -1286,7 +1297,7 @@ export class SyncService {
       include: {
         recetas: {
           include: {
-            insumo: { select: { id: true, codigoSKU: true, nombre: true } },
+            insumo: { select: { id: true, codigoSKU: true, nombre: true, unidadMedida: { select: { factorBase: true } } } },
             unidadConsumo: {
               select: {
                 id: true,
@@ -1356,9 +1367,11 @@ export class SyncService {
           insumoNombre: r.insumo.nombre,
           productoSKU: r.insumo.codigoSKU,
           cantidad: Number(r.cantidadUsada),
-          cantidadSugerida:
-            Number(r.cantidadUsada) *
-            (Number(r.unidadConsumo?.factorBase) || 1),
+          cantidadSugerida: aUnidadDelInsumo(
+            Number(r.cantidadUsada),
+            r.unidadConsumo?.factorBase,
+            r.insumo?.unidadMedida?.factorBase,
+          ),
           unidad: r.unidadConsumo.codigo,
           esOpcional: r.esOpcional,
         })),

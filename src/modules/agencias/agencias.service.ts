@@ -73,6 +73,7 @@ import {
 
 import { Alcance, SIN_RESULTADOS, puedeSobreAgencia, resolverAlcance, whereAgencias, whereSobreAgencia } from '../../common/permisos/alcance.js';
 import { esLiderDeAgencia, normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { idsServiciosRetoque } from '../../common/utils/retoque-catalogo.js';
 import { tieneAlgunPermiso, tienePermiso } from '../../common/permisos/capacidades.js';
 import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
 import { CacheService } from '../../common/cache/cache.service.js';
@@ -1285,6 +1286,8 @@ export class AgenciasService {
       });
       finalServicioIds = Array.from(new Set([...finalServicioIds, ...especiales.map((s) => s.id)]));
     }
+    // El retoque general no se puede quitar de una agencia: sin él el líder no podría registrar retoques.
+    finalServicioIds = Array.from(new Set([...finalServicioIds, ...(await idsServiciosRetoque(this.prisma, 'GENERAL'))]));
 
     const created = await this.prisma.agencia.create({
       data: {
@@ -1297,6 +1300,7 @@ export class AgenciasService {
         email: dto.email?.trim().toLowerCase(),
         numeroBahias: dto.numeroBahias ?? 2,
         maxLavadoresPorBahia: dto.maxLavadoresPorBahia ?? 1,
+        permiteVariasOtPorBahia: dto.permiteVariasOtPorBahia ?? true,
         clienteId: clienteIdFinal,
         estado: dto.estado ?? 1,
         tieneServiciosEspeciales: dto.tieneServiciosEspeciales ?? false,
@@ -1400,7 +1404,7 @@ export class AgenciasService {
       if ((d.clienteId !== undefined || d.marcaId !== undefined) && !tienePermiso(user, 'agencias.transferir')) {
         throw new ForbiddenException('Cambiar el cliente de una agencia es solo para administradores.');
       }
-      if ((d.numeroBahias !== undefined || d.maxLavadoresPorBahia !== undefined) && !tienePermiso(user, 'agencias.editar')) {
+      if ((d.numeroBahias !== undefined || d.maxLavadoresPorBahia !== undefined || d.permiteVariasOtPorBahia !== undefined) && !tienePermiso(user, 'agencias.editar')) {
         throw new ForbiddenException('Cambiar la cantidad de bahías de una agencia es solo para administradores.');
       }
       if ((d.gerenteId !== undefined || d.liderOperadorId !== undefined) && !tienePermiso(user, 'usuarios.gestionar')) {
@@ -1465,6 +1469,9 @@ export class AgenciasService {
     } else if (dto.tieneServiciosEspeciales !== undefined) {
       finalServicioIds = Array.isArray((agencia as any).servicioIds) ? (agencia as any).servicioIds.map(Number) : [];
     }
+    if (finalServicioIds !== undefined) {
+      finalServicioIds = Array.from(new Set([...finalServicioIds, ...(await idsServiciosRetoque(this.prisma, 'GENERAL'))]));
+    }
 
     let finalServiciosNombres: string[] | undefined = undefined;
     if (finalServicioIds !== undefined) {
@@ -1499,6 +1506,7 @@ export class AgenciasService {
         ...(dto.email !== undefined && { email: dto.email?.trim().toLowerCase() }),
         ...(dto.numeroBahias !== undefined && { numeroBahias: dto.numeroBahias }),
         ...(dto.maxLavadoresPorBahia !== undefined && { maxLavadoresPorBahia: dto.maxLavadoresPorBahia }),
+        ...(dto.permiteVariasOtPorBahia !== undefined && { permiteVariasOtPorBahia: dto.permiteVariasOtPorBahia }),
         ...(clienteIdFinal !== undefined && { clienteId: clienteIdFinal }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
         ...(dto.tieneServiciosEspeciales !== undefined && { tieneServiciosEspeciales: dto.tieneServiciosEspeciales }),
@@ -1850,7 +1858,7 @@ export class AgenciasService {
       take,
       include: {
         agencia: {
-          select: { id: true, codigo: true, nombre: true, region: true, maxLavadoresPorBahia: true },
+          select: { id: true, codigo: true, nombre: true, region: true, maxLavadoresPorBahia: true, permiteVariasOtPorBahia: true },
         },
         operadorActual: {
           select: { id: true, name: true, lastname: true, email: true },
@@ -2085,7 +2093,7 @@ export class AgenciasService {
     const actualizada = await this.prisma.bahia.findUnique({
       where: { id: bahia.id },
       include: {
-        agencia: { select: { id: true, codigo: true, nombre: true, maxLavadoresPorBahia: true } },
+        agencia: { select: { id: true, codigo: true, nombre: true, maxLavadoresPorBahia: true, permiteVariasOtPorBahia: true } },
         operadorActual: { select: { id: true, name: true, lastname: true, email: true } },
         operadores: {
           where: { activo: true },

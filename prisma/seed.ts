@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { motivoPasswordDebil } from '../src/common/utils/password-politica.js';
+import { asegurarServiciosRetoque } from '../src/common/utils/retoque-catalogo.js';
 
 /** Los roles oficiales con los permisos tal como se configuraron en «Roles y permisos» (prisma/data/roles.json). */
 interface RolSeed {
@@ -22,8 +23,8 @@ const ROLES_SEED = JSON.parse(fs.readFileSync(RUTA_ROLES, 'utf8')) as RolSeed[];
 /**
  * Seed idempotente de EasyDry.
  *
- * Por defecto NO borra nada: crea lo que falta (módulos, los 15 roles oficiales con sus permisos, catálogos base de inventario
- * y las cuentas Super Admin y Admin) y deja intacto lo que ya existe. Los roles salen de prisma/data/roles.json: los permisos
+ * Por defecto NO borra nada: crea lo que falta (módulos, los 15 roles oficiales con sus permisos, catálogos base de inventario,
+ * los servicios de retoque y las cuentas Super Admin y Admin) y deja intacto lo que ya existe. Los roles salen de prisma/data/roles.json: los permisos
  * tal como están configurados en «Roles y permisos» (páginas, sub-páginas y acciones). Los correos y contraseñas de las dos cuentas vienen del .env, sin valores por defecto.
  *
  * Variables de entorno:
@@ -220,6 +221,10 @@ async function main() {
   if ((await prisma.tipoMovimientoInventario.count()) === 0) {
     for (const tm of tiposMovData) await prisma.tipoMovimientoInventario.create({ data: tm });
   }
+
+  // 5. Servicios de retoque (general para líderes, especial para pulidores): sin ellos no hay retoque. Se dejan siempre bien configurados.
+  console.log('🔧 Asegurando los servicios de retoque...');
+  await asegurarServiciosRetoque(prisma);
 
   console.log('=====================================================');
   console.log('🚀 Seed ejecutado con éxito');

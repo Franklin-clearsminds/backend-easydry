@@ -210,6 +210,8 @@ model Agencia {
   email                String?
   numeroBahias         Int     @default(0) // Capacidad máxima de bahías
   maxLavadoresPorBahia Int     @default(1) // Máximo de lavadores simultáneos por bahía
+  /// true: se pueden registrar varias OT en proceso en la misma bahía; false: una bahía con un vehículo en proceso no recibe otra OT.
+  permiteVariasOtPorBahia Boolean @default(true)
   estado               Int     @default(1) // 1 activo, 0 inactivo
 
   // Servicios del catálogo que la agencia ofrece (origen de verdad en base)
@@ -434,6 +436,11 @@ model ConsumoServicio {
   insumoSKU     String @default("")
   unidadSimbolo String @default("")
 
+  // Costo congelado al momento del consumo: de UNA unidad base (precio del envase ÷ contenido neto) y de lo consumido
+  // (cantidadUsada × costo unitario). Null en consumos anteriores a este campo: se valoran con el costo actual del insumo.
+  costoUnitarioUSD Decimal? @db.Decimal(14, 6)
+  costoTotalUSD    Decimal? @db.Decimal(12, 4)
+
   createdAt DateTime @default(now())
 
   @@index([servicioId])
@@ -458,6 +465,8 @@ model ConsumoServicioEspecial {
   insumoNombre  String @default("")
   insumoSKU     String @default("")
   unidadSimbolo String @default("")
+  costoUnitarioUSD Decimal? @db.Decimal(14, 6)
+  costoTotalUSD    Decimal? @db.Decimal(12, 4)
 
   createdAt DateTime @default(now())
 

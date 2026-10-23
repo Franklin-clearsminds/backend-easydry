@@ -17,6 +17,7 @@ import { CacheService, huella } from '../../common/cache/cache.service.js';
 import { ServiciosFederados } from '../archivado/servicios-federados.js';
 import { HistoricoService } from '../archivado/historico.service.js';
 import { CALIFICACIONES_INFORME, estrellasDe5s, estrellasDeInforme, promedioEstrellas } from './auditorias-estrellas.js';
+import { costoDeConsumo, costoPorUnidadBase } from '../../common/utils/costo-insumo.js';
 
 /** % máximo de descuento permitido sin autorización: por encima se considera "fuera de rango". */
 const UMBRAL_DESCUENTO_PCT = 15;
@@ -166,9 +167,7 @@ export class AnalyticsService {
    * llevan en unidad base (`contenidoNeto` por envase), así que para valorar una cantidad en base hay que dividir.
    */
   private costoUnidadBase(ins: { costoUnitarioUSD?: unknown; contenidoNeto?: unknown } | null | undefined): number {
-    const costo = Number(ins?.costoUnitarioUSD || 0);
-    const contenido = Number(ins?.contenidoNeto) > 0 ? Number(ins?.contenidoNeto) : 1;
-    return costo / contenido;
+    return costoPorUnidadBase(ins);
   }
 
   /**
@@ -567,7 +566,7 @@ export class AnalyticsService {
           precio: true, marca: true, modelo: true, color: true, horaInicio: true, horaSalida: true,
           catalogo: { select: { nombre: true, categoria: true } },
           bahia: { select: { nombre: true, agencia: { select: { nombre: true, region: true } } } },
-          consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true, contenidoNeto: true } } } },
+          consumos: { select: { cantidadUsada: true, costoTotalUSD: true, insumo: { select: { costoUnitarioUSD: true, contenidoNeto: true } } } },
         },
       }),
       this.prisma.incidenteTecnico.findMany({
@@ -625,7 +624,7 @@ export class AnalyticsService {
       let costoInsumos = 0;
       for (const c of s.consumos || []) {
         unidadesInsumos += Number(c.cantidadUsada || 0);
-        costoInsumos += Number(c.cantidadUsada || 0) * this.costoUnidadBase(c.insumo);
+        costoInsumos += costoDeConsumo(c);
       }
 
       const claveEntidad = esAlcanceAgencia ? (s.bahia?.nombre || 'Sin bahía') : (s.bahia?.agencia?.nombre || 'Sin agencia');
@@ -1119,7 +1118,7 @@ this.federados.count('servicioLavado', {
           id: true, estado: true, horaIngreso: true, horaInicio: true, horaSalida: true, marca: true,
           catalogo: { select: { nombre: true, categoria: true, tiempoEstimadoMin: true } },
           bahia: { select: { id: true, nombre: true, agencia: { select: { nombre: true } } } },
-          consumos: { select: { cantidadUsada: true, insumo: { select: { costoUnitarioUSD: true, contenidoNeto: true } } } },
+          consumos: { select: { cantidadUsada: true, costoTotalUSD: true, insumo: { select: { costoUnitarioUSD: true, contenidoNeto: true } } } },
         },
       }),
       this.federados.count('servicioLavado', { where: servicioWhere }),
@@ -1187,7 +1186,7 @@ this.federados.count('servicioLavado', {
           if (duracionMin <= estimado) slaCumplen++;
         }
       }
-      for (const c of s.consumos || []) costoTotalQuimicosUSD += Number(c.cantidadUsada || 0) * this.costoUnidadBase(c.insumo);
+      for (const c of s.consumos || []) costoTotalQuimicosUSD += costoDeConsumo(c);
       if (s.bahia) {
         const esPorAgencia = isSupervisorView && !dto?.agenciaId;
         const entidadId = esPorAgencia ? (s.bahia.agencia?.nombre || 'Sin agencia') : s.bahia.id;
@@ -1416,7 +1415,7 @@ this.federados.count('servicioLavado', {
     for (const c of consumos) {
       const cant = Number(c.cantidadUsada);
       const costoUnit = Number(c.insumo.costoUnitarioUSD || 0); // precio del envase, tal como está en el catálogo
-      const costoSubtotal = cant * this.costoUnidadBase(c.insumo);
+      const costoSubtotal = costoDeConsumo(c);
       granTotalCostoUSD += costoSubtotal;
       const agenciaKey = c.servicio?.bahia?.agencia?.nombre || 'Agencia General';
       consumoPorAgencia[agenciaKey] = (consumoPorAgencia[agenciaKey] || 0) + cant;
@@ -1444,7 +1443,7 @@ this.federados.count('servicioLavado', {
     const costoPorPeriodo: Record<string, number> = {};
     for (const c of consumos) {
       const periodo = this.clavePeriodo(c.createdAt, agrupacion);
-      costoPorPeriodo[periodo] = (costoPorPeriodo[periodo] || 0) + Number(c.cantidadUsada) * this.costoUnidadBase(c.insumo);
+      costoPorPeriodo[periodo] = (costoPorPeriodo[periodo] || 0) + costoDeConsumo(c);
     }
     const serie = Object.keys(costoPorPeriodo).sort().map((periodo) => ({ periodo, costoUSD: Number(costoPorPeriodo[periodo].toFixed(2)) }));
 

@@ -31,6 +31,7 @@ import { ConsumosArchivo } from './consumos-archivo.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { Alcance, puedeSobreAgencia, resolverAlcance } from '../../common/permisos/alcance.js';
 import { esLiderDeAgencia, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { aUnidadDelInsumo, valorarConsumo } from '../../common/utils/costo-insumo.js';
 
 /** Datos del vehículo y del cliente que corrige «Editar OT» (valen para todos los servicios de la misma OT). */
 const CAMPOS_EDITABLES_OT = ['placa', 'marca', 'modelo', 'color', 'cliente'] as const;
@@ -335,8 +336,8 @@ export class OperacionesService {
               include: {
                 insumo: {
                   select: {
-                    id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true, costoUnitarioUSD: true,
-                    unidadMedida: { select: { simbolo: true } },
+                    id: true, codigoSKU: true, nombre: true, categoria: true, stockMinimoAgencia: true, costoUnitarioUSD: true, contenidoNeto: true,
+                    unidadMedida: { select: { simbolo: true, factorBase: true } },
                   },
                 },
                 unidadConsumo: { select: { codigo: true, simbolo: true, factorBase: true } },
@@ -481,7 +482,7 @@ export class OperacionesService {
     });
     const catalogos = await this.prisma.catalogoServicio.findMany({
       where: { id: { in: ids } },
-      include: { recetas: { include: { insumo: true, unidadConsumo: true } } },
+      include: { recetas: { include: { insumo: { include: { unidadMedida: true } }, unidadConsumo: true } } },
     });
     const faltantesCatalogo = ids.filter((id) => !catalogos.some((c) => c.id === id));
     if (faltantesCatalogo.length > 0) {
@@ -502,7 +503,7 @@ export class OperacionesService {
           if (receta.esOpcional) continue;
           const cantidad = this._convertirAUnidadBase(
             Number(receta.cantidadUsada),
-            receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+            receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null, receta.insumo?.unidadMedida?.factorBase,
           );
           const prev = requerido.get(receta.insumoId);
           requerido.set(receta.insumoId, {
@@ -541,6 +542,22 @@ export class OperacionesService {
       }, operadorId, actor));
     }
     return creados;
+  }
+
+  /**
+   * Precio con el que una OT queda congelada al crearse: el que la agencia tiene fijado para el servicio (override) o, si no hay, el
+   * del catálogo. Lo usan todas las vías que crean una OT (web, API y sincronización de la app) para que el precio quede atado a la OT.
+   */
+  async precioEfectivo(catalogoId: number, precioCatalogo: unknown, agenciaId?: string | null): Promise<number | null> {
+    let precio: number | null = precioCatalogo != null ? Number(precioCatalogo) : null;
+    if (agenciaId) {
+      const override = await this.prisma.precioAgenciaServicio.findUnique({
+        where: { agenciaId_catalogoServicioId: { agenciaId, catalogoServicioId: catalogoId } },
+        select: { precio: true },
+      });
+      if (override) precio = Number(override.precio);
+    }
+    return precio;
   }
 
   async create(createDto: CreateServicioDto, operadorId: string, actor?: any) {
@@ -636,7 +653,7 @@ export class OperacionesService {
         include: {
           recetas: {
             include: {
-              insumo: true,
+              insumo: { include: { unidadMedida: true } },
               unidadConsumo: true,
             },
           },
@@ -652,6 +669,10 @@ export class OperacionesService {
     // El líder (y Backup, que tiene sus mismos permisos) solo registra servicios generales; los especiales los gestiona su coordinación.
     if (esLiderDeAgencia(rolDeUsuario(actor)) && catalogo.categoria !== 'GENERAL') {
       throw new ForbiddenException('Tu rol solo puede registrar servicios generales.');
+    }
+    // El retoque de una OT general solo lo registra un líder de agencia (el del servicio especial, un pulidor).
+    if (actor && catalogo.esRetoque && !esLiderDeAgencia(rolDeUsuario(actor))) {
+      throw new ForbiddenException('El retoque solo lo pueden registrar los líderes de agencia.');
     }
     const resolvedCatalogoId = catalogo.id;
 
@@ -679,18 +700,37 @@ export class OperacionesService {
 
     // Precio efectivo de este servicio para esta agencia (override si lo fijó un admin, si no el precio
     // global del catálogo), congelado en la OT: cambios posteriores al precio no la afectan.
-    let precioResuelto: number | null = catalogo.precio != null ? Number(catalogo.precio) : null;
-    if (agenciaId) {
-      const overridePrecio = await this.prisma.precioAgenciaServicio.findUnique({
-        where: { agenciaId_catalogoServicioId: { agenciaId, catalogoServicioId: resolvedCatalogoId } },
-        select: { precio: true },
-      });
-      if (overridePrecio) precioResuelto = Number(overridePrecio.precio);
-    }
+    const precioResuelto = await this.precioEfectivo(resolvedCatalogoId, catalogo.precio, agenciaId);
 
-    // 4. Estado físico de la bahía: se informa, pero ya no bloquea el registro (decisión de
-    // producto). El estado real en tiempo real lo entrega `bahias/list` / `bahias/opciones`
-    // (campo `ocupada`) para que la pantalla lo muestre antes de crear el servicio.
+    // 4. Estado físico de la bahía. Cada agencia decide (Agencia.permiteVariasOtPorBahia) si admite más de una OT en proceso
+    // en la misma bahía: si no la admite, el registro de una OT nueva en una bahía ocupada se rechaza; si la admite, solo se
+    // informa. El estado real en tiempo real lo entrega `bahias/list` / `bahias/opciones` (campo `ocupada`) para que la
+    // pantalla lo muestre antes de crear el servicio. Agregar servicios a la misma OT o al mismo vehículo nunca es conflicto,
+    // y la sincronización de la app (sin `actor`) no se rechaza aquí: sus datos ya existen en el teléfono.
+    if (actor && createDto.estado === ServiceStatus.EN_PROCESO) {
+      const agenciaBahia = await this.prisma.agencia.findUnique({
+        where: { id: bahia.agenciaId },
+        select: { nombre: true, permiteVariasOtPorBahia: true },
+      });
+      if (agenciaBahia && agenciaBahia.permiteVariasOtPorBahia === false) {
+        const otNueva = createDto.ordenTrabajoOT?.trim().toUpperCase();
+        const otroEnBahia = await this.prisma.servicioLavado.findFirst({
+          where: {
+            bahiaId: resolvedBahiaId,
+            estado: ServiceStatus.EN_PROCESO,
+            deletedAt: null,
+            placa: { not: createDto.placa.toUpperCase().trim() },
+            ...(otNueva ? { NOT: { ordenTrabajoOT: { equals: otNueva, mode: 'insensitive' as const } } } : {}),
+          },
+          select: { placa: true, ordenTrabajoOT: true },
+        });
+        if (otroEnBahia) {
+          throw new BadRequestException(
+            `La bahía "${bahia.nombre}" ya tiene en proceso al vehículo ${otroEnBahia.placa} (OT ${otroEnBahia.ordenTrabajoOT || '—'}). La agencia "${agenciaBahia.nombre}" no permite más de una OT por bahía: elige otra bahía o finaliza esa OT.`,
+          );
+        }
+      }
+    }
     let advertenciaBahiaOcupada: string | undefined;
     if (createDto.estado === ServiceStatus.EN_PROCESO) {
       const activoEnBahia = await this.prisma.servicioLavado.findFirst({
@@ -715,7 +755,7 @@ export class OperacionesService {
 
         const cantidadBaseNecesaria = this._convertirAUnidadBase(
           Number(receta.cantidadUsada),
-          receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+          receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null, receta.insumo?.unidadMedida?.factorBase,
         );
 
         const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
@@ -845,8 +885,8 @@ export class OperacionesService {
               include: {
                 insumo: {
                   select: {
-                    id: true, codigoSKU: true, nombre: true, costoUnitarioUSD: true,
-                    unidadMedida: { select: { simbolo: true } },
+                    id: true, codigoSKU: true, nombre: true, costoUnitarioUSD: true, contenidoNeto: true,
+                    unidadMedida: { select: { simbolo: true, factorBase: true } },
                   },
                 },
                 unidadConsumo: { select: { id: true, codigo: true, simbolo: true, factorBase: true } },
@@ -923,7 +963,7 @@ export class OperacionesService {
 
     const catalogo = await this.prisma.catalogoServicio.findUnique({
       where: { id: nuevoId },
-      include: { recetas: { include: { insumo: true, unidadConsumo: true } } },
+      include: { recetas: { include: { insumo: { include: { unidadMedida: true } }, unidadConsumo: true } } },
     });
     if (!catalogo) throw new BadRequestException('El servicio indicado no existe en el catálogo.');
     if (catalogo.estado === 'Inactivo') throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar.`);
@@ -943,7 +983,7 @@ export class OperacionesService {
     const faltantes: string[] = [];
     for (const receta of catalogo.recetas) {
       if (receta.esOpcional) continue;
-      const necesario = this._convertirAUnidadBase(Number(receta.cantidadUsada), receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null);
+      const necesario = this._convertirAUnidadBase(Number(receta.cantidadUsada), receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null, receta.insumo?.unidadMedida?.factorBase);
       const stock = await this._getStockAgencia(receta.insumoId, agencia.id);
       const disponible = Number(stock?.cantidadActual ?? 0) + (devuelto.get(receta.insumoId) ?? 0);
       if (disponible < necesario) {
@@ -1339,9 +1379,8 @@ export class OperacionesService {
    * Usa factorBase de la unidad de consumo en la receta.
    * Para UNITARIO (U, PAQ): no hay conversión, la cantidad se usa directo.
    */
-  private _convertirAUnidadBase(cantidadUsada: number, factorBase: number | null): number {
-    if (!factorBase || factorBase === 1) return cantidadUsada;
-    return cantidadUsada * factorBase;
+  private _convertirAUnidadBase(cantidadUsada: number, factorBase: number | null, factorUnidadInsumo?: unknown): number {
+    return aUnidadDelInsumo(cantidadUsada, factorBase, factorUnidadInsumo);
   }
 
   /**
@@ -1379,7 +1418,7 @@ export class OperacionesService {
 
         const cantidadBaseNecesaria = this._convertirAUnidadBase(
           Number(receta.cantidadUsada),
-          receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+          receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null, receta.insumo?.unidadMedida?.factorBase,
         );
 
         const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
@@ -1404,7 +1443,7 @@ export class OperacionesService {
     for (const receta of recetas) {
       const cantidadEnBase = this._convertirAUnidadBase(
         Number(receta.cantidadUsada),
-        receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+        receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null, receta.insumo?.unidadMedida?.factorBase,
       );
 
       let nuevoStockCalculado = 0;
@@ -1474,6 +1513,8 @@ export class OperacionesService {
             insumoNombre: receta.insumo?.nombre || '',
             insumoSKU: receta.insumo?.codigoSKU || '',
             unidadSimbolo: receta.insumo?.unidadMedida?.simbolo || receta.unidadConsumo?.simbolo || '',
+            // Costo congelado: precio del envase ÷ contenido por la cantidad consumida, a los precios de este momento.
+            ...valorarConsumo(receta.insumo, cantidadADescontar),
           },
         });
       });
@@ -1574,7 +1615,7 @@ export class OperacionesService {
     for (const receta of recetas) {
       const cantidadEnBase = this._convertirAUnidadBase(
         Number(receta.cantidadUsada),
-        receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null,
+        receta.unidadConsumo?.factorBase ? Number(receta.unidadConsumo.factorBase) : null, receta.insumo?.unidadMedida?.factorBase,
       );
       const stock = await this._getStockAgencia(receta.insumoId, agenciaId);
       const disponible = Number(stock?.cantidadActual ?? 0);
@@ -1995,7 +2036,7 @@ export class OperacionesService {
                 codigoSKU: true,
                 nombre: true,
                 categoria: true,
-                unidadMedida: { select: { codigo: true, simbolo: true } },
+                unidadMedida: { select: { codigo: true, simbolo: true, factorBase: true } },
               },
             },
             unidadConsumo: { select: { id: true, codigo: true, nombre: true, simbolo: true, factorBase: true } },

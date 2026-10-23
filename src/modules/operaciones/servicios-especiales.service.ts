@@ -37,6 +37,7 @@ import {
 } from '../../common/utils/data-grid.helpers.js';
 import { HistoricoService } from '../archivado/historico.service.js';
 import { ServiciosEspecialesArchivo } from './servicios-especiales-archivo.js';
+import { aUnidadDelInsumo, valorarConsumo } from '../../common/utils/costo-insumo.js';
 
 /** Columnas por las que se puede ordenar la lista de servicios especiales (nombre público → campo de la base). */
 const ORDEN_ESPECIALES = columnasSimples({
@@ -529,6 +530,9 @@ export class ServiciosEspecialesService {
     // Retoque: se liga a una OT especial ya completada (misma OT, vehículo, agencia y pulidor) con código `SE-…-R1`.
     let retoque: Awaited<ReturnType<typeof prepararRetoqueEspecial>> | null = null;
     if (dto.retoqueDeCodigoSE?.trim()) {
+      if (currentUser && rolDeUsuario(currentUser) !== 'PULIDOR') {
+        throw new ForbiddenException('El retoque de un servicio especial solo lo pueden registrar los pulidores.');
+      }
       retoque = await prepararRetoqueEspecial(this.prisma, {
         codigoBase: dto.retoqueDeCodigoSE,
         servicioCatalogoId: dto.servicioCatalogoId,
@@ -1145,7 +1149,7 @@ export class ServiciosEspecialesService {
         include: {
           recetas: {
             include: {
-              insumo: { select: { id: true, nombre: true, codigoSKU: true } },
+              insumo: { select: { id: true, nombre: true, codigoSKU: true, unidadMedida: { select: { factorBase: true } } } },
               unidadConsumo: { select: { simbolo: true, factorBase: true } },
             },
           },
@@ -1153,10 +1157,11 @@ export class ServiciosEspecialesService {
       });
       if (cat?.recetas?.length) {
         items = cat.recetas.map((r) => {
-          const factor = r.unidadConsumo?.factorBase
-            ? Number(r.unidadConsumo.factorBase)
-            : 1;
-          const cantidadBase = Number(r.cantidadUsada) * (factor || 1);
+          const cantidadBase = aUnidadDelInsumo(
+            Number(r.cantidadUsada),
+            r.unidadConsumo?.factorBase,
+            r.insumo?.unidadMedida?.factorBase,
+          );
           return {
             productoId: r.insumoId,
             insumoId: r.insumoId,
@@ -2085,6 +2090,8 @@ export class ServiciosEspecialesService {
               unidadSimbolo:
                 insumoDb.unidadMedida?.simbolo ||
                 String(ins.unidadMedida || ''),
+              // Costo congelado: precio del envase ÷ contenido por la cantidad consumida, a los precios de este momento.
+              ...valorarConsumo(insumoDb, cantidadDesc),
             },
           });
 
