@@ -1315,10 +1315,35 @@ export class ServiciosEspecialesService {
 
   async iniciar(dto: IniciarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
-    if (
-      item.estado.toUpperCase() === 'COMPLETADO' ||
-      item.estado.toUpperCase() === 'FINALIZADO'
-    ) {
+    const estadoActual = String(item.estado || '').toUpperCase();
+    const videoInicialRemoto = this._esUrlRemota(dto.videoInicialUrl)
+      ? dto.videoInicialUrl
+      : undefined;
+
+    // El video de inicio se sube en segundo plano y su confirmación puede llegar cuando el servicio ya avanzó
+    // (pausado o completado por la cola de sincronización). Entonces solo se adjunta el video: ni falla para
+    // siempre ni devuelve el servicio a "En Proceso".
+    if (['EN PROCESO', 'PAUSADO', 'COMPLETADO', 'FINALIZADO'].includes(estadoActual) && videoInicialRemoto) {
+      if (item.videoInicialUrl === videoInicialRemoto) return this._formatItem(item);
+      if (estadoActual !== 'EN PROCESO') {
+        const adjuntado = await this.prisma.servicioEspecial.update({
+          where: { id: item.id },
+          data: { videoInicialUrl: videoInicialRemoto, version: item.version + 1 },
+          include: {
+            agencia: true,
+            operador: { select: { id: true, name: true, lastname: true, email: true } },
+            operadoresAsignados: {
+              orderBy: { orden: 'asc' },
+              include: { operador: { select: { id: true, name: true, lastname: true } } },
+            },
+            region: true,
+          },
+        });
+        return this._formatItem(adjuntado);
+      }
+    }
+
+    if (estadoActual === 'COMPLETADO' || estadoActual === 'FINALIZADO') {
       throw new BadRequestException(
         'El servicio especial ya ha sido finalizado.',
       );
@@ -1777,6 +1802,11 @@ export class ServiciosEspecialesService {
 
   async completar(dto: CompletarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
+    // La app puede mandar la ruta local del video (file://) al cerrar sin haberlo subido aún: no sirve a nadie
+    // más y taparía el estado real. El enlace S3 llega después, al confirmarse la subida.
+    const videoFinalRemoto = this._esUrlRemota(dto.videoFinalUrl)
+      ? dto.videoFinalUrl
+      : undefined;
 
     const rol = rolDeUsuario(currentUser);
     // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
@@ -1804,8 +1834,8 @@ export class ServiciosEspecialesService {
         );
       }
       const data: any = { version: item.version + 1 };
-      if (dto.videoFinalUrl && dto.videoFinalUrl !== item.videoFinalUrl)
-        data.videoFinalUrl = dto.videoFinalUrl;
+      if (videoFinalRemoto && videoFinalRemoto !== item.videoFinalUrl)
+        data.videoFinalUrl = videoFinalRemoto;
       if (dto.observaciones) {
         data.observaciones = dto.observaciones;
         data.notasOperador = dto.observaciones;
@@ -1874,8 +1904,8 @@ export class ServiciosEspecialesService {
       version: item.version + 1,
     };
 
-    if (dto.videoFinalUrl) {
-      data.videoFinalUrl = dto.videoFinalUrl;
+    if (videoFinalRemoto) {
+      data.videoFinalUrl = videoFinalRemoto;
     }
     if (dto.evidencias) {
       data.evidencias = dto.evidencias;
