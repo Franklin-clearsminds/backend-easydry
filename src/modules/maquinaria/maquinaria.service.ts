@@ -1087,6 +1087,17 @@ export class MaquinariaService {
         { tipo: 'INCIDENCIA_ASIGNADA', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
       );
     }
+    // Quien reportó la falla (líder o pulidor) se entera de que ya tiene responsable.
+    if (inc.reportadoPorId && inc.reportadoPorId !== actor.id && inc.reportadoPorId !== tecnicoId) {
+      const responsable = this.shortName((updated as { tecnicoAsignado?: { name?: string | null; lastname?: string | null } | null }).tecnicoAsignado);
+      void this.notifications.notificarUsuarios(
+        [inc.reportadoPorId],
+        `Tu incidencia fue asignada: ${maquina.codigo}`,
+        responsable ? `${inc.titulo} · la atiende ${responsable}` : inc.titulo,
+        { type: 'INCIDENTE_ASIGNADO', incidenteId: inc.id, maquinariaId: maquina.id },
+        { tipo: 'INCIDENCIA_ASIGNADA', entidadTipo: 'MAQUINARIA', entidadId: maquina.id },
+      );
+    }
     return { success: true, data: this.ubicacionIncidente(updated) };
   }
 
