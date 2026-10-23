@@ -7,16 +7,20 @@ import {
   IdInformeDto,
   ListInformesDto,
   ListPlanesDto,
-  RevisarInformeDto,
   SeguimientoPlanDto,
 } from './dto/informes.dto.js';
+import { AprobarInformeDto, FirmarInformeDto, ValidarSelloDto } from './dto/sellos.dto.js';
+import { SellosService } from './sellos.service.js';
 import { InformesInspeccionService } from './informes.service.js';
 
 @ApiTags('Auditorías — Informes de inspección (100% POST)')
 @ApiBearerAuth()
 @Controller('informes-inspeccion')
 export class InformesInspeccionController {
-  constructor(private readonly informes: InformesInspeccionService) {}
+  constructor(
+    private readonly informes: InformesInspeccionService,
+    private readonly sellos: SellosService,
+  ) {}
 
   @Permiso('informes.ver')
   @Post('list')
@@ -82,36 +86,44 @@ export class InformesInspeccionController {
     return this.informes.update(dto, user);
   }
 
-  @Permiso('informes.crear')
-  @Post('enviar')
+  @Permiso('informes.firmar')
+  @Post('sellos/opciones')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Enviar un borrador a revisión' })
-  enviar(@Body() dto: IdInformeDto, @CurrentUser() user: any) {
-    return this.informes.enviar(dto.id, user);
+  @ApiOperation({ summary: 'Jefes de taller activos para elegir al calificar (solo nombre, sin logo ni contraseña)' })
+  opcionesSellos() {
+    return this.sellos.opciones();
+  }
+
+  @Permiso('informes.firmar')
+  @Post('sello/validar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Validar con su contraseña al jefe de taller del informe (habilita la sección de firmas)' })
+  validarSello(@Body() dto: ValidarSelloDto, @CurrentUser() user: any) {
+    return this.informes.validarSello(dto, user);
   }
 
   @Permiso('informes.crear')
-  @Post('reabrir')
+  @Post('firmar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reabrir un informe rechazado para corregirlo' })
-  reabrir(@Body() dto: IdInformeDto, @CurrentUser() user: any) {
-    return this.informes.reabrir(dto.id, user);
+  @ApiOperation({ summary: 'Registrar una de las cuatro firmas capturadas en pantalla' })
+  firmar(@Body() dto: FirmarInformeDto, @CurrentUser() user: any) {
+    return this.informes.firmar(dto, user);
   }
 
-  @Permiso('informes.revisar')
-  @Post('revisar')
+  @Permiso('informes.aprobar')
+  @Post('aprobar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Aprobar el informe (queda aprobado) o rechazarlo con motivo' })
-  revisar(@Body() dto: RevisarInformeDto, @CurrentUser() user: any) {
-    return this.informes.revisar(dto, user);
+  @ApiOperation({ summary: 'Aprobar un informe guardado firmando la recepción (solo Admin y Super Admin)' })
+  aprobar(@Body() dto: AprobarInformeDto, @CurrentUser() user: any) {
+    return this.informes.aprobar(dto, user);
   }
 
-  @Permiso('informes.revisar')
-  @Post('cerrar')
+  @Permiso('informes.crear')
+  @Post('guardar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cerrar un informe aprobado' })
-  cerrar(@Body() dto: IdInformeDto, @CurrentUser() user: any) {
-    return this.informes.cerrar(dto.id, user);
+  @ApiOperation({ summary: 'Guardar el informe de forma definitiva (ya no se puede modificar)' })
+  guardar(@Body() dto: IdInformeDto, @CurrentUser() user: any) {
+    return this.informes.guardar(dto.id, user);
   }
 
   @Permiso('informes.eliminar')

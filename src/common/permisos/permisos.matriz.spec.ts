@@ -30,9 +30,9 @@ describe('catálogo de permisos', () => {
       expect(p.codigo).toMatch(/^[a-z]+(\.[a-z]+)+$/);
   });
 
-  it('los 15 roles oficiales existen, sin repetir, con ámbito válido y solo permisos del catálogo', () => {
-    expect(ROLES_BASE).toHaveLength(15);
-    expect(new Set(ROLES_BASE.map((r) => r.namerol)).size).toBe(15);
+  it('los 16 roles oficiales existen, sin repetir, con ámbito válido y solo permisos del catálogo', () => {
+    expect(ROLES_BASE).toHaveLength(16);
+    expect(new Set(ROLES_BASE.map((r) => r.namerol)).size).toBe(16);
     for (const r of ROLES_BASE) {
       expect(AMBITOS).toContain(r.ambito);
       for (const c of r.capacidades) expect(esCodigoPermiso(c), `${r.namerol}: ${c} fuera del catálogo`).toBe(true);
@@ -65,8 +65,8 @@ describe('matriz acordada de permisos por rol', () => {
     expect(permisos.sort()).toEqual(['informes.ver', 'inspecciones.ver']);
   });
 
-  it('auditar (hacer informes de inspección y auditorías 5S) lo pueden todos los roles menos líder, Backup, lavador y pulidor', () => {
-    const noAudita = ['BACKUP', 'LAVADOR', 'LIDER', 'PULIDOR'];
+  it('auditar (hacer informes de inspección y auditorías 5S) lo pueden todos los roles menos líder, Backup, auxiliar, lavador y pulidor', () => {
+    const noAudita = ['AUXILIAR', 'BACKUP', 'LAVADOR', 'LIDER', 'PULIDOR'];
     const auditan = ROLES_BASE.map((r) => r.namerol).filter((n) => !noAudita.includes(n)).sort();
     expect(rolesCon('informes.crear')).toEqual(auditan);
     expect(rolesCon('inspecciones.crear')).toEqual(auditan);
@@ -80,9 +80,17 @@ describe('matriz acordada de permisos por rol', () => {
     }
   });
 
-  it('revisar, verificar y eliminar borradores de auditoría: administradores y supervisor', () => {
-    expect(rolesCon('informes.revisar')).toEqual(['ADMIN', 'SUPERVISOR', 'SUPER_ADMIN']);
+  it('administrar los borradores de otros y verificar acciones de auditoría: administradores y supervisor', () => {
+    expect(rolesCon('informes.administrar')).toEqual(['ADMIN', 'SUPERVISOR', 'SUPER_ADMIN']);
     expect(rolesCon('inspecciones.verificar')).toEqual(['ADMIN', 'SUPERVISOR', 'SUPER_ADMIN']);
+  });
+
+  it('aprobar los informes y firmar la recepción es solo de Admin y Super Admin', () => {
+    expect(rolesCon('informes.aprobar')).toEqual(['ADMIN', 'SUPER_ADMIN']);
+  });
+
+  it('configurar los sellos de los jefes de taller es solo de Admin y Super Admin', () => {
+    expect(rolesCon('sellos.gestionar')).toEqual(['ADMIN', 'SUPER_ADMIN']);
   });
 
   it('el Backup hereda las capacidades del líder y el supervisor gestiona solo Backups', () => {
@@ -109,6 +117,7 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('servicios.anular')).toEqual([
       'ADMIN',
       'APROBADOR',
+      'AUXILIAR',
       'BACKUP',
       'LIDER',
       'SUPER_ADMIN',
@@ -129,12 +138,14 @@ describe('matriz acordada de permisos por rol', () => {
   it('crear y editar OT generales: líder y administradores', () => {
     expect(rolesCon('servicios.crear')).toEqual([
       'ADMIN',
+      'AUXILIAR',
       'BACKUP',
       'LIDER',
       'SUPER_ADMIN',
     ]);
     expect(rolesCon('servicios.editar')).toEqual([
       'ADMIN',
+      'AUXILIAR',
       'BACKUP',
       'LIDER',
       'SUPER_ADMIN',
@@ -192,6 +203,7 @@ describe('matriz acordada de permisos por rol', () => {
   it('alertas de stock: crean líder, pulidor y administradores; atienden bodega y administradores', () => {
     expect(rolesCon('alertas.crear')).toEqual([
       'ADMIN',
+      'AUXILIAR',
       'BACKUP',
       'LIDER',
       'PULIDOR',
@@ -209,6 +221,7 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('despachos.crear')).toEqual([
       'ADMIN',
       'ASISTENTE_BODEGA',
+      'AUXILIAR',
       'BACKUP',
       'COORD_BODEGA',
       'LIDER',
@@ -249,6 +262,7 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('maquinaria.evidencias')).toContain('LIDER');
     expect(rolesCon('limpiezas.evidencias')).toEqual([
       'ADMIN',
+      'AUXILIAR',
       'BACKUP',
       'LIDER',
       'PULIDOR',
@@ -409,6 +423,7 @@ describe('matriz acordada de permisos por rol', () => {
         'APROBADOR',
         'LIDER',
         'BACKUP',
+        'AUXILIAR',
         'LAVADOR',
         'PULIDOR',
         'COORD_MANTENIMIENTO',

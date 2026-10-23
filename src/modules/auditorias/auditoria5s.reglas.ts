@@ -19,10 +19,11 @@ export const ETIQUETA_AREA: Record<string, string> = {
   ADMINISTRACION: 'Administración',
 };
 
-export const ESTADOS_AUDITORIA_5S = ['BORRADOR', 'EN_PROCESO', 'FINALIZADA', 'CERRADA'] as const;
+/** Una auditoría es borrador mientras se hace y queda guardada, sin poder modificarse, cuando se guarda. */
+export const ESTADOS_AUDITORIA_5S = ['BORRADOR', 'GUARDADA'] as const;
 export type EstadoAuditoria5s = (typeof ESTADOS_AUDITORIA_5S)[number];
-/** Quien no puede auditar solo ve el resultado: las auditorías ya finalizadas o cerradas. */
-export const ESTADOS_RESULTADO_5S: readonly EstadoAuditoria5s[] = ['FINALIZADA', 'CERRADA'];
+/** Quien no puede auditar solo ve el resultado: las auditorías ya guardadas. */
+export const ESTADOS_RESULTADO_5S: readonly EstadoAuditoria5s[] = ['GUARDADA'];
 
 /** El responsable de una acción es siempre la agencia auditada y su fecha es la de creación: no hay estado «vencida». */
 export const ESTADOS_ACCION = ['PENDIENTE', 'EN_PROCESO', 'EN_VERIFICACION', 'CERRADA'] as const;

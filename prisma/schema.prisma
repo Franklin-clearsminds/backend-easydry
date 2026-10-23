@@ -1695,6 +1695,19 @@ model InformeInspeccion {
   enviadoEn               DateTime?
   aprobadoEn              DateTime?
   cerradoEn               DateTime?
+  /// Quién aprobó el informe ya guardado: un Admin o Super Admin, que firma la recepción. (`aprobadoEn` es cuándo.)
+  aprobadoPorId           String?
+  aprobadoPorNombre       String?
+  /// El jefe de taller estuvo en la visita. Si no, el informe se firma y se guarda sin su contraseña ni su firma.
+  jefeTallerPresente      Boolean   @default(true)
+  /// Cuándo se guardó de forma definitiva (después ya no se puede modificar).
+  guardadoEn              DateTime?
+  /// Sello del jefe de taller que se validó con su contraseña, con su nombre y logo tal como estaban al validarlo.
+  selloId                 String?
+  sello                   SelloJefeTaller? @relation(fields: [selloId], references: [id], onDelete: SetNull)
+  selloNombre             String?
+  selloLogo               String?
+  selloValidadoEn         DateTime?
   deletedAt               DateTime?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
@@ -1711,6 +1724,29 @@ model InformeInspeccion {
   @@index([estado])
   @@index([fecha])
   @@index([deletedAt])
+  @@index([selloId])
+}
+
+/// Sello de un jefe de taller: su nombre, el logo que sale como marca de agua bajo su firma y una contraseña que se pide
+/// al calificar un informe. Lo configuran solo Admin y Super Admin.
+model SelloJefeTaller {
+  id               String    @id @default(uuid())
+  nombre           String
+  apellido         String
+  /// Imagen del logo como data URL (PNG/JPG/WEBP pequeño).
+  logo             String?
+  passwordHash     String
+  estado           Int       @default(1)
+  intentosFallidos Int       @default(0)
+  bloqueadoHasta   DateTime?
+  creadoPorId      String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  informes InformeInspeccion[]
+
+  @@index([estado])
+  @@map("sellos_jefe_taller")
 }
 
 model InformeNovedad {
@@ -1792,6 +1828,10 @@ model InformeFirma {
   /// Usuario que registró la firma (sale del token, nunca del cliente)
   registradoPorId     String?
   registradoPorNombre String?
+  /// Una firma vale para el contenido tal como estaba al firmar: si el contenido cambia deja de ser vigente y hay que repetirla.
+  vigente             Boolean           @default(true)
+  /// Huella del contenido del informe en el momento de firmar.
+  contenidoHash       String?
 
   @@unique([informeId, tipo])
 }

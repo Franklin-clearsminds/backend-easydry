@@ -76,7 +76,7 @@ describe('MaintenanceCronService', () => {
         });
         await service.recordatorioLimpiezaDelDia();
         expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-          where: expect.objectContaining({ agenciaId: 'ag-1', role: { namerol: { in: ['LIDER', 'BACKUP'] } } }),
+          where: expect.objectContaining({ agenciaId: 'ag-1', role: { namerol: { in: ['LIDER', 'BACKUP', 'AUXILIAR'] } } }),
         }));
         expect(notifications.notificarUsuarios).toHaveBeenCalledWith(['lider-1'], expect.any(String), expect.any(String), expect.any(Object), expect.any(Object));
       } finally {

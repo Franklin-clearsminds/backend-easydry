@@ -304,15 +304,21 @@ export const PAGINAS: readonly PaginaDef[] = [
     accion('informes.crear', 'Crear y editar informes', ['informes.crear']),
     accion('informes.firmar', 'Registrar observaciones y calificación', ['informes.firmar']),
     accion('informes.seguimiento', 'Dar seguimiento a los planes de acción', ['informes.seguimiento']),
-    accion('informes.revisar', 'Revisar, aprobar, rechazar y cerrar', ['informes.revisar']),
+    accion('informes.administrar', 'Editar y eliminar informes de otros', ['informes.administrar']),
+    accion('informes.aprobar', 'Aprobar informes y firmar la recepción', ['informes.aprobar']),
     accion('informes.eliminar', 'Eliminar borradores', ['informes.eliminar']),
   ]),
 
   pagina('inspecciones', 'Auditorías 5S', '/auditorias-5s', 'auditorias-5s', ['inspecciones.ver'], [], [
     accion('inspecciones.crear', 'Hacer auditorías 5S', ['inspecciones.crear']),
     accion('inspecciones.acciones', 'Dar seguimiento a las acciones correctivas', ['inspecciones.acciones']),
-    accion('inspecciones.verificar', 'Verificar acciones y cerrar auditorías', ['inspecciones.verificar']),
+    accion('inspecciones.verificar', 'Verificar acciones correctivas', ['inspecciones.verificar']),
     accion('inspecciones.eliminar', 'Eliminar borradores', ['inspecciones.eliminar']),
+  ]),
+
+  // Configuración de los sellos de los jefes de taller (marca de agua y contraseña de la firma). Solo Admin y Super Admin.
+  pagina('sellos', 'Configuración de Sellos', '/configuracion-sellos', 'configuracion/sellos', [], [], [
+    accion('sellos.gestionar', 'Crear y editar sellos de jefes de taller', ['sellos.gestionar']),
   ]),
 
   pagina('usuarios', 'Usuarios y Roles', '/usuarios', 'usuarios', [], [

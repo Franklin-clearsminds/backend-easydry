@@ -198,7 +198,7 @@ export class ReportesService {
       verInsumos ? this.prisma.insumo.findMany({ where: { estado: 1 }, select: { id: true, codigoSKU: true, nombre: true }, orderBy: { nombre: 'asc' } }) : [],
       verServicios && ids.length
         ? this.prisma.user.findMany({
-            where: { agenciaId: { in: ids }, role: { namerol: { in: ['LAVADOR', 'LIDER', 'BACKUP'] } } },
+            where: { agenciaId: { in: ids }, role: { namerol: { in: ['LAVADOR', 'LIDER', 'BACKUP', 'AUXILIAR'] } } },
             select: { id: true, name: true, lastname: true, agenciaId: true },
             orderBy: { name: 'asc' },
           })
@@ -458,7 +458,7 @@ export class ReportesService {
 
   private async lavadoresListado(ctx: Ctx): Promise<Bruta[]> {
     const usuarios = await this.prisma.user.findMany({
-      where: { agenciaId: { in: ctx.ids }, role: { namerol: { in: ['LAVADOR', 'LIDER', 'BACKUP'] } } },
+      where: { agenciaId: { in: ctx.ids }, role: { namerol: { in: ['LAVADOR', 'LIDER', 'BACKUP', 'AUXILIAR'] } } },
       select: { id: true, name: true, lastname: true, estado: true, agenciaId: true, role: { select: { namerol: true } } },
       orderBy: [{ name: 'asc' }, { lastname: 'asc' }],
     });

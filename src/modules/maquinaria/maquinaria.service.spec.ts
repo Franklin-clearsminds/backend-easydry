@@ -356,7 +356,7 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       await service.setActiva({ maquinariaId: 'm1', activa: false, motivo: 'Irreparable' } as never, admin);
 
       expect(prisma.user.findMany).toHaveBeenCalledWith({
-        where: { estado: 1, agenciaId: 'ag-1', role: { namerol: { in: ['LIDER', 'BACKUP'] } } },
+        where: { estado: 1, agenciaId: 'ag-1', role: { namerol: { in: ['LIDER', 'BACKUP', 'AUXILIAR'] } } },
         select: { id: true },
       });
       expect(notifications.resolverDestinatariosPorRol).toHaveBeenCalledWith({

@@ -18,10 +18,11 @@ describe('roles - sin alias, BACKUP es un rol propio', () => {
     expect(normalizarRol(undefined)).toBe('');
   });
 
-  it('esLiderDeAgencia incluye a LIDER y a BACKUP, y a nadie más', () => {
-    expect(ROLES_LIDER_AGENCIA).toEqual(['LIDER', 'BACKUP']);
+  it('esLiderDeAgencia incluye a LIDER, BACKUP y AUXILIAR, y a nadie más', () => {
+    expect(ROLES_LIDER_AGENCIA).toEqual(['LIDER', 'BACKUP', 'AUXILIAR']);
     expect(esLiderDeAgencia('LIDER')).toBe(true);
     expect(esLiderDeAgencia('BACKUP')).toBe(true);
+    expect(esLiderDeAgencia('AUXILIAR')).toBe(true);
     for (const otro of ['APROBADOR', 'SUPERVISOR', 'ADMIN', 'LAVADOR', 'PULIDOR', '']) {
       expect(esLiderDeAgencia(otro)).toBe(false);
     }

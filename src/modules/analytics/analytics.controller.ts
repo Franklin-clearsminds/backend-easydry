@@ -5,6 +5,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import {
   DashboardAnalyticsDto,
   DashboardDedicadoDto,
+  EstrellasAgenciaDto,
   ConsumoQuimicosAnalyticsDto,
   RankingLavadoresDto,
 } from './dto/analytics.dto.js';
@@ -88,6 +89,24 @@ export class AnalyticsController {
   @ApiResponse({ status: 200, description: 'KPIs reales de bodega e inventario' })
   async getDashboardBodega(@Body() dto: DashboardDedicadoDto, @CurrentUser() user: any) {
     return this.analyticsService.getDashboardBodega(dto, user);
+  }
+
+  @Permiso('informes.ver', 'inspecciones.ver')
+  @Post('dashboard-auditorias')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Dashboard de auditorías: informes de inspección y auditorías 5S puntuados en estrellas' })
+  @ApiResponse({ status: 200, description: 'Estrellas, distribución, evolución mensual y ranking de agencias' })
+  async getDashboardAuditorias(@Body() dto: DashboardDedicadoDto, @CurrentUser() user: any) {
+    return this.analyticsService.getDashboardAuditorias(dto, user);
+  }
+
+  @Permiso('informes.ver', 'inspecciones.ver')
+  @Post('estrellas-agencia')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Estrellas de una agencia: última auditoría 5S y último informe de inspección' })
+  @ApiResponse({ status: 200, description: 'Estrellas de la agencia del usuario (o de la pedida)' })
+  async getEstrellasAgencia(@Body() dto: EstrellasAgenciaDto, @CurrentUser() user: any) {
+    return this.analyticsService.getEstrellasAgencia(dto, user);
   }
 
   @Permiso('especiales.ver')

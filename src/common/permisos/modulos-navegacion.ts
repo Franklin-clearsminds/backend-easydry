@@ -27,6 +27,7 @@ export const PERMISOS_POR_MODULO: Readonly<Record<string, readonly CodigoPermiso
   reportes: ['reportes.ver'],
   'informes-inspeccion': ['informes.ver'],
   'auditorias-5s': ['inspecciones.ver'],
+  'configuracion/sellos': ['sellos.gestionar'],
   usuarios: ['usuarios.gestionar', 'backup.gestionar', 'roles.ver', 'roles.gestionar'],
   perfil: null,
 };

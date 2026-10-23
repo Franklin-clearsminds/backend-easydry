@@ -77,25 +77,17 @@ export class Auditoria5sController {
   }
 
   @Permiso('inspecciones.crear')
-  @Post('finalizar')
+  @Post('guardar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Finalizar: exige los 20 criterios, fija el resultado y el semáforo y abre las acciones correctivas' })
-  finalizar(@Body() dto: IdAuditoria5sDto, @CurrentUser() user: any) {
-    return this.auditorias.finalizar(dto.id, user);
-  }
-
-  @Permiso('inspecciones.verificar')
-  @Post('cerrar')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cerrar una auditoría finalizada (sin acciones abiertas)' })
-  cerrar(@Body() dto: IdAuditoria5sDto, @CurrentUser() user: any) {
-    return this.auditorias.cerrar(dto.id, user);
+  @ApiOperation({ summary: 'Guardar de forma definitiva: exige los 20 criterios, fija el resultado y el semáforo y abre las acciones correctivas' })
+  guardar(@Body() dto: IdAuditoria5sDto, @CurrentUser() user: any) {
+    return this.auditorias.guardar(dto.id, user);
   }
 
   @Permiso('inspecciones.eliminar')
   @Post('delete')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Eliminar una auditoría sin finalizar (queda registro)' })
+  @ApiOperation({ summary: 'Eliminar una auditoría sin guardar (queda registro)' })
   eliminar(@Body() dto: IdAuditoria5sDto, @CurrentUser() user: any) {
     return this.auditorias.eliminar(dto.id, user);
   }

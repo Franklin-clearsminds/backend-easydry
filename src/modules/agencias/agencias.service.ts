@@ -332,6 +332,45 @@ export class AgenciasService {
     }
   }
 
+  /** Cada agencia tiene a lo sumo un auxiliar del líder activo (un lavador de bahía que opera con las capacidades del líder). */
+  private async assertAgenciaSinOtroAuxiliar(agenciaId: string, excluirUsuarioId?: string): Promise<void> {
+    const otro = await this.prisma.user.findFirst({
+      where: {
+        agenciaId,
+        estado: 1,
+        role: { namerol: 'AUXILIAR' },
+        ...(excluirUsuarioId ? { id: { not: excluirUsuarioId } } : {}),
+      },
+      select: { name: true, lastname: true },
+    });
+    if (otro) {
+      const agencia = await this.prisma.agencia.findUnique({ where: { id: agenciaId }, select: { nombre: true } });
+      throw new ConflictException(
+        `La agencia "${agencia?.nombre || agenciaId}" ya tiene un auxiliar (${`${otro.name} ${otro.lastname}`.trim()}). `
+        + `Cada agencia solo puede tener uno: cambia primero su rol o desactívalo.`,
+      );
+    }
+  }
+
+  /** El auxiliar trabaja en una bahía de su agencia: debe existir, ser de esa agencia, estar activa y tener cupo de lavadores. */
+  private async assertBahiaParaAuxiliar(agenciaId: string, bahiaId: string, excluirUsuarioId?: string): Promise<void> {
+    const bahia = await this.prisma.bahia.findUnique({
+      where: { id: bahiaId },
+      select: { id: true, nombre: true, agenciaId: true, activa: true, agencia: { select: { maxLavadoresPorBahia: true } } },
+    });
+    if (!bahia || bahia.agenciaId !== agenciaId) {
+      throw new BadRequestException('La bahía elegida no pertenece a la agencia del auxiliar.');
+    }
+    if (!bahia.activa) throw new BadRequestException(`La bahía "${bahia.nombre}" está inactiva.`);
+    const max = bahia.agencia?.maxLavadoresPorBahia ?? 1;
+    const ocupados = await this.prisma.bahiaOperador.count({
+      where: { bahiaId, activo: true, ...(excluirUsuarioId ? { operadorId: { not: excluirUsuarioId } } : {}) },
+    });
+    if (ocupados >= max) {
+      throw new BadRequestException(`La bahía "${bahia.nombre}" alcanzó el máximo de ${max} lavador(es) simultáneos.`);
+    }
+  }
+
   private limpiarContactoBahia<T extends { operadorActual?: any; operadores?: any[] } | null>(bahia: T, user: any): T {
     if (!bahia || this.veContacto(user)) return bahia;
     const sinEmail = (u: any) => (u ? (({ email: _c, ...resto }: any) => resto)(u) : u);
@@ -1905,10 +1944,10 @@ export class AgenciasService {
     return this.limpiarContactoBahia(actualizada, user);
   }
 
-  /** Solo el rol Lavador trabaja en bahía. */
+  /** Solo el Lavador y el Auxiliar (un lavador con las capacidades del líder) trabajan en bahía. */
   private esRolLavador(namerol?: string | null): boolean {
     const r = (namerol || '').trim().toUpperCase();
-    return r === 'LAVADOR' || r.startsWith('LAVADOR ');
+    return r === 'LAVADOR' || r.startsWith('LAVADOR ') || r === 'AUXILIAR';
   }
 
   /** Quita al usuario de todas sus bahías activas y cierra su historial de asignación. */
@@ -1941,7 +1980,7 @@ export class AgenciasService {
       // Solo los lavadores trabajan en bahía; el resto de roles (pulidores, técnicos, líderes…) no se asignan a una.
       if (!this.esRolLavador(operador.role?.namerol)) {
         throw new BadRequestException(
-          `Solo los lavadores se asignan a una bahía. "${operador.name}" tiene el rol ${operador.role?.namerol || 'sin rol'}.`,
+          `Solo los lavadores y el auxiliar se asignan a una bahía. "${operador.name}" tiene el rol ${operador.role?.namerol || 'sin rol'}.`,
         );
       }
 
@@ -2529,13 +2568,24 @@ export class AgenciasService {
         : [];
     }
 
-    // Si el formulario manda el teléfono: celular de 10 dígitos, obligatorio para los líderes.
+    // Auxiliar: agencia y bahía obligatorias, uno por agencia. Si no se manda bahía, se conserva la actual (misma agencia).
+    const esAuxiliarFinal = normalizarRol(currentRoleName) === 'AUXILIAR';
+    let bahiaAuxiliar: string | undefined;
+    if (esAuxiliarFinal) {
+      const agenciaFinalAux = agenciaIdToSet !== undefined ? agenciaIdToSet : user.agenciaId;
+      if (!agenciaFinalAux) throw new BadRequestException('El Auxiliar debe tener una agencia asignada.');
+      const bahiaActual = await this.prisma.bahiaOperador.findFirst({ where: { operadorId: user.id, activo: true }, select: { bahiaId: true } });
+      bahiaAuxiliar = dto.bahiaId || (agenciaFinalAux === user.agenciaId ? bahiaActual?.bahiaId : undefined);
+      if (!bahiaAuxiliar) throw new BadRequestException('El Auxiliar debe tener una bahía asignada.');
+      bodegaIdToSet = null;
+      if ((dto.estado ?? user.estado) === 1) await this.assertAgenciaSinOtroAuxiliar(agenciaFinalAux, user.id);
+      await this.assertBahiaParaAuxiliar(agenciaFinalAux, bahiaAuxiliar, user.id);
+    }
+
+    // Si el formulario manda el teléfono: celular de 10 dígitos (es opcional para todos los roles).
     let telefonoActualizado: string | null | undefined;
     if (dto.telefono !== undefined) {
-      const rolFinal = roleIdToSet
-        ? (await this.prisma.role.findUnique({ where: { id: roleIdToSet }, select: { namerol: true } }))?.namerol
-        : user.role?.namerol;
-      telefonoActualizado = normalizarCelularEc(dto.telefono, esLiderDeAgencia(rolFinal ?? '')) || null;
+      telefonoActualizado = normalizarCelularEc(dto.telefono) || null;
     }
 
     const updatedUser = await this.prisma.user.update({
@@ -2586,6 +2636,12 @@ export class AgenciasService {
     // La bahía solo aplica a lavadores y pertenece a una agencia: si deja de ser lavador o se mueve de agencia, se libera.
     if (agenciaCambio || (rolCambio && !this.esRolLavador(updatedUser.role?.namerol))) {
       await this.liberarBahiasDeOperador(updatedUser.id);
+    }
+    if (esAuxiliarFinal && bahiaAuxiliar) {
+      const asignada = await this.prisma.bahiaOperador.findFirst({ where: { operadorId: updatedUser.id, activo: true }, select: { bahiaId: true } });
+      if (asignada?.bahiaId !== bahiaAuxiliar) {
+        await this.asignarOperadorABahia({ bahiaId: bahiaAuxiliar, operadorId: updatedUser.id }, actor?.id, actor);
+      }
     }
     const estadoCambio = dto.estado !== undefined && dto.estado !== user.estado;
     if (rolCambio || estadoCambio) {
@@ -2766,6 +2822,12 @@ export class AgenciasService {
         throw new BadRequestException('El Líder Operador debe tener una agencia asignada.');
       }
       bodegaIdToSet = null;
+    } else if (rolNormalizadoCreate === 'AUXILIAR') {
+      if (!agenciaIdToSet) throw new BadRequestException('El Auxiliar debe tener una agencia asignada.');
+      if (!dto.bahiaId) throw new BadRequestException('El Auxiliar debe tener una bahía asignada.');
+      bodegaIdToSet = null;
+      await this.assertAgenciaSinOtroAuxiliar(agenciaIdToSet);
+      await this.assertBahiaParaAuxiliar(agenciaIdToSet, dto.bahiaId);
     } else if (userRoleCode === 'BACKUP') {
       bodegaIdToSet = null;
       if (!regionIdToSet) {
@@ -2842,9 +2904,8 @@ export class AgenciasService {
       }
     }
 
-    // Celular de 10 dígitos; obligatorio para los líderes.
-    const rolDelNuevo = await this.prisma.role.findUnique({ where: { id: roleIdToSet }, select: { namerol: true } });
-    const telefonoNuevo = normalizarCelularEc(dto.telefono, esLiderDeAgencia(rolDelNuevo?.namerol ?? ''));
+    // Celular de 10 dígitos; opcional para todos los roles.
+    const telefonoNuevo = normalizarCelularEc(dto.telefono);
 
     const newUser = await this.prisma.user.create({
       data: {
@@ -2867,6 +2928,16 @@ export class AgenciasService {
         bodega: true,
       },
     });
+
+    if (rolNormalizadoCreate === 'AUXILIAR' && dto.bahiaId) {
+      try {
+        await this.asignarOperadorABahia({ bahiaId: dto.bahiaId, operadorId: newUser.id }, actor?.id, actor);
+      } catch (e) {
+        // Sin bahía no hay auxiliar: no se deja el usuario a medias.
+        await this.prisma.user.delete({ where: { id: newUser.id } }).catch(() => undefined);
+        throw e;
+      }
+    }
 
     if (servicioIdsToSet.length > 0) {
       const rolNuevo = (newUser.role?.namerol || dto.rolNombre || '').toUpperCase();
@@ -2954,7 +3025,7 @@ export class AgenciasService {
 
   /** Condiciones sobre el rol de cada segmento rápido (la pantalla los llama píldoras). */
   private static readonly SEGMENTOS_USUARIO: Record<string, string[]> = {
-    lavadores: ['LAVADOR', 'PULIDOR'],
+    lavadores: ['LAVADOR', 'AUXILIAR', 'PULIDOR'],
     supervisores: ['SUPERVISOR', 'COORD'],
     bodega: ['BODEGA', 'INVENTARIO'],
     admins: ['ADMIN', 'AUDITOR'],
@@ -3090,9 +3161,9 @@ export class AgenciasService {
     const isCoordEspeciales = !isLider && (rolUsuario === 'COORD_SERVICIOS_ESPECIALES' || dto.categoriaRol === 'PULIDOR' || dto.rol === 'PULIDOR');
 
     const rolesPulidor = ['PULIDOR', 'Pulidor'];
-    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía'];
+    const rolesLavador = ['LAVADOR', 'Lavador', 'Lavador de Bahía', 'AUXILIAR'];
 
-    let targetRoles: string[] = ['LAVADOR', 'PULIDOR', 'TECNICO', 'Pulidor'];
+    let targetRoles: string[] = ['LAVADOR', 'AUXILIAR', 'PULIDOR', 'TECNICO', 'Pulidor'];
 
     if (isLider) {
       // El líder ve a quien tiene asignado en su agencia: sus lavadores y su pulidor fijo (el móvil no tiene agencia).

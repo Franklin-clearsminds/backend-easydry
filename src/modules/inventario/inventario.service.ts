@@ -82,6 +82,7 @@ const ORDEN_INSUMOS = columnasSimples({
   nombre: 'nombre',
   tipo: 'tipoProducto.nombre',
   contenido: 'contenidoNeto',
+  precio: 'costoUnitarioUSD',
   stockMinimoBodega: 'stockMinimoBodega',
   stockOptimoBodega: 'stockOptimoBodega',
   stockMinimoAgencia: 'stockMinimoAgencia',
@@ -1411,6 +1412,8 @@ export class InventarioService {
         const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
           ? rawMinimo * cNeto
           : rawMinimo;
+        const rawOptimo = Number(ins.stockOptimoAgencia) || 5;
+        const optimo = Math.max(isLiquidOrPowder && cNeto > 1 && rawOptimo < cNeto ? rawOptimo * cNeto : rawOptimo, minimo);
         let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Sin Stock' = 'Óptimo';
 
         if (actual <= 0) {
@@ -1440,6 +1443,7 @@ export class InventarioService {
           stockActual: actual,
           stockUnidades: Math.round((actual / cNeto) * 100) / 100,
           stockMinimo: minimo,
+          stockOptimo: optimo,
           deficit,
           estado,
           enTransitoUnidades: transito?.unidades ?? 0,
@@ -2227,6 +2231,8 @@ export class InventarioService {
         const minimo = isLiquidOrPowder && cNeto > 1 && rawMinimo < cNeto
           ? rawMinimo * cNeto
           : rawMinimo;
+        const rawOptimo = Number(ins.stockOptimoAgencia) || 5;
+        const optimo = Math.max(isLiquidOrPowder && cNeto > 1 && rawOptimo < cNeto ? rawOptimo * cNeto : rawOptimo, minimo);
         let estado: 'Óptimo' | 'Bajo' | 'Crítico' | 'Sin Stock' = 'Óptimo';
 
         if (actual <= 0) {
@@ -2259,6 +2265,7 @@ export class InventarioService {
           stockActual: actual,
           stockUnidades: unidadesActuales,
           stockMinimo: minimo,
+          stockOptimo: optimo,
           stockMinimoUnidades: Math.floor(minimo / cNeto + 1e-9) || 1,
           deficit,
           estado,

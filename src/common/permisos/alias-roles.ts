@@ -8,10 +8,10 @@ export function normalizarRol(nombre: unknown): string {
 
 /**
  * BACKUP es un rol propio (reemplazo temporal de un líder, con sus reglas de gestión de usuarios) que tiene las mismas
- * capacidades que LIDER. Todo lo que hoy se pregunta como "¿es líder de agencia?" debe incluir a ambos: usa esta lista
+ * capacidades que LIDER. AUXILIAR (un lavador de bahía, uno por agencia) también las tiene. Todo lo que hoy se pregunta como "¿es líder de agencia?" debe incluir a ambos: usa esta lista
  * (o `esLiderDeAgencia`) en vez de repetir `['LIDER', 'BACKUP']` a mano.
  */
-export const ROLES_LIDER_AGENCIA: readonly string[] = ['LIDER', 'BACKUP'];
+export const ROLES_LIDER_AGENCIA: readonly string[] = ['LIDER', 'BACKUP', 'AUXILIAR'];
 
 /** `rol` ya normalizado (`normalizarRol` / `rolDeUsuario`). */
 export function esLiderDeAgencia(rol: string): boolean {

@@ -6,7 +6,7 @@ import {
 import { capacidadesConPaginas } from './migracion-paginas.js';
 
 /**
- * Los 15 roles oficiales con los permisos acordados. Es lo que carga el seed y lo que usan las pruebas para verificar la
+ * Los 16 roles oficiales con los permisos acordados. Es lo que carga el seed y lo que usan las pruebas para verificar la
  * matriz. Después de sembrado, la fuente de verdad es la tabla `roles` (se edita desde «Roles y Permisos»).
  */
 export interface RolBase {
@@ -47,9 +47,9 @@ const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
 /**
  * Auditorías. Pueden auditar (crear informes de inspección, firmarlos y verlos dentro de su ámbito) todos los roles menos el líder
  * de bahía (LIDER y su reemplazo BACKUP), el lavador y el pulidor, que solo ven el resultado de su inspección 5S y sus informes.
- * Revisar, aprobar, cerrar y eliminar borradores es de quien administra: ADMIN, SUPER_ADMIN y SUPERVISOR.
+ * Editar y eliminar los borradores de otros, y verificar las acciones correctivas, es de quien administra: ADMIN, SUPER_ADMIN y SUPERVISOR.
  */
-const ROLES_SOLO_VEN_AUDITORIA = ['LIDER', 'BACKUP', 'LAVADOR', 'PULIDOR'];
+const ROLES_SOLO_VEN_AUDITORIA = ['LIDER', 'BACKUP', 'AUXILIAR', 'LAVADOR', 'PULIDOR'];
 const ROLES_REVISAN_INFORMES = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR'];
 const CAPACIDADES_AUDITOR: CodigoPermiso[] = p(
   'informes.ver',
@@ -61,7 +61,7 @@ const CAPACIDADES_AUDITOR: CodigoPermiso[] = p(
   'inspecciones.acciones',
 );
 const CAPACIDADES_VER_AUDITORIA: CodigoPermiso[] = p('informes.ver', 'inspecciones.ver');
-const CAPACIDADES_REVISOR: CodigoPermiso[] = p('informes.revisar', 'informes.eliminar', 'inspecciones.verificar', 'inspecciones.eliminar');
+const CAPACIDADES_REVISOR: CodigoPermiso[] = p('informes.administrar', 'informes.eliminar', 'inspecciones.verificar', 'inspecciones.eliminar');
 
 const CAPACIDADES_LIDER = p(
   ...LECTURA_RED,
@@ -217,6 +217,13 @@ export const ROLES_BASE: RolBase[] = [
     namerol: 'BACKUP',
     descripcion:
       'Líder operador de reemplazo: opera como un líder de agencia mientras está asignado temporalmente a una agencia de su región.',
+    ambito: 'AGENCIA',
+    capacidades: [...CAPACIDADES_LIDER],
+  },
+  {
+    namerol: 'AUXILIAR',
+    descripcion:
+      'Auxiliar del líder: lavador de una bahía que, con las mismas capacidades del líder, opera su agencia (uno por agencia).',
     ambito: 'AGENCIA',
     capacidades: [...CAPACIDADES_LIDER],
   },

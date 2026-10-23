@@ -57,7 +57,7 @@ const texto = (s: string | undefined | null): string => String(s ?? '').trim();
 const lista = (a: string[] | undefined | null): string[] => (a ?? []).map((x) => String(x).trim()).filter(Boolean);
 const nombreDe = (u: { name?: string | null; lastname?: string | null } | null | undefined): string => `${u?.name ?? ''} ${u?.lastname ?? ''}`.trim();
 const nombreActor = (user: any): string => texto(user?.nombre) || nombreDe(user);
-const EDITABLES = ['BORRADOR', 'EN_PROCESO'];
+const EDITABLES = ['BORRADOR'];
 const nombreArea = (a: string) => ETIQUETA_AREA[a as keyof typeof ETIQUETA_AREA] ?? a;
 
 /** Comentarios por cada S: solo las cinco S conocidas y texto limpio. */
@@ -106,7 +106,7 @@ export class Auditoria5sService {
 
   // ───────────────────────── Alcance y permisos ─────────────────────────
 
-  /** Auditorías del ámbito del usuario; quien no puede auditar (líder, lavador, pulidor) ve solo las finalizadas o cerradas. */
+  /** Auditorías del ámbito del usuario; quien no puede auditar (líder, lavador, pulidor) ve solo las guardadas. */
   private whereVisible(user: any): Record<string, unknown> {
     return combinarWhere(
       { deletedAt: null },
@@ -126,9 +126,8 @@ export class Auditoria5sService {
     const final = (ESTADOS_RESULTADO_5S as readonly string[]).includes(a.estado);
     return {
       puedeEditar: editable,
-      puedeFinalizar: editable,
+      puedeGuardar: editable,
       puedeEliminar: EDITABLES.includes(a.estado) && tienePermiso(user, 'inspecciones.eliminar') && (esAutor || verifica),
-      puedeCerrar: a.estado === 'FINALIZADA' && verifica,
       puedeSeguimiento: final && tienePermiso(user, 'inspecciones.acciones'),
       puedeVerificar: final && verifica,
     };
@@ -389,7 +388,6 @@ export class Auditoria5sService {
       comentarios: a.comentarios,
       comentariosCategoria: (a.comentariosCategoria ?? {}) as Record<string, string>,
       finalizadaEn: a.finalizadaEn?.toISOString() ?? null,
-      cerradaEn: a.cerradaEn?.toISOString() ?? null,
       createdAt: a.createdAt.toISOString(),
       updatedAt: a.updatedAt.toISOString(),
       // Finalizada: lo fijado al finalizar. Antes: el cálculo del momento (orientativo hasta tener todos los criterios).
@@ -500,9 +498,8 @@ export class Auditoria5sService {
               comentariosCategoria: limpiarComentarios(dto.comentariosCategoria),
             },
           });
-          const evaluadas = conRespuestas ? await this.guardarRespuestas(tx, a.id, formato, dto.respuestas) : 0;
-          if (evaluadas) await tx.auditoria5s.update({ where: { id: a.id }, data: { estado: 'EN_PROCESO' } });
-          await this.registrar(tx, a.id, user, 'CREADA', null, evaluadas ? 'EN_PROCESO' : 'BORRADOR', `Auditoría ${codigo} · ${formato.nombre} (${nombreArea(dto.area ?? AREA_GENERAL)}) en ${agencia.nombre}.`);
+          if (conRespuestas) await this.guardarRespuestas(tx, a.id, formato, dto.respuestas);
+          await this.registrar(tx, a.id, user, 'CREADA', null, 'BORRADOR', `Auditoría ${codigo} · ${formato.nombre} (${nombreArea(dto.area ?? AREA_GENERAL)}) en ${agencia.nombre}.`);
           return a.id;
         });
       } catch (e) {
@@ -517,7 +514,7 @@ export class Auditoria5sService {
     if (!dto.id) throw new BadRequestException('Falta la auditoría a guardar.');
     const actual = await this.cargar(dto.id, user);
     if (!this.permisosSobre(actual, user).puedeEditar) {
-      throw new ForbiddenException(EDITABLES.includes(actual.estado) ? 'Solo quien hizo la auditoría puede editarla.' : 'La auditoría ya está finalizada: sus puntuaciones no se pueden modificar.');
+      throw new ForbiddenException(EDITABLES.includes(actual.estado) ? 'Solo quien hizo la auditoría puede editarla.' : 'La auditoría ya está guardada: no se puede modificar.');
     }
     const formato = formatoDe(actual.formato);
     const agenciaId = dto.agenciaId === actual.agenciaId ? actual.agenciaId : (await this.agenciaEnAlcance(dto.agenciaId, user)).id;
@@ -542,9 +539,6 @@ export class Auditoria5sService {
         await tx.auditoria5s.updateMany({ where: { grupoId: actual.grupoId, id: { not: actual.id }, estado: { in: EDITABLES }, deletedAt: null }, data: datosVisita });
       }
       await this.guardarRespuestas(tx, actual.id, formato, dto.respuestas);
-      const hay = await tx.auditoria5sRespuesta.count({ where: { auditoriaId: actual.id, puntaje: { not: null } } });
-      const estado = hay ? 'EN_PROCESO' : 'BORRADOR';
-      if (estado !== actual.estado) await tx.auditoria5s.update({ where: { id: actual.id }, data: { estado } });
     });
     return this.detail(actual.id, user);
   }
@@ -576,25 +570,25 @@ export class Auditoria5sService {
   }
 
   /**
-   * Finaliza la auditoría: exige todos los criterios evaluados, fija puntaje, porcentaje y semáforo (siempre calculados aquí, nunca
+   * Guarda la auditoría de forma definitiva: exige todos los criterios evaluados, fija puntaje, porcentaje y semáforo (siempre calculados aquí, nunca
    * por el cliente) y abre una acción correctiva por cada criterio que no cumple y tenga hallazgo o acción registrada.
    */
-  async finalizar(id: string, user: any) {
+  async guardar(id: string, user: any) {
     const a = await this.cargar(id, user);
-    if (!this.permisosSobre(a, user).puedeFinalizar) {
-      throw new ForbiddenException(EDITABLES.includes(a.estado) ? 'Solo quien hizo la auditoría puede finalizarla.' : 'La auditoría ya está finalizada.');
+    if (!this.permisosSobre(a, user).puedeGuardar) {
+      throw new ForbiddenException(EDITABLES.includes(a.estado) ? 'Solo quien hizo la auditoría puede guardarla.' : 'La auditoría ya está guardada.');
     }
     const formato = formatoDe(a.formato);
     const faltan = criteriosSinEvaluar(formato, a.respuestas);
-    if (faltan.length) throw new BadRequestException(`No se puede finalizar: faltan por evaluar ${faltan.length} criterio(s) (${faltan.join(', ')}).`);
+    if (faltan.length) throw new BadRequestException(`No se puede guardar: faltan por evaluar ${faltan.length} criterio(s) (${faltan.join(', ')}).`);
     const r = calcularResultado(formato, a.respuestas);
 
     await this.prisma.$transaction(async (tx) => {
       const cambio = await tx.auditoria5s.updateMany({
         where: { id: a.id, estado: { in: EDITABLES } },
-        data: { estado: 'FINALIZADA', puntaje: r.puntaje, porcentaje: r.porcentaje, semaforo: r.semaforo, finalizadaEn: new Date() },
+        data: { estado: 'GUARDADA', puntaje: r.puntaje, porcentaje: r.porcentaje, semaforo: r.semaforo, finalizadaEn: new Date() },
       });
-      if (cambio.count === 0) throw new ConflictException('La auditoría cambió mientras la finalizabas. Actualiza e inténtalo de nuevo.');
+      if (cambio.count === 0) throw new ConflictException('La auditoría cambió mientras la guardabas. Actualiza e inténtalo de nuevo.');
       let abiertas = 0;
       for (const resp of a.respuestas) {
         const efectivo = puntajeEfectivo(formato, resp.criterio, resp.puntaje);
@@ -617,27 +611,14 @@ export class Auditoria5sService {
           },
         });
       }
-      await this.registrar(tx, a.id, user, 'FINALIZADA', a.estado, 'FINALIZADA', `Puntaje ${r.puntaje}/${r.puntajeMaximo} (${r.porcentaje} %): ${r.semaforo}. ${abiertas} acción(es) correctiva(s) abierta(s).`);
-    });
-    return this.detail(id, user);
-  }
-
-  async cerrar(id: string, user: any) {
-    const a = await this.cargar(id, user);
-    if (!this.permisosSobre(a, user).puedeCerrar) throw new ForbiddenException('Solo una auditoría finalizada la cierra quien verifica.');
-    const abiertas = a.acciones.filter((x) => (ESTADOS_ACCION_ABIERTA as readonly string[]).includes(x.estado)).length;
-    if (abiertas) throw new ConflictException(`No se puede cerrar: quedan ${abiertas} acción(es) correctiva(s) sin cerrar.`);
-    await this.prisma.$transaction(async (tx) => {
-      const r = await tx.auditoria5s.updateMany({ where: { id, estado: 'FINALIZADA' }, data: { estado: 'CERRADA', cerradaEn: new Date() } });
-      if (r.count === 0) throw new ConflictException('La auditoría cambió mientras la cerrabas. Actualiza e inténtalo de nuevo.');
-      await this.registrar(tx, id, user, 'CERRADA', 'FINALIZADA', 'CERRADA', 'Auditoría cerrada: todas las acciones correctivas están verificadas.');
+      await this.registrar(tx, a.id, user, 'GUARDADA', a.estado, 'GUARDADA', `Puntaje ${r.puntaje}/${r.puntajeMaximo} (${r.porcentaje} %): ${r.semaforo}. ${abiertas} acción(es) correctiva(s) abierta(s).`);
     });
     return this.detail(id, user);
   }
 
   async eliminar(id: string, user: any) {
     const a = await this.cargar(id, user);
-    if (!this.permisosSobre(a, user).puedeEliminar) throw new ForbiddenException('Solo se puede eliminar una auditoría sin finalizar, y solo con permiso para ello.');
+    if (!this.permisosSobre(a, user).puedeEliminar) throw new ForbiddenException('Solo se puede eliminar una auditoría sin guardar, y solo con permiso para ello.');
     await this.prisma.$transaction(async (tx) => {
       await tx.auditoria5s.update({ where: { id }, data: { deletedAt: new Date() } });
       await this.registrar(tx, id, user, 'ELIMINADA', a.estado, null, `Auditoría ${a.codigo} eliminada.`);
@@ -695,7 +676,7 @@ export class Auditoria5sService {
   /** Seguimiento de la acción: no toca el puntaje de la auditoría. Quien lo da no la cierra: la manda a verificación. */
   async seguimientoAccion(dto: SeguimientoAccionDto, user: any) {
     const x = await this.cargarAccion(dto.id, user);
-    if (!this.permisosSobre(x.auditoria, user).puedeSeguimiento) throw new ForbiddenException('El seguimiento se registra cuando la auditoría ya está finalizada.');
+    if (!this.permisosSobre(x.auditoria, user).puedeSeguimiento) throw new ForbiddenException('El seguimiento se registra cuando la auditoría ya está guardada.');
     if (x.estado === 'CERRADA') throw new ConflictException('La acción ya está cerrada.');
     if (dto.estado !== x.estado && !(TRANSICIONES_ACCION[x.estado] ?? []).includes(dto.estado)) {
       throw new ConflictException(`Una acción ${x.estado} no puede pasar a ${dto.estado}.`);

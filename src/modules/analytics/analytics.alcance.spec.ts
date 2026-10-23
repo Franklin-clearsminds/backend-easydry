@@ -200,20 +200,25 @@ it('un usuario global puede acotar a la agencia o región que pida', async () =>
       // A3 aparece sin servicios porque tuvo incidentes en el periodo.
       expect(res.topAgenciasProductivas).toEqual([{ nombre: a1.nombre, cantidad: 3 }, { nombre: a3.nombre, cantidad: 0 }]);
       expect(res.topColores).toEqual([{ nombre: 'Rojo', cantidad: 2 }, { nombre: 'Azul', cantidad: 1 }]);
-      expect(res.mixGenerales).toEqual([{ nombre: gen.nombre, cantidad: 2 }]);
-      expect(res.mixEspeciales).toEqual([{ nombre: esp.nombre, cantidad: 1 }]);
+      expect(res.mixGenerales).toMatchObject([{ nombre: gen.nombre, cantidad: 2 }]);
+      expect(typeof res.mixGenerales[0].monto).toBe('number');
+      expect(res.mixEspeciales).toMatchObject([{ nombre: esp.nombre, cantidad: 1 }]);
     });
 
-    it('la rentabilidad por agencia reporta insumos en unidades y resta reparaciones', async () => {
+    it('la rentabilidad por agencia suma los gastos en insumos, mantenimientos e incidencias, sin ganancia neta', async () => {
       const res: any = await service.getDashboardMetrics({ ...ENE_5_11, regionId: r1.id }, act.superadmin);
       const [primera, segunda] = res.topAgenciasRentabilidad;
-      expect(primera).toMatchObject({ nombre: a1.nombre, ingresos: 100, costoIncidentes: 400, gastosOperativos: 400, gananciaNeta: -300 });
-      // Los insumos NO entran al monto (su costo es por envase y el consumo en unidad base); van en unidades.
+      expect(primera).toMatchObject({ nombre: a1.nombre, ingresos: 100, costoIncidentes: 400 });
       expect(primera.unidadesInsumos).toBe(3); // 2 + 1 consumidas
-      expect(primera.costoInsumos).toBeUndefined();
-      expect(segunda).toMatchObject({ nombre: a3.nombre, ingresos: 0, costoIncidentes: 200, gananciaNeta: -200 });
-      expect(res.kpis.gananciaNetaGlobal).toBe(-500);
-      expect(res.kpis.gastosOperativosGlobal).toBe(600);
+      expect(typeof primera.costoInsumos).toBe('number');
+      expect(primera.gastosOperativos).toBeCloseTo(primera.costoInsumos + primera.costoIncidentes + primera.costoMantenimientos, 2);
+      expect(primera.gananciaNeta).toBeUndefined();
+      expect(segunda).toMatchObject({ nombre: a3.nombre, ingresos: 0, costoIncidentes: 200 });
+      expect(res.kpis.gananciaNetaGlobal).toBeUndefined();
+      expect(res.kpis.gastoIncidentesGlobal).toBe(600);
+      expect(res.kpis.gastosOperativosGlobal).toBeCloseTo(res.kpis.gastoInsumosGlobal + res.kpis.gastoMantenimientosGlobal + 600, 2);
+      expect(res.rankingsAgencias.gastoInsumos).toBeDefined();
+      expect(res.rankingsAgencias.gastoMantenimientos).toBeDefined();
     });
 
     it('el panel comercial reporta el consumo de insumos en unidades, nunca en USD', async () => {
@@ -292,7 +297,7 @@ it('un usuario global puede acotar a la agencia o región que pida', async () =>
       const base = { ...ENE_5_11, regionId: r1.id };
       const especiales: any = await service.getDashboardMetrics({ ...base, categoriaServicio: 'ESPECIAL' }, act.superadmin);
       expect(especiales.kpis).toMatchObject({ serviciosCompletadosHoy: 1, ingresoHoy: 50, totalLavadosHoy: 1 });
-      expect(especiales.mixEspeciales).toEqual([{ nombre: esp.nombre, cantidad: 1 }]);
+      expect(especiales.mixEspeciales).toMatchObject([{ nombre: esp.nombre, cantidad: 1 }]);
       expect(especiales.mixGenerales).toEqual([]);
       expect(especiales.jerarquia.kpis.registros).toBe(1);
 
@@ -301,6 +306,19 @@ it('un usuario global puede acotar a la agencia o región que pida', async () =>
 
       const todos: any = await service.getDashboardMetrics(base, act.superadmin);
       expect(todos.kpis.serviciosCompletadosHoy).toBe(3);
+    });
+
+    it('elegir servicios concretos acota los gráficos que dependen del servicio', async () => {
+      const base = { ...ENE_5_11, regionId: r1.id };
+      const soloEspecial: any = await service.getDashboardMetrics({ ...base, servicioIds: [esp.id] }, act.superadmin);
+      expect(soloEspecial.kpis).toMatchObject({ serviciosCompletadosHoy: 1, ingresoHoy: 50 });
+      expect(soloEspecial.mixGenerales).toEqual([]);
+      expect(soloEspecial.mixEspeciales).toMatchObject([{ nombre: esp.nombre, cantidad: 1 }]);
+      const ambos: any = await service.getDashboardMetrics({ ...base, servicioIds: [esp.id, gen.id] }, act.superadmin);
+      expect(ambos.kpis.serviciosCompletadosHoy).toBe(3);
+      // Combinado con la categoría: un servicio general dentro de "especiales" no deja nada.
+      const cruzado: any = await service.getDashboardMetrics({ ...base, categoriaServicio: 'ESPECIAL', servicioIds: [gen.id] }, act.superadmin);
+      expect(cruzado.kpis.serviciosCompletadosHoy).toBe(0);
     });
 
     it('el filtro por pulidor acota los servicios al operador elegido', async () => {
@@ -515,19 +533,22 @@ it('un usuario global puede acotar a la agencia o región que pida', async () =>
       const res: any = await service.getDashboardBodega({}, act.asistenteBodega);
       // "Solo Agotada" (A4) tiene MÁS problemas (4) pero la mezcla (A3) es la accionable y va primero.
       expect(res.saludPorUbicacion.map((u: any) => u.nombre)).toEqual([a3.nombre, a4.nombre, a1.nombre]);
-      expect(res.saludPorUbicacion[0]).toEqual({
+      expect(res.saludPorUbicacion[0]).toMatchObject({
         nombre: a3.nombre,
         AGOTADO: 0, 'CRÍTICO': 2, 'BAJO MÍNIMO': 0, 'BAJO IDEAL': 1, 'ÓPTIMO': 0,
         criticos: 3, problemas: 3,
       });
+      // Lo que falta para llegar al óptimo, valorado en USD, viene por ubicación.
+      expect(typeof res.saludPorUbicacion[0].faltanteUSD).toBe('number');
+      expect(res.saludPorUbicacion[0].posicionesBajoOptimo).toBeGreaterThan(0);
       expect(res.kpis.posicionesEvaluadas).toBe(8);
     });
 
-    it('la reposición y las existencias se reportan en UNIDADES, nunca en USD', async () => {
+    it('la reposición y las existencias se reportan en UNIDADES y el faltante además en USD', async () => {
       const res: any = await service.getDashboardBodega({ regionId: r2.id }, act.coordBodega);
       expect(res.kpis).toMatchObject({ unidadesReponer: 46, insumosConDeficit: 1, ubicacionesConDeficit: 2, unidadesStock: 34, unidadesEnTransito: 7 }); // (40-4) + (40-30)
-      expect(res.kpis.costoReposicionUSD).toBeUndefined();
-      expect(res.topDeficit).toEqual([{ nombre: y1.nombre, unidades: 46, unidad: 'L', ubicaciones: 2 }]);
+      expect(res.topDeficit).toMatchObject([{ nombre: y1.nombre, unidades: 46, unidad: 'L', ubicaciones: 2 }]);
+      expect(typeof res.topDeficit[0].costoUSD).toBe('number');
     });
 
     it('un rol de agencia sin agencia no ve movimientos ni existencias', async () => {

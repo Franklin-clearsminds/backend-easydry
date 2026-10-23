@@ -209,6 +209,11 @@ export class UpdateUsuarioDto {
   @IsString()
   bodegaId?: string;
 
+  @ApiPropertyOptional({ example: 'uuid-bahia', description: 'Bahía donde trabaja el Auxiliar (obligatoria para ese rol)' })
+  @IsOptional()
+  @IsString()
+  bahiaId?: string;
+
   @ApiPropertyOptional({ example: 'NuevaClave123*', description: 'Nueva contraseña si se desea actualizar' })
   @IsOptional()
   @IsString()
@@ -290,6 +295,11 @@ export class CreateUsuarioDto {
   @IsOptional()
   @IsString()
   bodegaId?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-bahia', description: 'Bahía donde trabaja el Auxiliar (obligatoria para ese rol)' })
+  @IsOptional()
+  @IsString()
+  bahiaId?: string;
 
   @ApiPropertyOptional({ example: 'MOVIL', description: 'Modalidad de operador especial: FIJO o MOVIL' })
   @IsOptional()

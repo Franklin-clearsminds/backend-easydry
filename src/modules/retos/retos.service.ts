@@ -28,7 +28,7 @@ import {
 } from './retos.reglas.js';
 
 const ROLES_PULIDOR = ['PULIDOR'];
-const ROLES_LAVADOR = ['LAVADOR'];
+const ROLES_LAVADOR = ['LAVADOR', 'AUXILIAR'];
 
 /** "Todas" (o nada) significa sin filtro. */
 function filtroLista(valores: string[] | null | undefined): string[] {

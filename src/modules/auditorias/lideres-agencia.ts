@@ -1,18 +1,21 @@
 import type { PrismaService } from '../prisma/prisma.service.js';
 
+type Persona = { id: string; nombre: string };
+
 /**
- * Agrega a cada agencia su líder de bahía (el usuario activo con rol LIDER de esa agencia) para que los formularios de auditoría lo
- * marquen solos al elegir la agencia. Solo nombre e id: nunca correo ni teléfono.
+ * Agrega a cada agencia su líder de bahía (el usuario activo con rol LIDER de esa agencia) y su auxiliar (rol AUXILIAR, uno por agencia)
+ * para que los formularios de auditoría los marquen o los ofrezcan al elegir la agencia. Solo nombre e id: nunca correo ni teléfono.
  */
-export async function agenciasConLider<T extends { id: string }>(prisma: PrismaService, agencias: T[]): Promise<(T & { lider: { id: string; nombre: string } | null })[]> {
+export async function agenciasConLider<T extends { id: string }>(prisma: PrismaService, agencias: T[]): Promise<(T & { lider: Persona | null; auxiliar: Persona | null })[]> {
   if (!agencias.length) return [];
-  const lideres = await prisma.user.findMany({
-    where: { estado: 1, agenciaId: { in: agencias.map((a) => a.id) }, role: { namerol: 'LIDER' } },
-    select: { id: true, name: true, lastname: true, agenciaId: true },
+  const personas = await prisma.user.findMany({
+    where: { estado: 1, agenciaId: { in: agencias.map((a) => a.id) }, role: { namerol: { in: ['LIDER', 'AUXILIAR'] } } },
+    select: { id: true, name: true, lastname: true, agenciaId: true, role: { select: { namerol: true } } },
     orderBy: [{ createdAt: 'asc' }],
   });
-  return agencias.map((a) => {
-    const l = lideres.find((x) => x.agenciaId === a.id);
-    return { ...a, lider: l ? { id: l.id, nombre: `${l.name} ${l.lastname}`.trim() } : null };
-  });
+  const de = (agenciaId: string, rol: string): Persona | null => {
+    const u = personas.find((x) => x.agenciaId === agenciaId && x.role?.namerol === rol);
+    return u ? { id: u.id, nombre: `${u.name} ${u.lastname}`.trim() } : null;
+  };
+  return agencias.map((a) => ({ ...a, lider: de(a.id, 'LIDER'), auxiliar: de(a.id, 'AUXILIAR') }));
 }
