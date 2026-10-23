@@ -804,7 +804,8 @@ export class OperacionesService {
     }
     // Sin evidencia de ingreso no se inicia la OT: registrarla es iniciarla. Un servicio agregado a una OT que ya la tiene la hereda.
     // (La sincronización de la app no pasa por aquí con `actor`: su evidencia llega por su propio flujo.)
-    if (actor && !fotoIngresoUrl && !videoInicialHeredado) {
+    const videoInicialDto = createDto.videoInicialUrl?.trim() || undefined;
+    if (actor && !fotoIngresoUrl && !videoInicialHeredado && !videoInicialDto) {
       throw new BadRequestException('La evidencia de ingreso (foto o video del vehículo) es obligatoria para registrar e iniciar la OT.');
     }
 
@@ -829,7 +830,7 @@ export class OperacionesService {
         horaInicio: createDto.estado === ServiceStatus.EN_PROCESO ? now : null,
         horaSalida: horaSalidaFinal,
         fotoIngresoUrl,
-        videoInicialUrl: videoInicialHeredado,
+        videoInicialUrl: videoInicialDto ?? videoInicialHeredado,
         fotoSalidaUrl: createDto.fotoSalidaUrl,
         observaciones: observacionesFinales,
         syncedAt: now,

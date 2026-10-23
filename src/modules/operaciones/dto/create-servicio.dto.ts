@@ -86,6 +86,11 @@ export class CreateServicioDto {
   @IsString()
   fotoIngresoUrl?: string;
 
+  @ApiPropertyOptional({ description: 'Video de ingreso cuando la OT también trae una foto adicional en `fotoIngresoUrl`.' })
+  @IsOptional()
+  @IsString()
+  videoInicialUrl?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
