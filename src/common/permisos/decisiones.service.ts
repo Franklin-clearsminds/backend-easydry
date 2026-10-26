@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Global, Injectable, Module } f
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../modules/prisma/prisma.service.js';
 import { rolDeUsuario } from './alias-roles.js';
+import { FUNCION, rolConFuncion, tieneFuncion } from './funciones.js';
 import { resolverAlcance, puedeSobreAgencia } from './alcance.js';
 import { tieneAlgunPermiso } from './capacidades.js';
 
@@ -16,7 +17,6 @@ export interface AgenciaRef {
   regionId?: string | null;
 }
 
-const ROLES_ADMIN = ['SUPER_ADMIN', 'ADMIN'];
 /** Casillas que habilitan decidir: las mismas que exigen los endpoints de aprobar, rechazar y anular. */
 const PERMISOS_DECIDIR = ['aprobaciones.aprobar', 'aprobaciones.rechazar'];
 const PERMISOS_ANULAR = ['aprobaciones.anular', 'servicios.generales.anular'];
@@ -38,7 +38,7 @@ export class DecisionesService {
   /** Usuario activo con rol APROBADOR asignado a esa agencia. */
   async tieneAprobadorDesignado(agenciaId: string): Promise<boolean> {
     const n = await this.prisma.user.count({
-      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR'] }, estado: 1 } },
+      where: { agenciaId, estado: 1, role: { ...rolConFuncion(FUNCION.APROBADOR), estado: 1 } },
     });
     return n > 0;
   }
@@ -48,7 +48,7 @@ export class DecisionesService {
     const ids = Array.from(new Set(agenciaIds.filter(Boolean)));
     if (!ids.length) return new Set();
     const filas = await this.prisma.user.findMany({
-      where: { agenciaId: { in: ids }, estado: 1, role: { namerol: { in: ['APROBADOR'] }, estado: 1 } },
+      where: { agenciaId: { in: ids }, estado: 1, role: { ...rolConFuncion(FUNCION.APROBADOR), estado: 1 } },
       select: { agenciaId: true },
     });
     return new Set(filas.map((f) => String(f.agenciaId)));
@@ -59,8 +59,7 @@ export class DecisionesService {
    * el aprobador en su agencia; administradores y supervisor (su región) solo si la agencia no tiene aprobador.
    */
   puedeDecidirAhora(user: any, agencia: AgenciaRef, agenciaTieneAprobador: boolean): boolean {
-    const rol = rolDeUsuario(user);
-    if (rol === 'APROBADOR') return !!user?.agenciaId && user.agenciaId === agencia.id;
+    if (tieneFuncion(user, FUNCION.APROBADOR)) return !!user?.agenciaId && user.agenciaId === agencia.id;
     if (agenciaTieneAprobador) return false;
     // Sin aprobador designado decide, como respaldo, cualquier rol con las casillas de aprobar o rechazar
     // y alcance sobre esa agencia: administradores en todas, un supervisor en su región, otro rol en su ámbito.
@@ -69,8 +68,7 @@ export class DecisionesService {
 
   /** Devuelve con qué regla puede decidir el usuario, o lanza 403 explicando por qué no puede. */
   async reglaParaDecidir(user: any, agencia: AgenciaRef): Promise<ReglaDecision> {
-    const rol = rolDeUsuario(user);
-    if (rol === 'APROBADOR') {
+    if (tieneFuncion(user, FUNCION.APROBADOR)) {
       if (user?.agenciaId && user.agenciaId === agencia.id) return 'TITULAR';
       throw new ForbiddenException('Solo puedes aprobar o rechazar servicios de tu agencia.');
     }
@@ -90,8 +88,7 @@ export class DecisionesService {
 
   /** Quién puede anular un servicio y con qué regla. `aprobado`: el servicio ya fue aprobado. */
   reglaParaAnular(user: any, agencia: AgenciaRef, aprobado: boolean): ReglaDecision {
-    const rol = rolDeUsuario(user);
-    if (ROLES_ADMIN.includes(rol)) return 'ADMIN';
+    if (tieneFuncion(user, FUNCION.ADMINISTRADOR)) return 'ADMIN';
     if (aprobado) {
       throw new ForbiddenException('Un servicio aprobado solo lo puede anular un administrador.');
     }

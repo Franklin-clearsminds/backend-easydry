@@ -1,3 +1,4 @@
+import { FUNCION, rolConFuncion } from '../../common/permisos/funciones.js';
 import { BadRequestException, ForbiddenException, Injectable, Logger, Optional, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -27,8 +28,6 @@ import {
   type TipoServicioReto,
 } from './retos.reglas.js';
 
-const ROLES_PULIDOR = ['PULIDOR'];
-const ROLES_LAVADOR = ['LAVADOR', 'AUXILIAR'];
 
 /** "Todas" (o nada) significa sin filtro. */
 function filtroLista(valores: string[] | null | undefined): string[] {
@@ -345,7 +344,7 @@ export class RetosService {
   }
 
   private whereRolPersona(tipo: 'LAVADOR' | 'PULIDOR') {
-    return { namerol: { in: tipo === 'PULIDOR' ? ROLES_PULIDOR : ROLES_LAVADOR } };
+    return rolConFuncion(tipo === 'PULIDOR' ? FUNCION.PULIDOR : FUNCION.LAVADOR);
   }
 
   /** Personas activas de un tipo dentro de un ámbito (región del creador, regiones y clientes del reto, ids elegidos). */
@@ -631,8 +630,8 @@ export class RetosService {
       regionIds = regiones.map((r) => r.id);
     }
     const ids = await this.notifications.resolverDestinatariosPorRol({
-      global: ['ADMIN', 'SUPER_ADMIN', 'JEFE_COMERCIAL'],
-      regionales: ['COORD_COMERCIAL', 'SUPERVISOR'],
+      global: [FUNCION.ADMINISTRADOR, FUNCION.COMERCIAL_NACIONAL],
+      regionales: [FUNCION.COMERCIAL, FUNCION.SUPERVISOR],
       regionId: regionIds,
     });
     if (!ids.length) return;

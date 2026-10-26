@@ -3,7 +3,7 @@ import { CODIGOS_RETOQUE } from '../../common/utils/retoque-catalogo.js';
 import { aUnidadDelInsumo } from '../../common/utils/costo-insumo.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { normalizarRol, ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
+import { FUNCION, funcionesDeRol } from '../../common/permisos/funciones.js';
 import { columnasSimples, combinarWhere, whereBusqueda } from '../../common/utils/data-grid.helpers.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
 import { listarOpciones } from '../../common/utils/opciones.js';
@@ -14,10 +14,7 @@ import {
   ServiciosOpcionesDto,
 } from './dto/servicios.dto.js';
 
-// Roles cuyo catálogo se acota a Agencia.servicioIds aunque no tengan sede (entonces no ven nada)
-const ROLES_SCOPED = [...ROLES_LIDER_AGENCIA, 'APROBADOR'];
-// Estos roles ven todo el catálogo: no se atan a región, agencia ni marca.
-const ROLES_SIN_ALCANCE = ['SUPER_ADMIN', 'ADMIN'];
+type ContextoUsuario = { agenciaId?: string; namerol?: string; capacidades?: string[] };
 
 @Injectable()
 export class CatalogosService {
@@ -27,7 +24,7 @@ export class CatalogosService {
    * Qué servicios puede ver quien consulta: filtra por categoría y, para roles de sede o si se pide una agencia, solo los
    * servicios de esa agencia (nunca el catálogo global). Devuelve también el contexto de la agencia y la búsqueda de texto.
    */
-  private async alcanceServicios(dto?: { categoria?: string; search?: string; agenciaId?: string }, userCtx?: { agenciaId?: string; namerol?: string }) {
+  private async alcanceServicios(dto?: { categoria?: string; search?: string; agenciaId?: string }, userCtx?: ContextoUsuario) {
     const where: any = {};
     if (dto?.categoria && dto.categoria !== 'TODOS') {
       // Admite varias categorías separadas por coma (p. ej. "GENERAL,ESPECIAL").
@@ -36,10 +33,11 @@ export class CatalogosService {
     }
     const busqueda = whereBusqueda(['nombre', 'codigo'], dto?.search);
 
-    const namerol = normalizarRol(userCtx?.namerol);
-    const isScopedRole = ROLES_SCOPED.includes(namerol);
-    // Regla única de alcance: quien no es Admin ni Súper Admin y tiene sede queda limitado a los servicios de su sede.
-    const sinAlcance = ROLES_SIN_ALCANCE.includes(namerol);
+    const funciones = funcionesDeRol(userCtx?.capacidades, userCtx?.namerol);
+    // Líder (y quien actúa como él) y aprobador: su catálogo se acota a Agencia.servicioIds aunque no tengan sede (entonces no ven nada).
+    const isScopedRole = funciones.has(FUNCION.LIDER_AGENCIA) || funciones.has(FUNCION.APROBADOR);
+    // Regla única de alcance: quien no es administrador y tiene sede queda limitado a los servicios de su sede.
+    const sinAlcance = funciones.has(FUNCION.ADMINISTRADOR);
     const acotadoPorSede = !sinAlcance && !!userCtx?.agenciaId;
     // Con sede (o rol de sede) manda SIEMPRE la agencia del usuario; la que mande el cliente solo cuenta para administradores.
     const efectiveAgenciaId = acotadoPorSede || isScopedRole ? userCtx?.agenciaId : dto?.agenciaId || userCtx?.agenciaId;
@@ -96,7 +94,7 @@ export class CatalogosService {
     return { where, busqueda, agenciaCtx, agenciaPrecioId };
   }
 
-  async listServicios(dto?: ListCatalogoServiciosDto, userCtx?: { agenciaId?: string; namerol?: string }) {
+  async listServicios(dto?: ListCatalogoServiciosDto, userCtx?: ContextoUsuario) {
     const { where, busqueda, agenciaCtx, agenciaPrecioId } = await this.alcanceServicios(dto, userCtx);
 
     // Quien tiene sede ve el precio que su agencia tiene fijado para cada servicio (`precioAgencia`, null si no hay). El precio global
@@ -154,7 +152,7 @@ export class CatalogosService {
   }
 
   /** Servicios para un desplegable con buscador: { value (id), label (nombre), sublabel (código · categoría) } paginado. */
-  async listServiciosOpciones(dto: ServiciosOpcionesDto, userCtx?: { agenciaId?: string; namerol?: string }) {
+  async listServiciosOpciones(dto: ServiciosOpcionesDto, userCtx?: ContextoUsuario) {
     const { where } = await this.alcanceServicios(dto, userCtx);
     return listarOpciones(dto, {
       where,

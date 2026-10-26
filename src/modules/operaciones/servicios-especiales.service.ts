@@ -1,3 +1,4 @@
+import { FUNCION, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import { prepararRetoqueEspecial } from './retoque-especial.js';
 import {
   Injectable,
@@ -13,7 +14,7 @@ import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { Alcance, resolverAlcance } from '../../common/permisos/alcance.js';
 import {
   normalizarRol,
-  rolDeUsuario,
+
 } from '../../common/permisos/alias-roles.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import {
@@ -83,7 +84,7 @@ export class ServiciosEspecialesService {
     },
   ): boolean {
     const alcance: Alcance = resolverAlcance(actor);
-    if (rolDeUsuario(actor) === 'PULIDOR') {
+    if (tieneFuncion(actor, FUNCION.PULIDOR)) {
       return (
         item.operadorId === actor.id ||
         Boolean(
@@ -246,7 +247,7 @@ export class ServiciosEspecialesService {
       v && v !== 'Todas' && v !== 'TODAS' ? v : undefined;
     const pideRegion = neutro(query.regionId);
     const pideAgencia = neutro(query.agenciaId) || neutro(query.sucursalId);
-    if (rolDeUsuario(currentUser) === 'PULIDOR') {
+    if (tieneFuncion(currentUser, FUNCION.PULIDOR)) {
       where.OR = [
         { operadorId: currentUser.id },
         { operadoresAsignados: { some: { operadorId: currentUser.id } } },
@@ -258,7 +259,7 @@ export class ServiciosEspecialesService {
           if (pideAgencia) where.agenciaId = pideAgencia;
           break;
         case 'REGION':
-          if (rolDeUsuario(currentUser) === 'PULIDOR') {
+          if (tieneFuncion(currentUser, FUNCION.PULIDOR)) {
             where.OR = [
               { operadorId: currentUser.id },
               { operadoresAsignados: { some: { operadorId: currentUser.id } } },
@@ -272,7 +273,7 @@ export class ServiciosEspecialesService {
           }
           break;
         case 'AGENCIA':
-          if (rolDeUsuario(currentUser) === 'PULIDOR') {
+          if (tieneFuncion(currentUser, FUNCION.PULIDOR)) {
             where.OR = [
               { operadorId: currentUser.id },
               { operadoresAsignados: { some: { operadorId: currentUser.id } } },
@@ -294,7 +295,7 @@ export class ServiciosEspecialesService {
     if (
       query.operadorId &&
       !where.operadorId &&
-      rolDeUsuario(currentUser) !== 'PULIDOR'
+      !tieneFuncion(currentUser, FUNCION.PULIDOR)
     ) {
       where.operadorId = query.operadorId;
     }
@@ -379,7 +380,7 @@ export class ServiciosEspecialesService {
     // consulta es exactamente la de siempre.
     const { campo: campoOrden, dir: dirOrden } = resolverCampoOrden(query.sortField, query.sortOrder, ORDEN_ESPECIALES, { campo: 'fecha', dir: 'desc' });
     const especialesArchivo = this.historico ? new ServiciosEspecialesArchivo(this.prisma, this.historico) : null;
-    const quien = { id: currentUser?.id as string | undefined, esPulidor: rolDeUsuario(currentUser) === 'PULIDOR' };
+    const quien = { id: currentUser?.id as string | undefined, esPulidor: tieneFuncion(currentUser, FUNCION.PULIDOR) };
     const archivado = especialesArchivo ? await especialesArchivo.consultar({ params: query, alcance, actor: quien, campo: campoOrden, dir: dirOrden, skip, take }) : null;
 
     const [itemsBase, totalBase] = await Promise.all([
@@ -530,7 +531,7 @@ export class ServiciosEspecialesService {
     // Retoque: se liga a una OT especial ya completada (misma OT, vehículo, agencia y pulidor) con código `SE-…-R1`.
     let retoque: Awaited<ReturnType<typeof prepararRetoqueEspecial>> | null = null;
     if (dto.retoqueDeCodigoSE?.trim()) {
-      if (currentUser && rolDeUsuario(currentUser) !== 'PULIDOR') {
+      if (currentUser && !tieneFuncion(currentUser, FUNCION.PULIDOR)) {
         throw new ForbiddenException('El retoque de un servicio especial solo lo pueden registrar los pulidores.');
       }
       retoque = await prepararRetoqueEspecial(this.prisma, {
@@ -680,7 +681,7 @@ export class ServiciosEspecialesService {
         where: {
           estado: 1,
           agenciaId: finalAgenciaId,
-          role: { namerol: 'PULIDOR' },
+          role: rolConFuncion(FUNCION.PULIDOR),
         },
         select: { id: true },
       });
@@ -701,7 +702,7 @@ export class ServiciosEspecialesService {
       where: {
         id: { in: operadoresIds },
         estado: 1,
-        role: { namerol: 'PULIDOR' },
+        role: rolConFuncion(FUNCION.PULIDOR),
       },
       select: { id: true, regionId: true, agencia: { select: { regionId: true } } },
     });
@@ -996,7 +997,7 @@ export class ServiciosEspecialesService {
         where: {
           estado: 1,
           agenciaId: item.agenciaId,
-          role: { namerol: 'PULIDOR' },
+          role: rolConFuncion(FUNCION.PULIDOR),
         },
         select: { id: true },
       });
@@ -1018,7 +1019,7 @@ export class ServiciosEspecialesService {
           where: {
             id: { in: operadoresIds },
             estado: 1,
-            role: { namerol: 'PULIDOR' },
+            role: rolConFuncion(FUNCION.PULIDOR),
           },
           select: {
             id: true,
@@ -1369,7 +1370,6 @@ export class ServiciosEspecialesService {
       );
     }
 
-    const rol = rolDeUsuario(currentUser);
     // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
     // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
     // permiso desde Roles y Permisos, este comportamiento cambia con él.
@@ -1377,7 +1377,7 @@ export class ServiciosEspecialesService {
       currentUser,
       'especiales.reasignar',
     );
-    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
+    const isPulidor = tieneFuncion(currentUser, FUNCION.PULIDOR) && !puedeActuarSobreCualquiera;
 
     // Solo el pulidor asignado a esta OT o un Admin/SuperAdmin puede iniciarla
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
@@ -1430,7 +1430,6 @@ export class ServiciosEspecialesService {
   async pausar(dto: PausarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
 
-    const rol = rolDeUsuario(currentUser);
     // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
     // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
     // permiso desde Roles y Permisos, este comportamiento cambia con él.
@@ -1438,7 +1437,7 @@ export class ServiciosEspecialesService {
       currentUser,
       'especiales.reasignar',
     );
-    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
+    const isPulidor = tieneFuncion(currentUser, FUNCION.PULIDOR) && !puedeActuarSobreCualquiera;
 
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException(
@@ -1552,7 +1551,6 @@ export class ServiciosEspecialesService {
   async reanudar(dto: ReanudarServicioEspecialDto, currentUser?: any) {
     const item = await this.findOneRaw(dto.id);
 
-    const rol = rolDeUsuario(currentUser);
     // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
     // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
     // permiso desde Roles y Permisos, este comportamiento cambia con él.
@@ -1560,7 +1558,7 @@ export class ServiciosEspecialesService {
       currentUser,
       'especiales.reasignar',
     );
-    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
+    const isPulidor = tieneFuncion(currentUser, FUNCION.PULIDOR) && !puedeActuarSobreCualquiera;
 
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
       throw new ForbiddenException(
@@ -1813,7 +1811,6 @@ export class ServiciosEspecialesService {
       ? dto.videoFinalUrl
       : undefined;
 
-    const rol = rolDeUsuario(currentUser);
     // Quién puede operar el servicio de cualquier pulidor (no solo el suyo) depende del permiso
     // 'especiales.reasignar' —el mismo que rige reasignarlo a otro—, no del nombre del rol: si se edita ese
     // permiso desde Roles y Permisos, este comportamiento cambia con él.
@@ -1821,7 +1818,7 @@ export class ServiciosEspecialesService {
       currentUser,
       'especiales.reasignar',
     );
-    const isPulidor = rol === 'PULIDOR' && !puedeActuarSobreCualquiera;
+    const isPulidor = tieneFuncion(currentUser, FUNCION.PULIDOR) && !puedeActuarSobreCualquiera;
 
     // Solo el pulidor asignado a esta OT o un Admin/SuperAdmin puede completarla
     if (isPulidor && item.operadorId && item.operadorId !== currentUser?.id) {
@@ -1962,8 +1959,8 @@ export class ServiciosEspecialesService {
   ): Promise<void> {
     if (!this.notifications) return;
     const ids = await this.notifications.resolverDestinatariosPorRol({
-      global: ['ADMIN', 'SUPER_ADMIN', 'COORD_SERVICIOS_ESPECIALES'],
-      regionales: ['SUPERVISOR'],
+      global: [FUNCION.ADMINISTRADOR, FUNCION.COORD_ESPECIALES],
+      regionales: [FUNCION.SUPERVISOR],
       regionId: item.regionId,
     });
     if (!ids.length) return;
@@ -2157,7 +2154,7 @@ export class ServiciosEspecialesService {
         'anular un servicio especial',
       );
       this.asegurarPuedeVer(actor, item);
-      regla = ['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor))
+      regla = tieneFuncion(actor, FUNCION.ADMINISTRADOR)
         ? 'ADMIN'
         : 'TITULAR';
     }
@@ -2218,16 +2215,7 @@ export class ServiciosEspecialesService {
     }
     const where: any = {
       estado: 1,
-      role: {
-        namerol: {
-          in: [
-            'PULIDOR',
-            'Pulidor',
-            'Pulidor Móvil',
-            'Pulidor Fijo',
-          ],
-        },
-      },
+      role: rolConFuncion(FUNCION.PULIDOR),
     };
     if (
       agenciaId &&
@@ -2260,7 +2248,7 @@ export class ServiciosEspecialesService {
         agencia: {
           select: { id: true, nombre: true, regionId: true, codigo: true },
         },
-        role: { select: { id: true, namerol: true } },
+        role: { select: { id: true, namerol: true, capacidades: true } },
       },
       orderBy: { name: 'asc' },
     });
@@ -2285,7 +2273,7 @@ export class ServiciosEspecialesService {
 
   async obtenerStockPulidor(pulidorId: string, actor?: any) {
     if (actor && pulidorId !== String(actor.id)) {
-      if (rolDeUsuario(actor) === 'PULIDOR')
+      if (tieneFuncion(actor, FUNCION.PULIDOR))
         throw new ForbiddenException(
           'Solo puedes ver el stock de tu propio kit.',
         );

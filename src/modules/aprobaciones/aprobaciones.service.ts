@@ -4,7 +4,7 @@ import { SolicitarAprobacionDto, DecidirAprobacionDto, ListAprobacionesDto } fro
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { resolverAlcance } from '../../common/permisos/alcance.js';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { FUNCION, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 @Injectable()
@@ -24,12 +24,12 @@ export class AprobacionesService {
   /** Aprobador designado de la agencia (APROBADOR/GERENTE activos); si no hay, respaldo en ADMIN/SUPER_ADMIN. */
   private async resolverAprobadores(agenciaId: string): Promise<string[]> {
     const titulares = await this.prisma.user.findMany({
-      where: { agenciaId, estado: 1, role: { namerol: { in: ['APROBADOR'] }, estado: 1 } },
+      where: { agenciaId, estado: 1, role: { ...rolConFuncion(FUNCION.APROBADOR), estado: 1 } },
       select: { id: true },
     });
     if (titulares.length) return titulares.map((u) => u.id);
     const respaldo = await this.prisma.user.findMany({
-      where: { estado: 1, role: { namerol: { in: ['ADMIN', 'SUPER_ADMIN'] }, estado: 1 } },
+      where: { estado: 1, role: { ...rolConFuncion(FUNCION.ADMINISTRADOR), estado: 1 } },
       select: { id: true },
     });
     return respaldo.map((u) => u.id);
@@ -157,7 +157,7 @@ export class AprobacionesService {
     let regla;
     if (solicitud.agencia) {
       regla = await this.decisiones.reglaParaDecidir(actor, { id: solicitud.agencia.id, regionId: solicitud.agencia.regionId });
-    } else if (['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor))) {
+    } else if (tieneFuncion(actor, FUNCION.ADMINISTRADOR)) {
       regla = 'ADMIN' as const;
     } else {
       throw new ForbiddenException('Esta solicitud no pertenece a una agencia: solo un administrador puede decidirla.');

@@ -34,6 +34,8 @@ const REQUISITOS: Record<string, string[]> = {
   'taller.incidentes.asignar': ['incidentes.ver', 'usuarios.ver'],
   'taller.incidentes.resolver': ['incidentes.ver', 'maquinaria.evidencias'],
   'taller.incidentes.cancelar': ['incidentes.ver'],
+  'taller.incidentes.editar': ['incidentes.ver'],
+  'taller.incidentes.editar.asignadas': ['incidentes.ver'],
   // Programar elige máquina y técnico.
   'taller.mantenimientos.programar': ['mantenimientos.ver', 'usuarios.ver'],
   'taller.mantenimientos.ejecutar': ['mantenimientos.ver', 'maquinaria.evidencias'],

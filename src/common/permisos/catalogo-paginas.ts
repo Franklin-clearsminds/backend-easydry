@@ -238,6 +238,10 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('taller.incidentes.asignar', 'Asignar técnico', ['maquinaria.gestionar', 'usuarios.ver'], { migrarSi: ['maquinaria.gestionar'], grupo: 'Operar' }),
       accion('taller.incidentes.resolver', 'Resolver incidencia con evidencia', ['incidentes.resolver', 'evidencias.subir', 'evidencias.ver', 'maquinaria.evidencias'], { grupo: 'Operar' }),
       accion('taller.incidentes.cancelar', 'Cancelar incidencia', ['incidentes.resolver'], { grupo: 'Operar' }),
+      // Editar tiene dos casillas: la completa (título, descripción, gravedad, solución y costo de cualquier incidencia de su alcance) y la del
+      // técnico, que solo corrige la solución de las incidencias que tiene asignadas.
+      accion('taller.incidentes.editar', 'Editar incidencia', ['incidentes.resolver'], { grupo: 'Operar' }),
+      accion('taller.incidentes.editar.asignadas', 'Editar la incidencia asignada a mí', ['incidentes.resolver'], { grupo: 'Operar' }),
       PRECIOS,
     ], ['incidentes.ver']),
     sub('taller', 'mantenimientos', 'Mantenimientos', ['mantenimientos.ver'], [
@@ -343,6 +347,23 @@ export const PAGINAS: readonly PaginaDef[] = [
     accion('sistema.app.retos', 'Ver retos en la app móvil', ['retos.ver']),
     accion('sistema.sync.usar', 'Usar la sincronización de la app', ['sync.usar']),
     accion('sistema.sync.errores', 'Gestionar errores de sincronización', ['sync.dlq.gestionar']),
+    // Qué tipo de usuario es el rol: de aquí salen los comportamientos que antes dependían del nombre (ver common/permisos/funciones.ts).
+    accion('funcion.administrador', 'Administrador: gestiona la plataforma, aprueba como administrador y recibe los avisos de administración', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.lider_agencia', 'Líder de agencia: registra las OT de su sede, y ve y reporta toda la maquinaria de su agencia', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.lider', 'Líder titular de la agencia (uno por agencia)', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.auxiliar', 'Auxiliar de bahía: lavador con las capacidades del líder', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.backup', 'Backup: reemplazo temporal de un líder', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.lavador', 'Lavador: personal de bahía que realiza los servicios generales', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.aprobador', 'Aprobador de la agencia: aprueba o rechaza los servicios finalizados', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.pulidor', 'Pulidor: servicios especiales, su kit de insumos y la maquinaria que tiene a su nombre', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.tecnico', 'Técnico: repara y da mantenimiento solo a lo que le asignan', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.coord_mantenimiento', 'Coordinador de mantenimiento: asigna técnicos y gestiona incidencias y mantenimientos de su región', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.supervisor', 'Supervisor regional: controla su región y aprueba donde no hay aprobador', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.coord_especiales', 'Coordinador de servicios especiales: supervisa a los pulidores y sus servicios', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.comercial', 'Comercial: consulta la operación, los retos y la productividad', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.comercial_nacional', 'Comercial nacional: lo anterior sobre todo el país y recibe los avisos de retos de todas las regiones', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.coord_bodega', 'Coordinador de bodega: gestiona el inventario central', [], { grupo: 'Funciones del rol' }),
+    accion('funcion.asistente_bodega', 'Asistente de bodega: apoya el inventario de su región', [], { grupo: 'Funciones del rol' }),
   ]),
 ];
 

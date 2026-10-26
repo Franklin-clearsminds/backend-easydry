@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsGateway } from './notifications.gateway.js';
 import { resolverPaginacion } from '../../common/utils/data-grid.helpers.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
-import { ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
+import { FUNCION, rolConFuncion } from '../../common/permisos/funciones.js';
 import type { ListarNotificacionesDto } from './dto/notifications.dto.js';
 
 export interface PushNotificationPayload {
@@ -127,13 +127,13 @@ export class NotificationsService {
    */
   async resolverDestinatariosPorRol(params: { global?: string[]; regionales?: string[]; regionId?: string | string[] | null }): Promise<string[]> {
     const or: Record<string, unknown>[] = [];
-    if (params.global?.length) or.push({ role: { namerol: { in: params.global }, estado: 1 } });
+    if (params.global?.length) or.push({ role: this.filtroRol(params.global) });
     if (params.regionales?.length && params.regionId) {
       if (params.regionId === 'TODAS') {
-        or.push({ role: { namerol: { in: params.regionales }, estado: 1 } });
+        or.push({ role: this.filtroRol(params.regionales) });
       } else {
         const regionIds = Array.isArray(params.regionId) ? params.regionId : [params.regionId];
-        if (regionIds.length) or.push({ role: { namerol: { in: params.regionales }, estado: 1 }, regionId: { in: regionIds } });
+        if (regionIds.length) or.push({ role: this.filtroRol(params.regionales), regionId: { in: regionIds } });
       }
     }
     if (!or.length) return [];
@@ -141,10 +141,24 @@ export class NotificationsService {
     return usuarios.map((u) => u.id);
   }
 
+  /**
+   * Roles destinatarios. Lo normal es pasar funciones del rol (`FUNCION.*`): un rol creado desde Roles con esa función también recibe el aviso.
+   * Un nombre de rol suelto (`'SUPER_ADMIN'`) se sigue entendiendo como nombre.
+   */
+  private filtroRol(valores: string[]): Record<string, unknown> {
+    const funciones = valores.filter((v) => v.startsWith('funcion.'));
+    const nombres = valores.filter((v) => !v.startsWith('funcion.'));
+    if (!funciones.length) return { namerol: { in: nombres }, estado: 1 };
+    const or: Record<string, unknown>[] = [];
+    if (funciones.length) or.push(rolConFuncion(...(funciones as never[])) as Record<string, unknown>);
+    if (nombres.length) or.push({ namerol: { in: nombres } });
+    return { estado: 1, OR: or };
+  }
+
   /** Notifica a los administradores cuando cambian módulos, capacidades o ámbito de un rol. */
   async notificarCambioPermisosRol(params: { roleId: string; roleName: string; actorName?: string }) {
     try {
-      const userIds = await this.resolverDestinatariosPorRol({ global: ['ADMIN', 'SUPER_ADMIN'] });
+      const userIds = await this.resolverDestinatariosPorRol({ global: [FUNCION.ADMINISTRADOR] });
       await this.notificarUsuarios(
         userIds,
         'Permisos de rol actualizados',
@@ -167,7 +181,7 @@ export class NotificationsService {
   }) {
     if (!params.regionId) return;
     const coordinadores = await this.prisma.user.findMany({
-      where: { estado: 1, regionId: params.regionId, role: { namerol: 'COORD_MANTENIMIENTO' } },
+      where: { estado: 1, regionId: params.regionId, role: rolConFuncion(FUNCION.COORD_MANTENIMIENTO) },
       select: { id: true },
     });
     await this.notificarUsuarios(coordinadores.map((u) => u.id), params.title, params.body, params.data, params.opts);
@@ -184,7 +198,7 @@ export class NotificationsService {
     const destinatarios = await this.prisma.user.findMany({
       where: {
         estado: 1,
-        role: { namerol: { in: ['COORD_MANTENIMIENTO', 'SUPERVISOR', 'ADMIN'] } },
+        role: rolConFuncion(FUNCION.COORD_MANTENIMIENTO, FUNCION.SUPERVISOR, FUNCION.ADMINISTRADOR),
         ...(params.agenciaId ? { OR: [{ agenciaId: params.agenciaId }, { agenciasIds: { has: params.agenciaId } }, { agenciaId: null }] } : {}),
       },
       select: { id: true },
@@ -222,11 +236,11 @@ export class NotificationsService {
     const destinatarios = await this.prisma.user.findMany({
       where: {
         estado: 1,
-        role: { namerol: { in: ['COORD_BODEGA', 'ASISTENTE_BODEGA', ...ROLES_LIDER_AGENCIA, 'ADMIN'] } },
+        role: rolConFuncion(FUNCION.COORD_BODEGA, FUNCION.ASISTENTE_BODEGA, FUNCION.LIDER_AGENCIA, FUNCION.ADMINISTRADOR),
         ...(params.agenciaId
           ? {
               OR: [
-                { role: { namerol: { in: ['COORD_BODEGA', 'ADMIN'] } } },
+                { role: rolConFuncion(FUNCION.COORD_BODEGA, FUNCION.ADMINISTRADOR) },
                 ...(regionId ? [{ regionId }] : []),
                 { agenciaId: params.agenciaId },
                 { agenciasIds: { has: params.agenciaId } },

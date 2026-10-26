@@ -1,3 +1,4 @@
+import { FUNCION, rolConFuncion } from '../../common/permisos/funciones.js';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { NotificationsService } from './notifications.service.js';
 import { NotificationsGateway } from './notifications.gateway.js';
@@ -116,7 +117,7 @@ describe('NotificationsService', () => {
       expect(prisma.user.findMany).toHaveBeenCalledWith({
         where: {
           estado: 1,
-          OR: [{ role: { namerol: { in: ['ADMIN', 'SUPER_ADMIN'] }, estado: 1 } }],
+          OR: [{ role: { estado: 1, OR: [rolConFuncion(FUNCION.ADMINISTRADOR)] } }],
         },
         select: { id: true },
       });

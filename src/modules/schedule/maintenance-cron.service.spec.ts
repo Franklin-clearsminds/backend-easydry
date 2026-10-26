@@ -1,3 +1,4 @@
+import { FUNCION, rolConFuncion } from '../../common/permisos/funciones.js';
 import { describe, expect, it, vi } from 'vitest';
 import { MaintenanceCronService } from './maintenance-cron.service.js';
 
@@ -76,7 +77,7 @@ describe('MaintenanceCronService', () => {
         });
         await service.recordatorioLimpiezaDelDia();
         expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-          where: expect.objectContaining({ agenciaId: 'ag-1', role: { namerol: { in: ['LIDER', 'BACKUP', 'AUXILIAR'] } } }),
+          where: expect.objectContaining({ agenciaId: 'ag-1', role: rolConFuncion(FUNCION.LIDER_AGENCIA) }),
         }));
         expect(notifications.notificarUsuarios).toHaveBeenCalledWith(['lider-1'], expect.any(String), expect.any(String), expect.any(Object), expect.any(Object));
       } finally {

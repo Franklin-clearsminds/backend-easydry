@@ -1,3 +1,4 @@
+import { FUNCION, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
 import { validarLavadoresDeLaOT } from './lavadores-bahia.js';
 import { validarAgregarServicioAOT } from './retoque.js';
@@ -30,7 +31,6 @@ import { ServiciosArchivo } from './servicios-archivo.js';
 import { ConsumosArchivo } from './consumos-archivo.js';
 import { DecisionesService } from '../../common/permisos/decisiones.service.js';
 import { Alcance, puedeSobreAgencia, resolverAlcance } from '../../common/permisos/alcance.js';
-import { esLiderDeAgencia, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { aUnidadDelInsumo, valorarConsumo } from '../../common/utils/costo-insumo.js';
 
 /** Datos del vehículo y del cliente que corrige «Editar OT» (valen para todos los servicios de la misma OT). */
@@ -667,11 +667,11 @@ export class OperacionesService {
       throw new BadRequestException(`El servicio "${catalogo.nombre}" está inactivo y no se puede usar en una nueva OT.`);
     }
     // El líder (y Backup, que tiene sus mismos permisos) solo registra servicios generales; los especiales los gestiona su coordinación.
-    if (esLiderDeAgencia(rolDeUsuario(actor)) && catalogo.categoria !== 'GENERAL') {
+    if (tieneFuncion(actor, FUNCION.LIDER_AGENCIA) && catalogo.categoria !== 'GENERAL') {
       throw new ForbiddenException('Tu rol solo puede registrar servicios generales.');
     }
     // El retoque de una OT general solo lo registra un líder de agencia (el del servicio especial, un pulidor).
-    if (actor && catalogo.esRetoque && !esLiderDeAgencia(rolDeUsuario(actor))) {
+    if (actor && catalogo.esRetoque && !tieneFuncion(actor, FUNCION.LIDER_AGENCIA)) {
       throw new ForbiddenException('El retoque solo lo pueden registrar los líderes de agencia.');
     }
     const resolvedCatalogoId = catalogo.id;
@@ -1059,7 +1059,7 @@ export class OperacionesService {
       }
       this.exigirPermisosDeActualizacion(actor, servicio, updateDto);
       if (servicio.estado === ServiceStatus.APROBADO) {
-        if (!['SUPER_ADMIN', 'ADMIN'].includes(rolDeUsuario(actor))) {
+        if (!tieneFuncion(actor, FUNCION.ADMINISTRADOR)) {
           throw new ForbiddenException('Un servicio aprobado solo lo puede editar un administrador.');
         }
         motivoCorreccion = this.decisiones.exigirMotivo(updateDto.motivoCorreccion, 'corregir un servicio aprobado');
@@ -1352,10 +1352,10 @@ export class OperacionesService {
   ): Promise<void> {
     if (!this.notifications) return;
     const [lideres, porRol] = await Promise.all([
-      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } }, select: { id: true } }),
+      this.prisma.user.findMany({ where: { estado: 1, agenciaId: agencia.id, role: rolConFuncion(FUNCION.LIDER_AGENCIA) }, select: { id: true } }),
       this.notifications.resolverDestinatariosPorRol({
-        global: ['ADMIN', 'SUPER_ADMIN'],
-        regionales: ['SUPERVISOR'],
+        global: [FUNCION.ADMINISTRADOR],
+        regionales: [FUNCION.SUPERVISOR],
         regionId: agencia.regionId,
       }),
     ]);

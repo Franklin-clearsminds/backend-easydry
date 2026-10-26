@@ -1,5 +1,5 @@
 import { ambitoDeUsuario } from './capacidades.js';
-import { rolDeUsuario } from './alias-roles.js';
+import { FUNCION, tieneFuncion } from './funciones.js';
 
 /**
  * Sobre qué datos actúa el usuario. Regla única para todos los módulos:
@@ -32,7 +32,7 @@ export function resolverAlcance(user: any): Alcance {
     case 'AGENCIA':
       if (agenciaId) return { tipo: 'AGENCIA', agenciaId };
       // El pulidor móvil no tiene agencia: opera en su región.
-      if (rolDeUsuario(user) === 'PULIDOR' && regionId) return { tipo: 'REGION', regionId };
+      if (tieneFuncion(user, FUNCION.PULIDOR) && regionId) return { tipo: 'REGION', regionId };
       return NINGUNO;
     case 'PROPIO':
       return user?.id ? { tipo: 'PROPIO', userId: String(user.id) } : NINGUNO;

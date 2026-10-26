@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { MaquinariaService } from './maquinaria.service.js';
 import type { Actor } from './maquinaria.permisos.js';
+import { FUNCION, rolConFuncion } from '../../common/permisos/funciones.js';
 
 const DAY = 86_400_000;
 
@@ -356,12 +357,12 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       await service.setActiva({ maquinariaId: 'm1', activa: false, motivo: 'Irreparable' } as never, admin);
 
       expect(prisma.user.findMany).toHaveBeenCalledWith({
-        where: { estado: 1, agenciaId: 'ag-1', role: { namerol: { in: ['LIDER', 'BACKUP', 'AUXILIAR'] } } },
+        where: { estado: 1, agenciaId: 'ag-1', role: rolConFuncion(FUNCION.LIDER_AGENCIA) },
         select: { id: true },
       });
       expect(notifications.resolverDestinatariosPorRol).toHaveBeenCalledWith({
-        global: ['ADMIN', 'SUPER_ADMIN'],
-        regionales: ['COORD_MANTENIMIENTO', 'SUPERVISOR'],
+        global: [FUNCION.ADMINISTRADOR],
+        regionales: [FUNCION.COORD_MANTENIMIENTO, FUNCION.SUPERVISOR],
         regionId: 'costa',
       });
       const [ids] = notifications.notificarUsuarios.mock.calls[0];
@@ -740,6 +741,22 @@ describe('MaquinariaService — costo de mantenimiento e incidencias', () => {
       expect(tx.incidenteTecnico.update.mock.calls[0][0].data.costoTotal).toBe(35.5);
     });
 
+    it('el PDF es opcional al resolver: basta una foto o video, y con PDF también se acepta', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente());
+      const soloMultimedia = [{ url: 'maquinaria/mq-01/incidentes/inc-1/multimedia/a.jpg' }];
+      await service.resolverIncidente({ incidenteId: 'inc-1', solucion: 'Se cambió el retén', evidencias: soloMultimedia, costoTotal: 20 } as never, tecnico);
+      expect(tx.incidenteTecnico.update.mock.calls[0][0].data.estado).toBe('RESUELTO');
+    });
+
+    it('al resolver sigue exigiendo al menos una foto o video', async () => {
+      const { service, prisma } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente());
+      await expect(
+        service.resolverIncidente({ incidenteId: 'inc-1', solucion: 'Se cambió el retén', evidencias: [{ url: 'maquinaria/mq-01/incidentes/inc-1/documento/a.pdf' }], costoTotal: 20 } as never, tecnico),
+      ).rejects.toThrow(/foto o un video/);
+    });
+
     it('permite resolver sin evidencias cuando el rol no tiene permiso para subirlas', async () => {
       const { service, prisma, tx } = build();
       prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente());
@@ -798,6 +815,32 @@ describe('MaquinariaService — costo de mantenimiento e incidencias', () => {
       prisma.incidenteTecnico.findUnique.mockResolvedValue(cargado());
       await service.editarIncidente({ incidenteId: 'inc-1', costoTotal: 42 } as never, coordCosta);
       expect(tx.incidenteTecnico.update.mock.calls[0][0].data.costoTotal).toBe(42);
+    });
+  });
+
+  describe('editarIncidente — casilla «editar la incidencia asignada a mí» (sin la casilla completa)', () => {
+    it('quien solo tiene la casilla de las asignadas no puede editar una que no es suya, aunque sea de su región', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente({ estado: 'EN_PROCESO', tecnicoAsignadoId: 'otro-tecnico' }));
+      await expect(service.editarIncidente({ incidenteId: 'inc-1', titulo: 'Nuevo título' } as never, coordCosta, false)).rejects.toThrow(/asignadas/);
+      expect(tx.incidenteTecnico.update).not.toHaveBeenCalled();
+    });
+
+    it('en la suya solo cambia la solución: el título y el costo se ignoran', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente({ estado: 'EN_PROCESO', tecnicoAsignadoId: coordCosta.id }));
+      await service.editarIncidente({ incidenteId: 'inc-1', titulo: 'Nuevo título', costoTotal: 99, solucion: 'Cambié la pieza' } as never, coordCosta, false);
+      const data = tx.incidenteTecnico.update.mock.calls[0][0].data;
+      expect(data.solucion).toBe('Cambié la pieza');
+      expect(data.titulo).toBeUndefined();
+      expect(data.costoTotal).toBeUndefined();
+    });
+
+    it('con la casilla completa el coordinador sí edita cualquiera de su región', async () => {
+      const { service, prisma, tx } = build();
+      prisma.incidenteTecnico.findUnique.mockResolvedValue(incidente({ estado: 'EN_PROCESO', tecnicoAsignadoId: 'otro-tecnico' }));
+      await service.editarIncidente({ incidenteId: 'inc-1', titulo: 'Nuevo título' } as never, coordCosta, true);
+      expect(tx.incidenteTecnico.update.mock.calls[0][0].data.titulo).toBe('Nuevo título');
     });
   });
 });

@@ -35,6 +35,7 @@ export class CatalogosController {
     const userCtx = {
       agenciaId: user?.agenciaId || user?.agencia?.id || undefined,
       namerol: user?.roleDetails?.namerol || user?.role || undefined,
+      capacidades: user?.roleDetails?.capacidades,
     };
     return this.catalogosService.listServicios(dto, userCtx);
   }
@@ -48,6 +49,7 @@ export class CatalogosController {
     return this.catalogosService.listServiciosOpciones(dto, {
       agenciaId: user?.agenciaId || user?.agencia?.id || undefined,
       namerol: user?.roleDetails?.namerol || user?.role || undefined,
+      capacidades: user?.roleDetails?.capacidades,
     });
   }
 

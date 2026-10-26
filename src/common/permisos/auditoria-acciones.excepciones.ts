@@ -35,6 +35,9 @@ export const EXCEPCIONES_SERVIDOR: Record<string, string> = {
  * Casillas que ninguna pantalla puede usar por su cuenta, con el motivo. Mismo criterio: decisión razonada y permanente, a diferencia
  * de la línea base. Si una pantalla pasa a usarla, se borra de aquí.
  */
+/** Las funciones del rol las lee el servidor (alcance, quién recibe un aviso, a quién se asigna): las pantallas muestran lo que llega. */
+const FUNCION_MOTIVO = 'Función del rol: la leen el servidor (alcance, avisos, asignaciones) y la sesión; ninguna pantalla muestra un botón por ella.';
+
 export const EXCEPCIONES_PANTALLA: Record<string, string> = {
   'precios.ver': 'El servidor retira los precios de la respuesta (interceptor) a quien no tiene esta casilla: la pantalla muestra lo que llega, sin consultarla.',
   'datos.cedula.ver': 'El servidor omite la cédula del personal en la respuesta si falta la casilla: la pantalla muestra lo que llega.',
@@ -43,4 +46,20 @@ export const EXCEPCIONES_PANTALLA: Record<string, string> = {
   'evidencias.subir': 'La subida de archivos la valida el servidor (storage/upload-permissions); cada pantalla oculta su botón con su propia casilla de evidencias (las de reportar o resolver incidente, ejecutar mantenimiento y registrar limpieza).',
   'sistema.sync.usar': 'La sincronización no tiene botón: la app la usa en segundo plano y el servidor la rechaza si falta la casilla.',
   'sistema.sync.errores': 'La cola de errores de sincronización se gestiona desde soporte, sin pantalla propia: el servidor la exige.',
+  'funcion.administrador': FUNCION_MOTIVO,
+  'funcion.lider_agencia': FUNCION_MOTIVO,
+  'funcion.lider': FUNCION_MOTIVO,
+  'funcion.auxiliar': FUNCION_MOTIVO,
+  'funcion.backup': FUNCION_MOTIVO,
+  'funcion.lavador': FUNCION_MOTIVO,
+  'funcion.aprobador': FUNCION_MOTIVO,
+  'funcion.pulidor': FUNCION_MOTIVO,
+  'funcion.tecnico': FUNCION_MOTIVO,
+  'funcion.coord_mantenimiento': FUNCION_MOTIVO,
+  'funcion.supervisor': FUNCION_MOTIVO,
+  'funcion.coord_especiales': FUNCION_MOTIVO,
+  'funcion.comercial': FUNCION_MOTIVO,
+  'funcion.comercial_nacional': FUNCION_MOTIVO,
+  'funcion.coord_bodega': FUNCION_MOTIVO,
+  'funcion.asistente_bodega': FUNCION_MOTIVO,
 };

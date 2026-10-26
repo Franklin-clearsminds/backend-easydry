@@ -11,7 +11,7 @@ import {
 } from './dto/analytics.dto.js';
 import { ServiceStatus } from '@prisma/client';
 import { SIN_RESULTADOS, resolverAlcance } from '../../common/permisos/alcance.js';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { FUNCION, funcionesDeRol, tieneAlgunaFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { CacheService, huella } from '../../common/cache/cache.service.js';
 import { ServiciosFederados } from '../archivado/servicios-federados.js';
@@ -214,34 +214,32 @@ export class AnalyticsService {
     const startOfDay = periodo.desde;
     const endOfDay = periodo.hasta;
     const hace30Dias = periodo.desde;
-    const roleName = rolDeUsuario(user);
-
-    if (roleName === 'APROBADOR') {
+    if (tieneFuncion(user, FUNCION.APROBADOR)) {
       const metricas = await this.getAprobadorMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, this.servFiltro(dto), dto?.bahiaId);
       return { success: true, isAprobadorView: true, metricasAprobaciones: metricas, ...metricas };
     }
 
     // Roles que ven el dashboard analítico (Super Admin, Admin, Supervisor, Líder, Comerciales)
     let baseMetrics: any;
-    const isComercial = roleName === 'COORD_COMERCIAL' || roleName === 'JEFE_COMERCIAL';
+    const isComercial = tieneFuncion(user, FUNCION.COMERCIAL);
     
     if (isComercial) {
       baseMetrics = await this.getComercialMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, this.servFiltro(dto));
       baseMetrics.isComercialView = true;
     } else {
-      const isSupervisorView = roleName === 'SUPERVISOR';
+      const isSupervisorView = tieneFuncion(user, FUNCION.SUPERVISOR);
       baseMetrics = await this.getEjecutivoMetrics(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, isSupervisorView, dto);
     }
 
     // Todos los roles de negocio reciben la analítica estratégica y jerárquica (filtrada por su ámbito)
-    const isEjecutivo = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER', 'BACKUP', 'AUXILIAR', 'COORD_COMERCIAL', 'JEFE_COMERCIAL'].includes(roleName);
+    const isEjecutivo = tieneAlgunaFuncion(user, [FUNCION.ADMINISTRADOR, FUNCION.SUPERVISOR, FUNCION.LIDER_AGENCIA, FUNCION.COMERCIAL]);
     
     if (isEjecutivo) {
       const globalMetrics = await this.getAdminEstrategicos(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.pulidorId, this.servFiltro(dto));
       const jerarquia = await this.getAdminJerarquia(dto, filtro, hayFiltro, startOfDay, endOfDay, user);
       return {
         success: true,
-        isSuperAdminView: ['SUPER_ADMIN', 'ADMIN'].includes(roleName),
+        isSuperAdminView: tieneFuncion(user, FUNCION.ADMINISTRADOR),
         isEjecutivoView: true,
         ...baseMetrics,
         ...globalMetrics,
@@ -1527,13 +1525,13 @@ this.federados.count('servicioLavado', {
       select: { 
         operadorId: true, 
         precio: true,
-        operador: { select: { id: true, name: true, lastname: true, agenciaId: true, agencia: { select: { nombre: true } }, region: { select: { nombre: true } }, role: { select: { namerol: true } } } } 
+        operador: { select: { id: true, name: true, lastname: true, agenciaId: true, agencia: { select: { nombre: true } }, region: { select: { nombre: true } }, role: { select: { namerol: true, capacidades: true } } } } 
       } 
     });
 
     const acumulado: Record<string, any> = {};
     for (const s of servicios) {
-      if (!s.operadorId || !s.operador || s.operador.role.namerol !== 'PULIDOR') continue;
+      if (!s.operadorId || !s.operador || !funcionesDeRol(s.operador.role.capacidades, s.operador.role.namerol).has(FUNCION.PULIDOR)) continue;
       if (!acumulado[s.operadorId]) {
         const nombreBase = `${s.operador.name} ${s.operador.lastname}`;
         const esFijo = s.operador.agenciaId !== null;

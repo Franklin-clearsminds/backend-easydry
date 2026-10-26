@@ -3,7 +3,7 @@ import { CacheService } from '../../common/cache/cache.service.js';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
-import { ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
+import { FUNCION, rolConFuncion } from '../../common/permisos/funciones.js';
 import { esHoyDiaDebido, limpiezaAtrasada, reglaLimpieza } from '../../common/utils/limpieza-maquinaria.js';
 
 @Injectable()
@@ -119,7 +119,7 @@ export class MaintenanceCronService {
           ? [m.operadorAsignadoId]
           : m.agenciaId
             ? (await this.prisma.user.findMany({
-              where: { agenciaId: m.agenciaId, estado: 1, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } },
+              where: { agenciaId: m.agenciaId, estado: 1, role: rolConFuncion(FUNCION.LIDER_AGENCIA) },
               select: { id: true },
             })).map((u) => u.id)
             : [];

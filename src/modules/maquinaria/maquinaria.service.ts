@@ -14,7 +14,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { CacheService } from '../../common/cache/cache.service.js';
 import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
-import { normalizarRol, ROLES_LIDER_AGENCIA } from '../../common/permisos/alias-roles.js';
+import { FUNCION, funcionesDeRol, rolConFuncion } from '../../common/permisos/funciones.js';
 import {
   columnasSimples,
   combinarWhere,
@@ -61,9 +61,9 @@ import {
 import {
   Actor,
   addDays,
+  ambitoDeActor,
   assertRegion,
   esAdmin,
-  esCoordComercial,
   esCoordMantenimiento,
   esCoordServiciosEspeciales,
   esSupervisor,
@@ -71,8 +71,8 @@ import {
   esLider,
   esRolPropio,
   esTecnico,
-  ROL,
-  ROLES_OPERADOR,
+  puedeRecibirMaquina,
+  puedeRecibirTrabajo,
   startOfDay,
 } from './maquinaria.permisos.js';
 import { horaDeReporte } from './hora-reporte.js';
@@ -238,19 +238,16 @@ export class MaquinariaService {
   // Alcance de lo que cada rol puede ver
   // ==============================================================
 
+  /**
+   * Máquinas que ve el actor. Lo decide el ámbito del rol (país, región, agencia o lo suyo), salvo dos funciones que lo acotan:
+   *  - pulidor: solo lo que tiene asignado a él personalmente (como su kit de insumos);
+   *  - coordinador de servicios especiales: la maquinaria que está a nombre de pulidores.
+   * El líder, que supervisa toda su agencia, ve cualquier máquina de su sede por su ámbito (y por tanto puede reportarla).
+   */
   private scopeMaquinaria(actor: Actor): Prisma.MaquinariaWhereInput {
-    if (esAdmin(actor) || actor.rol === ROL.COORD_BODEGA) return {};
-    if (esCoordMantenimiento(actor) || esSupervisor(actor) || esTecnico(actor) || esCoordComercial(actor)) {
-      return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
-    }
-    if (esCoordServiciosEspeciales(actor)) return { operadorAsignado: { role: { namerol: 'PULIDOR' } } };
-    // El líder supervisa toda su agencia: ve (y por tanto puede reportar, ver §reportarIncidente)
-    // cualquier máquina de su sede, esté o no asignada a él por nombre. El pulidor sigue viendo solo
-    // lo que tiene asignado a él personalmente, como su kit de insumos.
-    if (esLider(actor)) return { agenciaId: actor.agenciaId ?? NADA };
     if (esOperador(actor)) return { operadorAsignadoId: actor.id };
-    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
-    switch (actor.ambito) {
+    if (esCoordServiciosEspeciales(actor)) return { operadorAsignado: { role: rolConFuncion(FUNCION.PULIDOR) } };
+    switch (ambitoDeActor(actor)) {
       case 'GLOBAL': return {};
       case 'REGION': return { agencia: { regionId: actor.regionId ?? SIN_REGION } };
       case 'AGENCIA': return { agenciaId: actor.agenciaId ?? NADA };
@@ -259,33 +256,24 @@ export class MaquinariaService {
     }
   }
 
+  /**
+   * Incidencias que ve el actor: las de su ámbito. Tres funciones lo acotan o lo amplían:
+   *  - técnico: solo las que el coordinador de mantenimiento le asignó, no todas las de la región;
+   *  - pulidor: las de sus máquinas y las que reportó;
+   *  - coordinador de servicios especiales: las de la maquinaria a nombre de pulidores;
+   *  - coordinador de mantenimiento: además, las que tiene asignadas a su propio nombre aunque lo muevan de región después (ver bloqueo de
+   *    cambio de región con trabajo abierto en agencias.service.ts).
+   */
   private scopeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
-    if (esAdmin(actor)) return {};
-    if (esCoordMantenimiento(actor)) {
-      // El coordinador ve todo lo de su región (tiene que verlo para poder asignarlo), y además lo
-      // que tiene asignado a su propio nombre aunque lo muevan de región después (ver bloqueo de
-      // cambio de región con trabajo abierto en agencias.service.ts).
-      return { OR: [
-        { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } },
-        { tecnicoAsignadoId: actor.id },
-      ] };
-    }
-    if (esSupervisor(actor)) {
-      return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
-    }
-    if (esTecnico(actor)) {
-      // El técnico solo ve las incidencias que el coordinador de mantenimiento de su región le
-      // asignó a él por nombre, no todas las de la región (eso es del coordinador/supervisor).
-      return { tecnicoAsignadoId: actor.id };
-    }
-    if (esCoordServiciosEspeciales(actor)) return { maquinaria: { operadorAsignado: { role: { namerol: 'PULIDOR' } } } };
-    // Mismo criterio que scopeMaquinaria: el líder ve las incidencias de toda su agencia.
-    if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
-    if (esOperador(actor)) {
-      return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
-    }
-    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
-    switch (actor.ambito) {
+    if (esTecnico(actor)) return { tecnicoAsignadoId: actor.id };
+    if (esCoordServiciosEspeciales(actor)) return { maquinaria: { operadorAsignado: { role: rolConFuncion(FUNCION.PULIDOR) } } };
+    const base = this.alcanceDeIncidentes(actor);
+    return esCoordMantenimiento(actor) && Object.keys(base).length ? { OR: [base, { tecnicoAsignadoId: actor.id }] } : base;
+  }
+
+  private alcanceDeIncidentes(actor: Actor): Prisma.IncidenteTecnicoWhereInput {
+    if (esOperador(actor)) return { OR: [{ maquinaria: { operadorAsignadoId: actor.id } }, { reportadoPorId: actor.id }] };
+    switch (ambitoDeActor(actor)) {
       case 'GLOBAL': return {};
       case 'REGION': return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
       case 'AGENCIA': return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
@@ -294,29 +282,20 @@ export class MaquinariaService {
     }
   }
 
+  /**
+   * Mantenimientos que ve el actor: los de su ámbito. El técnico solo ve los que le asignaron (al depender solo de `tecnicoId` tampoco
+   * pierde de vista su trabajo si lo mueven de región mientras lo tiene abierto), el pulidor los de lo que tiene asignado a él y el
+   * coordinador de mantenimiento, además de los de su región, los que tiene a su propio nombre.
+   */
   private scopeMantenimientos(actor: Actor): Prisma.MantenimientoMaquinariaWhereInput {
-    if (esAdmin(actor)) return {};
-    if (esCoordMantenimiento(actor)) {
-      // El coordinador ve todos los de su región (tiene que verlos para poder asignarlos), y además
-      // los que tiene asignados a su propio nombre aunque lo muevan de región después (ver bloqueo
-      // de cambio de región con trabajo abierto en agencias.service.ts).
-      return { OR: [
-        { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } },
-        { tecnicoId: actor.id },
-      ] };
-    }
-    if (esTecnico(actor)) {
-      // El técnico solo ve los mantenimientos que el coordinador de mantenimiento de su región le
-      // asignó a él por nombre, no todos los de la región. Al depender solo de tecnicoId (y no de
-      // la región), tampoco pierde de vista su trabajo si lo mueven de región mientras lo tiene abierto.
-      return { tecnicoId: actor.id };
-    }
-    // Mismo criterio que scopeMaquinaria: el pulidor ve los mantenimientos de lo que tiene asignado
-    // a él, y el líder los de toda su agencia (ve y reporta cualquier máquina de su sede).
+    if (esTecnico(actor)) return { tecnicoId: actor.id };
+    const base = this.alcanceDeMantenimientos(actor);
+    return esCoordMantenimiento(actor) && Object.keys(base).length ? { OR: [base, { tecnicoId: actor.id }] } : base;
+  }
+
+  private alcanceDeMantenimientos(actor: Actor): Prisma.MantenimientoMaquinariaWhereInput {
     if (esOperador(actor)) return { maquinaria: { operadorAsignadoId: actor.id } };
-    if (esLider(actor)) return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
-    // Rol propio (creado desde Roles): manda el ámbito del rol, no su nombre.
-    switch (actor.ambito) {
+    switch (ambitoDeActor(actor)) {
       case 'GLOBAL': return {};
       case 'REGION': return { maquinaria: { agencia: { regionId: actor.regionId ?? SIN_REGION } } };
       case 'AGENCIA': return { maquinaria: { agenciaId: actor.agenciaId ?? NADA } };
@@ -335,11 +314,10 @@ export class MaquinariaService {
   private async validarResponsable(userId: string, regionMaquina: string | null): Promise<void> {
     const u = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, estado: true, regionId: true, role: { select: { namerol: true } } },
+      select: { id: true, estado: true, regionId: true, role: { select: { namerol: true, capacidades: true } } },
     });
     if (!u || u.estado !== 1) throw new NotFoundException('El técnico indicado no existe o está inactivo.');
-    const rolUsuario = normalizarRol(u.role.namerol);
-    if (rolUsuario !== ROL.TECNICO && rolUsuario !== ROL.COORD_MANTENIMIENTO) {
+    if (!puedeRecibirTrabajo(funcionesDeRol(u.role.capacidades, u.role.namerol))) {
       throw new BadRequestException('Solo se puede asignar a un técnico o al coordinador de mantenimiento.');
     }
     if (!regionMaquina || u.regionId !== regionMaquina) {
@@ -362,8 +340,8 @@ export class MaquinariaService {
     inputs: EvidenciaInputDto[] | undefined,
     /**
      * `requiereMultimedia`: exige al menos 1 foto o video. `requiereDocumento`: exige exactamente 1
-     * PDF. Son independientes: al reportar una falla solo se exige evidencia (foto/video) — el PDF
-     * (informe de reparación) recién se exige al resolver la incidencia o cerrar el mantenimiento.
+     * PDF. Son independientes: al reportar o resolver una incidencia solo se exige evidencia (foto/video) y el PDF
+     * es opcional; únicamente al cerrar un mantenimiento se exige además el PDF (informe).
      */
     opts: { requiereMultimedia?: boolean; requiereDocumento?: boolean },
   ): Promise<EvidenciaVerificada[]> {
@@ -818,12 +796,12 @@ export class MaquinariaService {
 
     if (!dto.activa && updated.agencia?.id) {
       const lideres = await this.prisma.user.findMany({
-        where: { estado: 1, agenciaId: updated.agencia.id, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } },
+        where: { estado: 1, agenciaId: updated.agencia.id, role: rolConFuncion(FUNCION.LIDER_AGENCIA) },
         select: { id: true },
       });
       const porRol = await this.notifications.resolverDestinatariosPorRol({
-        global: ['ADMIN', 'SUPER_ADMIN'],
-        regionales: ['COORD_MANTENIMIENTO', 'SUPERVISOR'],
+        global: [FUNCION.ADMINISTRADOR],
+        regionales: [FUNCION.COORD_MANTENIMIENTO, FUNCION.SUPERVISOR],
         regionId: updated.agencia.regionId,
       });
       void this.notifications.notificarUsuarios(
@@ -851,13 +829,12 @@ export class MaquinariaService {
           id: true,
           estado: true,
           regionId: true,
-          role: { select: { namerol: true } },
+          role: { select: { namerol: true, capacidades: true } },
           agencia: { select: { regionId: true } },
         },
       });
       if (!u || u.estado !== 1) throw new NotFoundException('El usuario indicado no existe o está inactivo.');
-      // Normalizado: cuentas viejas aún pueden tener el rol guardado como PULIDOR_FIJO/PULIDOR_MOVIL.
-      if (!ROLES_OPERADOR.includes(normalizarRol(u.role.namerol))) {
+      if (!puedeRecibirMaquina(funcionesDeRol(u.role.capacidades, u.role.namerol))) {
         throw new BadRequestException('Solo se puede asignar la máquina a un pulidor (fijo o móvil).');
       }
       // Fuera de admin/super admin, solo se puede asignar a un pulidor de la propia región
@@ -984,7 +961,7 @@ export class MaquinariaService {
       inputs.unshift({ url: dto.fotoEvidenciaUrl });
     }
     this.exigirPermisoParaEvidencias(inputs, puedeSubirEvidencias);
-    // Solo se exige evidencia al rol que tiene habilitada su subida; el PDF se pide al resolver.
+    // Solo se exige evidencia al rol que tiene habilitada su subida; el PDF no es obligatorio.
     const evidencias = await this.verificarEvidencias(maquina, inputs, { requiereMultimedia: puedeSubirEvidencias });
 
     if (dto.destinoTallerId) {
@@ -1123,10 +1100,10 @@ export class MaquinariaService {
 
     const nuevoEstado = dto.estado || 'RESUELTO';
     this.exigirPermisoParaEvidencias(dto.evidencias || [], puedeSubirEvidencias);
-    // Al resolver (repararla de verdad), los roles habilitados deben adjuntar foto/video y PDF.
+    // Al resolver (repararla de verdad), los roles habilitados deben adjuntar foto/video; el PDF es opcional (se puede subir uno o ninguno).
     // Si el permiso de evidencias está desactivado, se conserva la resolución sin adjuntos.
     const evidencias = nuevoEstado === 'RESUELTO' && puedeSubirEvidencias
-      ? await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true, requiereDocumento: true })
+      ? await this.verificarEvidencias(maquina, dto.evidencias, { requiereMultimedia: true })
       : await this.verificarEvidencias(maquina, dto.evidencias, {});
     if (nuevoEstado === 'RESUELTO' && dto.costoTotal == null) {
       throw new BadRequestException('El costo de la reparación es obligatorio para resolver la incidencia.');
@@ -1230,14 +1207,14 @@ export class MaquinariaService {
     return { success: true, data: this.ubicacionIncidente(updated) };
   }
 
-  async editarIncidente(dto: EditarIncidenteDto, actor: Actor) {
+  async editarIncidente(dto: EditarIncidenteDto, actor: Actor, puedeEditarTodo = true) {
     const inc = await this.cargarIncidente(dto.incidenteId);
     const maquina = inc.maquinaria as unknown as MaquinaCtx;
 
     // El costo ya lo ingresó el técnico al resolver; corregirlo después es solo de admin o coordinador de mantenimiento.
     let campos = ['titulo', 'descripcion', 'gravedad', 'solucion', 'costoTotal'];
-    if (esTecnico(actor)) {
-      // El reparador solo corrige su propio trabajo.
+    if (esTecnico(actor) || !puedeEditarTodo) {
+      // El reparador (o quien solo tiene la casilla «asignada a mí») corrige únicamente su propio trabajo.
       if (inc.tecnicoAsignadoId !== actor.id && inc.resueltoPorId !== actor.id) {
         throw new ForbiddenException('Solo puedes editar incidencias que tienes asignadas.');
       }
@@ -2105,7 +2082,7 @@ export class MaquinariaService {
       where: {
         tipoUbicacion: { in: ['TALLER_NACIONAL', 'TALLER_REGIONAL'] },
         estado: 1,
-        ...(esAdmin(actor) || actor.ambito === 'GLOBAL' ? {} : { regionId: actor.regionId ?? SIN_REGION }),
+        ...(esAdmin(actor) || ambitoDeActor(actor) === 'GLOBAL' ? {} : { regionId: actor.regionId ?? SIN_REGION }),
       },
       select: {
         id: true,

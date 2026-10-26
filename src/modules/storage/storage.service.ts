@@ -30,7 +30,7 @@ import {
 } from './media-inspect.js';
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
-import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { FUNCION, tieneFuncion } from '../../common/permisos/funciones.js';
 /** Resultado de verificar un archivo ya subido a S3. */
 export interface InspectedEvidence {
   key: string;
@@ -195,7 +195,7 @@ export class StorageService implements OnModuleInit {
     serviceId: string | undefined,
     actor: any,
   ): Promise<void> {
-    if (rolDeUsuario(actor) !== 'PULIDOR') return;
+    if (!tieneFuncion(actor, FUNCION.PULIDOR)) return;
     if (!serviceId || !this.prisma) {
       throw new ForbiddenException(
         'Solo el pulidor responsable puede subir evidencias de esta orden.',
@@ -1124,7 +1124,7 @@ export class StorageService implements OnModuleInit {
       select: { agenciaId: true, operadorAsignadoId: true, agencia: { select: { regionId: true } } },
     });
     if (!maquina) return true;
-    if (rolDeUsuario(user) === 'PULIDOR' || alcance.tipo === 'PROPIO') {
+    if (tieneFuncion(user, FUNCION.PULIDOR) || alcance.tipo === 'PROPIO') {
       return !!user?.id && maquina.operadorAsignadoId === String(user.id);
     }
     if (alcance.tipo === 'REGION') return !!maquina.agencia?.regionId && maquina.agencia.regionId === alcance.regionId;

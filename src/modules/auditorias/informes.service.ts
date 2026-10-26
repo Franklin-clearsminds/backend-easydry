@@ -9,6 +9,7 @@ import { buildDataGridResponse } from '../../common/dto/data-grid.dto.js';
 import { paginacionListado } from '../../common/utils/data-grid.helpers.js';
 import { resolverAlcance, whereAgencias, whereSobreAgencia, type Alcance } from '../../common/permisos/alcance.js';
 import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { FUNCION, funcionesDeRol, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { hoyEcuador } from '../retos/retos.reglas.js';
 import {
@@ -55,6 +56,9 @@ const dia = (d: Date | null | undefined): string | null => (d ? d.toISOString().
 const fechaDia = (s?: string | null): Date | null => (s ? new Date(`${String(s).slice(0, 10)}T00:00:00.000Z`) : null);
 const texto = (s: string | undefined | null): string => String(s ?? '').trim();
 const lista = (a: string[] | undefined | null): string[] => (a ?? []).map((x) => String(x).trim()).filter(Boolean);
+/** ¿La fila de la base ya tiene exactamente estos valores? (texto, números y listas de texto). */
+const sinCambios = (previa: object, nuevo: Record<string, unknown>): boolean =>
+  Object.entries(nuevo).every(([campo, valor]) => JSON.stringify((previa as Record<string, unknown>)[campo]) === JSON.stringify(valor));
 
 @Injectable()
 export class InformesInspeccionService {
@@ -87,7 +91,7 @@ export class InformesInspeccionService {
   }
 
   private esAdmin(user: any): boolean {
-    return ['ADMIN', 'SUPER_ADMIN'].includes(rolDeUsuario(user));
+    return tieneFuncion(user, FUNCION.ADMINISTRADOR);
   }
 
   /** Qué puede hacer el usuario con este informe, calculado en el servidor para que la web y la app no repitan las reglas. */
@@ -344,8 +348,8 @@ export class InformesInspeccionService {
     const alcance = resolverAlcance(user);
     const donde = this.whereUsuariosDelAlcance(alcance);
     const usuarios = await this.prisma.user.findMany({
-      where: { estado: 1, role: { namerol: { not: 'LAVADOR' } }, ...donde },
-      select: { id: true, name: true, lastname: true, agenciaId: true, role: { select: { namerol: true } } },
+      where: { estado: 1, role: { NOT: { AND: [rolConFuncion(FUNCION.LAVADOR), { NOT: rolConFuncion(FUNCION.LIDER_AGENCIA) }] } }, ...donde },
+      select: { id: true, name: true, lastname: true, agenciaId: true, role: { select: { namerol: true, capacidades: true } } },
       orderBy: [{ name: 'asc' }, { lastname: 'asc' }],
       take: 300,
     });
@@ -353,7 +357,7 @@ export class InformesInspeccionService {
     return usuarios.map((u) => ({
       id: u.id,
       nombre: `${u.name} ${u.lastname}`.trim(),
-      cargo: u.role.namerol === 'PULIDOR' ? (u.agenciaId ? 'Pulidor fijo' : 'Pulidor móvil') : cargoDeRol(u.role.namerol),
+      cargo: funcionesDeRol(u.role.capacidades, u.role.namerol).has(FUNCION.PULIDOR) ? (u.agenciaId ? 'Pulidor fijo' : 'Pulidor móvil') : cargoDeRol(u.role.namerol),
       rol: u.role.namerol,
       agenciaId: u.agenciaId,
     }));
@@ -614,9 +618,10 @@ export class InformesInspeccionService {
   }
 
   private async sincronizarNovedades(tx: Tx, informeId: string, items: NovedadDto[]) {
-    const existentes = new Set((await tx.informeNovedad.findMany({ where: { informeId }, select: { id: true } })).map((x) => x.id));
+    const existentes = new Map((await tx.informeNovedad.findMany({ where: { informeId }, select: { id: true, titulo: true, descripcion: true, categoria: true, area: true, fotos: true, orden: true } })).map((x) => [x.id, x]));
     const conservar = items.filter((i) => i.id && existentes.has(i.id)).map((i) => i.id as string);
-    await tx.informeNovedad.deleteMany({ where: { informeId, id: { notIn: conservar } } });
+    if (conservar.length !== existentes.size) await tx.informeNovedad.deleteMany({ where: { informeId, id: { notIn: conservar } } });
+    const nuevas: Prisma.InformeNovedadUncheckedCreateInput[] = [];
     for (const [orden, n] of items.entries()) {
       const data = {
         titulo: texto(n.titulo),
@@ -626,15 +631,20 @@ export class InformesInspeccionService {
         fotos: lista(n.fotos),
         orden,
       };
-      if (n.id && existentes.has(n.id)) await tx.informeNovedad.update({ where: { id: n.id }, data });
-      else await tx.informeNovedad.create({ data: { ...data, informeId } });
+      const previa = n.id ? existentes.get(n.id) : undefined;
+      // Solo se escribe lo que cambió (guardar sin cambios no toca la base) y lo nuevo entra en una sola consulta.
+      if (previa) {
+        if (!sinCambios(previa, data)) await tx.informeNovedad.update({ where: { id: previa.id }, data });
+      } else nuevas.push({ ...data, informeId });
     }
+    if (nuevas.length) await tx.informeNovedad.createMany({ data: nuevas });
   }
 
   private async sincronizarActividades(tx: Tx, informeId: string, items: ActividadDto[]) {
-    const existentes = new Set((await tx.informeActividad.findMany({ where: { informeId }, select: { id: true } })).map((x) => x.id));
+    const existentes = new Map((await tx.informeActividad.findMany({ where: { informeId }, select: { id: true, nombre: true, descripcion: true, fotos: true, orden: true } })).map((x) => [x.id, x]));
     const conservar = items.filter((i) => i.id && existentes.has(i.id)).map((i) => i.id as string);
-    await tx.informeActividad.deleteMany({ where: { informeId, id: { notIn: conservar } } });
+    if (conservar.length !== existentes.size) await tx.informeActividad.deleteMany({ where: { informeId, id: { notIn: conservar } } });
+    const nuevas: Prisma.InformeActividadUncheckedCreateInput[] = [];
     for (const [orden, a] of items.entries()) {
       const data = {
         nombre: texto(a.nombre),
@@ -642,18 +652,22 @@ export class InformesInspeccionService {
         fotos: lista(a.fotos),
         orden,
       };
-      if (a.id && existentes.has(a.id)) await tx.informeActividad.update({ where: { id: a.id }, data });
-      else await tx.informeActividad.create({ data: { ...data, informeId } });
+      const previa = a.id ? existentes.get(a.id) : undefined;
+      if (previa) {
+        if (!sinCambios(previa, data)) await tx.informeActividad.update({ where: { id: previa.id }, data });
+      } else nuevas.push({ ...data, informeId });
     }
+    if (nuevas.length) await tx.informeActividad.createMany({ data: nuevas });
   }
 
   private async sincronizarPlanes(tx: Tx, informeId: string, agenciaId: string, items: PlanAccionDto[]) {
-    const existentes = new Set((await tx.informePlanAccion.findMany({ where: { informeId }, select: { id: true } })).map((x) => x.id));
+    const existentes = new Map((await tx.informePlanAccion.findMany({ where: { informeId }, select: { id: true, agenciaId: true, problema: true, accionRequerida: true, evidenciaCumplimiento: true, orden: true } })).map((x) => [x.id, x]));
     const conservar = items.filter((i) => i.id && existentes.has(i.id)).map((i) => i.id as string);
-    await tx.informePlanAccion.deleteMany({ where: { informeId, id: { notIn: conservar } } });
+    if (conservar.length !== existentes.size) await tx.informePlanAccion.deleteMany({ where: { informeId, id: { notIn: conservar } } });
     // El responsable de un plan es siempre la agencia del informe y su fecha es la del día en que se crea.
-    const agencia = await tx.agencia.findUnique({ where: { id: agenciaId }, select: { nombre: true } });
+    const agencia = items.some((p) => !p.id || !existentes.has(p.id)) ? await tx.agencia.findUnique({ where: { id: agenciaId }, select: { nombre: true } }) : null;
     const creacion = { areaResponsable: '', personaResponsable: agencia?.nombre ?? '', fechaCompromiso: hoyEcuador() };
+    const nuevos: Prisma.InformePlanAccionUncheckedCreateInput[] = [];
     for (const [orden, p] of items.entries()) {
       // Prioridad, estado y observaciones ya no se piden al crear el informe: quedan con el valor de la base (media, pendiente, vacío).
       // El seguimiento posterior a la aprobación sigue cambiando el estado y las observaciones.
@@ -664,9 +678,12 @@ export class InformesInspeccionService {
         evidenciaCumplimiento: lista(p.evidenciaCumplimiento),
         orden,
       };
-      if (p.id && existentes.has(p.id)) await tx.informePlanAccion.update({ where: { id: p.id }, data });
-      else await tx.informePlanAccion.create({ data: { ...data, ...creacion, informeId } });
+      const previo = p.id ? existentes.get(p.id) : undefined;
+      if (previo) {
+        if (!sinCambios(previo, data)) await tx.informePlanAccion.update({ where: { id: previo.id }, data });
+      } else nuevos.push({ ...data, ...creacion, informeId });
     }
+    if (nuevos.length) await tx.informePlanAccion.createMany({ data: nuevos });
   }
 
   // ───────────────────────── Flujo de estados ─────────────────────────

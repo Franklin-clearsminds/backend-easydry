@@ -44,6 +44,8 @@ export class UsuariosOpcionesDto extends OpcionesDto {
   @ApiPropertyOptional() @IsOptional() @IsString() agenciaId?: string;
   @ApiPropertyOptional({ description: 'Roles separados por coma' })
   @IsOptional() @IsString() rolNombre?: string;
+  @ApiPropertyOptional({ description: 'Funciones del rol separadas por coma (funcion.tecnico, funcion.pulidor…): trae a quien tenga alguna, sea cual sea el nombre de su rol' })
+  @IsOptional() @IsString() funcion?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() regionId?: string;
   @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() estado?: number;
 }

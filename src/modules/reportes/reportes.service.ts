@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException,
 import { PrismaService } from '../prisma/prisma.service.js';
 import { resolverAlcance, whereAgencias, type Alcance } from '../../common/permisos/alcance.js';
 import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { FUNCION, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import { tienePermiso, tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
 import {
   REPORTES,
@@ -23,7 +24,6 @@ import { CacheService } from '../../common/cache/cache.service.js';
 /** Desde cuántas filas la pantalla avisa antes de exportar (no es un tope: se puede exportar igual). */
 export const UMBRALES_ADVERTENCIA = { PDF: 2000, EXCEL: 20000 } as const;
 
-const ROLES_BITACORA = ['ADMIN', 'SUPER_ADMIN'];
 
 interface AgenciaFila {
   id: string;
@@ -198,7 +198,7 @@ export class ReportesService {
       verInsumos ? this.prisma.insumo.findMany({ where: { estado: 1 }, select: { id: true, codigoSKU: true, nombre: true }, orderBy: { nombre: 'asc' } }) : [],
       verServicios && ids.length
         ? this.prisma.user.findMany({
-            where: { agenciaId: { in: ids }, role: { namerol: { in: ['LAVADOR', 'LIDER', 'BACKUP', 'AUXILIAR'] } } },
+            where: { agenciaId: { in: ids }, role: rolConFuncion(FUNCION.LAVADOR, FUNCION.LIDER_AGENCIA) },
             select: { id: true, name: true, lastname: true, agenciaId: true },
             orderBy: { name: 'asc' },
           })
@@ -206,7 +206,7 @@ export class ReportesService {
       // Pulidores fijos de las agencias del alcance y móviles de sus regiones.
       verEspeciales && (ids.length || regionIds.length)
         ? this.prisma.user.findMany({
-            where: { role: { namerol: 'PULIDOR' }, OR: [{ agenciaId: { in: ids } }, { agenciaId: null, regionId: { in: regionIds } }] },
+            where: { role: rolConFuncion(FUNCION.PULIDOR), OR: [{ agenciaId: { in: ids } }, { agenciaId: null, regionId: { in: regionIds } }] },
             select: { id: true, name: true, lastname: true, agenciaId: true, regionId: true },
             orderBy: { name: 'asc' },
           })
@@ -312,7 +312,7 @@ export class ReportesService {
         region: true,
         regionRel: { select: { nombre: true } },
         cliente: { select: { nombre: true } },
-        usuarios: { where: { role: { namerol: 'APROBADOR' } }, select: { name: true, lastname: true }, take: 1 },
+        usuarios: { where: { role: rolConFuncion(FUNCION.APROBADOR) }, select: { name: true, lastname: true }, take: 1 },
       },
       orderBy: { nombre: 'asc' },
     });
@@ -458,7 +458,7 @@ export class ReportesService {
 
   private async lavadoresListado(ctx: Ctx): Promise<Bruta[]> {
     const usuarios = await this.prisma.user.findMany({
-      where: { agenciaId: { in: ctx.ids }, role: { namerol: { in: ['LAVADOR', 'LIDER', 'BACKUP', 'AUXILIAR'] } } },
+      where: { agenciaId: { in: ctx.ids }, role: rolConFuncion(FUNCION.LAVADOR, FUNCION.LIDER_AGENCIA) },
       select: { id: true, name: true, lastname: true, estado: true, agenciaId: true, role: { select: { namerol: true } } },
       orderBy: [{ name: 'asc' }, { lastname: 'asc' }],
     });
@@ -1257,7 +1257,7 @@ export class ReportesService {
 
   /** Últimas exportaciones. Solo ADMIN y SUPER_ADMIN. */
   async bitacora(user: any, limite = 100) {
-    if (!ROLES_BITACORA.includes(rolDeUsuario(user))) throw new ForbiddenException('La bitácora de exportaciones es solo para administradores.');
+    if (!tieneFuncion(user, FUNCION.ADMINISTRADOR)) throw new ForbiddenException('La bitácora de exportaciones es solo para administradores.');
     return this.prisma.exportacionReporte.findMany({ orderBy: { createdAt: 'desc' }, take: Math.min(Math.max(limite, 1), 500) });
   }
 }

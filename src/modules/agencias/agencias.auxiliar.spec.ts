@@ -65,10 +65,12 @@ describe('auxiliar del líder (base real)', () => {
     expect(enBase.agenciaId).toBe(agencia.id);
   });
 
-  it('una agencia solo puede tener un auxiliar: el segundo se bloquea y nombra al que ya existe', async () => {
-    const d = datos('segundo', { bahiaId: bahia2.id });
-    await expect(service.createUsuario(d as any, actor())).rejects.toThrow(/ya tiene un auxiliar \(ROSA AUXILIAR\)/);
-    expect(await env.prisma.user.count({ where: { email: d.email } })).toBe(0);
+  it('una agencia puede tener varios auxiliares, cada uno en su bahía; en la misma bahía llena se bloquea', async () => {
+    const segundo: any = await service.createUsuario(datos('segundo', { bahiaId: bahia2.id }) as any, actor());
+    env.rastrear('User', segundo.user.id);
+    expect(await bahiaActiva(segundo.user.id)).toBe(bahia2.id);
+    // La bahía 1 ya está ocupada por el primero (máximo 1 lavador por bahía).
+    await expect(service.createUsuario(datos('tercero', { bahiaId: bahia1.id }) as any, actor())).rejects.toThrow(/máximo/);
   });
 
   it('un lavador pasa a auxiliar con su bahía, y cambiarlo de bahía reasigna sin duplicar', async () => {
@@ -95,7 +97,8 @@ describe('auxiliar del líder (base real)', () => {
       env.prisma.role.findUniqueOrThrow({ where: { namerol: 'AUXILIAR' } }),
       env.prisma.role.findUniqueOrThrow({ where: { namerol: 'LIDER' } }),
     ]);
-    expect([...aux.capacidades].sort()).toEqual([...lider.capacidades].sort());
+    const sinFunciones = (c: string[]) => c.filter((x) => !x.startsWith('funcion.')).sort();
+    expect(sinFunciones(aux.capacidades)).toEqual(sinFunciones(lider.capacidades));
     expect(aux.ambito).toBe('AGENCIA');
   });
 });

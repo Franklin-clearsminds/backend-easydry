@@ -239,6 +239,7 @@
       "taller.incidentes.cancelar",
       "taller.incidentes.reportar",
       "taller.incidentes.resolver",
+      "taller.incidentes.editar",
       "taller.limpiezas.editar",
       "taller.limpiezas.registrar",
       "taller.mantenimientos.editar",
@@ -253,7 +254,8 @@
       "usuarios.ver",
       "pagina.sellos",
       "sellos.gestionar",
-      "informes.aprobar"
+      "informes.aprobar",
+      "funcion.administrador"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -336,7 +338,8 @@
       "solicitudes.crear",
       "solicitudes.ver",
       "sync.usar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.aprobador"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -439,7 +442,8 @@
       "sistema.sync.usar",
       "stock.ajustar",
       "sync.usar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.asistente_bodega"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -565,7 +569,9 @@
       "sync.usar",
       "taller.incidentes.reportar",
       "taller.limpiezas.registrar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.lider_agencia",
+      "funcion.backup"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -691,7 +697,10 @@
       "sync.usar",
       "taller.incidentes.reportar",
       "taller.limpiezas.registrar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.lider_agencia",
+      "funcion.auxiliar",
+      "funcion.lavador"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -807,7 +816,8 @@
       "sistema.sync.usar",
       "stock.ajustar",
       "sync.usar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.coord_bodega"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -930,7 +940,8 @@
       "sistema.app.retos",
       "sistema.sync.usar",
       "sync.usar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.comercial"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1013,11 +1024,13 @@
       "taller.incidentes.asignar",
       "taller.incidentes.cancelar",
       "taller.incidentes.resolver",
+      "taller.incidentes.editar",
       "taller.limpiezas.editar",
       "taller.mantenimientos.editar",
       "taller.mantenimientos.ejecutar",
       "taller.mantenimientos.programar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.coord_mantenimiento"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1127,7 +1140,8 @@
       "sistema.sync.usar",
       "sync.usar",
       "taller.incidentes.reportar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.coord_especiales"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -1244,7 +1258,9 @@
       "sistema.app.retos",
       "sistema.sync.usar",
       "sync.usar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.comercial",
+      "funcion.comercial_nacional"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -1287,7 +1303,9 @@
       "pagina.informes",
       "pagina.inspecciones",
       "pagina.notificaciones",
-      "pagina.perfil"
+      "pagina.perfil",
+      "pagina.sistema",
+      "funcion.lavador"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1413,7 +1431,9 @@
       "sync.usar",
       "taller.incidentes.reportar",
       "taller.limpiezas.registrar",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.lider_agencia",
+      "funcion.lider"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1522,7 +1542,8 @@
       "sistema.sync.usar",
       "sync.usar",
       "taller.incidentes.reportar",
-      "taller.limpiezas.registrar"
+      "taller.limpiezas.registrar",
+      "funcion.pulidor"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1789,6 +1810,7 @@
       "taller.incidentes.cancelar",
       "taller.incidentes.reportar",
       "taller.incidentes.resolver",
+      "taller.incidentes.editar",
       "taller.limpiezas.editar",
       "taller.limpiezas.registrar",
       "taller.mantenimientos.editar",
@@ -1806,7 +1828,8 @@
       "usuarios.ver",
       "pagina.sellos",
       "sellos.gestionar",
-      "informes.aprobar"
+      "informes.aprobar",
+      "funcion.administrador"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -1961,7 +1984,8 @@
       "taller.incidentes.reportar",
       "taller.limpiezas.editar",
       "usuarios.usuarios.backup",
-      "usuarios.ver"
+      "usuarios.ver",
+      "funcion.supervisor"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -2033,8 +2057,10 @@
       "sync.usar",
       "taller.incidentes.cancelar",
       "taller.incidentes.resolver",
+      "taller.incidentes.editar.asignadas",
       "taller.mantenimientos.editar",
-      "taller.mantenimientos.ejecutar"
+      "taller.mantenimientos.ejecutar",
+      "funcion.tecnico"
     ],
     "acciones": {
       "verTodasSucursales": false,

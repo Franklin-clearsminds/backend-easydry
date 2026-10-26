@@ -223,7 +223,7 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'AUXILIAR',
     descripcion:
-      'Auxiliar del líder: lavador de una bahía que, con las mismas capacidades del líder, opera su agencia (uno por agencia).',
+      'Auxiliar del líder: lavador de una bahía que, con las mismas capacidades del líder, opera su agencia (varios por agencia, cada uno en su bahía).',
     ambito: 'AGENCIA',
     capacidades: [...CAPACIDADES_LIDER],
   },

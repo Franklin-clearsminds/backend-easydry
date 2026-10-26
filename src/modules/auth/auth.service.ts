@@ -12,7 +12,7 @@ import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { StorageService } from '../storage/storage.service.js';
 import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
-import { normalizarRol } from '../../common/permisos/alias-roles.js';
+import { FUNCION, funcionesDeRol } from '../../common/permisos/funciones.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
 import { JWT_ACCESS_DEFAULT, JWT_REFRESH_DEFAULT, JWT_SIGN_OPTIONS, JWT_VERIFY_OPTIONS } from './jwt.config.js';
 
@@ -161,8 +161,7 @@ export class AuthService {
   async cambiarPasswordPropia(userId: string, dto: { passwordActual: string; passwordNueva: string }): Promise<{ ok: true }> {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { role: true } });
     if (!user) throw new UnauthorizedException('Sesión no válida.');
-    const rol = normalizarRol(user.role?.namerol);
-    if (rol !== 'SUPER_ADMIN' && rol !== 'ADMIN') {
+    if (!funcionesDeRol(user.role?.capacidades, user.role?.namerol).has(FUNCION.ADMINISTRADOR)) {
       throw new ForbiddenException('Tu contraseña la asigna un administrador: solicítala desde el módulo de Usuarios.');
     }
     const actual = dto.passwordActual ?? '';
@@ -184,7 +183,7 @@ export class AuthService {
           accion: 'CAMBIAR_PASSWORD_PROPIA',
           usuarioId: user.id,
           usuarioNombre: `${user.name ?? ''} ${user.lastname ?? ''}`.trim() || user.email,
-          rol,
+          rol: user.role?.namerol,
           regla: 'ADMIN',
           agenciaId: user.agenciaId ?? null,
           detalle: { usuario: user.email },
@@ -286,8 +285,7 @@ export class AuthService {
       limpiarIntentos,
     ]);
 
-    const rolLogin = (user.role?.namerol || '').toUpperCase();
-    const esPulidorLogin = rolLogin.includes('PULIDOR') || rolLogin === 'OPERADOR_SERVICIOS_ESPECIALES';
+    const esPulidorLogin = funcionesDeRol(user.role?.capacidades, user.role?.namerol).has(FUNCION.PULIDOR);
 
     return {
       success: true,
@@ -430,8 +428,7 @@ export class AuthService {
       include: { bahia: { select: { id: true, nombre: true } } },
       orderBy: { fechaAsignacion: 'desc' },
     });
-    const rolRefresh = (user.role?.namerol || '').toUpperCase();
-    const esPulidorLogin = rolRefresh.includes('PULIDOR') || rolRefresh === 'OPERADOR_SERVICIOS_ESPECIALES';
+    const esPulidorLogin = funcionesDeRol(user.role?.capacidades, user.role?.namerol).has(FUNCION.PULIDOR);
 
     return {
       success: true,

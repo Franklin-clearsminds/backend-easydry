@@ -23,7 +23,8 @@ import { serializeServicioLavado } from '../../common/utils/servicio-serializer.
 
 import { tienePermiso, tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
 import { mensajeSinPermiso, permisoRequeridoPorMutacion, SinPermisoMutacionException } from './sync-permisos.js';
-import { esLiderDeAgencia, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { FUNCION, tieneFuncion } from '../../common/permisos/funciones.js';
 import { aUnidadDelInsumo } from '../../common/utils/costo-insumo.js';
 import { validarLavadoresDeLaOT } from '../operaciones/lavadores-bahia.js';
 import { modulosDeRol } from '../../common/permisos/modulos-navegacion.js';
@@ -281,9 +282,7 @@ export class SyncService {
               const b = await this.prisma.bahia.findUnique({
                 where: { id: bahiaId },
               });
-              const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(
-                currentUser?.role?.namerol || '',
-              );
+              const isAdmin = tieneFuncion(currentUser, FUNCION.ADMINISTRADOR);
               if (
                 !b ||
                 (!isAdmin &&
@@ -328,10 +327,10 @@ export class SyncService {
                 'No se pudo resolver el servicio en el catálogo offline.',
               );
             }
-            if (catalogo.esRetoque && !esLiderDeAgencia(rolDeUsuario(currentUser))) {
+            if (catalogo.esRetoque && !tieneFuncion(currentUser, FUNCION.LIDER_AGENCIA)) {
               throw new ForbiddenException('El retoque solo lo pueden registrar los líderes de agencia.');
             }
-            if (esLiderDeAgencia(rolDeUsuario(currentUser)) && catalogo.categoria !== 'GENERAL') {
+            if (tieneFuncion(currentUser, FUNCION.LIDER_AGENCIA) && catalogo.categoria !== 'GENERAL') {
               throw new BadRequestException('Tu rol solo puede registrar servicios generales.');
             }
 
@@ -1014,7 +1013,7 @@ export class SyncService {
               );
             }
             if (
-              rolDeUsuario(currentUser) === 'PULIDOR' &&
+              tieneFuncion(currentUser, FUNCION.PULIDOR) &&
               existing.operadorId !== userId
             ) {
               throw new ForbiddenException(
@@ -1198,8 +1197,7 @@ export class SyncService {
           default:
             Object.assign(whereClause, SIN_RESULTADOS);
         }
-        const rol = rolDeUsuario(user);
-        esAdminOSuperAdmin = rol === 'SUPER_ADMIN' || rol === 'ADMIN';
+        esAdminOSuperAdmin = tieneFuncion(user, FUNCION.ADMINISTRADOR);
         ocultarContactoOperador = !esAdminOSuperAdmin;
       }
     }

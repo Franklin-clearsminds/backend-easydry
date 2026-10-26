@@ -156,12 +156,13 @@ export class MaquinariaController {
     return this.maquinariaService.cancelarIncidente(dto, actorFromUser(user));
   }
 
-  @Permiso('taller.incidentes.resolver')
+  @Permiso('taller.incidentes.editar', 'taller.incidentes.editar.asignadas')
   @Post('incidentes/editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Editar una incidencia; queda registrado quién editó y qué cambió' })
   async editarIncidente(@Body() dto: EditarIncidenteDto, @CurrentUser() user: any) {
-    return this.maquinariaService.editarIncidente(dto, actorFromUser(user));
+    // Con la casilla completa edita cualquier incidencia de su alcance; solo con la de «asignada a mí», únicamente la solución de las suyas.
+    return this.maquinariaService.editarIncidente(dto, actorFromUser(user), tienePermiso(user, 'taller.incidentes.editar'));
   }
 
   @Permiso('incidentes.ver')

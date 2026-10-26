@@ -11,6 +11,7 @@ import { columnasSimples, whereBusqueda } from '../../common/utils/data-grid.hel
 import { listarPaginable } from '../../common/utils/listado-paginable.js';
 import { AMBITOS, CATALOGO_PERMISOS, ROL_SUPER_ADMIN, esAmbito, esCodigoPermiso } from '../../common/permisos/catalogo-permisos.js';
 import { normalizarRol, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { FUNCION, funcionesDeRol } from '../../common/permisos/funciones.js';
 import { ambitoDeUsuario, tienePermiso } from '../../common/permisos/capacidades.js';
 import { accionesLegacy } from '../../common/permisos/acciones-legacy.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
@@ -326,14 +327,15 @@ export class RolesService implements OnModuleInit {
     }
     if (ambito !== undefined) {
       if (!esAmbito(ambito)) throw new BadRequestException('Ámbito inválido.');
-      if (role.namerol === 'BACKUP' && ambito !== 'AGENCIA' && ambito !== 'REGION') {
-        throw new BadRequestException('El ámbito de BACKUP solo puede ser AGENCIA o REGION.');
+      const esRolBackup = funcionesDeRol(role.capacidades, role.namerol).has(FUNCION.BACKUP);
+      if (esRolBackup && ambito !== 'AGENCIA' && ambito !== 'REGION') {
+        throw new BadRequestException('El ámbito de un rol Backup solo puede ser AGENCIA o REGION.');
       }
-      if (role.namerol === 'BACKUP' && ambito !== role.ambito && rolDeUsuario(actor) !== ROL_SUPER_ADMIN) {
+      if (esRolBackup && ambito !== role.ambito && rolDeUsuario(actor) !== ROL_SUPER_ADMIN) {
         throw new ForbiddenException('Solo el Super Administrador puede cambiar el ámbito del rol BACKUP.');
       }
       const esCambioDeAmbitoBackup =
-        role.namerol === 'BACKUP' &&
+        esRolBackup &&
         rolDeUsuario(actor) === ROL_SUPER_ADMIN &&
         (ambito === 'AGENCIA' || ambito === 'REGION');
       if (role.esSistema && ambito !== role.ambito && !esCambioDeAmbitoBackup) {

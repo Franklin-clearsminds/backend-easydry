@@ -1,3 +1,4 @@
+import { FUNCION, rolConFuncion, tieneAlgunaFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import {
   Injectable,
   Logger,
@@ -246,7 +247,7 @@ import { randomUUID } from 'crypto';
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
-import { esLiderDeAgencia, normalizarRol, ROLES_LIDER_AGENCIA, rolDeUsuario } from '../../common/permisos/alias-roles.js';
+import { normalizarRol } from '../../common/permisos/alias-roles.js';
 @Injectable()
 export class InventarioService {
   private readonly logger = new Logger(InventarioService.name);
@@ -272,14 +273,14 @@ export class InventarioService {
     }
     if (params.tipo === 'DESPACHO_AGENCIA' && params.destinoAgenciaId) {
       const lideres = await this.prisma.user.findMany({
-        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: { namerol: { in: [...ROLES_LIDER_AGENCIA] } } },
+        where: { agenciaId: params.destinoAgenciaId, estado: 1, role: rolConFuncion(FUNCION.LIDER_AGENCIA) },
         select: { id: true },
       });
       return lideres.map((u) => u.id);
     }
     if (params.tipo === 'DESPACHO_BODEGA' && params.destinoBodegaId) {
       const asistentes = await this.prisma.user.findMany({
-        where: { bodegaId: params.destinoBodegaId, estado: 1, role: { namerol: 'ASISTENTE_BODEGA' } },
+        where: { bodegaId: params.destinoBodegaId, estado: 1, role: rolConFuncion(FUNCION.ASISTENTE_BODEGA) },
         select: { id: true },
       });
       return asistentes.map((u) => u.id);
@@ -445,17 +446,10 @@ export class InventarioService {
    *  - el resto: el stock físico de UNA bodega (la del asistente, la pedida o la Central).
    */
   private async alcanceInsumos(dto: ListInsumosDto, user?: any) {
-    const ROLES_SCOPED = [...ROLES_LIDER_AGENCIA, 'APROBADOR', 'LAVADOR'];
-    const userRole = normalizarRol(
-      user?.roleDetails?.namerol ||
-      user?.role?.namerol ||
-      (typeof user?.role === 'string' ? user.role : '') ||
-      '',
-    );
-    // Sede propia: por ámbito (agencia); los nombres de la lista siguen valiendo para los roles de sede ya conocidos.
+    // Sede propia: por ámbito (agencia) o por función del rol (líder, aprobador o lavador).
     const isScopedRole =
-      ROLES_SCOPED.some((r) => userRole === r || userRole.includes(r)) ||
-      (!!user && resolverAlcance(user).tipo === 'AGENCIA' && !userRole.includes('PULIDOR'));
+      tieneAlgunaFuncion(user, [FUNCION.LIDER_AGENCIA, FUNCION.APROBADOR, FUNCION.LAVADOR]) ||
+      (!!user && resolverAlcance(user).tipo === 'AGENCIA' && !tieneFuncion(user, FUNCION.PULIDOR));
     // Igual que el asistente de bodega con su `bodegaId`: un rol de sede nunca amplía su alcance con
     // un `agenciaId` que mande el cliente — siempre es la suya, tomada del token.
     const targetAgenciaId = isScopedRole ? (user?.agenciaId || user?.agencia?.id) : dto?.agenciaId;
@@ -488,8 +482,7 @@ export class InventarioService {
     if (!agenciaTarget) {
       // Quien tiene una bodega asignada y no actúa en todo el país: SIEMPRE su bodega, no la que pida el cliente.
       const isAsistenteBodega =
-        userRole === 'ASISTENTE_BODEGA' ||
-        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA')) ||
+        tieneFuncion(user, FUNCION.ASISTENTE_BODEGA) ||
         (!!user?.bodegaId && !!user && resolverAlcance(user).tipo !== 'GLOBAL');
       if (isAsistenteBodega && user?.id) {
         // Asistente: SIEMPRE su bodega asignada (ignora dto.bodegaId del cliente)
@@ -820,7 +813,7 @@ export class InventarioService {
     const agenciaDelUsuario = usuario?.agenciaId || agenciaIdUsuario;
     // Qué stock ve cada quien lo decide el ámbito de su rol (país, región, agencia o propio), no el nombre del rol.
     // Un pulidor móvil (sin agencia) solo ve su kit.
-    const esPulidorMovil = rolDeUsuario(usuario) === 'PULIDOR' && !agenciaDelUsuario;
+    const esPulidorMovil = tieneFuncion(usuario, FUNCION.PULIDOR) && !agenciaDelUsuario;
     const alcance = resolverAlcance(usuario);
 
     if (esPulidorMovil || alcance.tipo === 'PROPIO') {
@@ -848,7 +841,7 @@ export class InventarioService {
         where.agenciaId = { in: agenciasRegionIds };
       }
     } else if (alcance.tipo === 'AGENCIA') {
-      if (rolDeUsuario(usuario) === 'PULIDOR') {
+      if (tieneFuncion(usuario, FUNCION.PULIDOR)) {
         where.OR = [{ agenciaId: alcance.agenciaId }, { pulidorId: usuarioId }];
       } else {
         where.agenciaId = alcance.agenciaId;
@@ -920,8 +913,8 @@ export class InventarioService {
   /** Pulidor cuyo kit puede consultar el usuario: el suyo, o el de un pulidor de su alcance. */
   async pulidorEnAlcance(user: any, pulidorId?: string): Promise<string | undefined> {
     const mio = String(user?.id);
-    if (!pulidorId || pulidorId === mio) return rolDeUsuario(user) === 'PULIDOR' ? mio : pulidorId || undefined;
-    if (rolDeUsuario(user) === 'PULIDOR') throw new ForbiddenException('Solo puedes ver el kit de insumos propio.');
+    if (!pulidorId || pulidorId === mio) return tieneFuncion(user, FUNCION.PULIDOR) ? mio : pulidorId || undefined;
+    if (tieneFuncion(user, FUNCION.PULIDOR)) throw new ForbiddenException('Solo puedes ver el kit de insumos propio.');
     const p = await this.prisma.user.findUnique({
       where: { id: pulidorId },
       select: { agenciaId: true, regionId: true, agencia: { select: { regionId: true } } },
@@ -1318,11 +1311,10 @@ export class InventarioService {
         },
       });
       if (usuario) {
-        const rol = rolDeUsuario(usuario);
         const alc = resolverAlcance(usuario);
         if (alc.tipo === 'REGION') {
           whereAgencia.regionId = alc.regionId;
-        } else if (esLiderDeAgencia(rol) && usuario.agencia?.regionId) {
+        } else if (tieneFuncion(usuario, FUNCION.LIDER_AGENCIA) && usuario.agencia?.regionId) {
           // El líder puede consultar agencias de su región para seleccionar destinos de despacho.
           whereAgencia.regionId = usuario.agencia.regionId;
         } else if (alc.tipo === 'AGENCIA') {
@@ -1621,11 +1613,9 @@ export class InventarioService {
         where: { id: usuarioId },
         include: { role: true, region: true, bodega: true },
       });
-      const userRole = (usuario?.role?.namerol || '').toUpperCase();
       // Con una bodega asignada y sin alcance nacional, solo se ve esa bodega.
       const isAsistente =
-        userRole === 'ASISTENTE_BODEGA' ||
-        (userRole.includes('ASISTENTE') && userRole.includes('BODEGA')) ||
+        tieneFuncion(usuario, FUNCION.ASISTENTE_BODEGA) ||
         (!!usuario?.bodegaId && resolverAlcance(usuario).tipo !== 'GLOBAL');
 
       if (isAsistente) {
@@ -2109,7 +2099,7 @@ export class InventarioService {
 
   private async calcularStockPulidores(dto: { pulidorId?: string; regionId?: string }, usuarioId?: string) {
     const wherePulidor: any = {
-      role: { namerol: { in: ['PULIDOR'] } },
+      role: rolConFuncion(FUNCION.PULIDOR),
       estado: 1,
     };
 
@@ -2120,7 +2110,7 @@ export class InventarioService {
       });
       if (!usuario) {
         wherePulidor.id = { in: [] };
-      } else if (rolDeUsuario(usuario) === 'PULIDOR') {
+      } else if (tieneFuncion(usuario, FUNCION.PULIDOR)) {
         wherePulidor.id = usuarioId;
       } else {
         const alcance = resolverAlcance(usuario);
@@ -2786,20 +2776,19 @@ export class InventarioService {
       where: { id: usuarioId },
       include: { role: true, bodega: true },
     });
-    // Backup opera como líder de la agencia a la que está asignado: se normaliza el alias antes de comparar.
+    // Backup y auxiliar operan como líder de la agencia a la que están asignados (función «líder de agencia»).
     const role = normalizarRol(usuario?.role?.namerol);
     const isSuperAdmin =
       role === 'SUPER_ADMIN' || (role.includes('SUPER') && role.includes('ADMIN'));
 
-    if (role === 'ADMIN' && !isSuperAdmin) {
+    if (tieneFuncion(usuario, FUNCION.ADMINISTRADOR) && !isSuperAdmin) {
       throw new ForbiddenException(
         'Admin no puede confirmar recepción: solo supervisión.',
       );
     }
 
-    const isLider = esLiderDeAgencia(role);
-    const isAsistente =
-      role === 'ASISTENTE_BODEGA' || (role.includes('ASISTENTE') && role.includes('BODEGA'));
+    const isLider = tieneFuncion(usuario, FUNCION.LIDER_AGENCIA);
+    const isAsistente = tieneFuncion(usuario, FUNCION.ASISTENTE_BODEGA);
 
     // Cargar FKs tipadas (pueden no venir en el modelo Prisma client)
     let destinoBodegaId = (movimiento as any).destinoBodegaId as string | null;
@@ -2875,15 +2864,15 @@ export class InventarioService {
 
     const rol = normalizarRol(usuario.role?.namerol);
     const isSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
-    const isAdmin = rol === 'ADMIN';
+    const isAdmin = tieneFuncion(usuario, FUNCION.ADMINISTRADOR) && !isSuperAdmin;
     const isDirector = isSuperAdmin || isAdmin;
 
     // Cómo despacha cada quien lo decide su ámbito (país, región con bodega, agencia), no solo el nombre del rol:
     // un rol personalizado con la casilla de despachar se comporta como el rol oficial de su mismo ámbito.
     const alcanceDespacha = resolverAlcance(usuario);
-    const nombreCoord = rol === 'COORD_BODEGA' || (rol.includes('COORD') && rol.includes('BODEGA'));
-    const nombreAsistente = rol === 'ASISTENTE_BODEGA' || (rol.includes('ASISTENTE') && rol.includes('BODEGA'));
-    const isLider = esLiderDeAgencia(rol) || (alcanceDespacha.tipo === 'AGENCIA' && !!usuario.agenciaId && !nombreCoord && !nombreAsistente && !isDirector);
+    const nombreCoord = tieneFuncion(usuario, FUNCION.COORD_BODEGA);
+    const nombreAsistente = tieneFuncion(usuario, FUNCION.ASISTENTE_BODEGA);
+    const isLider = tieneFuncion(usuario, FUNCION.LIDER_AGENCIA) || (alcanceDespacha.tipo === 'AGENCIA' && !!usuario.agenciaId && !nombreCoord && !nombreAsistente && !isDirector);
     const isAsistente = !isLider && (nombreAsistente || (!!usuario.bodegaId && alcanceDespacha.tipo !== 'GLOBAL'));
     const isCoord = !isLider && !isAsistente && !isDirector && (nombreCoord || alcanceDespacha.tipo === 'GLOBAL');
 
@@ -3466,8 +3455,8 @@ export class InventarioService {
       regionOrigenId = bod?.regionId || null;
     }
     const porRol = await this.notifications.resolverDestinatariosPorRol({
-      global: ['ADMIN', 'SUPER_ADMIN', 'COORD_BODEGA'],
-      regionales: ['ASISTENTE_BODEGA', 'SUPERVISOR'],
+      global: [FUNCION.ADMINISTRADOR, FUNCION.COORD_BODEGA],
+      regionales: [FUNCION.ASISTENTE_BODEGA, FUNCION.SUPERVISOR],
       regionId: regionOrigenId,
     });
     const ids = [...new Set([movimiento.usuarioDespachaId, ...porRol].filter(Boolean))] as string[];
@@ -3693,8 +3682,8 @@ export class InventarioService {
       regionOrigenId = bod?.regionId || null;
     }
     const porRol = await this.notifications.resolverDestinatariosPorRol({
-      global: ['ADMIN', 'SUPER_ADMIN', 'COORD_BODEGA'],
-      regionales: ['ASISTENTE_BODEGA', 'SUPERVISOR'],
+      global: [FUNCION.ADMINISTRADOR, FUNCION.COORD_BODEGA],
+      regionales: [FUNCION.ASISTENTE_BODEGA, FUNCION.SUPERVISOR],
       regionId: regionOrigenId,
     });
     const ids = [...new Set([movimiento.usuarioDespachaId, ...porRol].filter(Boolean))] as string[];
@@ -3839,10 +3828,10 @@ export class InventarioService {
       : null;
     const rol = normalizarRol(viewer?.role?.namerol);
     const esSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
-    const esAdmin = rol === 'ADMIN' && !esSuperAdmin;
+    const esAdmin = tieneFuncion(viewer, FUNCION.ADMINISTRADOR) && !esSuperAdmin;
     // Qué despachos ve cada quien lo decide el ámbito de su rol: propio (kit), agencia o región; país ve todo.
     const alc = viewer ? resolverAlcance(viewer) : { tipo: 'NINGUNO' as const };
-    const esPulidor = rol.includes('PULIDOR') || alc.tipo === 'PROPIO';
+    const esPulidor = tieneFuncion(viewer, FUNCION.PULIDOR) || alc.tipo === 'PROPIO';
     const esAsistente = !esPulidor && alc.tipo === 'REGION';
     const esLider = !esPulidor && alc.tipo === 'AGENCIA' && !!viewer?.agenciaId;
     const regionPropia: string | undefined = alc.tipo === 'REGION' ? alc.regionId : viewer?.regionId || undefined;
@@ -4195,7 +4184,7 @@ export class InventarioService {
       this.prisma.user.findMany({
         where: {
           estado: 1,
-          role: { namerol: { in: ['PULIDOR'] } },
+          role: rolConFuncion(FUNCION.PULIDOR),
         },
         select: {
           id: true,
@@ -4349,7 +4338,7 @@ export class InventarioService {
 
     let agenciaId: string | undefined;
     let pulidorId: string | undefined;
-    if (rolDeUsuario(user) === 'PULIDOR') {
+    if (tieneFuncion(user, FUNCION.PULIDOR)) {
       pulidorId = String(user.id);
       const a = resolverAlcance(user);
       agenciaId = a.tipo === 'AGENCIA' ? a.agenciaId : undefined;
@@ -4417,7 +4406,7 @@ export class InventarioService {
         // Alertas de las agencias de la región y de los kits de los pulidores de la región.
         const agIds = (await this.prisma.agencia.findMany({ where: { regionId: alcance.regionId }, select: { id: true } })).map((a) => a.id);
         const pulIds = (
-          await this.prisma.user.findMany({ where: { regionId: alcance.regionId, role: { namerol: { in: ['PULIDOR'] } } }, select: { id: true } })
+          await this.prisma.user.findMany({ where: { regionId: alcance.regionId, role: rolConFuncion(FUNCION.PULIDOR) }, select: { id: true } })
         ).map((p) => p.id);
         const orScope: any[] = [];
         if (targetAgencia) {
@@ -5335,15 +5324,12 @@ export class InventarioService {
 
     const isAdmin =
       role === 'SUPER_ADMIN' ||
-      role === 'ADMIN' ||
       (role.includes('SUPER') && role.includes('ADMIN')) ||
-      (role.includes('GESTOR') && (role.includes('INVENTARIO') || role.includes('BODEGA')));
+      tieneFuncion(usuario, FUNCION.ADMINISTRADOR);
 
     if (isAdmin) return { mode: 'ALL' };
 
-    const isCoord =
-      role === 'COORD_BODEGA' ||
-      (role.includes('COORD') && role.includes('BODEGA'));
+    const isCoord = tieneFuncion(usuario, FUNCION.COORD_BODEGA);
 
     if (isCoord) {
       const centralRows: any[] = await this.prisma.$queryRawUnsafe(
@@ -5363,9 +5349,7 @@ export class InventarioService {
       };
     }
 
-    const isAsistente =
-      role === 'ASISTENTE_BODEGA' ||
-      (role.includes('ASISTENTE') && role.includes('BODEGA'));
+    const isAsistente = tieneFuncion(usuario, FUNCION.ASISTENTE_BODEGA);
 
     if (isAsistente) {
       const bodegaId = (usuario?.bodegaId || '').toString().trim();
