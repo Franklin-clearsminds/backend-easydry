@@ -1299,6 +1299,8 @@ export class InventarioService {
 
   private async calcularStockAgencias(dto: { agenciaId?: string; region?: string }, usuarioId?: string) {
     const whereAgencia: any = { estado: 1 };
+    // Agencia propia del líder: de las demás agencias de su región solo se devuelve el nombre y el código (para elegir destino de despacho).
+    let agenciaPropiaLider: string | null = null;
 
     if (usuarioId) {
       const usuario = await this.prisma.user.findUnique({
@@ -1315,8 +1317,9 @@ export class InventarioService {
         if (alc.tipo === 'REGION') {
           whereAgencia.regionId = alc.regionId;
         } else if (tieneFuncion(usuario, FUNCION.LIDER_AGENCIA) && usuario.agencia?.regionId) {
-          // El líder puede consultar agencias de su región para seleccionar destinos de despacho.
+          // El líder puede consultar agencias de su región para seleccionar destinos de despacho, pero sin ver su stock ni sus alertas.
           whereAgencia.regionId = usuario.agencia.regionId;
+          agenciaPropiaLider = usuario.agenciaId ?? '';
         } else if (alc.tipo === 'AGENCIA') {
           whereAgencia.id = alc.agenciaId;
         } else if (alc.tipo !== 'GLOBAL') {
@@ -1379,7 +1382,12 @@ export class InventarioService {
     let agenciasEnAlerta = 0;
     let insumosCriticosTotal = 0;
 
+    const soloDestino = (ag: { id: string }) => agenciaPropiaLider !== null && ag.id !== agenciaPropiaLider;
+
     const agenciasData = agencias.map((ag) => {
+      if (soloDestino(ag)) {
+        return { agencia: { id: ag.id, codigo: ag.codigo, nombre: ag.nombre, region: ag.region }, totalInsumos: 0, insumosCriticos: 0, tieneAlerta: false, insumos: [] as any[] };
+      }
       let alertaAgencia = false;
       let criticosAgencia = 0;
 
@@ -1455,7 +1463,12 @@ export class InventarioService {
       };
     });
 
-    return { agencias, agenciasData, agenciasEnAlerta, insumosCriticosTotal };
+    return {
+      agencias: agencias.map((ag) => (soloDestino(ag) ? { id: ag.id, codigo: ag.codigo, nombre: ag.nombre, region: ag.region } : ag)),
+      agenciasData,
+      agenciasEnAlerta,
+      insumosCriticosTotal,
+    };
   }
 
   /** Filtro por estado y búsqueda, orden y página sobre los insumos ya calculados de una ubicación (bodega, agencia o kit). */

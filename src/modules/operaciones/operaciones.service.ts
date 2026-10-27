@@ -1823,7 +1823,21 @@ export class OperacionesService {
    * lavado general (agencia) como de servicios especiales (kit del pulidor).
    * Los insumos salen del snapshot congelado al momento del consumo.
    */
-  async listConsumosPorServicio(dto: ListConsumosServicioDto) {
+  async listConsumosPorServicio(dto: ListConsumosServicioDto, actor?: any) {
+    // El alcance lo manda el servidor, no el cliente: quien actúa en una agencia ve solo la suya; quien actúa en una región, solo las de
+    // su región; quien no tiene ámbito, nada. `null` = sin restricción (alcance global o llamada interna).
+    let permitidas: string[] | null = null;
+    if (actor) {
+      const alcance = resolverAlcance(actor);
+      if (alcance.tipo === 'AGENCIA') permitidas = [alcance.agenciaId];
+      else if (alcance.tipo === 'REGION') permitidas = (await this.prisma.agencia.findMany({ where: { regionId: alcance.regionId }, select: { id: true } })).map((a) => a.id);
+      else if (alcance.tipo !== 'GLOBAL') permitidas = [];
+    }
+    const agenciaFiltro = (): string | { in: string[] } | undefined => {
+      if (!permitidas) return dto.agenciaId || undefined;
+      if (dto.agenciaId) return permitidas.includes(dto.agenciaId) ? dto.agenciaId : { in: [] };
+      return { in: permitidas };
+    };
     const page = dto.page ?? 1;
     const pageSize = dto.pageSize ?? 20;
     const tipo = dto.tipo ?? 'TODOS';
@@ -1844,7 +1858,7 @@ export class OperacionesService {
       u ? `${u.name || ''} ${u.lastname || ''}`.replace(/\(CI:[^)]*\)/, '').trim() : '';
 
     const whereGeneral: any = { ...rango };
-    if (dto.agenciaId) whereGeneral.agenciaId = dto.agenciaId;
+    if (agenciaFiltro()) whereGeneral.agenciaId = agenciaFiltro();
     if (busqueda) {
       whereGeneral.OR = [
         { insumoNombre: { contains: busqueda, mode: 'insensitive' } },
@@ -1856,7 +1870,7 @@ export class OperacionesService {
     }
 
     const whereEspecial: any = { ...rango };
-    if (dto.agenciaId) whereEspecial.servicioEspecial = { agenciaId: dto.agenciaId };
+    if (agenciaFiltro()) whereEspecial.servicioEspecial = { agenciaId: agenciaFiltro() };
     if (busqueda) {
       whereEspecial.OR = [
         { insumoNombre: { contains: busqueda, mode: 'insensitive' } },
@@ -1909,8 +1923,11 @@ export class OperacionesService {
     ]);
 
     // Lo archivado en Parquet se suma por debajo: la base va primero y el archivo completa lo más antiguo.
-    const consumosArchivo = this.historico ? new ConsumosArchivo(this.prisma, this.historico) : null;
-    const params = { agenciaId: dto.agenciaId, busqueda, fechaDesde: dto.fechaDesde, fechaHasta: dto.fechaHasta };
+    // El archivo filtra por una sola agencia: con alcance limitado se usa esa; si el alcance abarca varias y no se eligió una, el archivo
+    // no se consulta (mejor omitirlo que mostrar agencias ajenas).
+    const agenciaArchivo = permitidas ? (dto.agenciaId && permitidas.includes(dto.agenciaId) ? dto.agenciaId : permitidas.length === 1 ? permitidas[0] : null) : dto.agenciaId;
+    const consumosArchivo = this.historico && (!permitidas || agenciaArchivo) ? new ConsumosArchivo(this.prisma, this.historico) : null;
+    const params = { agenciaId: agenciaArchivo ?? undefined, busqueda, fechaDesde: dto.fechaDesde, fechaHasta: dto.fechaHasta };
     const [generalesArchivo, especialesArchivo] = await Promise.all([
       tipo === 'ESPECIAL' || !consumosArchivo ? [] : consumosArchivo.generales(params, LIMITE_LINEAS),
       tipo === 'GENERAL' || !consumosArchivo ? [] : consumosArchivo.especiales(params, LIMITE_LINEAS),

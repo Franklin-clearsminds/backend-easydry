@@ -89,8 +89,8 @@ export class AgenciasController {
   @Post('regiones/opciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Regiones para un desplegable con buscador: { value, label, sublabel } paginado' })
-  async opcionesRegiones(@Body() dto: RegionesOpcionesDto) {
-    return this.agenciasService.listRegionesOpciones(dto);
+  async opcionesRegiones(@Body() dto: RegionesOpcionesDto, @CurrentUser() user: any) {
+    return this.agenciasService.listRegionesOpciones(dto, user);
   }
 
   @Permiso('agencias.regiones.crear')

@@ -39,8 +39,11 @@ const LECTURA_COMERCIAL: CodigoPermiso[] = p(
   'despachos.ver',
 );
 
-/** Roles que no ven precios ni costos. El Coordinador Comercial sí los ve (en su región); el Jefe Comercial no. */
-const ROLES_SIN_PRECIOS = ['JEFE_COMERCIAL', 'LAVADOR'];
+/**
+ * Roles que no ven precios ni costos. El Coordinador Comercial sí los ve (en su región); el Jefe Comercial no. El líder de agencia
+ * (y su reemplazo BACKUP y el auxiliar, que copian sus permisos) trabaja con cantidades: nunca ve dinero.
+ */
+const ROLES_SIN_PRECIOS = ['JEFE_COMERCIAL', 'LAVADOR', 'LIDER', 'BACKUP', 'AUXILIAR'];
 /** Roles comerciales que ven bodegas y agencias pero no el stock de los kits. */
 const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
 

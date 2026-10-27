@@ -197,6 +197,12 @@ describe('migración de roles existentes', () => {
     expect(lider).not.toContain('mapa.bahia.asignar');
   });
 
+  it('el Líder, su reemplazo y el auxiliar no ven precios ni costos', () => {
+    for (const nombre of ['LIDER', 'BACKUP', 'AUXILIAR']) {
+      expect(ROLES_BASE.find((r) => r.namerol === nombre)!.capacidades, nombre).not.toContain('precios.ver');
+    }
+  });
+
   it('los roles comerciales ven en solo lectura; solo el Coordinador ve precios', () => {
     for (const nombre of ['COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
       const caps = ROLES_BASE.find((r) => r.namerol === nombre)!.capacidades;

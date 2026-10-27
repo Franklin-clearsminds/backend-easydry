@@ -196,8 +196,8 @@ export class OperacionesController {
     summary: 'Consumo de insumos por servicio realizado (SUPER_ADMIN, ADMIN, COORD_BODEGA, ASISTENTE_BODEGA)',
     description: 'Lista, por cada OT de lavado general y de servicios especiales, qué producto y qué cantidad se descontó, con filtros por tipo, agencia, fechas y búsqueda.',
   })
-  async listConsumosPorServicio(@Body() dto: ListConsumosServicioDto) {
-    return this.operacionesService.listConsumosPorServicio(dto);
+  async listConsumosPorServicio(@Body() dto: ListConsumosServicioDto, @CurrentUser() actor: any) {
+    return this.operacionesService.listConsumosPorServicio(dto, actor);
   }
 
   @Permiso('servicios.generales.crear', 'servicios.generales.agregar')

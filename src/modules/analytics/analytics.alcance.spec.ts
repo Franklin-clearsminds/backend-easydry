@@ -404,7 +404,8 @@ it('un usuario global puede acotar a la agencia o región que pida', async () =>
   describe('consumo de químicos — alcance', () => {
     it('se limita a las agencias de su alcance', async () => {
       const res: any = await service.getConsumoQuimicos({ agenciaId: a2.id }, act.lider);
-      expect(res.consumoPorAgencia.map((c: any) => c.nombre)).toEqual([a1.nombre]);
+      // Quien actúa en una sola agencia no ve el comparativo por agencia (con una sola, no hay con qué comparar).
+      expect(res.consumoPorAgencia).toEqual([]);
       expect(res.insumos).toHaveLength(1);
       expect(res.insumos[0]).toMatchObject({ insumoId: x[0].id, cantidadTotal: 3, vecesConsumido: 2, nombre: `${x[0].nombre} (${a1.nombre})` });
     });
@@ -414,6 +415,8 @@ it('un usuario global puede acotar a la agencia o región que pida', async () =>
       expect(agencia.insumos.map((i: any) => i.insumoId)).toEqual([y1.id]);
       const region: any = await service.getConsumoQuimicos({ regionId: r2.id }, act.coordBodega);
       expect(region.consumoPorAgencia.map((c: any) => c.nombre)).toEqual([a2.nombre]);
+      // Por agencia se compara el costo en USD y el número de consumos, no cantidades de insumos distintos sumadas.
+      expect(region.consumoPorAgencia[0]).toEqual({ nombre: a2.nombre, costo: expect.any(Number), usos: expect.any(Number) });
       expect(region.insumos.map((i: any) => i.cantidadTotal)).toEqual([5]);
     });
 

@@ -800,9 +800,17 @@ export class AgenciasService {
     });
   }
 
-  async listRegionesOpciones(dto: RegionesOpcionesDto) {
+  async listRegionesOpciones(dto: RegionesOpcionesDto, user?: any) {
+    // Cada quien ve solo la región de su ámbito: la suya (región) o la de su agencia. Global ve todas.
+    let regionPropia: Record<string, unknown> | undefined;
+    if (user) {
+      const a = resolverAlcance(user);
+      if (a.tipo === 'REGION') regionPropia = { id: a.regionId };
+      else if (a.tipo === 'AGENCIA') regionPropia = { id: (await this.prisma.agencia.findUnique({ where: { id: a.agenciaId }, select: { regionId: true } }))?.regionId ?? '' };
+      else if (a.tipo !== 'GLOBAL') regionPropia = { id: '' };
+    }
     return listarOpciones(dto, {
-      where: combinarWhere(dto.estado !== undefined ? { estado: dto.estado } : undefined),
+      where: combinarWhere(dto.estado !== undefined ? { estado: dto.estado } : undefined, regionPropia),
       camposBusqueda: ['nombre', 'codigo'],
       orderBy: [{ nombre: 'asc' }, { id: 'asc' }],
       buscar: ({ where, orderBy, skip, take }) =>

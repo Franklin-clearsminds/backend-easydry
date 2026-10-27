@@ -1406,7 +1406,8 @@ this.federados.count('servicioLavado', {
     });
 
     const acumuladoPorInsumo: Record<string, any> = {};
-    const consumoPorAgencia: Record<string, number> = {};
+    // Por agencia no se suman cantidades (mezclarían ml con unidades): se compara el costo en USD y el número de consumos.
+    const consumoPorAgencia: Record<string, { costo: number; usos: number }> = {};
     const consumoPorCategoria: Record<string, number> = {};
     let granTotalCostoUSD = 0;
 
@@ -1416,7 +1417,9 @@ this.federados.count('servicioLavado', {
       const costoSubtotal = costoDeConsumo(c);
       granTotalCostoUSD += costoSubtotal;
       const agenciaKey = c.servicio?.bahia?.agencia?.nombre || 'Agencia General';
-      consumoPorAgencia[agenciaKey] = (consumoPorAgencia[agenciaKey] || 0) + cant;
+      const porAg = (consumoPorAgencia[agenciaKey] ??= { costo: 0, usos: 0 });
+      porAg.costo += costoSubtotal;
+      porAg.usos++;
       consumoPorCategoria[c.insumo.categoria || 'Sin Categoría'] = (consumoPorCategoria[c.insumo.categoria || 'Sin Categoría'] || 0) + cant;
       if (!acumuladoPorInsumo[c.insumoId]) acumuladoPorInsumo[c.insumoId] = { insumoId: c.insumoId, codigoSKU: c.insumoSKU || c.insumo.codigoSKU, nombre: c.insumoNombre || c.insumo.nombre, categoria: c.insumo.categoria, simboloUnidad: c.unidadSimbolo || c.insumo.unidadMedida?.simbolo || 'u', cantidadTotal: 0, costoUnitario: costoUnit, costoTotalUSD: 0, vecesConsumido: 0, agencias: {} };
       acumuladoPorInsumo[c.insumoId].cantidadTotal += cant;
@@ -1445,7 +1448,7 @@ this.federados.count('servicioLavado', {
     }
     const serie = Object.keys(costoPorPeriodo).sort().map((periodo) => ({ periodo, costoUSD: Number(costoPorPeriodo[periodo].toFixed(2)) }));
 
-    return { success: true, rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].toFixed(2)) })).sort((a, b) => b.costo - a.costo), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
+    return { success: true, rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: resolverAlcance(user).tipo === 'AGENCIA' ? [] : Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].costo.toFixed(2)), usos: consumoPorAgencia[k].usos })).sort((a, b) => b.costo - a.costo), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
   }
 
   /** Clave de agrupación temporal (día, semana ISO o mes) para las series de analítica. */
@@ -1770,6 +1773,8 @@ this.federados.count('servicioLavado', {
   }
 
   private async getDashboardBodegaSinCache(dto: DashboardDedicadoDto, user: any) {
+    // Quien actúa en una sola agencia no ve comparativos con otras: los rankings por agencia (y las agencias destino de sus despachos) no van.
+    const soloSuAgencia = resolverAlcance(user).tipo === 'AGENCIA';
     const filtro = this.filtroAgencia(user, dto);
     const hayFiltro = Object.keys(filtro).length > 0;
     const { desde: desdePeriodo, hasta: endOfDay } = this.resolverPeriodo(dto);
@@ -1976,11 +1981,11 @@ this.federados.count('servicioLavado', {
       topDeficitRank: salud.topDeficitRank,
       alertasPorCategoriaNivel: salud.alertasPorCategoriaNivel,
       topInsumosCriticos,
-      topAgenciasConAlertas,
+      topAgenciasConAlertas: soloSuAgencia ? [] : topAgenciasConAlertas,
       topInsumosConsumo: topInsumosConsumo.slice(0, 7),
       topInsumosConsumoRank: topInsumosConsumo,
-      topAgenciasConsumo: topAgenciasConsumo.slice(0, 7),
-      topAgenciasConsumoRank: topAgenciasConsumo,
+      topAgenciasConsumo: soloSuAgencia ? [] : topAgenciasConsumo.slice(0, 7),
+      topAgenciasConsumoRank: soloSuAgencia ? [] : topAgenciasConsumo,
       unidadesStockPorCategoria: Object.keys(unidadesStockPorCategoria).map(k => ({ nombre: k, cantidad: Number(unidadesStockPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),
       despachosEstado: Object.keys(despachosEstado).filter(k => despachosEstado[k] > 0).map(k => ({ nombre: k.replace(/_/g, ' '), cantidad: despachosEstado[k] })),
       consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })).sort((a, b) => b.cantidad - a.cantidad),

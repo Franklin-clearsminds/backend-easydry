@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AnalyticsService } from './analytics.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -11,7 +11,9 @@ import {
 } from './dto/analytics.dto.js';
 
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
+import { OcultarCostosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
 @ApiTags('Analítica & Dashboards (100% POST)')
+@UseInterceptors(OcultarCostosInterceptor)
 @Controller('analytics')
 @ApiBearerAuth()
 export class AnalyticsController {
