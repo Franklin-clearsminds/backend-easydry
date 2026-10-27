@@ -30,6 +30,7 @@
     "prisma:import-ot": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/import-ot-xlsx.ts",
     "prisma:cifrar-imagenes": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/cifrar-imagenes.ts",
     "prisma:seed-demo": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/seed-demo-dashboards.ts",
+    "prisma:seed-completo": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/seed-demo-completo.ts",
     "prisma:seed-tres-meses": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/seed-demo-tres-meses.ts",
     "prisma:seed-demo-aprobaciones": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/seed-demo-aprobaciones.ts",
     "prisma:studio": "prisma studio"
