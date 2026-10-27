@@ -1300,7 +1300,24 @@ export class MaquinariaService {
         contar(combinarWhere(baseSinEstado, grupoEnProceso)),
         contar(combinarWhere(baseSinEstado, grupoCerradas)),
       ]);
-      extra['resumen'] = { noAtendidas, enProceso, cerradas, total: noAtendidas + enProceso + cerradas };
+      const resumen: Record<string, unknown> = { noAtendidas, enProceso, cerradas, total: noAtendidas + enProceso + cerradas };
+      {
+        // Gasto de maquinaria (no depende del permiso de precios) del mismo alcance y filtros de la lista: reparaciones de incidencias resueltas y mantenimientos finalizados del período.
+        const rangoEjecucion = rangoFechas(dto.fechaDesde, dto.fechaHasta);
+        const filtrosMant: Record<string, unknown>[] = [this.scopeMantenimientos(actor) as Record<string, unknown>, { estado: 'FINALIZADO' }];
+        if (dto.maquinariaId) filtrosMant.push({ maquinariaId: dto.maquinariaId });
+        if (dto.agenciaId) filtrosMant.push({ maquinaria: { agenciaId: dto.agenciaId } });
+        if (dto.regionId) filtrosMant.push({ maquinaria: { agencia: { regionId: dto.regionId } } });
+        if (dto.clienteId) filtrosMant.push({ maquinaria: { agencia: { clienteId: dto.clienteId } } });
+        if (rangoEjecucion) filtrosMant.push({ fechaEjecucion: rangoEjecucion });
+        const [gInc, gMant] = await Promise.all([
+          this.prisma.incidenteTecnico.aggregate({ where: combinarWhere(baseSinEstado, { estado: 'RESUELTO' }) as never, _sum: { costoTotal: true } }),
+          this.prisma.mantenimientoMaquinaria.aggregate({ where: combinarWhere(...filtrosMant) as never, _sum: { costoTotal: true } }),
+        ]);
+        resumen['gastoIncidentes'] = Number(gInc._sum.costoTotal ?? 0);
+        resumen['gastoMantenimientos'] = Number(gMant._sum.costoTotal ?? 0);
+      }
+      extra['resumen'] = resumen;
     }
 
     return this.respuestaPagina(

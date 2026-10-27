@@ -107,6 +107,17 @@ describe('MaquinariaService: listados paginados (base real)', () => {
       expect(r).toMatchObject({ page: 1, pageSize: 3, totalPages: 3, hasNextPage: true });
     });
 
+    it('el resumen trae el gasto en reparaciones y en mantenimientos del alcance y los filtros', async () => {
+      await env.prisma.incidenteTecnico.update({ where: { id: inc['c1'] }, data: { costoTotal: 40 } });
+      await env.prisma.incidenteTecnico.update({ where: { id: inc['c2'] }, data: { costoTotal: 999 } }); // cancelada: no cuenta
+      await env.prisma.mantenimientoMaquinaria.update({ where: { id: man['e1'] }, data: { costoTotal: 15 } });
+      await env.prisma.mantenimientoMaquinaria.update({ where: { id: man['e2'] }, data: { costoTotal: 25 } });
+      await env.prisma.mantenimientoMaquinaria.update({ where: { id: man['v1'] }, data: { costoTotal: 500 } }); // pendiente: no cuenta
+
+      const r: any = await service.listIncidentes({ regionId: r1.id, incluirResumen: true } as never, admin);
+      expect(r.resumen).toMatchObject({ gastoIncidentes: 40, gastoMantenimientos: 40 });
+    });
+
     it('las páginas siguientes continúan sin repetir ni saltar filas', async () => {
       const todas: string[] = [];
       for (let page = 1; page <= 3; page++) todas.push(...claves(await lista({ page, pageSize: 3 }), inc));
@@ -153,7 +164,7 @@ describe('MaquinariaService: listados paginados (base real)', () => {
     it('el resumen cuenta cada grupo con los filtros pero sin el de estado', async () => {
       const r = await lista({ estado: 'RESUELTO', incluirResumen: true, pageSize: 10 });
       expect(claves(r, inc)).toEqual(['c1']); // la página sí respeta el estado…
-      expect(r.resumen).toEqual({ noAtendidas: 2, enProceso: 3, cerradas: 2, total: 7 }); // …el resumen no
+      expect(r.resumen).toMatchObject({ noAtendidas: 2, enProceso: 3, cerradas: 2, total: 7 }); // …el resumen no
     });
 
     it('entrega el formato estándar con el alias data', async () => {
