@@ -17,7 +17,7 @@ import { abrirEntorno } from '../entorno.js';
 const BACKEND = resolve(import.meta.dirname, '../../..');
 const FRONT = resolve(BACKEND, '../frontend-easy-dry');
 const MUNDO = resolve(FRONT, 'src/testing/mundo.generated.json');
-const PUERTO = Number(process.env.PORT ?? 3000);
+const PUERTO = Number(process.env.PORT ?? 3001);
 const CLAVE = 'Prueba123!';
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

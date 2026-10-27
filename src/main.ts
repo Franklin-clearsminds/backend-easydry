@@ -133,7 +133,7 @@ async function bootstrap() {
     logger.warn('REDIS_URL vacío en producción: el sistema funciona, pero sin caché compartida ni límite de peticiones común. Defínelo con la URL interna del Redis de Render.');
   }
 
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT || 3001;
   await app.listen(port, '0.0.0.0');
 
   logger.log(`Servidor EasyDry backend ejecutándose en: http://localhost:${port}/api/v1`);

@@ -158,8 +158,8 @@ pnpm run build
 pnpm run start:prod
 ```
 
-El servidor iniciará en: **`http://localhost:3000/api/v1`**  
-Documentación Swagger interactiva: **`http://localhost:3000/api/docs`**
+El servidor iniciará en: **`http://localhost:3001/api/v1`**  
+Documentación Swagger interactiva: **`http://localhost:3001/api/docs`**
 
 ---
 
@@ -189,7 +189,7 @@ Sistema de notificaciones respaldado en PostgreSQL (tabla `Notification`) y empu
 | `POST` | `/api/v1/notifications/resumen` | Cantidad de notificaciones sin leer (badge de la campanita). |
 | `POST` | `/api/v1/notifications/marcar-leida` | Marca una notificación puntual como leída. |
 | `POST` | `/api/v1/notifications/marcar-todas-leidas` | Marca todas las notificaciones propias como leídas. |
-| `WebSocket` | `ws://localhost:3000/notifications` (namespace `/notifications`) | El cliente envía el JWT en `handshake.auth.token`; el servidor valida origen, token, usuario activo y sesión no revocada, y empuja `notification:new` solo a los sockets del destinatario. |
+| `WebSocket` | `ws://localhost:3001/notifications` (namespace `/notifications`) | El cliente envía el JWT en `handshake.auth.token`; el servidor valida origen, token, usuario activo y sesión no revocada, y empuja `notification:new` solo a los sockets del destinatario. |
 
 El envío es *fire-and-forget*: si falla (por ejemplo, el socket ya no está conectado) solo se registra una advertencia en el log. Con `REDIS_URL` configurado, el adaptador de Redis reparte los eventos entre todas las instancias del backend.
 
