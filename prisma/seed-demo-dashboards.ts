@@ -25,6 +25,8 @@ const RESET = process.argv.includes('--reset');
 const SOLO_BORRAR = process.argv.includes('--solo-borrar');
 const DIA = 86400000;
 const AHORA = Date.now();
+/** Días hacia atrás que cubren incidencias, envíos, limpiezas y traslados (por defecto 55; `DEMO_DIAS=90` para tres meses). */
+const VENTANA = Math.max(30, Number(process.env.DEMO_DIAS) || 55);
 
 if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
   throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost).');
@@ -164,7 +166,7 @@ async function crearMaquinaria(admin: { id: string }, tecnicos: { id: string }[]
   const maquinas: { id: string; tipo: string; agenciaId: string | null; operadorId: string | null; bahiaId: string | null; creada: Date; activa: boolean; estado: string }[] = [];
   let seq = 0;
   for (const p of plan) {
-    const creada = hace(entero(70, 200));
+    const creada = hace(entero(VENTANA + 15, VENTANA + 150));
     const estado = pesos([['OPERATIVA', 80], ['EN_MANTENIMIENTO', 12], ['DE_BAJA', 8]] as const);
     const baja = estado === 'DE_BAJA';
     const t = p.tipo;
@@ -203,7 +205,7 @@ async function crearMaquinaria(admin: { id: string }, tecnicos: { id: string }[]
   for (const m of maquinas) {
     const n = m.estado === 'EN_MANTENIMIENTO' ? entero(1, 2) : pesos([[0, 45], [1, 35], [2, 20]] as const);
     for (let i = 0; i < n; i++) {
-      const reporte = hace(entero(1, 55), entero(7, 17));
+      const reporte = hace(entero(1, VENTANA), entero(7, 17));
       let estado = pesos([['RESUELTO', 55], ['EN_PROCESO', 15], ['ABIERTO', 20], ['CANCELADO', 10]] as const);
       let gravedad = pesos([['BAJA', 30], ['MEDIA', 40], ['ALTA', 22], ['CRITICA', 8]] as const);
       if (m.estado === 'EN_MANTENIMIENTO' && i === 0) {
@@ -303,14 +305,14 @@ async function crearMaquinaria(admin: { id: string }, tecnicos: { id: string }[]
     }
   }
 
-  // ---- limpiezas: últimos 30 días
+  // ---- limpiezas: toda la ventana
   let nLimp = 0;
   for (const m of maquinas) {
     if (!m.activa) continue;
     const regla = m.operadorId ? 'PULIDOR' : m.agenciaId ? 'AGENCIA' : null;
     if (!regla) continue;
     const cumplimiento = prob(0.25) ? 0.45 : 0.9; // algunas máquinas quedan atrasadas
-    for (let d = 30; d >= 0; d--) {
+    for (let d = Math.min(VENTANA, 90); d >= 0; d--) {
       const fecha = new Date(AHORA - d * DIA);
       const dia = new Date(fecha.getTime() - 5 * 3600000).getUTCDay(); // día en Ecuador
       const toca = regla === 'PULIDOR' ? true : dia === 3 || dia === 6;
@@ -338,7 +340,7 @@ async function crearMaquinaria(admin: { id: string }, tecnicos: { id: string }[]
   const trasladables = mezclar(maquinas.filter((m) => m.activa && m.agenciaId && !m.operadorId && m.bahiaId)).slice(0, 8);
   for (const m of trasladables) {
     const dest = elige(destinos.filter((a) => a.id !== m.agenciaId));
-    const fecha = hace(entero(3, 45));
+    const fecha = hace(entero(3, VENTANA - 10));
     await prisma.movimientoMaquinaria.create({
       data: { maquinariaId: m.id, origenAgenciaId: m.agenciaId, destinoAgenciaId: dest.id, origenBahiaId: m.bahiaId, destinoBahiaId: dest.bahias[0].id, motivo: elige(['Refuerzo por alta demanda', 'Reubicación por mantenimiento', 'Balance de equipos entre agencias']), usuarioId: admin.id, fecha },
     });
@@ -382,7 +384,7 @@ async function crearEnvios(admin: { id: string }) {
   };
 
   const resumen: Record<string, number> = {};
-  const total = 80;
+  const total = Math.round((80 * VENTANA) / 55);
   for (let n = 1; n <= total; n++) {
     const aPulidor = pulidores.length > 0 && prob(0.13);
     const pul = aPulidor ? elige(pulidores) : null;
@@ -392,7 +394,7 @@ async function crearEnvios(admin: { id: string }) {
     const tipoUbic = pul ? 'PULIDOR_MOVIL' : 'AGENCIA';
     const estado = pesos([['RECIBIDO', 62], ['RECHAZADO', 9], ['EN_TRANSITO', 17], ['PENDIENTE', 6], ['CANCELADO', 6]] as const);
     // Los en tránsito: la mayoría recientes y algunos atrasados (más de 4 días sin confirmar).
-    const antiguedad = estado === 'EN_TRANSITO' ? (prob(0.35) ? entero(5, 12) : entero(0, 3)) : estado === 'PENDIENTE' ? entero(0, 2) : entero(3, 55);
+    const antiguedad = estado === 'EN_TRANSITO' ? (prob(0.35) ? entero(5, 12) : entero(0, 3)) : estado === 'PENDIENTE' ? entero(0, 2) : entero(3, VENTANA);
     const fechaDespacho = hace(antiguedad, entero(7, 16));
     const fechaRecepcion = new Date(fechaDespacho.getTime() + entero(5, 70) * 3600000);
 

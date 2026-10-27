@@ -15,15 +15,19 @@
  *            y lo vuelve a crear. Los usuarios aprobadores se conservan.
  *   --solo-borrar  solo deshace.
  *
- * Los aprobadores creados usan la contraseña inicial «Easy-dry2026»: aprobador.<agencia>@easydry.com
+ * Los aprobadores creados (aprobador.<agencia>@easydry.com) quedan con una clave aleatoria desconocida, salvo que se pase APROBADOR_PASSWORD.
  */
 import { PrismaClient, ServiceStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 
 const prisma = new PrismaClient();
 const RESET = process.argv.includes('--reset');
 const SOLO_BORRAR = process.argv.includes('--solo-borrar');
-const PASSWORD = 'Easy-dry2026';
+/** Días hacia atrás que cubren las solicitudes (por defecto 30; `DEMO_DIAS=90` para tres meses). */
+const DIAS = Math.max(30, Number(process.env.DEMO_DIAS) || 30);
+/** Clave de los aprobadores creados: solo si se pasa APROBADOR_PASSWORD; si no, una aleatoria que nadie conoce (el admin les asigna la suya). */
+const PASSWORD = process.env.APROBADOR_PASSWORD ?? randomBytes(24).toString('hex');
 const DIA = 86400000;
 const AHORA = Date.now();
 const MARCA = '[DEMO] ';
@@ -164,11 +168,11 @@ async function main() {
   const operadores = await prisma.user.findMany({ where: { estado: 1, agenciaId: { in: agencias.map((a) => a.id) } }, select: { id: true, agenciaId: true } });
   const decisoresSol: any[] = [];
   let sol = 0;
-  for (let n = 0; n < 30; n++) {
+  for (let n = 0; n < DIAS; n++) {
     const ag = elige(agencias);
     const t = elige(tipos);
     const solicitante = elige(operadores.filter((o) => o.agenciaId === ag.id).concat([{ id: superAdmin.id, agenciaId: ag.id }]));
-    const creada = new Date(AHORA - entero(0, 29) * DIA - entero(0, 8) * 3600000);
+    const creada = new Date(AHORA - entero(0, DIAS - 1) * DIA - entero(0, 8) * 3600000);
     const estado = rnd() < 0.4 ? 'PENDIENTE' : rnd() < 0.78 ? 'APROBADO' : 'RECHAZADO';
     const titular = aprobadorDe.get(ag.id);
     const decisor = titular ?? superAdmin;
@@ -202,7 +206,7 @@ async function main() {
 
   console.log(`✅ OT decididas: ${cuenta.APROBADO} aprobadas · ${cuenta.RECHAZADO} rechazadas · ${cuenta.pendientes} pendientes (de ${ots.length}). Por aprobador titular: ${cuenta.titular} · por respaldo (Super Admin): ${cuenta.respaldo}.`);
   console.log(`📝 Solicitudes de aprobación: ${sol} · decisiones en bitácora: ${bitacora.length + decisoresSol.length}.`);
-  if (creados.length) console.log(`👤 Aprobadores creados (contraseña ${PASSWORD}): ${creados.join(', ')}`);
+  if (creados.length) console.log(`👤 Aprobadores creados: ${creados.join(', ')}`);
 }
 
 main()
