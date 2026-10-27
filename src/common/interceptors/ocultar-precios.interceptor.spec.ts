@@ -45,17 +45,20 @@ describe('OcultarPreciosInterceptor', () => {
 });
 
 describe('quitarCostos (dashboards)', () => {
-  it('quita costos y gastos a cualquier profundidad y deja ingresos, ventas y cantidades', () => {
+  it('quita el costo de insumos y deja ingresos, ventas, cantidades y el gasto de maquinaria', () => {
     const r = quitarCostos({
-      kpis: { gastoInsumosGlobal: 10, gastoMantenimientosGlobal: 5, costoReparaciones30d: 3, ingresoHoy: 200, serviciosHoy: 12 },
+      kpis: { gastoInsumosGlobal: 10, gastosOperativosGlobal: 99, gastoMantenimientosGlobal: 5, gastoIncidentesGlobal: 7, costoReparaciones30d: 3, ingresoHoy: 200, serviciosHoy: 12 },
       insumos: [{ nombre: 'Shampoo', cantidadTotal: 4, costoUnitario: 2, costoTotalUSD: 8, granTotalCostoUSD: 8 }],
       topInsumosConsumo: [{ nombre: 'Cera', cantidad: 3, costoUSD: 9 }],
-      topMaquinasCostosas: [{ nombre: 'Hidrolavadora', costo: 50 }],
+      topMaquinasCostosas: [{ nombre: 'Hidrolavadora', costoTotal: 50 }],
+      topAgenciasReparaciones: [{ nombre: 'A1', costo: 12 }],
     });
     expect(r).toEqual({
-      kpis: { ingresoHoy: 200, serviciosHoy: 12 },
+      kpis: { gastoMantenimientosGlobal: 5, gastoIncidentesGlobal: 7, costoReparaciones30d: 3, ingresoHoy: 200, serviciosHoy: 12 },
       insumos: [{ nombre: 'Shampoo', cantidadTotal: 4 }],
       topInsumosConsumo: [{ nombre: 'Cera', cantidad: 3 }],
+      topMaquinasCostosas: [{ nombre: 'Hidrolavadora', costoTotal: 50 }],
+      topAgenciasReparaciones: [{ nombre: 'A1', costo: 12 }],
     });
   });
 });

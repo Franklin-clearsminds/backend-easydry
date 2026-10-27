@@ -1407,7 +1407,7 @@ this.federados.count('servicioLavado', {
 
     const acumuladoPorInsumo: Record<string, any> = {};
     // Por agencia no se suman cantidades (mezclarían ml con unidades): se compara el costo en USD y el número de consumos.
-    const consumoPorAgencia: Record<string, { costo: number; usos: number }> = {};
+    const consumoPorAgencia: Record<string, { costoInsumos: number; usos: number }> = {};
     const consumoPorCategoria: Record<string, number> = {};
     let granTotalCostoUSD = 0;
 
@@ -1417,8 +1417,8 @@ this.federados.count('servicioLavado', {
       const costoSubtotal = costoDeConsumo(c);
       granTotalCostoUSD += costoSubtotal;
       const agenciaKey = c.servicio?.bahia?.agencia?.nombre || 'Agencia General';
-      const porAg = (consumoPorAgencia[agenciaKey] ??= { costo: 0, usos: 0 });
-      porAg.costo += costoSubtotal;
+      const porAg = (consumoPorAgencia[agenciaKey] ??= { costoInsumos: 0, usos: 0 });
+      porAg.costoInsumos += costoSubtotal;
       porAg.usos++;
       consumoPorCategoria[c.insumo.categoria || 'Sin Categoría'] = (consumoPorCategoria[c.insumo.categoria || 'Sin Categoría'] || 0) + cant;
       if (!acumuladoPorInsumo[c.insumoId]) acumuladoPorInsumo[c.insumoId] = { insumoId: c.insumoId, codigoSKU: c.insumoSKU || c.insumo.codigoSKU, nombre: c.insumoNombre || c.insumo.nombre, categoria: c.insumo.categoria, simboloUnidad: c.unidadSimbolo || c.insumo.unidadMedida?.simbolo || 'u', cantidadTotal: 0, costoUnitario: costoUnit, costoTotalUSD: 0, vecesConsumido: 0, agencias: {} };
@@ -1448,7 +1448,7 @@ this.federados.count('servicioLavado', {
     }
     const serie = Object.keys(costoPorPeriodo).sort().map((periodo) => ({ periodo, costoUSD: Number(costoPorPeriodo[periodo].toFixed(2)) }));
 
-    return { success: true, rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: resolverAlcance(user).tipo === 'AGENCIA' ? [] : Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costo: Number(consumoPorAgencia[k].costo.toFixed(2)), usos: consumoPorAgencia[k].usos })).sort((a, b) => b.costo - a.costo), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
+    return { success: true, rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) }, agrupacion, granTotalCostoUSD: Number(granTotalCostoUSD.toFixed(2)), totalInsumosDistintos: listaOrdenada.length, insumos: listaOrdenada, serie, consumoPorAgencia: resolverAlcance(user).tipo === 'AGENCIA' ? [] : Object.keys(consumoPorAgencia).map(k => ({ nombre: k, costoInsumos: Number(consumoPorAgencia[k].costoInsumos.toFixed(2)), usos: consumoPorAgencia[k].usos })).sort((a, b) => b.costoInsumos - a.costoInsumos), consumoPorCategoria: Object.keys(consumoPorCategoria).map(k => ({ nombre: k, cantidad: Number(consumoPorCategoria[k].toFixed(2)) })) };
   }
 
   /** Clave de agrupación temporal (día, semana ISO o mes) para las series de analítica. */

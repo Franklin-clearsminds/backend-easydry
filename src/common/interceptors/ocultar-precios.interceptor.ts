@@ -30,23 +30,23 @@ export function quitarPrecios<T>(valor: T): T {
 }
 
 /**
- * Campos de costo y gasto de los dashboards (costo de insumos, gasto de mantenimiento, reparaciones, rankings de máquinas costosas).
- * Los ingresos y ventas no entran aquí: son del negocio, no de lo que cuesta operar.
+ * Campos de costo de INSUMOS y de gasto operativo de los dashboards (lo que cuesta lo consumido). El gasto de maquinaria (mantenimientos,
+ * incidencias, reparaciones) no entra aquí: se ve con normalidad. Tampoco los ingresos y ventas.
  */
-const ES_CAMPO_COSTO = /^(costo|gasto|granTotalCosto|topMaquinasCostosas|maquinasCostosasRank|subtotalUSD|faltanteUSD)|Costo(s|USD|Total)?$/;
+const ES_CAMPO_COSTO = /^(costoInsumos|gastoInsumos|gastosOperativos|granTotalCosto|costoQuimicos|costoTotalQuimicos|costoPorInsumo|costoUnitario|costoUSD|costoTotalUSD|subtotalUSD|faltanteUSD)/;
 
-/** Copia del valor sin los campos de costo y gasto de los dashboards, a cualquier profundidad. */
+/** Copia del valor sin los campos de costo de insumos de los dashboards, a cualquier profundidad. */
 export function quitarCostos<T>(valor: T): T {
   if (Array.isArray(valor)) return valor.map((v) => quitarCostos(v)) as unknown as T;
   if (!esObjetoPlano(valor)) return valor;
   const limpio: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(valor)) {
-    if (!ES_CAMPO_COSTO.test(k) && !CAMPOS_PRECIO.has(k)) limpio[k] = quitarCostos(v);
+    if (!ES_CAMPO_COSTO.test(k)) limpio[k] = quitarCostos(v);
   }
   return limpio as T;
 }
 
-/** Igual que `OcultarPreciosInterceptor`, pero para los dashboards: quita costos y gastos, sin tocar ingresos ni ventas. */
+/** Igual que `OcultarPreciosInterceptor`, pero para los dashboards: quita los costos de insumos, sin tocar ingresos, ventas ni gasto de maquinaria. */
 @Injectable()
 export class OcultarCostosInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {

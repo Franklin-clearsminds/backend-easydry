@@ -416,7 +416,7 @@ it('un usuario global puede acotar a la agencia o región que pida', async () =>
       const region: any = await service.getConsumoQuimicos({ regionId: r2.id }, act.coordBodega);
       expect(region.consumoPorAgencia.map((c: any) => c.nombre)).toEqual([a2.nombre]);
       // Por agencia se compara el costo en USD y el número de consumos, no cantidades de insumos distintos sumadas.
-      expect(region.consumoPorAgencia[0]).toEqual({ nombre: a2.nombre, costo: expect.any(Number), usos: expect.any(Number) });
+      expect(region.consumoPorAgencia[0]).toEqual({ nombre: a2.nombre, costoInsumos: expect.any(Number), usos: expect.any(Number) });
       expect(region.insumos.map((i: any) => i.cantidadTotal)).toEqual([5]);
     });
 
