@@ -27,6 +27,7 @@
     "prisma:status": "prisma migrate status",
     "prisma:seed": "prisma db seed",
     "prisma:import-agencias": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/import-datos-agencias.ts",
+    "prisma:import-informacion": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/import-informacion-sistema.ts",
     "prisma:import-ot": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/import-ot-xlsx.ts",
     "prisma:cifrar-imagenes": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/cifrar-imagenes.ts",
     "prisma:seed-demo": "node --require ./scripts/tsx-windows-userinfo.cjs --import tsx prisma/seed-demo-dashboards.ts",
