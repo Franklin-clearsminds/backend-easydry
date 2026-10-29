@@ -42,7 +42,7 @@ describe('ServiciosEspecialesService.create — precio congelado desde el catál
     const region = await env.region('R1');
     a1 = await env.agencia('A1', { regionId: region.id });
     pulidor = await env.usuario('pulidor', 'PULIDOR', { regionId: region.id });
-    coordinador = await env.actor((await env.usuario('coord', 'COORD_SERVICIOS_ESPECIALES')).id);
+    coordinador = await env.actor((await env.usuario('coord', 'COORD_SERVICIOS_ESPECIALES', { regionId: region.id })).id);
     insumo = await env.insumo('KIT');
     await env.stock({ insumoId: insumo.id, tipoUbicacion: 'PULIDOR_MOVIL', pulidorId: pulidor.id, cantidad: 50 });
   });

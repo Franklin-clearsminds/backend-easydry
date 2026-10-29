@@ -1058,9 +1058,9 @@
   },
   {
     "namerol": "COORD_SERVICIOS_ESPECIALES",
-    "descripcion": "Coordinador de servicios especiales: crea, asigna, reasigna y anula servicios especiales de la red especializada.",
+    "descripcion": "Coordinador de servicios especiales regional: crea, asigna, reasigna y anula los servicios especiales de su región.",
     "estado": 1,
-    "ambito": "GLOBAL",
+    "ambito": "REGION",
     "permisos": [
       "dashboard",
       "notificaciones",
@@ -1144,7 +1144,7 @@
       "funcion.coord_especiales"
     ],
     "acciones": {
-      "verTodasSucursales": true,
+      "verTodasSucursales": false,
       "crearSucursal": false,
       "editarSucursal": false,
       "crearUsuarios": false,
@@ -1160,7 +1160,7 @@
       "gestionarMantenimiento": false,
       "registrarIncidente": true,
       "verReportes": true,
-      "verProductividadGlobal": true,
+      "verProductividadGlobal": false,
       "verConfiguracion": false,
       "gestionarInventario": false,
       "despacharSuministros": false,

@@ -70,7 +70,7 @@ describe('AnalyticsService (base real)', () => {
       ['comercial', 'COORD_COMERCIAL', { regionId: r1.id }],
       ['coordBodega', 'COORD_BODEGA', {}],
       ['asistenteBodega', 'ASISTENTE_BODEGA', { regionId: r1.id }],
-      ['coordEspeciales', 'COORD_SERVICIOS_ESPECIALES', {}],
+      ['coordEspeciales', 'COORD_SERVICIOS_ESPECIALES', { regionId: r1.id }],
     ];
     for (const [sufijo, rol, opts] of roles) act[sufijo] = await env.actor((await env.usuario(sufijo.toLowerCase(), rol, opts)).id);
 

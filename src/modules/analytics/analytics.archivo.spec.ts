@@ -146,7 +146,7 @@ describe.skipIf(!(await duckdbDisponible))('paneles de análisis con datos archi
       jefeComercial: await rol('an-jcom', 'JEFE_COMERCIAL', {}),
       coordBodega: await rol('an-cb', 'COORD_BODEGA', {}),
       asistenteBodega: await rol('an-ab', 'ASISTENTE_BODEGA', { regionId: r1.id }),
-      coordEspeciales: await rol('an-ce', 'COORD_SERVICIOS_ESPECIALES', {}),
+      coordEspeciales: await rol('an-ce', 'COORD_SERVICIOS_ESPECIALES', { regionId: r1.id }),
     };
 
     const ENE_5_11 = { rango: 'RANGO', fechaDesde: '2019-01-05', fechaHasta: '2019-01-11' } as any;

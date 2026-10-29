@@ -302,6 +302,10 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('sync.dlq.gestionar')).toEqual(['ADMIN', 'SUPER_ADMIN']);
   });
 
+  it('el coordinador de servicios especiales es solo regional', () => {
+    expect(ROLES_BASE.find((r) => r.namerol === 'COORD_SERVICIOS_ESPECIALES')!.ambito).toBe('REGION');
+  });
+
   it('el coordinador comercial, el supervisor y el técnico tienen alcance regional; el aprobador y el líder, de agencia', () => {
     const ambito = (n: string) =>
       ROLES_BASE.find((r) => r.namerol === n)!.ambito;

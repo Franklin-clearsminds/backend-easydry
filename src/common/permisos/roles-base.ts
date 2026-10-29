@@ -240,8 +240,8 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'COORD_SERVICIOS_ESPECIALES',
     descripcion:
-      'Coordinador de servicios especiales: crea, asigna, reasigna y anula servicios especiales de la red especializada.',
-    ambito: 'GLOBAL',
+      'Coordinador de servicios especiales regional: crea, asigna, reasigna y anula los servicios especiales de su región.',
+    ambito: 'REGION',
     capacidades: p(
       ...LECTURA_RED,
       'dashboard.ver',

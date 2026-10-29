@@ -49,7 +49,8 @@ describe('InventarioService: alcance por rol (base real)', () => {
     await crear('asistenteR2', 'ASISTENTE_BODEGA', { bodegaId: bodR2.id });
     await crear('admin', 'ADMIN');
     await crear('coordBodega', 'COORD_BODEGA');
-    await crear('coordEsp', 'COORD_SERVICIOS_ESPECIALES');
+    await crear('coordEsp', 'COORD_SERVICIOS_ESPECIALES', { regionId: r1.id });
+    await crear('coordEspR2', 'COORD_SERVICIOS_ESPECIALES', { regionId: r2.id });
     await crear('tecnico', 'TECNICO');
   });
 
@@ -86,7 +87,8 @@ describe('InventarioService: alcance por rol (base real)', () => {
     });
 
     it('otros roles ven el kit de pulidores de su alcance', async () => {
-      await expect(service.pulidorEnAlcance(actores.coordEsp, ids.pepa)).resolves.toBe(ids.pepa); // alcance nacional
+      await expect(service.pulidorEnAlcance(actores.coordEsp, ids.pepa)).resolves.toBe(ids.pepa); // Pepa está en su región R1
+      await expect(service.pulidorEnAlcance(actores.coordEspR2, ids.pepa)).rejects.toThrow(/alcance/); // el coordinador es solo regional
       await expect(service.pulidorEnAlcance(actores.asistenteR1, ids.pepa)).resolves.toBe(ids.pepa); // Pepa está en la región R1
       await expect(service.pulidorEnAlcance(actores.asistenteR2, ids.pepa)).rejects.toThrow(/alcance/); // otra región
       await expect(service.pulidorEnAlcance(actores.lara, ids.pepa)).rejects.toThrow(/alcance/); // otra agencia

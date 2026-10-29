@@ -65,7 +65,7 @@ describe('ServiciosEspecialesService — notificaciones (base real)', () => {
       ids[clave] = u.id;
       actores[clave] = await env.actor(u.id);
     };
-    await crear('coord', 'COORD_SERVICIOS_ESPECIALES');
+    await crear('coord', 'COORD_SERVICIOS_ESPECIALES', { regionId: region.id });
     await crear('admin', 'ADMIN');
     await crear('supervisorR1', 'SUPERVISOR', { regionId: region.id });
     await crear('supervisorR2', 'SUPERVISOR', { regionId: otraRegion.id });
