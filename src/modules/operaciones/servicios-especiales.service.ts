@@ -704,13 +704,14 @@ export class ServiciosEspecialesService {
         estado: 1,
         role: rolConFuncion(FUNCION.PULIDOR),
       },
-      select: { id: true, regionId: true, agencia: { select: { regionId: true } } },
+      select: { id: true, name: true, lastname: true, agenciaId: true, regionId: true, agencia: { select: { regionId: true } } },
     });
     if (operadores.length !== operadoresIds.length) {
       throw new BadRequestException(
         'Todos los asignados deben ser pulidores activos.',
       );
     }
+    this.asegurarSoloFijoDeLaAgenciaOMoviles(operadores, finalAgenciaId);
     // La región del pulidor es la suya o, si es fijo de una agencia, la de esa agencia. Debe ser la de la agencia donde se programa la OT.
     if (
       finalRegionId &&
@@ -848,6 +849,22 @@ export class ServiciosEspecialesService {
     }
 
     return this._formatItem(created);
+  }
+
+  /**
+   * Quién puede atender una OT de una agencia: el pulidor fijo de esa agencia (responsable, no se cambia) y pulidores móviles de apoyo.
+   * Un pulidor fijo de otra agencia no puede tomarla.
+   */
+  private asegurarSoloFijoDeLaAgenciaOMoviles(
+    operadores: Array<{ agenciaId?: string | null; name?: string | null; lastname?: string | null }>,
+    agenciaId?: string | null,
+  ): void {
+    const ajenos = operadores.filter((o) => o.agenciaId && o.agenciaId !== agenciaId);
+    if (!ajenos.length) return;
+    const nombres = ajenos.map((o) => `${o.name || ''} ${o.lastname || ''}`.trim()).filter(Boolean).join(', ');
+    throw new BadRequestException(
+      `Solo se puede asignar el pulidor fijo de la agencia y pulidores móviles de apoyo${nombres ? `: ${nombres} es fijo de otra agencia` : ''}.`,
+    );
   }
 
   /**
@@ -1023,6 +1040,9 @@ export class ServiciosEspecialesService {
           },
           select: {
             id: true,
+            name: true,
+            lastname: true,
+            agenciaId: true,
             regionId: true,
             agencia: { select: { regionId: true } },
           },
@@ -1039,6 +1059,7 @@ export class ServiciosEspecialesService {
         `Todos los asignados deben ser pulidores activos${nombres ? `: ${nombres} no lo es` : ''}.`,
       );
     }
+    this.asegurarSoloFijoDeLaAgenciaOMoviles(operadores, item.agenciaId);
     const regionServicio = item.regionId || item.agencia?.regionId || null;
     if (
       regionServicio &&

@@ -75,7 +75,8 @@ describe('servicios especiales — alcance por rol (base real)', () => {
     a4 = await env.agencia('A4', { regionId: r1.id }); // agencia con su pulidor fijo, solo para la prueba de listados
     insumo = await env.insumo('KIT');
 
-    await crearUsuario('coord', 'COORD_SERVICIOS_ESPECIALES');
+    await crearUsuario('coord', 'COORD_SERVICIOS_ESPECIALES', { regionId: r1.id });
+    await crearUsuario('coordSinRegion', 'COORD_SERVICIOS_ESPECIALES');
     await crearUsuario('admin', 'ADMIN');
     await crearUsuario('supervisorR1', 'SUPERVISOR', { regionId: r1.id });
     await crearUsuario('aprobadorA1', 'APROBADOR', { agenciaId: a1.id });
@@ -119,9 +120,11 @@ describe('servicios especiales — alcance por rol (base real)', () => {
       for (const f of filas) expect(f.operadorId === ids.pablo || f.operadoresAsignados.some((a) => a.operadorId === ids.pablo)).toBe(true);
     });
 
-    it('el coordinador ve toda la red; el supervisor, su región; el aprobador, su agencia', async () => {
+    it('el coordinador y el supervisor ven su región; el aprobador, su agencia', async () => {
       const enA3 = await nuevo({ agenciaId: a3.id, regionId: r2.id, operadorId: ids.rita, asignados: [ids.rita] });
-      expect(await vistos({ agenciaId: a3.id }, actores.coord)).toEqual([enA3]); // alcance nacional
+      const coordinador = await vistos({ agenciaId: a3.id }, actores.coord);
+      expect(coordinador).not.toContain(enA3); // el coordinador es solo regional: no ve otra región
+      expect(await vistos({}, actores.coord)).toContain(base);
       const supervisor = await vistos({}, actores.supervisorR1);
       expect(supervisor).toContain(base);
       expect(supervisor).not.toContain(enA3); // de otra región
@@ -133,6 +136,7 @@ describe('servicios especiales — alcance por rol (base real)', () => {
 
     it('sin datos de su ámbito no ve nada', async () => {
       expect(await vistos({}, actores.aprobadorSinAgencia)).toEqual([]);
+      expect(await vistos({}, actores.coordSinRegion)).toEqual([]); // coordinador sin región
     });
 
     it('el detalle exige que el servicio esté en su alcance', async () => {
@@ -295,6 +299,14 @@ describe('servicios especiales — alcance por rol (base real)', () => {
       const id = await nuevo({ agenciaId: a2.id, operadorId: ids.fabi, asignados: [ids.fabi] });
       await expect(service.reasignar({ id, operadorId: ids.paco } as any, actores.coord)).rejects.toThrow(/pulidor fijo asignado permanentemente/);
       expect((await filaDe(id)).operadorId).toBe(ids.fabi);
+    });
+
+    it('solo se suman pulidores móviles de apoyo: un pulidor fijo de otra agencia no puede tomar la OT', async () => {
+      const deA1 = await nuevo(); // A1 no tiene pulidor fijo
+      await expect(service.reasignar({ id: deA1, operadoresIds: [ids.paco, ids.fabi] } as any, actores.coord)).rejects.toThrow(/fijo de otra agencia/);
+      const deA2 = await nuevo({ agenciaId: a2.id, operadorId: ids.fabi, asignados: [ids.fabi] }); // A2 tiene a Fabi como fijo
+      await expect(service.reasignar({ id: deA2, operadoresIds: [ids.fabi, ids.pulA4] } as any, actores.coord)).rejects.toThrow(/fijo de otra agencia/);
+      expect((await filaDe(deA2)).operadorId).toBe(ids.fabi); // sin cambios
     });
 
     it('reasigna a varios pulidores conservando el orden y valida el kit solo del primero', async () => {
