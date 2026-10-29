@@ -37,10 +37,17 @@ const SOLO_BORRAR = process.argv.includes('--solo-borrar');
 const DIA = 86400000;
 const AHORA = Date.now();
 const MARCA = '[DEMO]';
-const DIAS = 90;
+/**
+ * Modo remoto seguro (`DEMO_REMOTO=SI`, para una base con datos reales como Supabase): corre solo lo que únicamente inserta filas
+ * marcadas (servicios de lavado y especiales, maquinaria con incidencias, mantenimientos, limpiezas y traslados, envíos y retos).
+ * No corre las aprobaciones (crean usuarios), las auditorías 5S ni los informes, y no repara existencias.
+ * `DEMO_DIAS` ajusta la ventana de días (por ejemplo 30 para un mes).
+ */
+const REMOTO = process.env.DEMO_REMOTO === 'SI';
+const DIAS = Math.max(7, Number(process.env.DEMO_DIAS) || 90);
 
-if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
-  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost).');
+if (!REMOTO && !/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
+  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost). Para una base remota usa DEMO_REMOTO=SI (solo inserta filas marcadas).');
 }
 
 const prisma = new PrismaClient();
@@ -115,6 +122,10 @@ async function crearRetos(admin: { id: string; name: string; lastname: string })
     r('Cerámicos de octubre', 'Servicios cerámicos de los pulidores.', 'Bono de $150', 17, -14, { tipoReto: 'PULIDOR', tipoServicios: 'ESPECIFICOS', catalogoServicioIds: ceramicos, metrica: 'SERVICIOS', modoGanador: 'RANKING', cantidadGanadores: 3 }),
     r('Reto de noviembre', 'Las agencias con más servicios del mes.', 'Por definir', -5, -34, { tipoReto: 'AGENCIA', metrica: 'SERVICIOS', modoGanador: 'RANKING', cantidadGanadores: 3 }),
   ];
+  // `cerrarVencidos` cierra TODO reto vencido, no solo los de demostración: con una base de datos reales no se puede arriesgar.
+  if (REMOTO && (await prisma.reto.count({ where: { NOT: { titulo: { startsWith: `${MARCA} ` } } } })) > 0) {
+    return console.log('⚠ Hay retos reales en la base: no se crean los de demostración para no cerrarlos por error.');
+  }
   for (const data of retos) await prisma.reto.create({ data: data as Prisma.RetoUncheckedCreateInput });
   // Los retos cuya fecha de fin ya pasó se cierran con el mismo servicio de la aplicación: calcula los ganadores con los servicios reales.
   const service = new RetosService(prismaApp as never);
@@ -279,11 +290,11 @@ async function main() {
   if (RESET || SOLO_BORRAR) {
     paso(0, 'Borrado de la demostración anterior');
     await borrarPropio();
-    correr('seed-demo-aprobaciones.ts', ['--solo-borrar']);
+    if (!REMOTO) correr('seed-demo-aprobaciones.ts', ['--solo-borrar']);
     correr('seed-demo-dashboards.ts', ['--solo-borrar']);
     correr('seed-demo-tres-meses.ts', ['--solo-borrar']);
     if (SOLO_BORRAR) {
-      await repararExistencias();
+      if (!REMOTO) await repararExistencias();
       await limpiarCache();
       return console.log('\n✅ Demostración borrada.');
     }
@@ -299,16 +310,20 @@ async function main() {
   correr('seed-demo-tres-meses.ts');
   paso(2, 'Maquinaria, incidencias, mantenimientos, limpiezas y envíos');
   correr('seed-demo-dashboards.ts', [], { DEMO_DIAS: String(DIAS) });
-  paso(3, 'Aprobaciones');
-  correr('seed-demo-aprobaciones.ts', [], { DEMO_DIAS: String(DIAS) });
+  if (!REMOTO) {
+    paso(3, 'Aprobaciones');
+    correr('seed-demo-aprobaciones.ts', [], { DEMO_DIAS: String(DIAS) });
+  }
   paso(4, 'Retos');
   await crearRetos(admin);
-  paso(5, 'Auditorías 5S');
-  await crearAuditorias5s(actorAuditor);
-  paso(6, 'Informes de inspección');
-  await crearInformes(auditor);
-  paso(7, 'Existencias y caché');
-  await repararExistencias();
+  if (!REMOTO) {
+    paso(5, 'Auditorías 5S');
+    await crearAuditorias5s(actorAuditor);
+    paso(6, 'Informes de inspección');
+    await crearInformes(auditor);
+    paso(7, 'Existencias y caché');
+    await repararExistencias();
+  }
   await limpiarCache();
 
   console.log('\n✅ Listo: ya puedes revisar todos los dashboards. Para quitar todo: npm run prisma:seed-completo -- --solo-borrar');

@@ -27,11 +27,21 @@ const RESET = process.argv.includes('--reset');
 const SOLO_BORRAR = process.argv.includes('--solo-borrar');
 const DIA = 86400000;
 const AHORA = Date.now();
-const DIAS = 90;
+/**
+ * Modo remoto seguro (`DEMO_REMOTO=SI`, para una base con datos reales como Supabase): SOLO inserta filas nuevas y marcadas
+ * (clientUuid «c90-…», OT «OT-DEMO-…», códigos «SE-C90-…»). No toca precios del catálogo, costos de insumos, usuarios ni existencias:
+ * los consumos se guardan sin mover stock ni kardex. `DEMO_DIAS` ajusta la ventana (30 = un mes) y se crea la mitad del volumen.
+ */
+const REMOTO = process.env.DEMO_REMOTO === 'SI';
+const DIAS = Math.max(7, Number(process.env.DEMO_DIAS) || 90);
 const TAG = 'c90-';
+/** Volumen relativo de servicios: en modo remoto se crea la mitad para no engordar la base compartida. */
+const ESCALA = REMOTO ? 0.5 : 1;
+/** Prefijo de las OT: en modo remoto no pueden chocar con las OT reales ni bloquear un número real. */
+const PREFIJO_OT = REMOTO ? 'OT-DEMO-' : 'OT-';
 
-if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
-  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost).');
+if (!REMOTO && !/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
+  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost). Para una base remota usa DEMO_REMOTO=SI (solo inserta filas marcadas).');
 }
 
 // ---------------------------------------------------------------- utilidades
@@ -69,7 +79,8 @@ async function borrar() {
   const ids = [...lav, ...esp].map((s) => s.id);
   if (ids.length) {
     const neto = new Map<string, { insumoId: string; ubicacionId: string; cantidad: number }>();
-    for (const parte of lotes(ids, 5000)) {
+    // En modo remoto nunca se movió stock ni kardex: no hay nada que devolver.
+    for (const parte of REMOTO ? [] : lotes(ids, 5000)) {
       for (const k of await prisma.kardexMovimiento.findMany({ where: { referenciaId: { in: parte }, tipoMovimiento: { in: ['CONSUMO_SERVICIO', 'CONSUMO_SERVICIO_ESPECIAL'] } } })) {
         const clave = `${k.insumoId}|${k.ubicacionId}`;
         const e = neto.get(clave) ?? { insumoId: k.insumoId, ubicacionId: k.ubicacionId, cantidad: 0 };
@@ -83,11 +94,11 @@ async function borrar() {
       const donde: Prisma.StockUbicacionWhereInput = agencias.has(e.ubicacionId) ? { tipoUbicacion: 'AGENCIA', agenciaId: e.ubicacionId } : { pulidorId: e.ubicacionId };
       await prisma.stockUbicacion.updateMany({ where: { insumoId: e.insumoId, ...donde }, data: { cantidadActual: { decrement: e.cantidad } } });
     }
-    for (const parte of lotes(ids, 5000)) await prisma.kardexMovimiento.deleteMany({ where: { referenciaId: { in: parte } } });
+    if (!REMOTO) for (const parte of lotes(ids, 5000)) await prisma.kardexMovimiento.deleteMany({ where: { referenciaId: { in: parte } } });
     for (const parte of lotes(lav.map((s) => s.id), 5000)) await prisma.servicioLavado.deleteMany({ where: { id: { in: parte } } });
     for (const parte of lotes(esp.map((s) => s.id), 5000)) await prisma.servicioEspecial.deleteMany({ where: { id: { in: parte } } });
   }
-  await prisma.kardexMovimiento.deleteMany({ where: { tipoMovimiento: 'AJUSTE_INICIAL', referenciaId: 'c90' } });
+  if (!REMOTO) await prisma.kardexMovimiento.deleteMany({ where: { tipoMovimiento: 'AJUSTE_INICIAL', referenciaId: 'c90' } });
   console.log(`🧹 Borrado: ${lav.length} servicios de lavado y ${esp.length} especiales.`);
 }
 
@@ -163,6 +174,24 @@ async function crearTecnicos() {
   console.log(`🧑‍🔧 Técnicos / coordinador de mantenimiento creados: ${n}`);
 }
 
+/** Costo de un insumo según su nombre (el mismo criterio que `ponerCostosInsumos`), sin escribirlo en la base. */
+function costoDemo(nombre: string, contenidoNeto: unknown): number {
+  const regla = COSTOS.find(([re]) => re.test(nombre));
+  const costo = regla ? regla[1] : Number(contenidoNeto) > 1 ? Number(contenidoNeto) * 0.02 : 5;
+  return Math.max(0.01, Number(costo.toFixed(2)));
+}
+
+/** Modo remoto: precios y costos que faltan se completan SOLO en memoria, para que lo demo tenga valor sin cambiar el catálogo real. */
+function completarEnMemoria(catalogo: any[]): void {
+  if (!REMOTO) return;
+  for (const c of catalogo) {
+    if (Number(c.precio) === 0 && !c.esRetoque && PRECIOS[c.id]) c.precio = D(PRECIOS[c.id]);
+    for (const r of c.recetas ?? []) {
+      if (r.insumo && Number(r.insumo.costoUnitarioUSD) === 0) r.insumo = { ...r.insumo, costoUnitarioUSD: D(costoDemo(r.insumo.nombre, r.insumo.contenidoNeto)) };
+    }
+  }
+}
+
 // ---------------------------------------------------------------- datos de apoyo
 const VEHICULOS: Record<string, string[]> = {
   Toyota: ['Hilux', 'Corolla', 'Yaris', 'RAV4', 'Fortuner'], Chevrolet: ['Sail', 'Spark', 'Onix', 'D-Max', 'Tracker'],
@@ -188,6 +217,7 @@ type Consumo = { ubicacionId: string; insumoId: string; fecha: Date; referenciaI
 // ---------------------------------------------------------------- servicios de lavado
 async function crearLavados(admin: { id: string; name: string; lastname: string }, consumos: Consumo[]) {
   const catalogo = await prisma.catalogoServicio.findMany({ include: { recetas: { include: { insumo: { include: { unidadMedida: true } }, unidadConsumo: true } } } });
+  completarEnMemoria(catalogo);
   const porId = new Map(catalogo.map((c) => [c.id, c]));
   const retoque = catalogo.find((c) => c.codigo === 'RETOQUE-GEN');
   const agencias = await prisma.agencia.findMany({
@@ -222,7 +252,7 @@ async function crearLavados(admin: { id: string; name: string; lastname: string 
     for (let dias = DIAS; dias >= 0; dias--) {
       const dow = diaSemanaEc(dias);
       const factor = dow === 0 ? 0.35 : dow === 6 ? 1.4 : 1;
-      const cantidad = Math.round(peso * 2.6 * factor * entre(0.7, 1.3));
+      const cantidad = Math.round(peso * 2.6 * ESCALA * factor * entre(0.7, 1.3));
       for (let k = 0; k < cantidad; k++) {
         const hora = entero(8, 17);
         if (dias === 0 && hora >= horaActual - 1) continue;
@@ -247,7 +277,7 @@ async function crearLavados(admin: { id: string; name: string; lastname: string 
         const decidido = estado === 'APROBADO' || estado === 'RECHAZADO';
         const fDecision = decidido ? new Date(Math.min(AHORA, salida.getTime() + entero(3, 22) * 3600000)) : null;
         const modelo = elige(VEHICULOS[marca]);
-        const numOt = `OT-${++ot}`;
+        const numOt = `${PREFIJO_OT}${++ot}`;
         const plc = placa();
         const cliente = prob(0.7) ? persona() : null;
         const precio = precioDe(cat.id);
@@ -315,6 +345,7 @@ function registrarConsumo(cat: { recetas: any[] }, servicioId: string, operadorI
 // ---------------------------------------------------------------- servicios especiales
 async function crearEspeciales(admin: { id: string; name: string; lastname: string }, consumos: Consumo[]) {
   const catalogo = await prisma.catalogoServicio.findMany({ where: { categoria: 'ESPECIAL', esRetoque: false, estado: 'Activo' }, include: { recetas: { include: { insumo: { include: { unidadMedida: true } }, unidadConsumo: true } } } });
+  completarEnMemoria(catalogo);
   const porId = new Map(catalogo.map((c) => [c.id, c]));
   const pulidores = await prisma.user.findMany({ where: { estado: 1, role: { namerol: 'PULIDOR' } }, select: { id: true, name: true, lastname: true, agenciaId: true, regionId: true, servicioIds: true } });
   const agencias = await prisma.agencia.findMany({ where: { estado: 1 }, select: { id: true, regionId: true, cliente: { select: { nombre: true } } } });
@@ -334,7 +365,7 @@ async function crearEspeciales(admin: { id: string; name: string; lastname: stri
     const zona = propias.length ? propias : agencias.filter((a) => a.regionId === pul.regionId);
     if (!zona.length) continue;
     for (let dias = DIAS; dias >= 0; dias--) {
-      if (diaSemanaEc(dias) === 0 || !prob(0.4)) continue;
+      if (diaSemanaEc(dias) === 0 || !prob(0.4 * ESCALA)) continue;
       const hora = entero(8, 14);
       if (dias === 0 && hora >= horaActual - 3) continue;
       const cat = pesos(oferta.map((s) => [s, Number(s.precio) > 0 ? 1 / Math.pow(Number(s.precio), 0.6) : 1] as const));
@@ -351,7 +382,7 @@ async function crearEspeciales(admin: { id: string; name: string; lastname: stri
       const completo = estado === 'Completado';
       const pIni = new Date(fecha.getTime() + Math.round(efectivoMin / 2) * 60000);
       filas.push({
-        id, clientUuid: `${TAG}E-${++n}`, codigoSE: `SE-C90-${String(n).padStart(5, '0')}`, ordenTrabajoOT: `OT-${++ot}`, tipoServicio: tipoDe(cat.nombre), servicioCatalogoId: cat.id,
+        id, clientUuid: `${TAG}E-${++n}`, codigoSE: `SE-C90-${String(n).padStart(5, '0')}`, ordenTrabajoOT: `${PREFIJO_OT}${++ot}`, tipoServicio: tipoDe(cat.nombre), servicioCatalogoId: cat.id,
         precio: D(Number(cat.precio)), clienteNombre: persona(), placa: placa(), marca, modelo: elige(VEHICULOS[marca]), color: elige(COLORES),
         prioridad: pesos([['Media', 60], ['Alta', 20], ['Baja', 15], ['Urgente', 5]] as const), estado, agenciaId: ag.id, operadorId: pul.id,
         creadoPorId: admin.id, creadoPorNombre: `${admin.name} ${admin.lastname}`.trim(), regionId: ag.regionId ?? pul.regionId, regionNombre: regiones.get(ag.regionId ?? pul.regionId ?? '') ?? null,
@@ -376,7 +407,24 @@ async function crearEspeciales(admin: { id: string; name: string; lastname: stri
 }
 
 // ---------------------------------------------------------------- consumos, stock y kardex
+/** Modo remoto: guarda el consumo de cada servicio demo (para costos y reportes) sin tocar existencias ni kardex reales. */
+async function guardarConsumosSinStock(consumos: Consumo[]) {
+  const insumos = new Map((await prisma.insumo.findMany({ select: { id: true, nombre: true, codigoSKU: true, unidadMedida: { select: { simbolo: true } } } })).map((i) => [i.id, i]));
+  const consumoRows: Prisma.ConsumoServicioCreateManyInput[] = [];
+  const consumoEspRows: Prisma.ConsumoServicioEspecialCreateManyInput[] = [];
+  for (const c of consumos) {
+    const ins = insumos.get(c.insumoId)!;
+    const base = { insumoId: c.insumoId, cantidadUsada: D(c.cantidad), insumoNombre: ins.nombre, insumoSKU: ins.codigoSKU, unidadSimbolo: ins.unidadMedida.simbolo, costoUnitarioUSD: D(c.costoUnit), costoTotalUSD: D(c.costoTotal), createdAt: c.fecha };
+    if (c.pulidorId) consumoEspRows.push({ ...base, servicioEspecialId: c.referenciaId, pulidorId: c.pulidorId });
+    else consumoRows.push({ ...base, servicioId: c.referenciaId, agenciaId: c.ubicacionId, stockUbicacionId: null });
+  }
+  for (const p of lotes(consumoRows)) await prisma.consumoServicio.createMany({ data: p });
+  for (const p of lotes(consumoEspRows)) await prisma.consumoServicioEspecial.createMany({ data: p });
+  console.log(`📦 Consumos (sin mover stock): ${consumoRows.length} de lavado + ${consumoEspRows.length} de especiales`);
+}
+
 async function aplicarConsumos(consumos: Consumo[]) {
+  if (REMOTO) return guardarConsumosSinStock(consumos);
   // Se agrupa por (ubicación, insumo): el stock de partida es el actual, o más si la ubicación se reabastecía durante los 90 días.
   const grupos = new Map<string, Consumo[]>();
   for (const c of consumos) {
@@ -432,9 +480,13 @@ async function main() {
   const admin = await prisma.user.findFirst({ where: { role: { namerol: 'SUPER_ADMIN' } }, select: { id: true, name: true, lastname: true } });
   if (!admin) throw new Error('No hay usuario SUPER_ADMIN. Corre primero el seed.');
 
-  await ponerPrecios();
-  await ponerCostosInsumos();
-  await crearTecnicos();
+  if (REMOTO) {
+    console.log('ℹ Modo remoto: no se tocan precios, costos de insumos, usuarios ni existencias.');
+  } else {
+    await ponerPrecios();
+    await ponerCostosInsumos();
+    await crearTecnicos();
+  }
   const consumos: Consumo[] = [];
   await crearLavados(admin, consumos);
   await crearEspeciales(admin, consumos);

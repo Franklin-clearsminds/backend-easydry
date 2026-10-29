@@ -28,8 +28,14 @@ const AHORA = Date.now();
 /** Días hacia atrás que cubren incidencias, envíos, limpiezas y traslados (por defecto 55; `DEMO_DIAS=90` para tres meses). */
 const VENTANA = Math.max(30, Number(process.env.DEMO_DIAS) || 55);
 
-if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
-  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost).');
+/**
+ * Modo remoto seguro (`DEMO_REMOTO=SI`, para una base con datos reales como Supabase): solo inserta filas nuevas y marcadas
+ * (máquinas «DEMO-…», guías «DESP-DEMO-…»). Los envíos NO mueven existencias ni kardex reales ni exigen stock en la bodega.
+ */
+const REMOTO = process.env.DEMO_REMOTO === 'SI';
+
+if (!REMOTO && !/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
+  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost). Para una base remota usa DEMO_REMOTO=SI (solo inserta filas marcadas).');
 }
 
 // ---------------------------------------------------------------- utilidades
@@ -69,8 +75,8 @@ async function borrarDemo() {
   const movs = await prisma.movimientoInventario.findMany({ where: { numeroGuia: { startsWith: 'DESP-DEMO-' } }, select: { id: true } });
   const ids = movs.map((m) => m.id);
   if (ids.length) {
-    // Devuelve el stock: suma del kardex por (insumo, ubicación) con signo contrario.
-    const kardex = await prisma.kardexMovimiento.findMany({ where: { referenciaId: { in: ids } } });
+    // Devuelve el stock: suma del kardex por (insumo, ubicación) con signo contrario. En modo remoto nunca se movió: no hay kardex.
+    const kardex = REMOTO ? [] : await prisma.kardexMovimiento.findMany({ where: { referenciaId: { in: ids } } });
     const neto = new Map<string, { insumoId: string; ubicacionId: string; cantidad: number }>();
     for (const k of kardex) {
       const clave = `${k.insumoId}|${k.ubicacionId}`;
@@ -91,7 +97,7 @@ async function borrarDemo() {
       await prisma.stockUbicacion.updateMany({ where: { insumoId: e.insumoId, ...donde }, data: { cantidadActual: { decrement: e.cantidad } } });
       if (bodegas.has(e.ubicacionId)) await prisma.insumo.update({ where: { id: e.insumoId }, data: { stockActual: { decrement: e.cantidad } } });
     }
-    await prisma.kardexMovimiento.deleteMany({ where: { referenciaId: { in: ids } } });
+    if (!REMOTO) await prisma.kardexMovimiento.deleteMany({ where: { referenciaId: { in: ids } } });
     await prisma.movimientoInventario.deleteMany({ where: { id: { in: ids } } });
   }
   const maqs = await prisma.maquinaria.findMany({ where: { serie: { startsWith: 'DEMO-' } }, select: { id: true } });
@@ -371,6 +377,7 @@ async function crearEnvios(admin: { id: string }) {
     usuarioId: string,
     costo: Prisma.Decimal,
   ) => {
+    if (REMOTO) return; // base con datos reales: los envíos demo no mueven existencias ni kardex
     const where = ubic.tipo === 'BODEGA_CENTRAL' ? { bodegaId: ubic.id } : ubic.tipo === 'AGENCIA' ? { agenciaId: ubic.id } : { pulidorId: ubic.id };
     // Un pulidor puede ser fijo o móvil: se usa la fila que ya tenga, sin crear otra de distinto tipo.
     let fila = await prisma.stockUbicacion.findFirst({ where: { insumoId: ubic.insumoId, ...(ubic.tipo === 'PULIDOR_MOVIL' ? {} : { tipoUbicacion: ubic.tipo }), ...where } });
@@ -403,6 +410,7 @@ async function crearEnvios(admin: { id: string }) {
     for (const ins of mezclar(insumos).slice(0, entero(2, 5))) {
       const unidades = entero(1, 15);
       const base = unidades * (Number(ins.contenidoNeto) || 1);
+      if (REMOTO) { lineas.push({ ins, unidades, base }); continue; } // sin stock que cubrir: no se descuenta nada
       const st = await stockCentral(ins.id);
       if (st && Number(st.cantidadActual) >= base) lineas.push({ ins, unidades, base });
     }
