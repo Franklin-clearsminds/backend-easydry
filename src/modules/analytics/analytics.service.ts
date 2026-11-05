@@ -232,7 +232,7 @@ export class AnalyticsService {
     }
 
     // Todos los roles de negocio reciben la analítica estratégica y jerárquica (filtrada por su ámbito)
-    const isEjecutivo = tieneAlgunaFuncion(user, [FUNCION.ADMINISTRADOR, FUNCION.SUPERVISOR, FUNCION.LIDER_AGENCIA, FUNCION.COMERCIAL]);
+    const isEjecutivo = tieneAlgunaFuncion(user, [FUNCION.ADMINISTRADOR, FUNCION.SUPERVISOR, FUNCION.LIDER_AGENCIA, FUNCION.COMERCIAL, FUNCION.COORD_ESPECIALES]);
     
     if (isEjecutivo) {
       const globalMetrics = await this.getAdminEstrategicos(filtro, hayFiltro, startOfDay, endOfDay, hace30Dias, dto?.pulidorId, this.servFiltro(dto));
@@ -1512,6 +1512,69 @@ this.federados.count('servicioLavado', {
     return { success: true, rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) }, ranking, rankingBottom };
   }
 
+  /**
+   * Toda la productividad del periodo: una fila por agencia y una por persona (lavador, auxiliar, líder o backup, pulidor) con
+   * servicios finalizados, monto facturado y tiempo promedio. El monto solo se entrega a quien ve precios. Queda dentro del alcance del usuario.
+   */
+  async getProductividadDetalle(dto: RankingLavadoresDto, user: any) {
+    return this.enCache('getProductividadDetalle', dto, user, () => this.getProductividadDetalleSinCache(dto, user));
+  }
+
+  private async getProductividadDetalleSinCache(dto: RankingLavadoresDto, user: any) {
+    const filtro = this.filtroAgencia(user, dto);
+    const hayFiltro = Object.keys(filtro).length > 0;
+    const verMonto = tienePermiso(user, 'precios.ver');
+    const { desde: fechaDesde, hasta: fechaHasta } = this.periodoDeFiltro(dto);
+    const where: any = { estado: { in: [ServiceStatus.FINALIZADO, ServiceStatus.APROBADO] }, horaIngreso: { gte: fechaDesde, lte: fechaHasta }, ...this.filtroCategoria(this.servFiltro(dto)) };
+    if (hayFiltro) where.bahia = { agencia: filtro };
+    const seWhere: any = { estado: 'Completado', fechaFin: { gte: fechaDesde, lte: fechaHasta }, ...(hayFiltro ? { agencia: filtro } : {}) };
+
+    const personaSel = { select: { id: true, name: true, lastname: true, agencia: { select: { id: true, nombre: true, region: { select: { id: true, nombre: true } } } }, region: { select: { id: true, nombre: true } }, role: { select: { namerol: true, capacidades: true } } } };
+    const [generales, especiales] = await Promise.all([
+      this.federados.findMany('servicioLavado', {
+        where,
+        select: { operadorId: true, precio: true, horaIngreso: true, horaSalida: true, operador: personaSel, bahia: { select: { agencia: { select: { id: true, nombre: true, region: { select: { id: true, nombre: true } } } } } } },
+      }),
+      this.federados.findMany('servicioEspecial', {
+        where: seWhere,
+        select: { operadorId: true, precio: true, fechaInicio: true, fechaFin: true, operador: personaSel, agencia: { select: { id: true, nombre: true, region: { select: { id: true, nombre: true } } } }, region: { select: { id: true, nombre: true } } },
+      }),
+    ]);
+
+    const personas = new Map<string, any>();
+    const agencias = new Map<string, any>();
+    const acumular = (s: any, ag: any, reg: any, minutos: number | null, esEspecial: boolean) => {
+      const monto = Number(s.precio ?? 0);
+      const agId = ag?.id ?? 'sin-agencia';
+      const a = agencias.get(agId) ?? { agenciaId: agId, agencia: ag?.nombre ?? 'Móviles (sin agencia)', regionId: reg?.id ?? null, region: reg?.nombre ?? '', servicios: 0, monto: 0 };
+      a.servicios++; a.monto += monto; agencias.set(agId, a);
+      const op = s.operador;
+      if (!s.operadorId || !op) return;
+      const f = funcionesDeRol(op.role?.capacidades, op.role?.namerol);
+      const rol = f.has(FUNCION.PULIDOR) || esEspecial ? 'PULIDOR' : f.has(FUNCION.AUXILIAR) ? 'AUXILIAR' : f.has(FUNCION.LIDER_AGENCIA) ? 'LIDER' : 'LAVADOR';
+      const p = personas.get(s.operadorId) ?? { personaId: s.operadorId, nombre: `${op.name} ${op.lastname}`.trim(), rol, agenciaId: ag?.id ?? op.agencia?.id ?? null, agencia: ag?.nombre ?? op.agencia?.nombre ?? 'Móvil (sin agencia)', regionId: reg?.id ?? op.region?.id ?? null, region: reg?.nombre ?? op.region?.nombre ?? '', servicios: 0, monto: 0, minutos: 0, conTiempo: 0 };
+      p.servicios++; p.monto += monto;
+      if (minutos !== null) { p.minutos += minutos; p.conTiempo++; }
+      personas.set(s.operadorId, p);
+    };
+    for (const s of generales) {
+      const ag = s.bahia?.agencia ?? s.operador?.agencia;
+      acumular(s, ag, ag?.region, s.horaSalida ? Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime()) / 60000)) : null, false);
+    }
+    for (const s of especiales) {
+      const ag = s.agencia ?? s.operador?.agencia;
+      acumular(s, ag, ag?.region ?? s.region, s.fechaInicio && s.fechaFin ? Math.max(0, Math.round((new Date(s.fechaFin).getTime() - new Date(s.fechaInicio).getTime()) / 60000)) : null, true);
+    }
+    const dinero = (n: number) => (verMonto ? Math.round(n * 100) / 100 : null);
+    return {
+      success: true,
+      verMonto,
+      rango: { desde: this.aFechaISO(fechaDesde), hasta: this.aFechaISO(fechaHasta) },
+      agencias: [...agencias.values()].map((a) => ({ ...a, monto: dinero(a.monto) })),
+      personas: [...personas.values()].map(({ minutos, conTiempo, ...p }) => ({ ...p, monto: dinero(p.monto), tiempoPromedioMin: conTiempo ? Math.round(minutos / conTiempo) : 0 })),
+    };
+  }
+
   async getRankingPulidores(dto: RankingLavadoresDto, user: any) {
     return this.enCache('getRankingPulidores', dto, user, () => this.getRankingPulidoresSinCache(dto, user));
   }
@@ -1637,7 +1700,7 @@ this.federados.count('servicioLavado', {
     // Procesar incidentes 30d
     const gravedadCount: Record<string, number> = { BAJA: 0, MEDIA: 0, ALTA: 0, CRITICA: 0 };
     const estadoIncCount: Record<string, number> = { ABIERTO: 0, EN_PROCESO: 0, RESUELTO: 0, CANCELADO: 0 };
-    const maquinaMasProblematica: Record<string, { nombre: string; total: number; costoTotal: number }> = {};
+    const maquinaMasProblematica: Record<string, { nombre: string; total: number; costoTotal: number; agencia: string | null }> = {};
     let costoTotalReparaciones = 0;
     let tiempoTotalResolucionHoras = 0;
     let incidentesResueltos = 0;
@@ -1653,8 +1716,9 @@ this.federados.count('servicioLavado', {
       }
       if (inc.maquinaria) {
         const bh = (inc.maquinaria as any).bahia?.nombre ? ` [${(inc.maquinaria as any).bahia.nombre}]` : '';
-        const key = `${inc.maquinaria.codigo} · ${inc.maquinaria.nombre}${bh}`;
-        if (!maquinaMasProblematica[key]) maquinaMasProblematica[key] = { nombre: key, total: 0, costoTotal: 0 };
+        const ag = (inc.maquinaria as any).agencia?.nombre;
+        const key = `${inc.maquinaria.codigo} · ${inc.maquinaria.nombre}${bh}${ag ? ` — ${ag}` : ' — Sin agencia'}`;
+        if (!maquinaMasProblematica[key]) maquinaMasProblematica[key] = { nombre: key, total: 0, costoTotal: 0, agencia: ag ?? null };
         maquinaMasProblematica[key].total++;
         if (inc.costoTotal) maquinaMasProblematica[key].costoTotal += Number(inc.costoTotal);
       }

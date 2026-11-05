@@ -20,6 +20,14 @@ export class SellosController {
   }
 
   @Permiso('sellos.gestionar')
+  @Post('agencias')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Agencias activas con el sello que tienen, para asignarlas a un sello' })
+  agencias() {
+    return this.sellos.agenciasAsignables();
+  }
+
+  @Permiso('sellos.gestionar')
   @Post('create')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear el sello de un jefe de taller (nombre, apellido, logo y contraseña)' })
@@ -31,7 +39,7 @@ export class SellosController {
   @Post('update')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Editar un sello: datos, logo, contraseña o activarlo y desactivarlo' })
-  editar(@Body() dto: EditarSelloDto) {
-    return this.sellos.editar(dto);
+  editar(@Body() dto: EditarSelloDto, @CurrentUser() user: any) {
+    return this.sellos.editar(dto, user);
   }
 }

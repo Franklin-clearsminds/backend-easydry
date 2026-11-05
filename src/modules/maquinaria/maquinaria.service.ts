@@ -340,8 +340,8 @@ export class MaquinariaService {
     inputs: EvidenciaInputDto[] | undefined,
     /**
      * `requiereMultimedia`: exige al menos 1 foto o video. `requiereDocumento`: exige exactamente 1
-     * PDF. Son independientes: al reportar o resolver una incidencia solo se exige evidencia (foto/video) y el PDF
-     * es opcional; únicamente al cerrar un mantenimiento se exige además el PDF (informe).
+     * PDF. Son independientes: al reportar, resolver o cerrar un mantenimiento solo se exige evidencia (foto/video)
+     * y el PDF es siempre opcional.
      */
     opts: { requiereMultimedia?: boolean; requiereDocumento?: boolean },
   ): Promise<EvidenciaVerificada[]> {
@@ -634,6 +634,10 @@ export class MaquinariaService {
     await this.verificarImagenPerfil(dto.codigo, dto.fotoUrl, 'foto');
     await this.verificarImagenPerfil(dto.codigo, dto.fichaTecnicaUrl, 'ficha-tecnica');
 
+    // Toda máquina pertenece a una agencia: no se crea suelta ni en un lugar distinto.
+    if (!dto.agenciaId) {
+      throw new BadRequestException('La máquina debe pertenecer a una agencia.');
+    }
     let agencia: { id: string; nombre: string; regionId: string | null } | null = null;
     if (dto.agenciaId) {
       agencia = await this.prisma.agencia.findUnique({
@@ -1471,11 +1475,11 @@ export class MaquinariaService {
       );
     }
 
-    // Los roles habilitados deben adjuntar foto/video y PDF; el costo siempre es obligatorio.
+    // Los roles habilitados deben adjuntar foto/video; el PDF es opcional y el costo siempre es obligatorio.
     this.exigirPermisoParaEvidencias(dto.evidencias || [], puedeSubirEvidencias);
     const evidencias = await this.verificarEvidencias(maquina, dto.evidencias, {
       requiereMultimedia: puedeSubirEvidencias,
-      requiereDocumento: puedeSubirEvidencias,
+      requiereDocumento: false,
     });
     if (dto.costoTotal == null) {
       throw new BadRequestException('El costo del mantenimiento es obligatorio para ejecutarlo.');

@@ -35,7 +35,7 @@ async function main() {
     console.log(`Firma de prueba: ${(png.length / 1024).toFixed(0)} KB de texto · informe con ${NOVEDADES} novedades × ${FOTOS} fotos, 8 actividades y 6 planes.\n`);
 
     const t0 = performance.now();
-    const sello = await sellos.crear({ nombre: 'Carlos', apellido: `Mora ${env.marca}`, password: PASS }, admin);
+    const sello = await sellos.crear({ nombre: 'Carlos', apellido: `Mora ${env.marca}`, password: PASS, agenciaIds: [agencia.id] }, admin);
     env.rastrear('SelloJefeTaller', sello.id);
     console.log(`Crear un sello (hash de contraseña): ${ms(performance.now() - t0)}`);
 
@@ -76,7 +76,7 @@ async function main() {
       guardarUnCambio.push(performance.now() - b);
 
       let a = performance.now();
-      await informes.validarSello({ informeId: informe.id, selloId: sello.id, password: PASS }, inspector);
+      await informes.validarSello({ informeId: informe.id, password: PASS }, inspector);
       validar.push(performance.now() - a);
 
       a = performance.now();

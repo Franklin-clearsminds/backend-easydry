@@ -51,6 +51,7 @@ describe('Agencias: alcance por rol (base real)', () => {
     await crear('ana', 'LIDER', { agenciaId: a1.id, name: 'Ana' });
     await crear('lara', 'LIDER', { agenciaId: a2.id, name: 'Lara' });
     await crear('luis', 'LAVADOR', { agenciaId: a1.id, name: 'Luis' });
+    await crear('tec', 'TECNICO', { regionId: regionR1.id, name: 'Teo' });
     await crear('supR1', 'SUPERVISOR', { regionId: regionR1.id });
     await crear('supR2', 'SUPERVISOR', { regionId: regionR2.id });
     await crear('admin', 'ADMIN');
@@ -165,6 +166,19 @@ describe('Agencias: alcance por rol (base real)', () => {
       const intacta = await env.prisma.agencia.findUniqueOrThrow({ where: { id: a1.id } });
       expect(intacta.regionId).toBe(regionR1.id);
       expect(intacta.estado).toBe(1);
+    });
+  });
+
+  describe('directorio de usuarios', () => {
+    it('el supervisor ve a los usuarios de su región pero no a los asistentes de mantenimiento; el administrador sí los ve', async () => {
+      const nombres = async (actor: any) => {
+        const r: any = await service.listUsuariosPorAgencia({ page: 1, pageSize: 100 } as any, actor);
+        return (r.items ?? r.data ?? []).map((u: any) => u.name);
+      };
+      const delSupervisor = await nombres(actores.supR1);
+      expect(delSupervisor).toContain('Luis');
+      expect(delSupervisor).not.toContain('Teo');
+      expect(await nombres(actores.admin)).toContain('Teo');
     });
   });
 

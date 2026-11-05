@@ -96,7 +96,7 @@ export interface GenerateUploadTicketDto {
   insumoNombre?: string;
   /** Evidencias de envíos: número de guía y etapa ('recepcion' | 'rechazo' | 'resolucion'). */
   envioGuia?: string;
-  envioEtapa?: 'recepcion' | 'rechazo' | 'resolucion';
+  envioEtapa?: 'envio' | 'recepcion' | 'rechazo' | 'resolucion';
   /** Evidencias de auditorías: el módulo ('informes' o '5s') y el informe o auditoría al que pertenecen (si aún no existe, se guarda como «borrador»). */
   auditoriaTipo?: 'informes' | '5s';
   auditoriaId?: string;
@@ -413,7 +413,7 @@ export class StorageService implements OnModuleInit {
     } else if (type === 'FOTO_ENVIO') {
       // Todo lo de un envío vive junto, sin importar el origen o el destino: inventario/envios/{guia}/{etapa}/
       const guia = this.safeSegment(dto.envioGuia, 'sin-guia');
-      const etapa = ['recepcion', 'rechazo', 'resolucion'].includes(String(dto.envioEtapa)) ? dto.envioEtapa : 'recepcion';
+      const etapa = ['envio', 'recepcion', 'rechazo', 'resolucion'].includes(String(dto.envioEtapa)) ? dto.envioEtapa : 'recepcion';
       key = `inventario/envios/${guia}/${etapa}/${filename}`;
     } else if (
       type === 'FOTO_AJUSTE_INVENTARIO' ||

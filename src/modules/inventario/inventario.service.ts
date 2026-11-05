@@ -10,6 +10,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { CacheService } from '../../common/cache/cache.service.js';
@@ -187,6 +188,10 @@ interface ContextoDespachos {
   rol: string;
   esSuperAdmin: boolean;
   esAdmin: boolean;
+  /** Puede aprobar envíos entre agencias (ve todos los pendientes de aprobación). */
+  puedeAprobar: boolean;
+  /** Agencia propia del que mira: sus envíos pendientes de aprobación los ve aunque no apruebe. */
+  agenciaPropiaId: string | null;
   /** Agencia destino a la que se limita el listado (ids y patrones `ILIKE` ya escapados). */
   agencia: { ids: string[]; patrones: string[]; terminos: string[] } | null;
   pulidorId: string | null;
@@ -461,8 +466,16 @@ export class InventarioService {
         where: {
           OR: [{ id: targetAgenciaId }, { nombre: { equals: targetAgenciaId, mode: 'insensitive' } }],
         },
-        select: { id: true, servicioIds: true, tieneServiciosEspeciales: true },
+        select: { id: true, servicioIds: true, tieneServiciosEspeciales: true, regionId: true },
       });
+
+      // Quien actúa por región (coordinadores) solo consulta agencias de su región, aunque el cliente pida otra.
+      if (agenciaTarget && !isScopedRole && user) {
+        const alc = resolverAlcance(user);
+        if (alc.tipo === 'REGION' && agenciaTarget.regionId !== alc.regionId) {
+          throw new ForbiddenException('Esa agencia no pertenece a tu región.');
+        }
+      }
 
       if (agenciaTarget) {
         const rawIds = Array.isArray(agenciaTarget.servicioIds) ? agenciaTarget.servicioIds : [];
@@ -2319,6 +2332,7 @@ export class InventarioService {
     const guia = dto.numeroGuia ?? (await this._generarGuia('ING'));
     const existing = await this.prisma.movimientoInventario.findUnique({ where: { numeroGuia: guia } });
     if (existing) throw new ConflictException(`Ya existe un movimiento con guía "${guia}"`);
+    const evidencias = this.validarEvidenciasEnvio(dto.evidencias);
 
     // Validar que todos los insumos existan y guardar su contenido neto (envase → unidad base), igual que en despachos.
     const insumosPorId = new Map<string, { contenidoNeto: unknown }>();
@@ -2350,6 +2364,7 @@ export class InventarioService {
       },
       include: { detalles: true },
     });
+    await this.guardarEvidenciasEnvio(movimiento.id, null, 'RECEPCION', evidencias, usuarioId);
 
     // Incrementar stock en BODEGA_CENTRAL y registrar Kardex. `cantidadEnviada` llega en envases/unidades físicas
     // (igual que un despacho): se convierte a unidad base con `contenidoNeto` antes de tocar stock y kardex.
@@ -2613,6 +2628,32 @@ export class InventarioService {
         origen.bodegaId,
         cantidad,
       );
+    }
+  }
+
+  /**
+   * Descuenta del origen, en unidad base, todo lo que lleva un envío. Si algún insumo no alcanza devuelve lo ya
+   * descontado y relanza el error: el envío nunca queda con la mitad del stock movido.
+   */
+  private async reservarStockOrigen(
+    detalles: { insumoId: string; cantidadBase: number }[],
+    origen: { bodegaId?: string | null; agenciaId?: string | null },
+    guia: string,
+    usuarioId: string,
+  ) {
+    const descontados: { insumoId: string; cantidad: number }[] = [];
+    try {
+      for (const det of detalles) {
+        await this.descontarStockOrigen(det.insumoId, det.cantidadBase, origen, guia, usuarioId);
+        descontados.push({ insumoId: det.insumoId, cantidad: det.cantidadBase });
+      }
+    } catch (err) {
+      for (const d of descontados.reverse()) {
+        try {
+          await this.devolverStockOrigen(d.insumoId, d.cantidad, origen, guia, usuarioId);
+        } catch (_) {}
+      }
+      throw err;
     }
   }
 
@@ -3068,6 +3109,11 @@ export class InventarioService {
       }
     }
 
+    // Un envío entre agencias que crea un líder espera la aprobación de un administrador, super administrador o
+    // coordinador de bodega: hasta entonces no mueve stock. La foto de lo que sale es opcional.
+    const requiereAprobacion = isLider && tipo === 'DESPACHO_AGENCIA';
+    const evidenciasSalida = this.validarEvidenciasEnvio(dto.evidencias);
+
     // cantidadEnviada = unidades físicas completas; el stock se mueve en unidad base (volumen)
     const origenStock = { bodegaId: origenBodegaId, agenciaId: origenAgenciaId };
     const detallesNormalizados: { insumoId: string; unidades: number; cantidadBase: number }[] = [];
@@ -3103,7 +3149,8 @@ export class InventarioService {
       data: {
         numeroGuia: guia,
         tipo: tipoPrisma as any,
-        estadoDespacho: 'EN_TRANSITO',
+        estadoDespacho: requiereAprobacion ? 'PENDIENTE_APROBACION' : 'EN_TRANSITO',
+        requiereAprobacion,
         origenUbicacion: origenLabel,
         destinoUbicacion: destinoLabel,
         usuarioDespachaId: usuarioId,
@@ -3149,25 +3196,36 @@ export class InventarioService {
       );
     }
 
+    if (requiereAprobacion) {
+      // Sin reserva de stock: solo se guardan las fotos de salida y se avisa a quienes pueden aprobar.
+      await this.guardarEvidenciasEnvio(movimiento.id, null, 'ENVIO', evidenciasSalida, usuarioId);
+      void this.notificarEnvioPendienteAprobacion({ id: movimiento.id, numeroGuia: guia }, origenLabel, destinoLabel);
+      return {
+        ...movimiento,
+        tipo,
+        origenBodegaId,
+        origenAgenciaId,
+        destinoBodegaId,
+        destinoAgenciaId,
+        destinoPulidorId,
+        puedeConfirmar: false,
+        pendienteAprobacion: true,
+        stockReservado: false,
+        unidadDespacho: 'UNIDADES',
+      };
+    }
+
     // Reserva dura: descontar origen en unidad BASE (volumen). Destino solo suma al confirmar.
-    const descontados: { insumoId: string; cantidad: number }[] = [];
     try {
-      for (const det of detallesNormalizados) {
-        await this.descontarStockOrigen(det.insumoId, det.cantidadBase, origenStock, guia, usuarioId);
-        descontados.push({ insumoId: det.insumoId, cantidad: det.cantidadBase });
-      }
+      await this.reservarStockOrigen(detallesNormalizados, origenStock, guia, usuarioId);
     } catch (err) {
-      for (const d of descontados.reverse()) {
-        try {
-          await this.devolverStockOrigen(d.insumoId, d.cantidad, origenStock, guia, usuarioId);
-        } catch (_) {}
-      }
       try {
         await this.prisma.movimientoDetalle.deleteMany({ where: { movimientoId: movimiento.id } });
         await this.prisma.movimientoInventario.delete({ where: { id: movimiento.id } });
       } catch (_) {}
       throw err;
     }
+    await this.guardarEvidenciasEnvio(movimiento.id, null, 'ENVIO', evidenciasSalida, usuarioId);
 
     if (this.notifications) {
       void this.resolverDestinatariosDespacho({ tipo, destinoPulidorId, destinoAgenciaId, destinoBodegaId }).then((ids) => {
@@ -3203,7 +3261,7 @@ export class InventarioService {
     // Cargar por SQL tipado: Prisma client puede no deserializar DESPACHO_BODEGA
     const headers: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT m."id", m."numeroGuia", m."tipo"::text AS "tipo", m."estadoDespacho"::text AS "estadoDespacho",
-              m."origenUbicacion", m."destinoUbicacion", m."observaciones",
+              m."origenUbicacion", m."destinoUbicacion", m."observaciones", m."requiereAprobacion",
               m."usuarioDespachaId", m."usuarioRecibeId",
               m."origenBodegaId", m."origenAgenciaId", m."destinoBodegaId", m."destinoAgenciaId", m."destinoPulidorId"
        FROM "MovimientoInventario" m
@@ -3213,6 +3271,9 @@ export class InventarioService {
     );
     if (!headers[0]) throw new NotFoundException(`Movimiento con ID/Guía "${dto.movimientoId}" no encontrado`);
     const header = headers[0];
+    if (header.estadoDespacho === 'PENDIENTE_APROBACION') {
+      throw new BadRequestException('Este envío aún no está aprobado: no se puede recibir ni rechazar todavía.');
+    }
     if (header.estadoDespacho !== 'EN_TRANSITO') {
       throw new BadRequestException(`El movimiento ya tiene estado "${header.estadoDespacho}" y no puede confirmarse`);
     }
@@ -3484,7 +3545,7 @@ export class InventarioService {
     );
   }
 
-  /** Fotos opcionales de un envío: hasta 5, ya subidas con el tipo FOTO_ENVIO (carpeta inventario/envios/{guía}/…). */
+  /** Fotos de un envío: hasta 5, ya subidas con el tipo FOTO_ENVIO (carpeta inventario/envios/{guía}/…). Opcionales salvo en los envíos con aprobación. */
   private validarEvidenciasEnvio(urls?: string[]): string[] {
     const lista = (Array.isArray(urls) ? urls : []).map((u) => String(u || '').trim()).filter(Boolean);
     if (lista.length > 5) throw new BadRequestException('Puedes adjuntar hasta 5 fotos.');
@@ -3496,7 +3557,21 @@ export class InventarioService {
     return lista;
   }
 
-  private async guardarEvidenciasEnvio(movimientoId: string, faltanteId: string | null, etapa: 'RECEPCION' | 'RECHAZO' | 'RESOLUCION', urls: string[], usuarioId: string) {
+  /** URLs de las fotos de envío, recepción y rechazo de cada guía dada (las de resolución de faltantes no se incluyen). */
+  private async fotosPorGuia(guias: (string | null | undefined)[]): Promise<Map<string, string[]>> {
+    const mapa = new Map<string, string[]>();
+    const lista = [...new Set(guias.filter((g): g is string => !!g))];
+    if (lista.length === 0) return mapa;
+    const filas: { numeroGuia: string; url: string }[] = await this.prisma.$queryRawUnsafe(
+      `SELECT m."numeroGuia", e."url" FROM "EnvioEvidencia" e JOIN "MovimientoInventario" m ON m."id" = e."movimientoId"
+       WHERE m."numeroGuia" = ANY($1::text[]) AND e."faltanteId" IS NULL ORDER BY e."createdAt"`,
+      lista,
+    );
+    for (const f of filas) mapa.set(f.numeroGuia, [...(mapa.get(f.numeroGuia) ?? []), f.url]);
+    return mapa;
+  }
+
+  private async guardarEvidenciasEnvio(movimientoId: string, faltanteId: string | null, etapa: 'ENVIO' | 'RECEPCION' | 'RECHAZO' | 'RESOLUCION', urls: string[], usuarioId: string) {
     for (const url of urls) {
       await this.prisma.$executeRawUnsafe(
         `INSERT INTO "EnvioEvidencia" ("id", "movimientoId", "faltanteId", "etapa", "url", "usuarioId") VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -3733,6 +3808,230 @@ export class InventarioService {
     );
   }
 
+  // ============================================================
+  //  APROBACIÓN DE ENVÍOS ENTRE AGENCIAS (los que crea un líder)
+  // ============================================================
+
+  /** Usuarios activos que pueden aprobar envíos: los roles con la casilla `envios.aprobar` (y el super administrador). */
+  private async aprobadoresDeEnvios(): Promise<string[]> {
+    const usuarios = await this.prisma.user.findMany({
+      where: { estado: 1, role: { OR: [{ capacidades: { has: 'envios.aprobar' } }, { namerol: 'SUPER_ADMIN' }] } },
+      select: { id: true },
+    });
+    return usuarios.map((u) => u.id);
+  }
+
+  /** Avisa a los aprobadores que un líder dejó un envío esperando su decisión. Nunca bloquea el flujo. */
+  private async notificarEnvioPendienteAprobacion(
+    movimiento: { id: string; numeroGuia: string },
+    origen: string,
+    destino: string,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    try {
+      const ids = await this.aprobadoresDeEnvios();
+      await this.notifications.notificarUsuarios(
+        ids,
+        'Envío pendiente de aprobación',
+        `Guía ${movimiento.numeroGuia}: de ${origen} a ${destino}. No se mueve stock hasta que lo apruebes.`,
+        { type: 'ENVIO_PENDIENTE_APROBACION', movimientoId: movimiento.id },
+        { tipo: 'APROBACION_PENDIENTE', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: movimiento.id },
+      );
+    } catch (err) {
+      this.logger.warn(`No se pudo avisar a los aprobadores del envío ${movimiento.numeroGuia}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Carga el envío pendiente de aprobación o falla si no existe o ya no está pendiente. */
+  private async cargarEnvioPendiente(movimientoId: string) {
+    const filas: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT m."id", m."numeroGuia", m."estadoDespacho"::text AS "estadoDespacho", m."requiereAprobacion",
+              m."usuarioDespachaId", m."origenAgenciaId", m."origenBodegaId", m."destinoAgenciaId", m."destinoBodegaId",
+              m."destinoPulidorId", m."tipo"::text AS "tipo", m."destinoUbicacion"
+       FROM "MovimientoInventario" m
+       WHERE m."id" = $1 OR m."numeroGuia" = $1
+       LIMIT 1`,
+      movimientoId,
+    );
+    const mov = filas[0];
+    if (!mov) throw new NotFoundException(`Envío "${movimientoId}" no encontrado`);
+    if (mov.estadoDespacho !== 'PENDIENTE_APROBACION') {
+      throw new BadRequestException(`El envío ya no está pendiente de aprobación (estado "${mov.estadoDespacho}").`);
+    }
+    return mov;
+  }
+
+  /**
+   * Un aprobador autoriza o rechaza un envío pendiente. Al aprobar recién se descuenta el stock del origen (se vuelve a
+   * comprobar que alcance) y el envío sale hacia el destino; al rechazar queda cancelado sin mover nada.
+   */
+  async decidirEnvioPendiente(dto: { movimientoId: string; accion: 'APROBAR' | 'RECHAZAR'; motivo?: string }, usuarioId: string) {
+    const mov = await this.cargarEnvioPendiente(dto.movimientoId);
+    const motivo = (dto.motivo || '').toString().trim();
+    if (dto.accion === 'RECHAZAR' && !motivo) {
+      throw new BadRequestException('Debes escribir el motivo del rechazo.');
+    }
+
+    if (dto.accion === 'RECHAZAR') {
+      const cambiado: any[] = await this.prisma.$queryRawUnsafe(
+        `UPDATE "MovimientoInventario"
+         SET "estadoDespacho" = 'CANCELADO'::"EstadoDespacho", "aprobadoPorId" = $1, "fechaAprobacion" = NOW(), "motivoAprobacion" = $2
+         WHERE "id" = $3 AND "estadoDespacho" = 'PENDIENTE_APROBACION'::"EstadoDespacho"
+         RETURNING "id"`,
+        usuarioId,
+        motivo,
+        mov.id,
+      );
+      if (!cambiado.length) throw new ConflictException('Otra persona ya resolvió este envío.');
+      void this.notificarDecisionEnvio(mov, 'RECHAZADO', motivo);
+      return { ok: true, numeroGuia: mov.numeroGuia, nuevoEstado: 'CANCELADO' };
+    }
+
+    // Primero se "toma" el envío (solo uno gana si dos aprobadores lo intentan a la vez); si el stock no alcanza se devuelve a pendiente.
+    const tomado: any[] = await this.prisma.$queryRawUnsafe(
+      `UPDATE "MovimientoInventario"
+       SET "estadoDespacho" = 'EN_TRANSITO'::"EstadoDespacho", "aprobadoPorId" = $1, "fechaAprobacion" = NOW(), "fechaDespacho" = NOW()
+       WHERE "id" = $2 AND "estadoDespacho" = 'PENDIENTE_APROBACION'::"EstadoDespacho"
+       RETURNING "id"`,
+      usuarioId,
+      mov.id,
+    );
+    if (!tomado.length) throw new ConflictException('Otra persona ya resolvió este envío.');
+
+    try {
+      const detalles = await this.prisma.movimientoDetalle.findMany({
+        where: { movimientoId: mov.id },
+        include: { insumo: { select: { nombre: true, contenidoNeto: true } } },
+      });
+      const origenStock = { bodegaId: mov.origenBodegaId, agenciaId: mov.origenAgenciaId };
+      const aReservar: { insumoId: string; cantidadBase: number }[] = [];
+      for (const det of detalles) {
+        const unidades = Number(det.cantidadEnviada);
+        const cNeto = Number(det.insumo?.contenidoNeto) || 1;
+        const stock = await this.obtenerStockOrigen(det.insumoId, origenStock);
+        const fisico = Number(stock?.cantidadActual ?? 0);
+        const disponibles = cNeto > 0 ? Math.floor(fisico / cNeto + 1e-9) : Math.floor(fisico);
+        if (disponibles < unidades) {
+          throw new BadRequestException(
+            `No se puede aprobar: stock insuficiente de "${det.insumo?.nombre}" en el origen (disponible ${disponibles} und, requerido ${unidades} und).`,
+          );
+        }
+        aReservar.push({ insumoId: det.insumoId, cantidadBase: this.unidadesABase(unidades, cNeto) });
+      }
+      await this.reservarStockOrigen(aReservar, origenStock, mov.numeroGuia, usuarioId);
+    } catch (err) {
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE "MovimientoInventario"
+         SET "estadoDespacho" = 'PENDIENTE_APROBACION'::"EstadoDespacho", "aprobadoPorId" = NULL, "fechaAprobacion" = NULL
+         WHERE "id" = $1`,
+        mov.id,
+      );
+      throw err;
+    }
+
+    void this.notificarDecisionEnvio(mov, 'APROBADO', '');
+    return { ok: true, numeroGuia: mov.numeroGuia, nuevoEstado: 'EN_TRANSITO' };
+  }
+
+  /**
+   * Cancela un envío que todavía espera aprobación: no mueve stock. Puede hacerlo quien lo creó (mientras siga pendiente)
+   * o un aprobador, que debe dejar el motivo.
+   */
+  async cancelarEnvioPendiente(dto: { movimientoId: string; motivo?: string }, user: any) {
+    const mov = await this.cargarEnvioPendiente(dto.movimientoId);
+    const esCreador = String(mov.usuarioDespachaId) === String(user.id);
+    const esAprobador = tienePermiso(user, 'envios.aprobar');
+    if (!esCreador && !esAprobador) {
+      throw new ForbiddenException('Solo quien creó el envío o un aprobador puede cancelarlo.');
+    }
+    const motivo = (dto.motivo || '').toString().trim();
+    if (!esCreador && !motivo) {
+      throw new BadRequestException('Debes escribir el motivo de la cancelación.');
+    }
+    const cambiado: any[] = await this.prisma.$queryRawUnsafe(
+      `UPDATE "MovimientoInventario"
+       SET "estadoDespacho" = 'CANCELADO'::"EstadoDespacho", "motivoAprobacion" = $1,
+           "aprobadoPorId" = CASE WHEN $2::boolean THEN NULL ELSE $3 END,
+           "fechaAprobacion" = CASE WHEN $2::boolean THEN NULL ELSE NOW() END
+       WHERE "id" = $4 AND "estadoDespacho" = 'PENDIENTE_APROBACION'::"EstadoDespacho"
+       RETURNING "id"`,
+      motivo || 'Cancelado por quien lo creó',
+      esCreador,
+      user.id,
+      mov.id,
+    );
+    if (!cambiado.length) throw new ConflictException('Otra persona ya resolvió este envío.');
+    if (!esCreador) void this.notificarDecisionEnvio(mov, 'CANCELADO', motivo);
+    return { ok: true, numeroGuia: mov.numeroGuia, nuevoEstado: 'CANCELADO' };
+  }
+
+  /**
+   * Resultado de la decisión: al líder que lo creó siempre; a la agencia destino solo cuando se aprueba
+   * (hasta entonces no sabe que existe el envío).
+   */
+  private async notificarDecisionEnvio(
+    mov: { id: string; numeroGuia: string; usuarioDespachaId: string; destinoAgenciaId: string | null; tipo: string; destinoPulidorId: string | null; destinoBodegaId: string | null; destinoUbicacion: string },
+    resultado: 'APROBADO' | 'RECHAZADO' | 'CANCELADO',
+    motivo: string,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    try {
+      const titulo = resultado === 'APROBADO' ? 'Envío aprobado' : resultado === 'RECHAZADO' ? 'Envío rechazado' : 'Envío cancelado';
+      const cuerpo =
+        resultado === 'APROBADO'
+          ? `La guía ${mov.numeroGuia} fue aprobada y salió hacia ${mov.destinoUbicacion}.`
+          : `La guía ${mov.numeroGuia} ${resultado === 'RECHAZADO' ? 'fue rechazada' : 'fue cancelada'}${motivo ? `: ${motivo}` : ''}. No se movió stock.`;
+      await this.notifications.notificarUsuarios(
+        [mov.usuarioDespachaId],
+        titulo,
+        cuerpo,
+        { type: 'ENVIO_DECIDIDO', movimientoId: mov.id },
+        { tipo: 'DESPACHO_CONFIRMADO', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: mov.id },
+      );
+      if (resultado === 'APROBADO') {
+        const destinatarios = await this.resolverDestinatariosDespacho({
+          tipo: mov.tipo,
+          destinoPulidorId: mov.destinoPulidorId,
+          destinoAgenciaId: mov.destinoAgenciaId,
+          destinoBodegaId: mov.destinoBodegaId,
+        });
+        await this.notifications.notificarUsuarios(
+          destinatarios,
+          'Nuevo despacho en camino',
+          `Guía ${mov.numeroGuia}: ${mov.destinoUbicacion}`,
+          { movimientoId: mov.id },
+          { tipo: 'DESPACHO_PENDIENTE', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: mov.id },
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`No se pudo avisar la decisión del envío ${mov.numeroGuia}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Una vez por hora: avisa a los aprobadores de los envíos que llevan más de 24 horas esperando (un solo aviso por envío). */
+  @Cron('15 * * * *')
+  async avisarEnviosSinAprobar(): Promise<number> {
+    const filas: any[] = await this.prisma.$queryRawUnsafe(
+      `UPDATE "MovimientoInventario"
+       SET "avisoAprobacionEn" = NOW()
+       WHERE "estadoDespacho" = 'PENDIENTE_APROBACION'::"EstadoDespacho" AND "avisoAprobacionEn" IS NULL
+         AND "createdAt" < NOW() - INTERVAL '24 hours'
+       RETURNING "id", "numeroGuia", "origenUbicacion", "destinoUbicacion"`,
+    );
+    if (!filas.length || !this.notifications) return filas.length;
+    const ids = await this.aprobadoresDeEnvios();
+    for (const f of filas) {
+      void this.notifications.notificarUsuarios(
+        ids,
+        'Envío sin aprobar hace más de 24 horas',
+        `Guía ${f.numeroGuia}: de ${f.origenUbicacion} a ${f.destinoUbicacion} sigue esperando tu decisión.`,
+        { type: 'ENVIO_PENDIENTE_APROBACION', movimientoId: f.id },
+        { tipo: 'APROBACION_PENDIENTE', entidadTipo: 'MOVIMIENTO_INVENTARIO', entidadId: f.id },
+      );
+    }
+    return filas.length;
+  }
+
   /**
    * Despachos (envíos) con paginación, orden, búsqueda y filtros en el servidor.
    *
@@ -3781,7 +4080,8 @@ export class InventarioService {
         `SELECT m."id", m."numeroGuia", m."tipo"::text AS "tipo", m."estadoDespacho"::text AS "estadoDespacho",
                 m."origenUbicacion", m."destinoUbicacion", m."fechaDespacho", m."fechaRecepcion",
                 m."observaciones", m."usuarioDespachaId", m."usuarioRecibeId", m."createdAt", m."updatedAt",
-                m."origenBodegaId", m."origenAgenciaId", m."destinoBodegaId", m."destinoAgenciaId", m."destinoPulidorId"
+                m."origenBodegaId", m."origenAgenciaId", m."destinoBodegaId", m."destinoAgenciaId", m."destinoPulidorId",
+                m."requiereAprobacion", m."aprobadoPorId", m."fechaAprobacion", m."motivoAprobacion"
          FROM "MovimientoInventario" m
          WHERE ${filtro.sql}
          ORDER BY ${orden}
@@ -3810,6 +4110,7 @@ export class InventarioService {
     if (resumenBase && porEstadoArchivado) {
       resumen = {
         enTransito: resumenBase.enTransito + (porEstadoArchivado['EN_TRANSITO'] ?? 0) + (porEstadoArchivado['PENDIENTE'] ?? 0),
+        pendientesAprobacion: resumenBase.pendientesAprobacion,
         recibidos: resumenBase.recibidos + (porEstadoArchivado['RECIBIDO'] ?? 0),
         rechazados: resumenBase.rechazados + (porEstadoArchivado['RECHAZADO'] ?? 0),
         total: resumenBase.total + Object.values(porEstadoArchivado).reduce((a, b) => a + b, 0),
@@ -3830,8 +4131,9 @@ export class InventarioService {
     const enTransito = (por.get('EN_TRANSITO') ?? 0) + (por.get('PENDIENTE') ?? 0);
     const recibidos = por.get('RECIBIDO') ?? 0;
     const rechazados = por.get('RECHAZADO') ?? 0;
+    const pendientesAprobacion = por.get('PENDIENTE_APROBACION') ?? 0;
     const total = [...por.values()].reduce((a, b) => a + b, 0);
-    return { enTransito, recibidos, rechazados, total };
+    return { enTransito, recibidos, rechazados, pendientesAprobacion, total };
   }
 
   /** Resuelve, con pocas consultas, quién mira y a qué alcance tiene derecho; el resto del listado es SQL sin más consultas. */
@@ -3842,6 +4144,7 @@ export class InventarioService {
     const rol = normalizarRol(viewer?.role?.namerol);
     const esSuperAdmin = rol === 'SUPER_ADMIN' || (rol.includes('SUPER') && rol.includes('ADMIN'));
     const esAdmin = tieneFuncion(viewer, FUNCION.ADMINISTRADOR) && !esSuperAdmin;
+    const puedeAprobar = !!viewer && tienePermiso(viewer, 'envios.aprobar');
     // Qué despachos ve cada quien lo decide el ámbito de su rol: propio (kit), agencia o región; país ve todo.
     const alc = viewer ? resolverAlcance(viewer) : { tipo: 'NINGUNO' as const };
     const esPulidor = tieneFuncion(viewer, FUNCION.PULIDOR) || alc.tipo === 'PROPIO';
@@ -3914,6 +4217,8 @@ export class InventarioService {
       rol,
       esSuperAdmin,
       esAdmin,
+      puedeAprobar,
+      agenciaPropiaId: viewer?.agenciaId ?? null,
       agencia,
       pulidorId,
       regional,
@@ -3948,6 +4253,12 @@ export class InventarioService {
         `(m."destinoAgenciaId" = ANY(${ids}::text[]) OR m."destinoUbicacion" ILIKE ANY(${patrones}::text[])
           OR m."origenAgenciaId" = ANY(${ids}::text[]) OR m."origenUbicacion" ILIKE ANY(${patrones}::text[]))`,
       );
+    }
+    // Un envío pendiente de aprobación solo lo ven los aprobadores, quien lo creó y su agencia de origen: el destino no se entera hasta que se aprueba.
+    if (!ctx.puedeAprobar) {
+      const yo = p(ctx.viewer?.id ?? '');
+      const miAgencia = p(ctx.agenciaPropiaId ?? '');
+      cond.push(`(m."estadoDespacho"::text <> 'PENDIENTE_APROBACION' OR m."usuarioDespachaId" = ${yo} OR m."origenAgenciaId" = ${miAgencia})`);
     }
     if (ctx.pulidorId) {
       const id = p(ctx.pulidorId);
@@ -4009,7 +4320,7 @@ export class InventarioService {
       detallesPorMov.set(d.movimientoId, arr);
     }
 
-    const { viewer, rol, esSuperAdmin, esAdmin } = ctx;
+    const { viewer, rol, esSuperAdmin, esAdmin, puedeAprobar } = ctx;
     return filas.map((h) => {
       let motivoRechazo = '';
       if (h.observaciones && h.observaciones.includes('RECHAZO:')) {
@@ -4048,6 +4359,9 @@ export class InventarioService {
         destinoPulidorId,
         motivoRechazo: motivoRechazo || undefined,
         puedeConfirmar,
+        puedeAprobar: h.estadoDespacho === 'PENDIENTE_APROBACION' && puedeAprobar,
+        puedeCancelar:
+          h.estadoDespacho === 'PENDIENTE_APROBACION' && !!viewer && (puedeAprobar || String(h.usuarioDespachaId) === String(viewer.id)),
         faltantes: faltantesPorMov.get(String(h.id))?.faltantes || [],
         evidencias: faltantesPorMov.get(String(h.id))?.evidencias || [],
       };
@@ -4676,7 +4990,13 @@ export class InventarioService {
 
     // El id de la ubicación no le dice nada a la app: se expone también su nombre (agencia o bodega).
     const nombresPorId = await this.resolverEtiquetasUbicacion(items.map((i: any) => i.ubicacionId));
-    const itemsConUbicacion = items.map((i: any) => ({ ...i, ubicacionNombre: nombresPorId.get(i.ubicacionId) ?? null }));
+    // Las fotos de un despacho o una compra se guardan por guía (EnvioEvidencia); el Kardex las expone junto a cada fila.
+    const fotosPorGuia = await this.fotosPorGuia(items.map((i: any) => i.referenciaId));
+    const itemsConUbicacion = items.map((i: any) => ({
+      ...i,
+      ubicacionNombre: nombresPorId.get(i.ubicacionId) ?? null,
+      evidenciasUrls: [...(Array.isArray(i.evidenciasUrls) ? i.evidenciasUrls : []), ...(fotosPorGuia.get(i.referenciaId) ?? [])],
+    }));
 
     return buildDataGridResponse(itemsConUbicacion, total, page, pageSize);
   }

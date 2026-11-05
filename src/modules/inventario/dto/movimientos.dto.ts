@@ -63,6 +63,12 @@ export class RegistrarCompraDto {
   @IsString()
   observaciones?: string;
 
+  @ApiPropertyOptional({ type: [String], description: 'Fotos de la compra o de la factura (máximo 5), subidas con el tipo FOTO_ENVIO. Opcionales.' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidencias?: string[];
+
   @ApiProperty({ type: [DetalleMovimientoDto] })
   @IsArray()
   @ArrayNotEmpty()
@@ -131,12 +137,47 @@ export class CrearDespachoDto {
   @IsString()
   observaciones?: string;
 
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Fotos de lo que se envía (máximo 5), subidas con el tipo FOTO_ENVIO. Opcionales.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  evidencias?: string[];
+
   @ApiProperty({ type: [DetalleMovimientoDto] })
   @IsArray()
   @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Type(() => DetalleMovimientoDto)
   detalles: DetalleMovimientoDto[];
+}
+
+export class DecidirEnvioPendienteDto {
+  @ApiProperty({ description: 'ID o guía del envío pendiente de aprobación' })
+  @IsString()
+  movimientoId: string;
+
+  @ApiProperty({ enum: ['APROBAR', 'RECHAZAR'] })
+  @IsEnum(['APROBAR', 'RECHAZAR'])
+  accion: 'APROBAR' | 'RECHAZAR';
+
+  @ApiPropertyOptional({ description: 'Motivo (obligatorio si se rechaza)' })
+  @IsOptional()
+  @IsString()
+  motivo?: string;
+}
+
+export class CancelarEnvioPendienteDto {
+  @ApiProperty({ description: 'ID o guía del envío pendiente de aprobación' })
+  @IsString()
+  movimientoId: string;
+
+  @ApiPropertyOptional({ description: 'Motivo de la cancelación (obligatorio si cancela alguien distinto de quien lo creó)' })
+  @IsOptional()
+  @IsString()
+  motivo?: string;
 }
 
 export class ConfirmarRecepcionDto {
@@ -176,7 +217,7 @@ export class ConfirmarRecepcionDto {
   @IsArray()
   cantidadesRecibidas?: { detalleId: string; cantidadRecibida: number }[];
 
-  @ApiPropertyOptional({ type: [String], description: 'Fotos de evidencia (opcionales, máximo 5), subidas con el tipo FOTO_ENVIO' })
+  @ApiPropertyOptional({ type: [String], description: 'Fotos de evidencia (máximo 5), subidas con el tipo FOTO_ENVIO. Opcionales.' })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })

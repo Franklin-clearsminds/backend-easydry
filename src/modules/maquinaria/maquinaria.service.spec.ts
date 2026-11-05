@@ -134,13 +134,14 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
       expect(tx.maquinariaEvento.create.mock.calls[0][0].data.tipo).toBe('MANTENIMIENTO_EJECUTADO');
     });
 
-    it('exige al menos una foto o video y un documento', async () => {
-      const { service, prisma } = build();
+    it('exige al menos una foto o video; el documento es opcional', async () => {
+      const { service, prisma, tx } = build();
       prisma.mantenimientoMaquinaria.findUnique.mockResolvedValue(mantenimiento(0));
-      await expect(service.ejecutarMantenimiento(
-        { mantenimientoId: 'mt1', evidencias: [{ url: 'maquinaria/mq-01/mantenimientos/mt1/multimedia/a.jpg' }] } as never,
+      await service.ejecutarMantenimiento(
+        { mantenimientoId: 'mt1', costoTotal: 50, evidencias: [{ url: 'maquinaria/mq-01/mantenimientos/mt1/multimedia/a.jpg' }] } as never,
         tecnico,
-      )).rejects.toThrow(/documento/);
+      );
+      expect(tx.mantenimientoMaquinaria.update.mock.calls[0][0].data.estado).toBe('FINALIZADO');
       await expect(service.ejecutarMantenimiento(
         { mantenimientoId: 'mt1', evidencias: [{ url: 'maquinaria/mq-01/mantenimientos/mt1/documento/a.pdf' }] } as never,
         tecnico,

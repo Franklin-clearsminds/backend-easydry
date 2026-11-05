@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { TIPOS_FIRMA } from '../informes.reglas.js';
 
 export class CrearSelloDto {
@@ -7,6 +7,8 @@ export class CrearSelloDto {
   /** Logo como imagen en data URL (png, jpeg o webp). */
   @IsOptional() @IsString() logo?: string;
   @IsString() @MinLength(1) @MaxLength(100) password!: string;
+  /** Agencias cuyos informes firma este sello. Una agencia tiene un solo sello: si ya tenía otro, pasa a este. */
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @IsUUID('all', { each: true }) agenciaIds?: string[];
 }
 
 export class EditarSelloDto {
@@ -18,16 +20,17 @@ export class EditarSelloDto {
   /** Contraseña nueva; sin ella se conserva la actual. */
   @IsOptional() @IsString() @MinLength(1) @MaxLength(100) password?: string;
   @IsOptional() @IsInt() @IsIn([0, 1]) estado?: number;
+  /** Lista completa de agencias del sello: las que no estén quedan sin sello. Sin este campo no se tocan. */
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @IsUUID('all', { each: true }) agenciaIds?: string[];
 }
 
 export class SelloIdDto {
   @IsUUID() id!: string;
 }
 
-/** Valida el sello del jefe de taller de un informe con su contraseña. */
+/** Valida con su contraseña el sello de la agencia del informe. */
 export class ValidarSelloDto {
   @IsUUID() informeId!: string;
-  @IsUUID() selloId!: string;
   @IsString() @MinLength(1) @MaxLength(100) password!: string;
 }
 

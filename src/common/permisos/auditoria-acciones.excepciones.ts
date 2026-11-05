@@ -9,6 +9,8 @@ export const EXCEPCIONES_SERVIDOR: Record<string, string> = {
     "El listado de alertas (alertas/list) lo comparten el Dashboard y la pestaña Alertas de Inventario: lo exige 'alertas.ver', que esta casilla otorga. Se oculta el bloque en pantalla.",
   'agencias.personal.ver':
     "El personal sale de usuarios/list, que usan muchas pantallas y exige 'usuarios.ver' (que esta casilla otorga). Se oculta en la ficha de la agencia.",
+  'taller.limpiezas.fotos':
+    "Las fotos de limpieza se piden por /storage/presigned-url, que revisa 'limpiezas.fotos' (la que otorga esta casilla) en el controlador de almacenamiento; el historial de limpiezas no lleva el archivo, solo su ruta.",
   'evidencias.ver':
     'Las fotos y videos se piden por /storage/presigned-url, que revisa este permiso (o el de la página dueña de la evidencia) en el controlador de almacenamiento.',
   'pagina.catalogo.generales':

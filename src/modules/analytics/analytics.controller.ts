@@ -75,6 +75,17 @@ export class AnalyticsController {
     return this.analyticsService.getRankingPulidores(dto, user);
   }
 
+  @Permiso('productividad.ver')
+  @Post('productividad-detalle')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Productividad completa: por agencia y por persona (lavador, auxiliar, líder, pulidor) con servicios, monto facturado y tiempo' })
+  async getProductividadDetalle(
+    @Body() dto: RankingLavadoresDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.analyticsService.getProductividadDetalle(dto, user);
+  }
+
   @Permiso('maquinaria.ver')
   @Post('dashboard-taller')
   @HttpCode(HttpStatus.OK)

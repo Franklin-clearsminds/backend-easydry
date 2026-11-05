@@ -65,12 +65,24 @@ describe('división del periodo', () => {
     expect(bloques[1]).toMatchObject({ desde: '2026-02-01', hasta: '2026-02-28', etiqueta: 'Febrero 2026' });
   });
 
-  it('un mes se reparte en semanas recortadas a sus extremos', () => {
+  it('un mes no se reparte por semanas: sale en un solo bloque', () => {
     const { division, bloques } = dividirRango({ desde: '2026-10-01', hasta: '2026-10-31' });
+    expect(division).toBe('UNICO');
+    expect(bloques).toHaveLength(1);
+    expect(bloques[0]).toMatchObject({ desde: '2026-10-01', hasta: '2026-10-31' });
+  });
+
+  it('si el usuario lo elige, un mes se reparte en semanas recortadas a sus extremos', () => {
+    const { division, bloques } = dividirRango({ desde: '2026-10-01', hasta: '2026-10-31' }, 'SEMANA');
     expect(division).toBe('SEMANA');
+    expect(bloques).toHaveLength(5);
     expect(bloques[0]).toMatchObject({ desde: '2026-10-01', hasta: '2026-10-04' });
     expect(bloques.at(-1)).toMatchObject({ desde: '2026-10-26', hasta: '2026-10-31' });
-    expect(bloques).toHaveLength(5);
+  });
+
+  it('si el usuario lo elige, un año se reparte en un solo bloque o por días', () => {
+    expect(dividirRango({ desde: '2026-01-01', hasta: '2026-12-31' }, 'UNICO').bloques).toHaveLength(1);
+    expect(dividirRango({ desde: '2026-10-01', hasta: '2026-10-31' }, 'MES').bloques).toHaveLength(1);
   });
 
   it('una semana se reparte en 7 días', () => {
@@ -85,9 +97,9 @@ describe('división del periodo', () => {
     expect(dividirRango({ desde: '2026-10-10', hasta: '2026-10-10' }).bloques).toHaveLength(1);
   });
 
-  it('un rango personalizado largo se reparte por meses y uno corto por semanas', () => {
+  it('un rango personalizado largo se reparte por meses y uno corto no se divide', () => {
     expect(divisionDe({ desde: '2026-01-15', hasta: '2026-06-10' })).toBe('MES');
-    expect(divisionDe({ desde: '2026-10-01', hasta: '2026-10-20' })).toBe('SEMANA');
+    expect(divisionDe({ desde: '2026-10-01', hasta: '2026-10-20' })).toBe('UNICO');
   });
 
   it('los bloques cubren el rango sin huecos ni solapes', () => {

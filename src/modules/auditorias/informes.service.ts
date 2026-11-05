@@ -12,8 +12,12 @@ import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { FUNCION, funcionesDeRol, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { hoyEcuador } from '../retos/retos.reglas.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import {
   ActividadDto,
+  AdjuntarUsuariosDto,
+  BuscarAdjuntablesDto,
+  QuitarAdjuntoDto,
   GuardarInformeDto,
   ListInformesDto,
   ListPlanesDto,
@@ -69,6 +73,8 @@ export class InformesInspeccionService {
     private readonly crypto: CryptoService,
     /** Guarda un rato el resumen de los informes. Sin él, cada visita lo recalcula. */
     @Optional() private readonly cache?: CacheService,
+    /** Avisa a los usuarios adjuntos cuando el informe se aprueba. */
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   // ───────────────────────── Alcance y permisos sobre un informe ─────────────────────────
@@ -101,7 +107,12 @@ export class InformesInspeccionService {
     const crea = tienePermiso(user, 'informes.crear');
     // Un informe es editable solo mientras es borrador, y por quien lo elaboró (o quien administra los de otros).
     const puedeEditar = esEditable(i.estado) && ((esAutor && crea) || administra);
+    // Adjuntar usuarios: quien elabora el informe y quien lo revisa (Admin) hasta que se aprueba; ya aprobado solo un Admin puede agregar más.
+    const revisa = this.esAdmin(user) && (tienePermiso(user, 'informes.aprobar') || administra);
+    const gestionaAdjuntos = crea && ((esAutor && crea) || revisa);
     return {
+      puedeAdjuntar: i.aprobadoEn ? crea && revisa : gestionaAdjuntos,
+      puedeQuitarAdjuntos: !i.aprobadoEn && gestionaAdjuntos,
       puedeEditar,
       puedeGuardar: puedeEditar,
       puedeCalificar: puedeEditar && tienePermiso(user, 'informes.firmar'),
@@ -122,10 +133,35 @@ export class InformesInspeccionService {
     return informe;
   }
 
+  /** Sello que firma los informes de la agencia: el de la agencia, si está activo. Sin sello el taller firma con nombre escrito. */
+  private selloDeAgencia(i: { agencia?: { sello?: { id: string; nombre: string; apellido: string; estado: number } | null } | null }) {
+    const s = i.agencia?.sello;
+    return s && s.estado === 1 ? { id: s.id, nombre: `${s.nombre} ${s.apellido}`.trim() } : null;
+  }
+
+  /**
+   * Un borrador usa siempre el sello actual de su agencia. Si el sello de la agencia cambió (o se quitó), el sello validado y la firma del
+   * taller que hubiera se descartan y hay que repetirlos con el sello vigente. Un informe guardado conserva el suyo.
+   */
+  private async cargarAlineado(id: string, user: any) {
+    const informe = await this.cargar(id, user);
+    if (!esEditable(informe.estado)) return informe;
+    const vigente = this.selloDeAgencia(informe);
+    const distinto = (informe.selloId ?? null) !== (vigente?.id ?? null) || (!vigente && !!informe.selloNombre);
+    if (!distinto) return informe;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.informeInspeccion.update({ where: { id }, data: { selloId: null, selloNombre: null, selloLogo: null, selloValidadoEn: null } });
+      await tx.informeFirma.deleteMany({ where: { informeId: id, tipo: TIPO_FIRMA_JEFE } });
+      await this.registrar(tx, id, user, 'SELLO_CAMBIADO', null, null, vigente ? `El sello de la agencia ahora es de ${vigente.nombre}: debe validar su contraseña y firmar el taller.` : 'La agencia no tiene sello: el taller firma con su nombre escrito.');
+    });
+    return this.cargar(id, user);
+  }
+
   private incluirDetalle() {
     return {
-      agencia: { select: { id: true, codigo: true, nombre: true } },
+      agencia: { select: { id: true, codigo: true, nombre: true, selloId: true, sello: { select: { id: true, nombre: true, apellido: true, estado: true } } } },
       inspector: { select: { id: true, name: true, lastname: true } },
+      adjuntos: { orderBy: { createdAt: 'asc' as const }, include: { user: { select: { id: true, name: true, lastname: true, role: { select: { namerol: true } } } } } },
       novedades: { orderBy: [{ orden: 'asc' }, { registradaEn: 'asc' }] },
       actividades: { orderBy: [{ orden: 'asc' }, { id: 'asc' }] },
       planes: { orderBy: [{ orden: 'asc' }, { id: 'asc' }] },
@@ -327,11 +363,14 @@ export class InformesInspeccionService {
   /** Agencias del alcance del usuario y quienes elaboraron informes dentro de él: para los filtros y el formulario. */
   async opciones(user: any) {
     const alcance = resolverAlcance(user);
-    const agencias = await agenciasConLider(this.prisma, await this.prisma.agencia.findMany({
+    const filas = await this.prisma.agencia.findMany({
       where: { estado: 1, ...whereAgencias(alcance) } as Prisma.AgenciaWhereInput,
-      select: { id: true, codigo: true, nombre: true },
+      select: { id: true, codigo: true, nombre: true, sello: { select: { id: true, nombre: true, apellido: true, estado: true } } },
       orderBy: { nombre: 'asc' },
-    }));
+    });
+    // Cada agencia dice qué sello firma sus informes (o que no tiene): así el formulario sabe si pedirá contraseña antes de crear el borrador.
+    const selloPorAgencia = new Map(filas.map((f) => [f.id, this.selloDeAgencia({ agencia: { sello: f.sello } })]));
+    const agencias = (await agenciasConLider(this.prisma, filas.map(({ sello: _sello, ...f }) => f))).map((a: any) => ({ ...a, sello: selloPorAgencia.get(a.id) ?? null }));
     const informes = await this.prisma.informeInspeccion.findMany({
       where: this.whereVisible(user) as Prisma.InformeInspeccionWhereInput,
       distinct: ['inspectorId'],
@@ -379,7 +418,7 @@ export class InformesInspeccionService {
   // ───────────────────────── Detalle ─────────────────────────
 
   async detail(id: string, user: any) {
-    return this.aDetalle(await this.cargar(id, user), user);
+    return this.aDetalle(await this.cargarAlineado(id, user), user);
   }
 
   private aPlan(p: any, hoy: Date) {
@@ -432,6 +471,16 @@ export class InformesInspeccionService {
       sello: i.selloNombre
         ? { id: i.selloId, nombre: i.selloNombre, logo: this.crypto.revelarEnReposo(i.selloLogo), validadoEn: i.selloValidadoEn?.toISOString() ?? null }
         : null,
+      /** Sello de la agencia: si existe, su contraseña se pide siempre; si no, el taller firma con nombre escrito y su firma. */
+      selloAgencia: this.selloDeAgencia(i),
+      adjuntos: (i.adjuntos ?? []).map((a: any) => ({
+        userId: a.userId,
+        nombre: `${a.user?.name ?? ''} ${a.user?.lastname ?? ''}`.trim(),
+        rol: a.user?.role?.namerol ?? '',
+        agregadoPorNombre: a.agregadoPorNombre ?? '',
+        agregadoEn: a.createdAt.toISOString(),
+        notificadoEn: a.notificadoEn?.toISOString() ?? null,
+      })),
       firmas: FIRMAS_INFORME.map((f) => {
         const firma = (i.firmas ?? []).find((x: any) => x.tipo === f.tipo && x.imagen);
         return {
@@ -484,7 +533,8 @@ export class InformesInspeccionService {
 
   async create(dto: GuardarInformeDto, user: any) {
     const agencia = await this.agenciaEnAlcance(dto.agenciaId, user);
-    const fecha = texto(dto.fecha) || hoyEcuador().toISOString().slice(0, 10);
+    // La fecha del informe es siempre el día en que se crea: no se elige.
+    const fecha = hoyEcuador().toISOString().slice(0, 10);
     const periodo = periodoDe(fecha);
     const rol = rolDeUsuario(user);
     const nombre = texto(user?.nombre) || `${user?.name ?? ''} ${user?.lastname ?? ''}`.trim();
@@ -519,12 +569,13 @@ export class InformesInspeccionService {
 
   async update(dto: GuardarInformeDto, user: any) {
     if (!dto.id) throw new BadRequestException('Falta el informe a guardar.');
-    const actual = await this.cargar(dto.id, user);
+    const actual = await this.cargarAlineado(dto.id, user);
     if (!this.permisosSobre(actual, user).puedeEditar) {
       throw new ForbiddenException(esEditable(actual.estado) ? 'Solo quien elaboró el informe puede editarlo.' : 'El informe ya está guardado: no se puede modificar.');
     }
     const agenciaId = dto.agenciaId === actual.agenciaId ? actual.agenciaId : (await this.agenciaEnAlcance(dto.agenciaId, user)).id;
-    const fecha = texto(dto.fecha) || dia(actual.fecha)!;
+    // La fecha no se modifica: es la del día en que se creó el informe.
+    const fecha = dia(actual.fecha)!;
     const periodo = periodoDe(fecha);
 
     await this.prisma.$transaction(async (tx) => {
@@ -542,13 +593,12 @@ export class InformesInspeccionService {
       });
       await this.sincronizarHijos(tx, actual.id, agenciaId, dto);
       if (dto.jefeTallerPresente === false && actual.jefeTallerPresente !== false) {
-        // Sin jefe de taller en la visita no hay contraseña que validar: se descarta el sello y la firma que hubiera (el taller firmará con nombre escrito).
-        await tx.informeInspeccion.update({ where: { id: actual.id }, data: { selloId: null, selloNombre: null, selloLogo: null, selloValidadoEn: null } });
+        // Sin el jefe en la visita el sello de la agencia se valida igual, pero firma quien lo reemplaza con su nombre: la firma anterior se descarta.
         await tx.informeFirma.deleteMany({ where: { informeId: actual.id, tipo: TIPO_FIRMA_JEFE } });
-        await this.registrar(tx, actual.id, user, 'JEFE_AUSENTE', null, null, 'Se indicó que el jefe de taller no estuvo presente en la visita.');
+        await this.registrar(tx, actual.id, user, 'JEFE_AUSENTE', null, null, 'Se indicó que el jefe de taller no estuvo presente en la visita: firma otra persona, con su nombre.');
       } else if (dto.jefeTallerPresente === true && actual.jefeTallerPresente === false) {
         await tx.informeFirma.deleteMany({ where: { informeId: actual.id, tipo: TIPO_FIRMA_JEFE } });
-        await this.registrar(tx, actual.id, user, 'JEFE_PRESENTE', null, null, 'Se indicó que el jefe de taller sí estuvo presente: debe validar su contraseña y firmar.');
+        await this.registrar(tx, actual.id, user, 'JEFE_PRESENTE', null, null, 'Se indicó que el jefe de taller sí estuvo presente: firma con el nombre de su sello.');
       }
       await this.anularFirmasDesactualizadas(tx, actual.id, user);
       const calificacionCambio = dto.calificacion && dto.calificacion !== actual.calificacion && tienePermiso(user, 'informes.firmar');
@@ -690,7 +740,7 @@ export class InformesInspeccionService {
 
   /** Guarda el informe de forma definitiva: exige el contenido, la calificación, el jefe de taller validado y las cuatro firmas. */
   async guardar(id: string, user: any) {
-    const informe = await this.cargar(id, user);
+    const informe = await this.cargarAlineado(id, user);
     if (!this.permisosSobre(informe, user).puedeGuardar) {
       throw new ForbiddenException(esEditable(informe.estado) ? 'Solo quien elaboró el informe puede guardarlo.' : 'El informe ya está guardado.');
     }
@@ -701,7 +751,7 @@ export class InformesInspeccionService {
       novedades: informe.novedades.length,
       calificacion: informe.calificacion,
       selloValidado: !!informe.selloValidadoEn && !!informe.selloNombre,
-      jefePresente: informe.jefeTallerPresente !== false,
+      requiereSello: !!this.selloDeAgencia(informe),
       firmadas: (informe.firmas ?? []).filter((f: any) => f.imagen && f.vigente !== false).map((f: any) => f.tipo),
     });
     if (faltan.length) throw new BadRequestException(`Antes de guardar el informe completa: ${faltan.join(', ')}.`);
@@ -733,48 +783,36 @@ export class InformesInspeccionService {
       await tx.informeInspeccion.update({ where: { id: informe.id }, data: { aprobadoEn: new Date(), aprobadoPorId: String(user.id), aprobadoPorNombre: nombre } });
       await this.registrar(tx, informe.id, user, 'APROBADO', null, null, `Aprobado por ${nombre}, que firmó la recepción.`);
     });
+    await this.notificarAdjuntos(informe.id);
     return this.detail(informe.id, user);
   }
 
   /**
-   * Valida con su contraseña al jefe de taller que firma el informe. Es la puerta de la sección de firmas: guarda su nombre y su logo
-   * en el informe. Si se cambia de jefe de taller, la firma del anterior se descarta.
+   * Valida con su contraseña el sello de la agencia del informe (sale del informe: ya no se elige). Es la puerta de la sección de firmas:
+   * guarda el nombre y el logo del sello en el informe. Se pide aunque el jefe de taller no haya estado en la visita.
    */
   async validarSello(dto: ValidarSelloDto, user: any) {
-    const informe = await this.cargar(dto.informeId, user);
+    const informe = await this.cargarAlineado(dto.informeId, user);
     if (!this.permisosSobre(informe, user).puedeCalificar) {
       throw new ForbiddenException(esEditable(informe.estado) ? 'Tu rol no puede validar al jefe de taller.' : 'El informe ya está guardado.');
     }
-    if (informe.jefeTallerPresente === false) {
-      throw new BadRequestException('Indicaste que el jefe de taller no estuvo presente: no hay contraseña que validar. Márcalo como presente si sí estuvo.');
-    }
-    // Una vez que un jefe de taller firmó, solo ese mismo puede volver a firmar: no se cambia por otro.
-    const jefeFirmo = (informe.firmas ?? []).some((f: any) => f.tipo === TIPO_FIRMA_JEFE && f.imagen);
-    if (jefeFirmo) {
-      const mensaje = `Este informe ya lo firmó ${informe.selloNombre}: solo el mismo jefe de taller puede volver a firmarlo.`;
-      if (informe.selloId) {
-        if (informe.selloId !== dto.selloId) throw new ConflictException(mensaje);
-      } else {
-        // El sello original ya no existe (se borró): se acepta uno con el mismo nombre.
-        const elegido = await this.prisma.selloJefeTaller.findUnique({ where: { id: dto.selloId }, select: { nombre: true, apellido: true } });
-        if (!elegido || nombreNormalizado(`${elegido.nombre} ${elegido.apellido}`) !== nombreNormalizado(informe.selloNombre ?? '')) throw new ConflictException(mensaje);
-      }
-    }
-    const sello = await this.sellos.verificar(dto.selloId, dto.password);
+    const vigente = this.selloDeAgencia(informe);
+    if (!vigente) throw new BadRequestException('La agencia de este informe no tiene sello: el taller firma con su nombre y su firma, sin contraseña.');
+    const sello = await this.sellos.verificar(vigente.id, dto.password);
     const nombre = `${sello.nombre} ${sello.apellido}`.trim();
     await this.prisma.$transaction(async (tx) => {
       await tx.informeInspeccion.update({
         where: { id: informe.id },
         data: { selloId: sello.id, selloNombre: nombre, selloLogo: this.crypto.protegerEnReposo(sello.logo), selloValidadoEn: new Date() },
       });
-      await this.registrar(tx, informe.id, user, 'SELLO_VALIDADO', null, null, `Jefe de taller validado: ${nombre}.`);
+      await this.registrar(tx, informe.id, user, 'SELLO_VALIDADO', null, null, `Sello validado: ${nombre}${informe.jefeTallerPresente === false ? ' (el jefe de taller no estuvo; firma otra persona)' : ''}.`);
     });
     return this.detail(informe.id, user);
   }
 
   /** Registra una de las cuatro firmas capturadas en pantalla. Volver a firmar reemplaza la anterior mientras sea borrador. */
   async firmar(dto: FirmarInformeDto, user: any) {
-    const informe = await this.cargar(dto.informeId, user);
+    const informe = await this.cargarAlineado(dto.informeId, user);
     if (!this.permisosSobre(informe, user).puedeFirmar) {
       throw new ForbiddenException(esEditable(informe.estado) ? 'Solo quien elaboró el informe puede registrar las firmas.' : 'El informe ya está guardado: no se puede firmar.');
     }
@@ -784,21 +822,25 @@ export class InformesInspeccionService {
       throw new BadRequestException('La firma de recepción la hace un Admin o Super Admin cuando aprueba el informe ya guardado.');
     }
     let nombre: string;
-    // Si el jefe de taller estuvo, firma con su sello validado; si no estuvo, quien firma por el taller escribe su nombre y apellido.
-    if (dto.tipo === TIPO_FIRMA_JEFE && informe.jefeTallerPresente !== false) {
-      if (!informe.selloValidadoEn || !informe.selloNombre) throw new BadRequestException('Primero valida al jefe de taller con su contraseña, en el paso de calificación.');
-      nombre = informe.selloNombre;
+    const sellada = dto.tipo === TIPO_FIRMA_JEFE && !!this.selloDeAgencia(informe);
+    // Con sello en la agencia, primero se valida su contraseña (esté o no el jefe). Si el jefe estuvo, firma con el nombre de su sello;
+    // si no estuvo, o la agencia no tiene sello, quien firma por el taller escribe su nombre (editable).
+    if (sellada && (!informe.selloValidadoEn || !informe.selloNombre)) {
+      throw new BadRequestException('Primero valida el sello del taller con su contraseña, en el paso de calificación.');
+    }
+    if (sellada && informe.jefeTallerPresente !== false) {
+      nombre = informe.selloNombre!;
     } else {
       const anterior = (informe.firmas ?? []).find((f: any) => f.tipo === dto.tipo && f.imagen);
       const pedido = texto(dto.nombre);
-      if (anterior) {
-        // Quien firmó la primera vez es quien vuelve a firmar.
+      if (anterior && dto.tipo !== TIPO_FIRMA_JEFE) {
+        // Quien firmó la primera vez es quien vuelve a firmar (la del taller es la única cuyo nombre se puede cambiar).
         if (pedido && nombreNormalizado(pedido) !== nombreNormalizado(anterior.nombre)) {
           throw new BadRequestException(`Debe volver a firmar quien firmó la primera vez como ${def.nombre.toLowerCase()}: ${anterior.nombre}.`);
         }
         nombre = anterior.nombre;
       } else {
-        nombre = pedido;
+        nombre = pedido || (dto.tipo === TIPO_FIRMA_JEFE ? texto(anterior?.nombre) : '');
         if (!nombre) throw new BadRequestException(`Indica el nombre de quien firma como ${def.nombre.toLowerCase()}.`);
       }
     }
@@ -866,6 +908,98 @@ export class InformesInspeccionService {
       if (r.count === 0) throw new ConflictException('El informe cambió mientras lo procesabas. Actualiza e inténtalo de nuevo.');
       await this.registrar(tx, informe.id, user, accion, informe.estado, nuevo, detalle);
     });
+  }
+
+  // ───────────────────────── Usuarios adjuntos ─────────────────────────
+
+  /** Avisa una sola vez a cada adjunto que aún no fue notificado. Solo con el informe aprobado. Un fallo al avisar no deshace la aprobación. */
+  private async notificarAdjuntos(informeId: string) {
+    try {
+      const informe = await this.prisma.informeInspeccion.findUnique({
+        where: { id: informeId },
+        select: { id: true, numero: true, aprobadoEn: true, fecha: true, agencia: { select: { nombre: true } } },
+      });
+      if (!informe?.aprobadoEn) return;
+      const pendientes = await this.prisma.informeAdjunto.findMany({ where: { informeId, notificadoEn: null }, select: { id: true, userId: true } });
+      if (!pendientes.length) return;
+      await this.prisma.informeAdjunto.updateMany({ where: { id: { in: pendientes.map((p) => p.id) } }, data: { notificadoEn: new Date() } });
+      await this.notifications?.notificarUsuarios(
+        pendientes.map((p) => p.userId),
+        'Informe de inspección aprobado',
+        `${informe.numero} · ${informe.agencia?.nombre ?? ''} (${dia(informe.fecha)}) ya está firmado y aprobado.`,
+        { informeId: informe.id, numero: informe.numero },
+        { tipo: 'INFORME_INSPECCION_APROBADO', entidadTipo: 'INFORME_INSPECCION', entidadId: informe.id },
+      );
+    } catch {
+      // El aviso es un extra: si falla, el informe queda aprobado igual.
+    }
+  }
+
+  /** Adjunta usuarios a un informe. Quien lo elabora y quien lo revisa, hasta la aprobación; después, solo un Admin y avisa en el momento. */
+  async adjuntar(dto: AdjuntarUsuariosDto, user: any) {
+    const informe = await this.cargar(dto.informeId, user);
+    if (!this.permisosSobre(informe, user).puedeAdjuntar) {
+      throw new ForbiddenException(informe.aprobadoEn ? 'Con el informe aprobado solo un Admin o Super Admin puede adjuntar más usuarios.' : 'Solo quien elaboró el informe o quien lo revisa puede adjuntar usuarios.');
+    }
+    const ids = [...new Set(dto.userIds)];
+    const validos = await this.prisma.user.findMany({ where: { id: { in: ids }, estado: 1 }, select: { id: true } });
+    if (validos.length !== ids.length) throw new BadRequestException('Alguno de los usuarios no existe o está inactivo.');
+    const yaEstan = new Set((informe.adjuntos ?? []).map((a: any) => a.userId));
+    const nuevos = ids.filter((id) => !yaEstan.has(id));
+    if (nuevos.length) {
+      const quien = texto(user?.nombre) || `${user?.name ?? ''} ${user?.lastname ?? ''}`.trim();
+      await this.prisma.$transaction(async (tx) => {
+        await tx.informeAdjunto.createMany({ data: nuevos.map((userId) => ({ informeId: informe.id, userId, agregadoPorId: String(user.id), agregadoPorNombre: quien })), skipDuplicates: true });
+        await this.registrar(tx, informe.id, user, 'ADJUNTOS_AGREGADOS', null, null, `Se adjuntó a ${nuevos.length} usuario(s) para que reciban el informe cuando se apruebe.`);
+      });
+      if (informe.aprobadoEn) await this.notificarAdjuntos(informe.id);
+    }
+    return this.detail(informe.id, user);
+  }
+
+  async quitarAdjunto(dto: QuitarAdjuntoDto, user: any) {
+    const informe = await this.cargar(dto.informeId, user);
+    if (!this.permisosSobre(informe, user).puedeQuitarAdjuntos) {
+      throw new ForbiddenException(informe.aprobadoEn ? 'El informe ya está aprobado: la lista de adjuntos no se reduce.' : 'Solo quien elaboró el informe o quien lo revisa puede quitar adjuntos.');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const r = await tx.informeAdjunto.deleteMany({ where: { informeId: informe.id, userId: dto.userId } });
+      if (r.count) await this.registrar(tx, informe.id, user, 'ADJUNTO_QUITADO', null, null, 'Se quitó a un usuario de los adjuntos.');
+    });
+    return this.detail(informe.id, user);
+  }
+
+  /** Filtros del buscador de adjuntos: regiones, clientes, agencias y roles. */
+  async opcionesAdjuntos() {
+    const [regiones, clientes, agencias, roles] = await Promise.all([
+      this.prisma.region.findMany({ where: { estado: 1 }, orderBy: { nombre: 'asc' }, select: { id: true, nombre: true } }),
+      this.prisma.cliente.findMany({ where: { estado: 1 }, orderBy: { nombre: 'asc' }, select: { id: true, nombre: true } }),
+      this.prisma.agencia.findMany({ where: { estado: 1 }, orderBy: { nombre: 'asc' }, select: { id: true, nombre: true, regionId: true, clienteId: true } }),
+      this.prisma.role.findMany({ orderBy: { namerol: 'asc' }, select: { id: true, namerol: true } }),
+    ]);
+    return { regiones, clientes, agencias, roles: roles.map((r) => ({ id: r.id, nombre: cargoDeRol(r.namerol) })) };
+  }
+
+  /** Usuarios activos de cualquier rol, por nombre y por región, cliente, agencia o rol. */
+  async buscarAdjuntables(dto: BuscarAdjuntablesDto) {
+    const and: Prisma.UserWhereInput[] = [{ estado: 1 }];
+    const q = texto(dto.search);
+    if (q) {
+      for (const palabra of q.split(/\s+/).slice(0, 4)) {
+        and.push({ OR: [{ name: { contains: palabra, mode: 'insensitive' } }, { lastname: { contains: palabra, mode: 'insensitive' } }, { email: { contains: palabra, mode: 'insensitive' } }] });
+      }
+    }
+    if (dto.roleId) and.push({ roleId: dto.roleId });
+    if (dto.regionId) and.push({ OR: [{ regionId: dto.regionId }, { agencia: { regionId: dto.regionId } }] });
+    if (dto.clienteId) and.push({ agencia: { clienteId: dto.clienteId } });
+    if (dto.agenciaId) and.push({ OR: [{ agenciaId: dto.agenciaId }, { agenciasIds: { has: dto.agenciaId } }] });
+    const usuarios = await this.prisma.user.findMany({
+      where: { AND: and },
+      select: { id: true, name: true, lastname: true, agencia: { select: { nombre: true } }, role: { select: { namerol: true } } },
+      orderBy: [{ name: 'asc' }, { lastname: 'asc' }],
+      take: 60,
+    });
+    return usuarios.map((u) => ({ id: u.id, nombre: `${u.name} ${u.lastname}`.trim(), rol: cargoDeRol(u.role.namerol), agencia: u.agencia?.nombre ?? '' }));
   }
 
   // ───────────────────────── Seguimiento de planes ─────────────────────────

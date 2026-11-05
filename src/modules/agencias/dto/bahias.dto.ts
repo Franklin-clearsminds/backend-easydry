@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginacionOpcionalDto } from '../../../common/dto/data-grid.dto.js';
 
@@ -77,10 +77,11 @@ export class AsignarOperadorBahiaDto {
   @IsString()
   operadorId?: string | null;
 
-  @ApiPropertyOptional({ example: 'Turno Mañana 08:00 - 16:00', description: 'Notas u observaciones del turno' })
-  @IsOptional()
+  @ApiProperty({ example: 'Cobertura por vacaciones', description: 'Motivo del cambio de bahía (obligatorio)' })
   @IsString()
-  notas?: string;
+  @IsNotEmpty({ message: 'Indica el motivo del cambio de bahía' })
+  @MaxLength(300)
+  notas: string;
 }
 
 /** Página de 50 por defecto (máximo 100). Orden: fecha (inicio), bahia, operador. */
@@ -108,8 +109,9 @@ export class DesasignarOperadorBahiaDto {
   @IsNotEmpty()
   operadorId: string;
 
-  @ApiPropertyOptional({ example: 'Fin de turno', description: 'Motivo de la desasignación' })
-  @IsOptional()
+  @ApiProperty({ example: 'Fin de turno', description: 'Motivo de la desasignación (obligatorio)' })
   @IsString()
-  motivo?: string;
+  @IsNotEmpty({ message: 'Indica el motivo de la desasignación' })
+  @MaxLength(300)
+  motivo: string;
 }

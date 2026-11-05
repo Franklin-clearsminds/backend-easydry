@@ -62,6 +62,7 @@ import {
 } from '../../common/utils/data-grid.helpers.js';
 import {
   AsignarUsuarioAgenciaDto,
+  ListHistorialCambiosAgenciaDto,
   ListUsuariosAgenciaDto,
   ToggleEstadoUsuarioDto,
   UpdateUsuarioDto,
@@ -218,6 +219,15 @@ export class AgenciasService {
 
   /** Filtro sobre usuarios: los del país, de su región o de su agencia. Sin dato de su ámbito, ninguno. */
   private whereUsuariosPorAlcance(user: any): Record<string, unknown> {
+    const porAlcance = this.whereUsuariosSegunAlcance(user);
+    // El supervisor regional no ve a los asistentes de mantenimiento (técnicos) en el directorio de usuarios.
+    if (user && tieneFuncion(user, FUNCION.SUPERVISOR) && !this.esAdmin(user)) {
+      return { AND: [porAlcance, { NOT: { role: rolConFuncion(FUNCION.TECNICO) } }] };
+    }
+    return porAlcance;
+  }
+
+  private whereUsuariosSegunAlcance(user: any): Record<string, unknown> {
     const a: Alcance = resolverAlcance(user);
     switch (a.tipo) {
       case 'GLOBAL':
@@ -1923,12 +1933,49 @@ export class AgenciasService {
   }
 
   /** Quita al usuario de todas sus bahías activas y cierra su historial de asignación. */
-  private async liberarBahiasDeOperador(operadorId: string): Promise<void> {
+  /** Quiénes llevan historial de cambios de agencia: lavadores, líderes, pulidores, auxiliares y backups. */
+  private llevaHistorialAgencia(u: any): boolean {
+    return [FUNCION.LAVADOR, FUNCION.LIDER_AGENCIA, FUNCION.PULIDOR, FUNCION.BACKUP, FUNCION.AUXILIAR].some((f) => conFuncion(u, f));
+  }
+
+  /** Deja constancia (con fecha y hora) de que una persona cambió de agencia. No hace nada si la agencia no cambia o el rol no lleva historial. */
+  private async registrarCambioAgencia(p: {
+    usuario: any;
+    origenId?: string | null;
+    destinoId?: string | null;
+    motivo?: string | null;
+    origen: 'ALTA' | 'CAMBIO' | 'BAHIA';
+    actor?: any;
+  }): Promise<void> {
+    if (!this.llevaHistorialAgencia(p.usuario)) return;
+    const origenId = p.origenId ?? null;
+    const destinoId = p.destinoId ?? null;
+    if (origenId === destinoId) return;
+    const ids = [origenId, destinoId].filter(Boolean) as string[];
+    const agencias = ids.length ? await this.prisma.agencia.findMany({ where: { id: { in: ids } }, select: { id: true, nombre: true } }) : [];
+    const nombre = (id: string | null) => (id ? agencias.find((a) => a.id === id)?.nombre ?? null : null);
+    const realizadoPor = p.actor ? (String(p.actor.nombre || '').trim() || `${p.actor.name ?? ''} ${p.actor.lastname ?? ''}`.trim() || null) : null;
+    await this.prisma.historialCambioAgencia.create({
+      data: {
+        usuarioId: p.usuario.id,
+        agenciaOrigenId: origenId,
+        agenciaOrigenNombre: nombre(origenId),
+        agenciaDestinoId: destinoId,
+        agenciaDestinoNombre: nombre(destinoId),
+        origen: p.origen,
+        motivo: (p.motivo ?? '').trim() || (p.origen === 'ALTA' ? 'Alta inicial' : 'Sin motivo registrado'),
+        realizadoPorId: p.actor?.id ? String(p.actor.id) : null,
+        realizadoPorNombre: realizadoPor,
+      },
+    });
+  }
+
+  private async liberarBahiasDeOperador(operadorId: string, motivoFin?: string): Promise<void> {
     const activas = await this.prisma.bahiaOperador.findMany({ where: { operadorId, activo: true }, select: { bahiaId: true } });
     if (activas.length === 0) return;
     const bahiaIds = activas.map((a) => a.bahiaId);
     await this.prisma.bahiaOperador.updateMany({ where: { operadorId, activo: true }, data: { activo: false } });
-    await this.prisma.historialAsignacionBahia.updateMany({ where: { operadorId, fechaFin: null }, data: { fechaFin: new Date() } });
+    await this.prisma.historialAsignacionBahia.updateMany({ where: { operadorId, fechaFin: null }, data: { fechaFin: new Date(), motivoFin: motivoFin || null } });
     await this.prisma.bahia.updateMany({ where: { id: { in: bahiaIds }, operadorActualId: operadorId }, data: { operadorActualId: null } });
   }
 
@@ -1985,7 +2032,7 @@ export class AgenciasService {
         });
         await this.prisma.historialAsignacionBahia.updateMany({
           where: { bahiaId: asignacionAnterior.bahiaId, operadorId: operadorNuevoId, fechaFin: null },
-          data: { fechaFin: new Date() },
+          data: { fechaFin: new Date(), motivoFin: dto.notas || null },
         });
         await this.prisma.bahia.update({
           where: { id: asignacionAnterior.bahiaId },
@@ -2000,7 +2047,7 @@ export class AgenciasService {
     if (!operadorNuevoId && bahia.operadorActualId) {
       await this.prisma.historialAsignacionBahia.updateMany({
         where: { bahiaId: bahia.id, operadorId: bahia.operadorActualId, fechaFin: null },
-        data: { fechaFin: now },
+        data: { fechaFin: now, motivoFin: dto.notas || null },
       });
       // Desactivar todas las asignaciones activas de esta bahía
       await this.prisma.bahiaOperador.updateMany({
@@ -2045,12 +2092,26 @@ export class AgenciasService {
       data: { operadorActualId: operadorNuevoId },
     });
 
-    // Actualizar agencia del operador
+    // Actualizar agencia del operador (si la bahía es de otra agencia, queda constancia del cambio con su hora)
     if (operadorNuevoId) {
+      const antes = await this.prisma.user.findUnique({
+        where: { id: operadorNuevoId },
+        select: { id: true, agenciaId: true, role: { select: { namerol: true, capacidades: true } } },
+      });
       await this.prisma.user.update({
         where: { id: operadorNuevoId },
         data: { updatedAt: now, agenciaId: bahia.agenciaId },
       });
+      if (antes) {
+        await this.registrarCambioAgencia({
+          usuario: antes,
+          origenId: antes.agenciaId,
+          destinoId: bahia.agenciaId,
+          motivo: dto.notas,
+          origen: 'BAHIA',
+          actor: user,
+        });
+      }
     }
 
     // Retornar bahía actualizada con operadores múltiples
@@ -2115,7 +2176,7 @@ export class AgenciasService {
     // Cerrar historial activo
     await this.prisma.historialAsignacionBahia.updateMany({
       where: { bahiaId: dto.bahiaId, operadorId: dto.operadorId, fechaFin: null },
-      data: { fechaFin: now },
+      data: { fechaFin: now, motivoFin: dto.motivo || null },
     });
 
     // Si era el operadorActual, buscar el siguiente o null
@@ -2191,18 +2252,51 @@ export class AgenciasService {
     return buildDataGridResponse(itemsFinal, total, page, pageSize);
   }
 
+  /**
+   * Historial de cambios de agencia con fecha y hora. Cada quien ve solo a las personas de su alcance (región o agencia) y el coordinador de
+   * servicios especiales solo a los pulidores; la persona misma ve el suyo.
+   */
+  async listHistorialCambiosAgencia(dto: ListHistorialCambiosAgenciaDto, user?: any) {
+    const { page, pageSize, skip, take } = resolverPaginacion(dto, { defecto: 50 });
+    const soloPulidores = tieneFuncion(user, FUNCION.COORD_ESPECIALES) && !this.esAdmin(user) && !tieneFuncion(user, FUNCION.SUPERVISOR);
+    const filtros = combinarWhere(
+      { usuario: this.whereUsuariosPorAlcance(user) },
+      soloPulidores ? { usuario: { role: rolConFuncion(FUNCION.PULIDOR) } } : undefined,
+      dto.usuarioId ? { usuarioId: dto.usuarioId } : undefined,
+      whereBusqueda(['usuario.name', 'usuario.lastname', 'agenciaOrigenNombre', 'agenciaDestinoNombre', 'motivo'], dto.search),
+    ) as any;
+    const [items, total] = await Promise.all([
+      this.prisma.historialCambioAgencia.findMany({
+        where: filtros,
+        skip,
+        take,
+        orderBy: { createdAt: 'desc' },
+        include: { usuario: { select: { id: true, name: true, lastname: true } } },
+      }),
+      this.prisma.historialCambioAgencia.count({ where: filtros }),
+    ]);
+    return buildDataGridResponse(items, total, page, pageSize);
+  }
+
   // =========================================================================
   // 5. ASIGNACIÓN DE USUARIOS A AGENCIAS Y REGIONES
   // =========================================================================
 
-  async asignarUsuario(dto: AsignarUsuarioAgenciaDto) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.usuarioId } });
+  async asignarUsuario(dto: AsignarUsuarioAgenciaDto, actor?: any) {
+    const user = await this.prisma.user.findUnique({ where: { id: dto.usuarioId }, include: { role: { select: { namerol: true, capacidades: true } } } });
     if (!user) {
       throw new NotFoundException(`Usuario con ID "${dto.usuarioId}" no encontrado`);
+    }
+    if (actor && !this.esAdmin(actor) && conFuncion(user, FUNCION.PULIDOR) && dto.agenciaId !== undefined && (dto.agenciaId || null) !== (user.agenciaId ?? null)) {
+      throw new ForbiddenException('Solo un Admin o Super Admin puede cambiar de agencia a un pulidor.');
     }
 
     if (user.estado !== 1) {
       throw new BadRequestException('No se puede asignar un usuario inactivo. Debe activarlo primero.');
+    }
+    const cambiaAgenciaAsignar = dto.agenciaId !== undefined && (dto.agenciaId || null) !== (user.agenciaId ?? null);
+    if (actor && cambiaAgenciaAsignar && this.llevaHistorialAgencia(user) && !dto.motivo?.trim()) {
+      throw new BadRequestException('Indica el motivo del cambio de agencia.');
     }
 
     if (dto.agenciaId) {
@@ -2244,6 +2338,10 @@ export class AgenciasService {
         estado: true,
       },
     });
+
+    if (cambiaAgenciaAsignar) {
+      await this.registrarCambioAgencia({ usuario: user, origenId: user.agenciaId, destinoId: updatedUser.agenciaId, motivo: dto.motivo, origen: 'CAMBIO', actor });
+    }
 
     void this.notificarCambioUsuario(
       updatedUser.id,
@@ -2514,6 +2612,17 @@ export class AgenciasService {
 
     const isPulidorRole = fnRolUpdate.has(FUNCION.PULIDOR);
 
+    // Cambiar de agencia a quien lleva historial exige el motivo (queda en el historial con fecha y hora).
+    const cambiaAgenciaUpdate = agenciaIdToSet !== undefined && (agenciaIdToSet ?? null) !== (user.agenciaId ?? null);
+    if (actor && cambiaAgenciaUpdate && this.llevaHistorialAgencia(user) && !dto.motivo?.trim()) {
+      throw new BadRequestException('Indica el motivo del cambio de agencia.');
+    }
+
+    // Mover a un pulidor de agencia es solo del Admin o Super Admin: ni un coordinador ni otro rol con permiso de editar usuarios.
+    if (actor && !this.esAdmin(actor) && conFuncion(user, FUNCION.PULIDOR) && agenciaIdToSet !== undefined && (agenciaIdToSet ?? null) !== (user.agenciaId ?? null)) {
+      throw new ForbiddenException('Solo un Admin o Super Admin puede cambiar de agencia a un pulidor.');
+    }
+
     let finalServicioIdsUsuario: number[] | undefined = undefined;
     if (isPulidorRole) {
       const especiales = await this.prisma.catalogoServicio.findMany({
@@ -2596,12 +2705,15 @@ export class AgenciasService {
     const agenciaCambio = agenciaIdToSet !== undefined && agenciaIdToSet !== user.agenciaId;
     // La bahía solo aplica a lavadores y pertenece a una agencia: si deja de ser lavador o se mueve de agencia, se libera.
     if (agenciaCambio || (rolCambio && !this.esRolLavador(updatedUser.role))) {
-      await this.liberarBahiasDeOperador(updatedUser.id);
+      await this.liberarBahiasDeOperador(updatedUser.id, agenciaCambio ? `Cambio de agencia: ${dto.motivo?.trim() || 'sin motivo'}` : 'Cambio de rol');
+    }
+    if (agenciaCambio) {
+      await this.registrarCambioAgencia({ usuario: updatedUser, origenId: user.agenciaId, destinoId: updatedUser.agenciaId, motivo: dto.motivo, origen: 'CAMBIO', actor });
     }
     if (esAuxiliarFinal && bahiaAuxiliar) {
       const asignada = await this.prisma.bahiaOperador.findFirst({ where: { operadorId: updatedUser.id, activo: true }, select: { bahiaId: true } });
       if (asignada?.bahiaId !== bahiaAuxiliar) {
-        await this.asignarOperadorABahia({ bahiaId: bahiaAuxiliar, operadorId: updatedUser.id }, actor?.id, actor);
+        await this.asignarOperadorABahia({ bahiaId: bahiaAuxiliar, operadorId: updatedUser.id, notas: dto.motivo?.trim() || 'Auxiliar asignado a su bahía' }, actor?.id, actor);
       }
     }
     const estadoCambio = dto.estado !== undefined && dto.estado !== user.estado;
@@ -2880,10 +2992,13 @@ export class AgenciasService {
         bodega: true,
       },
     });
+    if (newUser.agenciaId) {
+      await this.registrarCambioAgencia({ usuario: newUser, origenId: null, destinoId: newUser.agenciaId, motivo: 'Alta inicial', origen: 'ALTA', actor });
+    }
 
     if (fnRolCreate.has(FUNCION.AUXILIAR) && dto.bahiaId) {
       try {
-        await this.asignarOperadorABahia({ bahiaId: dto.bahiaId, operadorId: newUser.id }, actor?.id, actor);
+        await this.asignarOperadorABahia({ bahiaId: dto.bahiaId, operadorId: newUser.id, notas: 'Alta del auxiliar en su bahía' }, actor?.id, actor);
       } catch (e) {
         // Sin bahía no hay auxiliar: no se deja el usuario a medias.
         await this.prisma.user.delete({ where: { id: newUser.id } }).catch(() => undefined);
@@ -3363,6 +3478,15 @@ export class AgenciasService {
       (dataToUpdate.estado !== undefined && dataToUpdate.estado !== user.estado) ||
       (dataToUpdate.agenciaId !== undefined && dataToUpdate.agenciaId !== user.agenciaId);
     if (cambiaDatos) this.exigirPermiso(actor, ['operadores.editar'], 'editar los datos de lavadores y pulidores');
+    const cambiaAgenciaOperador = dataToUpdate.agenciaId !== undefined && dataToUpdate.agenciaId !== (user.agenciaId ?? null);
+    if (actor && cambiaAgenciaOperador) {
+      if (!this.esAdmin(actor) && conFuncion(user, FUNCION.PULIDOR)) {
+        throw new ForbiddenException('Solo un Admin o Super Admin puede cambiar de agencia a un pulidor.');
+      }
+      if (this.llevaHistorialAgencia(user) && !dto.motivo?.trim()) {
+        throw new BadRequestException('Indica el motivo del cambio de agencia.');
+      }
+    }
     if (dto.bahiaId !== undefined) {
       const actual = user.bahiaOperadores?.[0]?.bahia;
       const sinBahia = !dto.bahiaId || /sin bah[ií]a/i.test(dto.bahiaId);
@@ -3376,11 +3500,14 @@ export class AgenciasService {
       where: { id: dto.id },
       data: dataToUpdate
     });
+    if (cambiaAgenciaOperador) {
+      await this.registrarCambioAgencia({ usuario: user, origenId: user.agenciaId, destinoId: dataToUpdate.agenciaId, motivo: dto.motivo, origen: 'CAMBIO', actor });
+    }
 
     // Un rol distinto de lavador no trabaja en bahía: se le libera la que tuviera y no se le asigna otra.
     const trabajaEnBahia = this.esRolLavador(user.role);
     if (!trabajaEnBahia || (dataToUpdate.agenciaId && dataToUpdate.agenciaId !== user.agenciaId)) {
-      await this.liberarBahiasDeOperador(dto.id);
+      await this.liberarBahiasDeOperador(dto.id, cambiaAgenciaOperador ? `Cambio de agencia: ${dto.motivo?.trim() || 'sin motivo'}` : undefined);
     }
 
     // Si se especificó bahía para cambiar o desvincular
@@ -3389,7 +3516,7 @@ export class AgenciasService {
       const esSinBahia = !dto.bahiaId || dto.bahiaId.toLowerCase().includes('sin bahia') || dto.bahiaId.toLowerCase().includes('sin bahía');
 
       if (esSinBahia && currentBahia) {
-        await this.asignarOperadorABahia({ bahiaId: currentBahia.id, operadorId: null }, updaterId || user.id);
+        await this.asignarOperadorABahia({ bahiaId: currentBahia.id, operadorId: null, notas: dto.motivo?.trim() || 'Retirado de la bahía' }, updaterId || user.id);
       } else if (!esSinBahia) {
         const agenciaIdTarget = dataToUpdate.agenciaId || user.agenciaId;
         const bahiaTarget = await this.prisma.bahia.findFirst({
@@ -3399,7 +3526,7 @@ export class AgenciasService {
           }
         });
         if (bahiaTarget && (!currentBahia || currentBahia.id !== bahiaTarget.id)) {
-          await this.asignarOperadorABahia({ bahiaId: bahiaTarget.id, operadorId: user.id }, updaterId || user.id);
+          await this.asignarOperadorABahia({ bahiaId: bahiaTarget.id, operadorId: user.id, notas: dto.motivo?.trim() || 'Cambio de bahía' }, updaterId || user.id);
         }
       }
     }

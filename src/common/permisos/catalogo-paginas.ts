@@ -252,6 +252,7 @@ export const PAGINAS: readonly PaginaDef[] = [
     ], ['mantenimientos.ver']),
     sub('taller', 'limpiezas', 'Limpiezas', ['limpiezas.ver'], [
       REGISTRAR_LIMPIEZA,
+      accion('taller.limpiezas.fotos', 'Ver fotos de limpieza', ['limpiezas.fotos'], { grupo: 'Consultar' }),
       accion('taller.limpiezas.editar', 'Editar o eliminar limpieza', ['limpiezas.editar'], { grupo: 'Operar' }),
       exportar('reportes.maquinaria.limpiezas', 'Exportar limpiezas'),
     ]),
@@ -300,6 +301,8 @@ export const PAGINAS: readonly PaginaDef[] = [
     accion('envios.confirmar', 'Confirmar recepción', ['despachos.recibir'], { grupo: 'Operar' }),
     accion('envios.rechazar', 'Rechazar recepción', ['despachos.recibir'], { grupo: 'Operar', implica: ['envios.confirmar'] }),
     accion('envios.faltantes', 'Resolver faltantes de envíos', ['despachos.ver'], { migrarSi: ['despachos.crear'], grupo: 'Operar' }),
+    // Los envíos entre agencias que crea un líder esperan a quien tenga esta casilla; sin ella no se mueve stock.
+    accion('envios.aprobar', 'Aprobar envíos entre agencias', ['despachos.ver'], { migrarSi: ['__nunca__'], grupo: 'Operar' }),
   ]),
 
   // Auditorías: tres pantallas del menú. Quien no puede auditar (líder, lavador, pulidor) solo ve el resultado de su inspección 5S y sus informes.

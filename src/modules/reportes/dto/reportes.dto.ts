@@ -39,7 +39,7 @@ export class PeriodoReporteDto {
 
 /** Filtros de un reporte. El servidor siempre los cruza con el alcance del usuario. */
 export class GenerarReporteDto {
-  @ApiProperty({ example: 'servicios-especiales' })
+  @ApiProperty({ example: 'servicios-lavado' })
   @IsString()
   @MaxLength(60)
   reporteId!: string;
@@ -92,6 +92,16 @@ export class GenerarReporteDto {
   @IsOptional()
   @IsIn(['AGENCIA', 'PULIDOR', 'BODEGA'])
   ubicacion?: 'AGENCIA' | 'PULIDOR' | 'BODEGA';
+
+  @ApiPropertyOptional({ enum: ['UNICO', 'DIA', 'SEMANA', 'MES'], description: 'Cómo repartir el reporte por periodo; vacío = automático (sin dividir, por días o por meses según el rango)' })
+  @IsOptional()
+  @IsIn(['UNICO', 'DIA', 'SEMANA', 'MES'])
+  division?: 'UNICO' | 'DIA' | 'SEMANA' | 'MES';
+
+  @ApiPropertyOptional({ enum: ['GENERAL', 'ESPECIAL', 'AMBOS'], description: 'Servicios de lavado: generales, especiales o ambos' })
+  @IsOptional()
+  @IsIn(['GENERAL', 'ESPECIAL', 'AMBOS'])
+  categoria?: 'GENERAL' | 'ESPECIAL' | 'AMBOS';
 
   @ApiPropertyOptional({ enum: ['VERDE', 'AMARILLO', 'ROJO'], description: 'Semáforo (auditorías 5S)' })
   @IsOptional()

@@ -3,19 +3,22 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { resolverAlcance, whereAgencias, type Alcance } from '../../common/permisos/alcance.js';
 import { rolDeUsuario } from '../../common/permisos/alias-roles.js';
 import { FUNCION, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
+import { HISTORIAL_APROBADOR_DIAS } from '../../common/permisos/historial-aprobador.js';
 import { tienePermiso, tieneAlgunPermiso } from '../../common/permisos/capacidades.js';
 import {
   REPORTES,
   SEMAFOROS_5S,
   UBICACIONES_STOCK,
   columnasVisibles,
+  columnasServicios,
+  type CategoriaServicios,
   reportePorId,
   type ColumnaDef,
   type FilaReporte,
   type ReporteDef,
   type TotalReporte,
 } from './reportes.definiciones.js';
-import { dividirRango, etiquetaDia, fechaEcuador, finDeDia, horaEcuador, inicioDeDia, resolverRango, type BloquePeriodo, type DivisionPeriodo, type RangoResuelto } from './reportes.periodos.js';
+import { dividirRango, etiquetaDia, fechaEcuador, finDeDia, horaEcuador, hoyEcuador, inicioDeDia, resolverRango, sumarDias as sumarDiasIso, type BloquePeriodo, type DivisionPeriodo, type RangoResuelto } from './reportes.periodos.js';
 import type { GenerarReporteDto, RegistrarExportacionDto } from './dto/reportes.dto.js';
 import { RetosService } from '../retos/retos.service.js';
 import { ReportesArchivoService } from './reportes.archivo.js';
@@ -91,6 +94,9 @@ interface Ctx {
 
 const nombreDe = (u?: { name?: string | null; lastname?: string | null } | null): string => (u ? `${u.name ?? ''} ${u.lastname ?? ''}`.trim() : '');
 const titulo = (s?: string | null): string => (s ? `${s.charAt(0).toUpperCase()}${s.slice(1).toLowerCase().replace(/_/g, ' ')}` : '');
+/** Reportes que puede sacar el aprobador: solo los de sus servicios. */
+const REPORTES_DEL_APROBADOR = ['servicios-lavado'];
+
 const num = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
 const dinero = (v: unknown): number | null => (v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100);
 const unicos = (xs: (string | null | undefined)[]): string[] => [...new Set(xs.filter((x): x is string => !!x))];
@@ -130,6 +136,8 @@ export class ReportesService {
 
   /** Un reporte se ve solo si el rol tiene activo el módulo al que pertenece (y, si hace falta, los precios). */
   private puedeVer(def: ReporteDef, user: any): boolean {
+    // El aprobador solo saca el reporte de sus servicios (generales y especiales), no el resto del catálogo.
+    if (tieneFuncion(user, FUNCION.APROBADOR) && !REPORTES_DEL_APROBADOR.includes(def.id)) return false;
     if (!tieneAlgunPermiso(user, def.permisos)) return false;
     return (def.permisosTodos ?? []).every((p) => tienePermiso(user, p));
   }
@@ -144,6 +152,7 @@ export class ReportesService {
   /** Reportes que el usuario puede sacar, con sus columnas y filtros (sin las funciones de totales). */
   catalogo(user: any) {
     const verPrecios = tienePermiso(user, 'precios.ver');
+    const categorias = this.categoriasPermitidas(user);
     return REPORTES.filter((r) => this.puedeVer(r, user)).map((r) => ({
       id: r.id,
       nombre: r.nombre,
@@ -156,8 +165,37 @@ export class ReportesService {
       estados: r.estados ?? [],
       ubicaciones: r.extras.includes('ubicacion') ? UBICACIONES_STOCK : [],
       semaforos: r.extras.includes('semaforo') ? SEMAFOROS_5S : [],
-      columnas: columnasVisibles(r, verPrecios),
+      categorias: r.extras.includes('categoria') ? categorias : [],
+      columnas: this.columnasDe(r, r.id === 'servicios-lavado' ? this.categoriaPorDefecto(categorias) : undefined, verPrecios),
     }));
+  }
+
+  /** Categorías de servicios que el usuario puede sacar: generales con `servicios.ver`, especiales con `especiales.ver`; «Ambos» con los dos. */
+  private categoriasPermitidas(user: any): { valor: CategoriaServicios; etiqueta: string }[] {
+    const general = tienePermiso(user, 'servicios.ver');
+    const especial = tienePermiso(user, 'especiales.ver');
+    const salida: { valor: CategoriaServicios; etiqueta: string }[] = [];
+    if (general) salida.push({ valor: 'GENERAL', etiqueta: 'Generales' });
+    if (especial) salida.push({ valor: 'ESPECIAL', etiqueta: 'Especiales' });
+    if (general && especial) salida.push({ valor: 'AMBOS', etiqueta: 'Generales y especiales' });
+    return salida;
+  }
+
+  private categoriaPorDefecto(permitidas: { valor: CategoriaServicios }[]): CategoriaServicios {
+    return permitidas.some((c) => c.valor === 'AMBOS') ? 'AMBOS' : (permitidas[0]?.valor ?? 'GENERAL');
+  }
+
+  /** Categoría elegida, validada contra los permisos; sin elegir, la más amplia que le corresponde. */
+  private categoriaDe(def: ReporteDef, dto: GenerarReporteDto, user: any): CategoriaServicios | undefined {
+    if (def.id !== 'servicios-lavado') return undefined;
+    const permitidas = this.categoriasPermitidas(user);
+    if (!dto.categoria) return this.categoriaPorDefecto(permitidas);
+    if (!permitidas.some((c) => c.valor === dto.categoria)) throw new ForbiddenException('Tu rol no puede sacar esa categoría de servicios.');
+    return dto.categoria;
+  }
+
+  private columnasDe(def: ReporteDef, categoria: CategoriaServicios | undefined, verPrecios: boolean) {
+    return def.id === 'servicios-lavado' ? columnasServicios(categoria ?? 'AMBOS').filter((c) => verPrecios || !c.soloPrecios) : columnasVisibles(def, verPrecios);
   }
 
   // ---------------------------------------------------------------------------------------------------------------------
@@ -193,7 +231,7 @@ export class ReportesService {
 
     const verInsumos = pide.has('productos') && tienePermiso(user, 'inventario.ver');
     const verServicios = pide.has('lavadores') && tienePermiso(user, 'servicios.ver');
-    const verEspeciales = pide.has('pulidores') && tienePermiso(user, 'especiales.ver');
+    const verEspeciales = pide.has('pulidores') && (tienePermiso(user, 'especiales.ver') || tienePermiso(user, 'operadores.ver'));
     const [productos, lavadores, pulidores] = await Promise.all([
       verInsumos ? this.prisma.insumo.findMany({ where: { estado: 1 }, select: { id: true, codigoSKU: true, nombre: true }, orderBy: { nombre: 'asc' } }) : [],
       verServicios && ids.length
@@ -229,6 +267,8 @@ export class ReportesService {
 
   async generar(dto: GenerarReporteDto, user: any) {
     const def = this.definicionAccesible(dto.reporteId, user);
+    const categoria = this.categoriaDe(def, dto, user);
+    if (categoria) dto = { ...dto, categoria };
     this.validarFiltros(def, dto);
 
     let rango: RangoResuelto | null = null;
@@ -238,6 +278,12 @@ export class ReportesService {
         rango = resolverRango(dto.periodo);
       } catch (e) {
         throw new BadRequestException((e as Error).message);
+      }
+      // El aprobador solo ve los últimos 30 días: un periodo que empieza antes se recorta, y uno que termina antes no se entrega.
+      if (tieneFuncion(user, FUNCION.APROBADOR)) {
+        const limite = sumarDiasIso(hoyEcuador(), -HISTORIAL_APROBADOR_DIAS);
+        if (rango.hasta < limite) throw new BadRequestException(`Solo puedes sacar reportes de los últimos ${HISTORIAL_APROBADOR_DIAS} días.`);
+        if (rango.desde < limite) rango = { ...rango, desde: limite, etiqueta: `${rango.etiqueta} (desde ${etiquetaDia(limite)}, máximo ${HISTORIAL_APROBADOR_DIAS} días)` };
       }
     }
 
@@ -268,7 +314,7 @@ export class ReportesService {
     };
 
     const brutas = ctx.ids.length || def.id === 'insumos-inventario' ? await this.consultar(ctx) : [];
-    const columnas = columnasVisibles(def, verPrecios);
+    const columnas = this.columnasDe(def, categoria, verPrecios);
     const { grupos: salida, totales, totalFilas, division } = this.armar(ctx, brutas, columnas);
 
     return {
@@ -285,6 +331,11 @@ export class ReportesService {
   }
 
   private validarFiltros(def: ReporteDef, dto: GenerarReporteDto): void {
+    if (def.id === 'servicios-lavado') {
+      // Cada categoría tiene sus propios estados: con «Ambos» el filtro se aplica a la que lo reconoce.
+      if (dto.estado && !def.estados!.some((e) => e.valor === dto.estado)) throw new BadRequestException('El estado elegido no es válido para este reporte.');
+      return;
+    }
     if (dto.estado && def.estados && !def.estados.some((e) => e.valor === dto.estado)) throw new BadRequestException('El estado elegido no es válido para este reporte.');
     if (def.id === 'kardex' && !dto.productoId) throw new BadRequestException('Elige el producto del kardex.');
   }
@@ -337,8 +388,7 @@ export class ReportesService {
     switch (ctx.def.id) {
       case 'agencias-listado': return this.agenciasListado(ctx);
       case 'lavadores-listado': return this.lavadoresListado(ctx);
-      case 'servicios-generales': return this.serviciosGenerales(ctx);
-      case 'servicios-especiales': return this.serviciosEspeciales(ctx);
+      case 'servicios-lavado': return this.serviciosLavado(ctx);
       case 'catalogo-precios': return this.catalogoPrecios(ctx);
       case 'maquinaria-asignada': return this.maquinariaAsignada(ctx);
       case 'incidentes': return this.incidentes(ctx);
@@ -380,7 +430,7 @@ export class ReportesService {
     let bloquesDef: BloquePeriodo[] = [];
     let division: DivisionPeriodo | null = null;
     if (def.periodo && ctx.rango) {
-      const r = dividirRango(ctx.rango);
+      const r = dividirRango(ctx.rango, ctx.dto.division);
       bloquesDef = r.bloques;
       division = r.division;
     }
@@ -414,6 +464,10 @@ export class ReportesService {
       const u = await this.prisma.user.findUnique({ where: { id }, select: { name: true, lastname: true } });
       filtros.extras.push({ etiqueta, valor: u ? nombreDe(u) : id });
     }
+    if (ctx.dto.productoId && ctx.def.extras.includes('productoFiltro')) {
+      const i = await this.prisma.insumo.findUnique({ where: { id: ctx.dto.productoId }, select: { nombre: true, codigoSKU: true } });
+      filtros.extras.push({ etiqueta: 'Producto', valor: i ? `${i.nombre} (${i.codigoSKU})` : ctx.dto.productoId });
+    }
     return filtros;
   }
 
@@ -422,6 +476,7 @@ export class ReportesService {
     const nombres = (xs: string[]) => (xs.length ? xs.join(', ') : 'Todas');
     const extras: { etiqueta: string; valor: string }[] = [];
     if (dto.estado) extras.push({ etiqueta: 'Estado', valor: def.estados?.find((e) => e.valor === dto.estado)?.etiqueta ?? dto.estado });
+    if (dto.categoria && def.extras.includes('categoria')) extras.push({ etiqueta: 'Servicios', valor: { GENERAL: 'Generales', ESPECIAL: 'Especiales', AMBOS: 'Generales y especiales' }[dto.categoria] });
     if (dto.ubicacion) extras.push({ etiqueta: 'Ubicación', valor: UBICACIONES_STOCK.find((u) => u.valor === dto.ubicacion)?.etiqueta ?? dto.ubicacion });
     if (dto.semaforo) extras.push({ etiqueta: 'Semáforo', valor: SEMAFORO_ETIQUETA[dto.semaforo] });
     return {
@@ -457,8 +512,12 @@ export class ReportesService {
   }
 
   private async lavadoresListado(ctx: Ctx): Promise<Bruta[]> {
+    // Con un pulidor elegido solo sale él; sin elegir, salen los lavadores y los pulidores fijos de las agencias.
+    const pulidorId = ctx.dto.pulidorId;
     const usuarios = await this.prisma.user.findMany({
-      where: { agenciaId: { in: ctx.ids }, role: rolConFuncion(FUNCION.LAVADOR, FUNCION.LIDER_AGENCIA) },
+      where: pulidorId
+        ? { id: pulidorId, agenciaId: { in: ctx.ids }, role: rolConFuncion(FUNCION.PULIDOR) }
+        : { agenciaId: { in: ctx.ids }, OR: [{ role: rolConFuncion(FUNCION.LAVADOR, FUNCION.LIDER_AGENCIA) }, { role: rolConFuncion(FUNCION.PULIDOR) }] },
       select: { id: true, name: true, lastname: true, estado: true, agenciaId: true, role: { select: { namerol: true } } },
       orderBy: [{ name: 'asc' }, { lastname: 'asc' }],
     });
@@ -471,6 +530,28 @@ export class ReportesService {
       grupo: u.agenciaId!,
       fila: { nombre: nombreDe(u), rol: titulo(u.role?.namerol), bahia: bahiaDe.get(u.id) ?? '', estado: u.estado === 1 ? 'Activo' : 'Inactivo' },
     }));
+  }
+
+  /** Generales, especiales o ambos, en un solo listado ordenado por fecha. */
+  private async serviciosLavado(ctx: Ctx): Promise<Bruta[]> {
+    const { dto } = ctx;
+    const categoria = dto.categoria ?? 'AMBOS';
+    const ESTADOS_GENERAL = ['EN_ESPERA', 'EN_PROCESO', 'FINALIZADO', 'APROBADO', 'RECHAZADO', 'CANCELADO'];
+    const ESTADOS_ESPECIAL = ['Pendiente', 'En Proceso', 'Completado', 'Cancelado'];
+    const ambos = categoria === 'AMBOS';
+    // Con «Ambos», elegir un lavador deja solo generales y elegir un pulidor solo especiales.
+    const conGenerales = categoria !== 'ESPECIAL' && !(ambos && dto.pulidorId && !dto.lavadorId) && (!dto.estado || ESTADOS_GENERAL.includes(dto.estado));
+    const conEspeciales = categoria !== 'GENERAL' && !(ambos && dto.lavadorId && !dto.pulidorId) && (!dto.estado || ESTADOS_ESPECIAL.includes(dto.estado));
+    const [generales, especiales] = await Promise.all([
+      conGenerales ? this.serviciosGenerales(ctx) : [],
+      conEspeciales ? this.serviciosEspeciales(ctx) : [],
+    ]);
+    if (!ambos) return categoria === 'GENERAL' ? generales : especiales;
+    const todas: Bruta[] = [
+      ...generales.map((b) => ({ ...b, fila: { ...b.fila, tipo: 'General', asesor: '' } })),
+      ...especiales.map((b) => ({ ...b, fila: { ...b.fila, tipo: 'Especial', lavador: b.fila.pulidor ?? '' } })),
+    ];
+    return todas.sort((a, b) => String(a.fecha ?? '').localeCompare(String(b.fecha ?? '')) || String(a.fila.horaIngreso ?? '').localeCompare(String(b.fila.horaIngreso ?? '')));
   }
 
   private async serviciosGenerales(ctx: Ctx): Promise<Bruta[]> {
@@ -515,7 +596,6 @@ export class ReportesService {
           aprobado: aprobacionGeneral(s.estado),
           aprobadoPor: aprobacionGeneral(s.estado) ? (s.aprobadoPor ?? '') : '',
           precio: dinero(s.precio),
-          firma: '',
         },
       };
     });
@@ -532,7 +612,7 @@ export class ReportesService {
         ...(dto.pulidorId ? { AND: [{ OR: [{ operadorId: dto.pulidorId }, { operadoresAsignados: { some: { operadorId: dto.pulidorId } } }] }] } : {}),
       },
       select: {
-        id: true, codigoSE: true, ordenTrabajoOT: true, tipoServicio: true, placa: true, marca: true, modelo: true, color: true, estado: true, precio: true, agenciaId: true,
+        id: true, codigoSE: true, ordenTrabajoOT: true, tipoServicio: true, operadorId: true, placa: true, marca: true, modelo: true, color: true, estado: true, precio: true, agenciaId: true,
         observaciones: true, creadoPorNombre: true, fechaProgramada: true, createdAt: true, horaIngreso: true, fechaInicio: true, fechaFin: true,
       },
       orderBy: [{ fechaProgramada: 'asc' }, { createdAt: 'asc' }],
@@ -549,6 +629,9 @@ export class ReportesService {
         })
       : [];
     const vigente = new Map(decisiones.map((d) => [d.entidadId, d]));
+    const operadorIds = unicos(filas.map((f) => f.operadorId));
+    const pulidores = operadorIds.length ? await this.prisma.user.findMany({ where: { id: { in: operadorIds } }, select: { id: true, name: true, lastname: true } }) : [];
+    const pulidorDe = new Map(pulidores.map((u) => [u.id, nombreDe(u)]));
     return filas.map((s) => {
       const dia = fechaEcuador(s.fechaProgramada ?? s.createdAt);
       const decision = vigente.get(s.id);
@@ -567,12 +650,12 @@ export class ReportesService {
           color: s.color ?? '',
           servicio: s.tipoServicio,
           asesor: s.creadoPorNombre ?? '',
+          pulidor: s.operadorId ? (pulidorDe.get(s.operadorId) ?? '') : '',
           observacion: s.observaciones ?? '',
           realizado: marcaServicioEspecial(s.estado),
           aprobado,
           aprobadoPor: decision?.usuarioNombre ?? '',
           precio: dinero(s.precio),
-          firma: '',
         },
       };
     });
@@ -702,7 +785,7 @@ export class ReportesService {
   private async insumosInventario(ctx: Ctx): Promise<Bruta[]> {
     const { or } = await this.ubicacionesDeStock(ctx);
     const [insumos, stocks] = await Promise.all([
-      this.prisma.insumo.findMany({ select: { id: true, codigoSKU: true, nombre: true, categoria: true, costoUnitarioUSD: true, estado: true, unidadMedida: { select: { simbolo: true } } }, orderBy: [{ categoria: 'asc' }, { nombre: 'asc' }] }),
+      this.prisma.insumo.findMany({ where: ctx.dto.productoId ? { id: ctx.dto.productoId } : {}, select: { id: true, codigoSKU: true, nombre: true, categoria: true, costoUnitarioUSD: true, estado: true, unidadMedida: { select: { simbolo: true } } }, orderBy: [{ categoria: 'asc' }, { nombre: 'asc' }] }),
       ctx.ids.length || or.length > 1 ? this.prisma.stockUbicacion.groupBy({ by: ['insumoId'], where: { OR: or } as any, _sum: { cantidadActual: true } }) : [],
     ]);
     const total = new Map(stocks.map((s) => [s.insumoId, num(s._sum.cantidadActual)]));
@@ -729,7 +812,7 @@ export class ReportesService {
     const { or, bodegas } = await this.ubicacionesDeStock(ctx);
     const tipos = ctx.dto.ubicacion === 'AGENCIA' ? ['AGENCIA'] : ctx.dto.ubicacion === 'PULIDOR' ? ['PULIDOR_FIJO', 'PULIDOR_MOVIL'] : ctx.dto.ubicacion === 'BODEGA' ? ['BODEGA_CENTRAL'] : null;
     const filas = await this.prisma.stockUbicacion.findMany({
-      where: { OR: or, ...(tipos ? { tipoUbicacion: { in: tipos as any } } : {}) } as any,
+      where: { OR: or, ...(tipos ? { tipoUbicacion: { in: tipos as any } } : {}), ...(ctx.dto.productoId ? { insumoId: ctx.dto.productoId } : {}) } as any,
       include: {
         insumo: { select: { codigoSKU: true, nombre: true, unidadMedida: { select: { simbolo: true } } } },
         pulidor: { select: { name: true, lastname: true, regionId: true, region: { select: { nombre: true } } } },
@@ -865,7 +948,8 @@ export class ReportesService {
       const m = maestros.get(l.insumoId);
       return { ...l, nombre: l.nombre || m?.nombre || 'Insumo', sku: l.sku || m?.sku || '', unidad: l.unidad || m?.unidad || '' };
     };
-    return { generales: generales.map(completa), especiales: especiales.map(completa) };
+    const delProducto = (l: Linea): boolean => !ctx.dto.productoId || l.insumoId === ctx.dto.productoId;
+    return { generales: generales.filter(delProducto).map(completa), especiales: especiales.filter(delProducto).map(completa) };
   }
 
   private redondear(n: number): number {

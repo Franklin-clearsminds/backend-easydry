@@ -10,7 +10,7 @@ import { CreateEnvaseDto, UpdateEnvaseDto, ListEnvasesDto, DetailEnvaseDto } fro
 import { ListUnidadesDto, CreateUnidadDto, UpdateUnidadDto } from './dto/unidades.dto.js';
 import { CreateInsumoDto, UpdateInsumoDto, ListInsumosDto, DetailInsumoDto, InsumosOpcionesDto } from './dto/insumos.dto.js';
 import { ListStockDto, AjusteStockDto, ReajusteStockDto } from './dto/stock.dto.js';
-import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, RechazarDespachoDto, ListMovimientosDto, ListDespachosDto } from './dto/movimientos.dto.js';
+import { RegistrarCompraDto, CrearDespachoDto, ConfirmarRecepcionDto, RechazarDespachoDto, DecidirEnvioPendienteDto, CancelarEnvioPendienteDto, ListMovimientosDto, ListDespachosDto } from './dto/movimientos.dto.js';
 import { ListKardexDto } from './dto/kardex.dto.js';
 import { StockResumenAgenciasDto, StockResumenPulidoresDto, StockResumenBodegasDto, InsumosServiciosDto } from './dto/stock-resumen.dto.js';
 import { CrearAlertaDto, ListAlertasDto, AtenderAlertaDto, SincronizarAlertasDto } from './dto/alertas.dto.js';
@@ -323,6 +323,25 @@ export class InventarioController {
   @ApiOperation({ summary: 'Rechazar despacho químico recibido en agencia (devuelve stock a Bodega)' })
   async rechazarDespachoDirecto(@Body() dto: RechazarDespachoDto, @CurrentUser() user: any) {
     return this.inventarioService.rechazarDespacho(dto, user.id);
+  }
+
+  @Permiso('envios.aprobar')
+  @Post('despachos/decidir-pendiente')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Aprobar o rechazar un envío entre agencias que creó un líder',
+    description: 'Al aprobar se descuenta el stock del origen y el envío sale hacia el destino. Al rechazar queda cancelado sin mover stock (motivo obligatorio).',
+  })
+  async decidirEnvioPendiente(@Body() dto: DecidirEnvioPendienteDto, @CurrentUser() user: any) {
+    return this.inventarioService.decidirEnvioPendiente(dto, user.id);
+  }
+
+  @Permiso('envios.aprobar', 'envios.crear', 'inventario.despachar')
+  @Post('despachos/cancelar-pendiente')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Cancelar un envío que aún espera aprobación (quien lo creó o un aprobador). No mueve stock.' })
+  async cancelarEnvioPendiente(@Body() dto: CancelarEnvioPendienteDto, @CurrentUser() user: any) {
+    return this.inventarioService.cancelarEnvioPendiente(dto, user);
   }
 
   @Permiso('envios.faltantes')

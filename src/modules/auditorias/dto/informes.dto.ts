@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -92,4 +93,24 @@ export class ListPlanesDto extends PaginacionOpcionalDto {
   @IsOptional() @IsUUID() agenciaId?: string;
   /** PENDIENTE | EN_PROCESO | COMPLETADO | CANCELADO | ABIERTOS (pendiente y en proceso) */
   @IsOptional() @IsIn([...ESTADOS_PLAN, 'ABIERTOS']) estado?: string;
+}
+
+/** Adjunta usuarios a un informe: cuando se aprueba, a cada uno le llega una notificación. */
+export class AdjuntarUsuariosDto {
+  @IsUUID() informeId!: string;
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100) @IsUUID('all', { each: true }) userIds!: string[];
+}
+
+export class QuitarAdjuntoDto {
+  @IsUUID() informeId!: string;
+  @IsUUID() userId!: string;
+}
+
+/** Búsqueda de usuarios a quienes adjuntar un informe. */
+export class BuscarAdjuntablesDto {
+  @IsOptional() @IsString() @MaxLength(80) search?: string;
+  @IsOptional() @IsUUID() regionId?: string;
+  @IsOptional() @IsUUID() clienteId?: string;
+  @IsOptional() @IsUUID() agenciaId?: string;
+  @IsOptional() @IsUUID() roleId?: string;
 }

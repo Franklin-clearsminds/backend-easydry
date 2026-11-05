@@ -83,7 +83,11 @@ describe('archivos de maquinaria: presigned-url', () => {
     const inc = 'maquinaria/hd-20022/incidentes/i1/reporte/fotos/a.jpg';
     const limp = 'maquinaria/hd-20022/limpiezas/2026-10-15/a.jpg';
     await expect(controlador.getPresignedUrl(inc, conPermisos('incidentes.ver'))).resolves.toBeDefined();
-    await expect(controlador.getPresignedUrl(limp, conPermisos('limpiezas.ver'))).resolves.toBeDefined();
+    await expect(controlador.getPresignedUrl(limp, conPermisos('limpiezas.fotos'))).resolves.toBeDefined();
+    // Ver el historial, la trazabilidad o los mantenimientos no abre las fotos de limpieza: son solo de la supervisión.
+    for (const otro of ['limpiezas.ver', 'maquinaria.trazabilidad', 'mantenimientos.ver', 'limpiezas.evidencias']) {
+      await expect(controlador.getPresignedUrl(limp, conPermisos(otro))).rejects.toThrow(/No tienes permiso/);
+    }
     await expect(controlador.getPresignedUrl(inc, conPermisos('maquinaria.ver'))).rejects.toThrow(/No tienes permiso/);
   });
 });

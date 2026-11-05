@@ -158,6 +158,7 @@ model User {
   alertasKitPulidor              AlertaStock[]                @relation("AlertaStockPulidor")
   devices                        SyncDevice[]
   notifications                  Notification[]
+  informesAdjuntos               InformeAdjunto[]             @relation("InformeAdjuntoUsuario")
   incidentesReportados           IncidenteTecnico[]           @relation("ReportadoPor")
   incidentesResueltos            IncidenteTecnico[]           @relation("ResueltoPor")
   incidentesCancelados           IncidenteTecnico[]           @relation("CanceladoPor")
@@ -168,6 +169,8 @@ model User {
   bahiasAsignadas                Bahia[]                      @relation("OperadorActualBahia")
   historialesOperador            HistorialAsignacionBahia[]   @relation("OperadorHistorialAsignacion")
   asignacionesRealizadas         HistorialAsignacionBahia[]   @relation("SupervisorAsignadorBahia")
+  historialAgencia               HistorialCambioAgencia[]     @relation("UsuarioHistorialAgencia")
+  cambiosAgenciaRealizados       HistorialCambioAgencia[]     @relation("RealizadoPorCambioAgencia")
   serviciosEspeciales            ServicioEspecial[]           @relation("OperadorServicioEspecial")
   asignacionesEspeciales         ServicioEspecialOperador[]
   movimientosInventarioGlobal    MovimientoInventarioGlobal[] @relation("ResponsableMovimientoGlobal")
@@ -222,6 +225,9 @@ model Agencia {
   // Cliente corporativo / franquiciador
   clienteId String?
   cliente   Cliente? @relation(fields: [clienteId], references: [id])
+  /// Sello del jefe de taller de la agencia: firma sus informes de inspección sin tener que elegirlo. Sin sello, el taller firma con nombre escrito.
+  selloId   String?
+  sello     SelloJefeTaller? @relation(fields: [selloId], references: [id], onDelete: SetNull)
 
   // Región oficial
   regionId  String?
@@ -252,6 +258,7 @@ model Agencia {
   @@index([regionId])
   @@index([estado])
   @@index([clienteId])
+  @@index([selloId])
   @@index([tipoUbicacion])
 }
 
@@ -806,6 +813,8 @@ enum EstadoDespacho {
   RECIBIDO
   RECHAZADO
   CANCELADO
+  /// Envío entre agencias creado por un líder: no mueve stock hasta que un aprobador lo autoriza.
+  PENDIENTE_APROBACION
 }
 
 model MovimientoInventario {
@@ -832,6 +841,16 @@ model MovimientoInventario {
   fechaDespacho   DateTime            @default(now())
   fechaRecepcion  DateTime?
   observaciones   String?
+
+  /// Envío entre agencias creado por un líder: pasa por aprobación y exige foto al enviar y al recibir.
+  requiereAprobacion Boolean   @default(false)
+  aprobadoPorId      String?
+  fechaAprobacion    DateTime?
+  /// Motivo cuando el aprobador rechaza o alguien cancela el envío antes de aprobarse.
+  motivoAprobacion   String?
+  /// Cuándo se avisó a los aprobadores de que lleva más de 24 horas pendiente (un solo aviso).
+  avisoAprobacionEn  DateTime?
+
   detalles        MovimientoDetalle[]
   faltantes       FaltanteDespacho[]
   evidenciasEnvio EnvioEvidencia[]
@@ -1015,6 +1034,7 @@ enum TipoNotificacion {
   DESPACHO_CONFIRMADO
   DESPACHO_FALTANTE
   ARCHIVADO_FALLIDO
+  INFORME_INSPECCION_APROBADO
 }
 
 model Notification {
@@ -1399,12 +1419,37 @@ model HistorialAsignacionBahia {
   asignadoPorId String?
   asignadoPor   User?     @relation("SupervisorAsignadorBahia", fields: [asignadoPorId], references: [id])
   motivo        String?
+  /// Motivo con el que se sacó a la persona de la bahía (al cerrar la asignación)
+  motivoFin     String?
   createdAt     DateTime  @default(now())
 
   @@index([operadorId])
   @@index([bahiaId])
   @@index([fechaInicio])
   @@index([asignadoPorId])
+}
+
+/// Cada cambio de agencia de lavadores, líderes, pulidores, auxiliares y backups, con fecha y hora, quién lo hizo y por qué.
+/// Los nombres se guardan tal como eran en ese momento. Nunca se borra.
+model HistorialCambioAgencia {
+  id                    String   @id @default(uuid())
+  usuarioId             String
+  usuario               User     @relation("UsuarioHistorialAgencia", fields: [usuarioId], references: [id])
+  agenciaOrigenId       String?
+  agenciaOrigenNombre   String?
+  agenciaDestinoId      String?
+  agenciaDestinoNombre  String?
+  /// ALTA (primera asignación) | CAMBIO (edición de usuario o asignación) | BAHIA (se movió al asignarlo a una bahía de otra agencia)
+  origen                String   @default("CAMBIO")
+  motivo                String
+  realizadoPorId        String?
+  realizadoPor          User?    @relation("RealizadoPorCambioAgencia", fields: [realizadoPorId], references: [id])
+  realizadoPorNombre    String?
+  createdAt             DateTime @default(now())
+
+  @@index([usuarioId])
+  @@index([createdAt])
+  @@index([realizadoPorId])
 }
 
 // =========================================================================
@@ -1683,7 +1728,7 @@ model InformeInspeccion {
   destinatarioNombre      String
   fecha                   DateTime  @db.Date
   fechaVisita             DateTime
-  /// Tipo de informe: RUTINA | SEGUIMIENTO | EXTRAORDINARIA | CIERRE_MENSUAL | APERTURA_AGENCIA | CIERRE_AGENCIA | NOVEDADES
+  /// Tipo de informe: RUTINA | SEGUIMIENTO | EXTRAORDINARIA | CIERRE_MENSUAL | APERTURA_AGENCIA | CIERRE_AGENCIA | NOVEDADES | MANTENIMIENTO_COMERCIAL | COLISION
   tipoInspeccion          String    @default("RUTINA")
   /// BORRADOR | EN_REVISION | PENDIENTE_FIRMAS | APROBADO | RECHAZADO | CERRADO
   estado                  String    @default("BORRADOR")
@@ -1726,6 +1771,7 @@ model InformeInspeccion {
   planes      InformePlanAccion[]
   firmas      InformeFirma[]
   historial   InformeHistorial[]
+  adjuntos    InformeAdjunto[]
 
   @@unique([agenciaId, periodo, numeroMensual])
   @@index([agenciaId])
@@ -1753,6 +1799,7 @@ model SelloJefeTaller {
   updatedAt        DateTime  @updatedAt
 
   informes InformeInspeccion[]
+  agencias Agencia[]
 
   @@index([estado])
   @@map("sellos_jefe_taller")
@@ -1820,6 +1867,24 @@ model InformePlanAccion {
   @@index([agenciaId])
   @@index([estado])
   @@index([fechaCompromiso])
+}
+
+/// Usuario al que se adjunta un informe: cuando se aprueba recibe una notificación. No cambia quién puede ver el informe.
+model InformeAdjunto {
+  id                  String            @id @default(uuid())
+  informeId           String
+  informe             InformeInspeccion @relation(fields: [informeId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User              @relation("InformeAdjuntoUsuario", fields: [userId], references: [id])
+  agregadoPorId       String?
+  agregadoPorNombre   String?
+  createdAt           DateTime          @default(now())
+  /// Cuándo se le avisó (una sola vez); nulo mientras el informe no esté aprobado.
+  notificadoEn        DateTime?
+
+  @@unique([informeId, userId])
+  @@index([userId])
+  @@map("informe_adjuntos")
 }
 
 /// Una fila por cada una de las cuatro firmas del documento. Una vez firmada no se modifica.

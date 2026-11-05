@@ -137,8 +137,11 @@ describe('dependencias entre página, sub-página y acción', () => {
   it('el menú sale de las páginas activas', () => {
     const caps = capacidadesDesdeNuevos(['pagina.dashboard', 'pagina.servicios', 'pagina.servicios.generales']);
     const m = modulosDeCapacidades(caps, 'X');
-    expect(m).toEqual(expect.arrayContaining(['dashboard', 'servicios', 'notificaciones', 'perfil']));
+    expect(m).toEqual(expect.arrayContaining(['dashboard', 'servicios', 'perfil']));
     expect(m).not.toContain('inventario');
+    // Notificaciones es una página más: sin ella activa en el rol, no hay campanita ni pantalla.
+    expect(m).not.toContain('notificaciones');
+    expect(modulosDeCapacidades([...caps, 'pagina.notificaciones'], 'X')).toContain('notificaciones');
     // Aunque tenga 'catalogo.ver' como dato de apoyo de Servicios, no ve la pantalla Catálogo.
     expect(caps).toContain('catalogo.ver');
     expect(m).not.toContain('configuracion/servicios');
@@ -163,8 +166,8 @@ describe('migración de roles existentes', () => {
 
   it('cada rol oficial conserva exactamente las pantallas que tenía', () => {
     const esperadas: Record<string, string[]> = {
-      APROBADOR: ['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'informes-inspeccion', 'auditorias-5s', 'perfil'],
-      COORD_MANTENIMIENTO: ['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'informes-inspeccion', 'auditorias-5s', 'perfil'],
+      APROBADOR: ['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'reportes', 'perfil'],
+      COORD_MANTENIMIENTO: ['dashboard', 'notificaciones', 'configuracion/servicios', 'maquinaria', 'taller-tecnico', 'inventario', 'informes-inspeccion', 'auditorias-5s', 'perfil'],
     };
     for (const [rol, pantallas] of Object.entries(esperadas)) {
       const r = ROLES_BASE.find((x) => x.namerol === rol)!;
@@ -203,19 +206,34 @@ describe('migración de roles existentes', () => {
     }
   });
 
-  it('los roles comerciales ven en solo lectura; solo el Coordinador ve precios', () => {
+  it('los roles comerciales ven en solo lectura, con los kits de los pulidores y los precios', () => {
     for (const nombre of ['COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
       const caps = ROLES_BASE.find((r) => r.namerol === nombre)!.capacidades;
       expect(caps).toEqual(expect.arrayContaining(['pagina.agencias', 'pagina.agencias.mapa', 'pagina.operadores', 'pagina.inventario', 'pagina.envios']));
       expect(caps).not.toContain('operadores.registrar');
       expect(caps).not.toContain('operadores.gestionar');
       expect(caps).not.toContain('envios.confirmar');
-      expect(caps).not.toContain('inventario.kits.ver');
+      expect(caps).toContain('inventario.kits.ver');
+      expect(caps).toContain('pagina.inventario.pulidores');
+      expect(caps).toContain('precios.ver');
+      expect(caps).not.toContain('inventario.reajustar');
+      expect(caps).not.toContain('inventario.despachar');
     }
     const coord = ROLES_BASE.find((r) => r.namerol === 'COORD_COMERCIAL')!.capacidades;
     const jefe = ROLES_BASE.find((r) => r.namerol === 'JEFE_COMERCIAL')!.capacidades;
     expect(coord).toContain('precios.ver');
-    expect(jefe).not.toContain('precios.ver');
+    expect(jefe).toContain('precios.ver');
+  });
+
+  it('los coordinadores ven el inventario (agencias y kits de pulidores) solo en lectura y de su región', () => {
+    for (const nombre of ['COORD_SERVICIOS_ESPECIALES', 'COORD_MANTENIMIENTO', 'COORD_COMERCIAL']) {
+      const rol = ROLES_BASE.find((r) => r.namerol === nombre)!;
+      expect(rol.ambito, nombre).toBe('REGION');
+      expect(rol.capacidades, nombre).toEqual(expect.arrayContaining(['inventario.ver', 'inventario.kits.ver', 'precios.ver', 'pagina.inventario.agencias', 'pagina.inventario.pulidores']));
+      for (const accion of ['inventario.despachar', 'inventario.reajustar', 'inventario.productos.compra', 'envios.aprobar', 'envios.crear']) {
+        expect(rol.capacidades, `${nombre} no debe tener ${accion}`).not.toContain(accion);
+      }
+    }
   });
 
   it('el Coordinador Comercial ve servicios generales y especiales, agencias y lavadores, solo de su región', () => {

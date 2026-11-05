@@ -79,7 +79,7 @@ describe.skipIf(!duckdbDisponible)('reportes con datos archivados (base real + D
     const { generadoEn: _ignorado, ...resto } = r;
     return resto;
   };
-  const REPORTES = ['servicios-generales', 'servicios-especiales', 'kardex', 'productividad-agencias'];
+  const REPORTES = ['servicios-lavado', 'kardex', 'productividad-agencias'];
 
   beforeAll(async () => {
     env = await abrirEntorno();

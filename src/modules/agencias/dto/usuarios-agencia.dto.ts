@@ -4,6 +4,14 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DataGridQueryDto } from '../../../common/dto/data-grid.dto.js';
 
+/** Historial de cambios de agencia (fecha y hora, de dónde a dónde, quién y por qué). Sin `usuarioId`, el de todo el personal de su alcance. */
+export class ListHistorialCambiosAgenciaDto extends PaginacionOpcionalDto {
+  @ApiPropertyOptional({ example: 'uuid-usuario', description: 'Solo los cambios de esta persona' })
+  @IsOptional()
+  @IsString()
+  usuarioId?: string;
+}
+
 export class AsignarUsuarioAgenciaDto {
   @ApiProperty({ example: 'uuid-usuario', description: 'ID del usuario a reasignar' })
   @IsString()
@@ -14,6 +22,12 @@ export class AsignarUsuarioAgenciaDto {
   @IsOptional()
   @IsString()
   agenciaId?: string;
+
+  @ApiPropertyOptional({ example: 'Traslado por cierre de turno', description: 'Motivo del cambio de agencia (obligatorio si la agencia cambia)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  motivo?: string;
 
   @ApiPropertyOptional({ example: 'uuid-region', description: 'ID de la región asignada (para roles como SUPERVISOR, COORD_COMERCIAL)' })
   @IsOptional()
@@ -152,6 +166,12 @@ export class UpdateUsuarioDto {
   @IsString()
   @IsNotEmpty({ message: 'El ID de usuario es obligatorio' })
   id: string;
+
+  @ApiPropertyOptional({ example: 'Traslado a otra agencia', description: 'Motivo del cambio de agencia (obligatorio si la agencia cambia)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  motivo?: string;
 
   @ApiPropertyOptional({ example: 'Carlos' })
   @IsOptional()
@@ -396,6 +416,12 @@ export class UpdateOperadorDto {
   @IsString()
   @IsNotEmpty({ message: 'El ID del operador es obligatorio' })
   id: string;
+
+  @ApiPropertyOptional({ example: 'Traslado por apertura de agencia', description: 'Motivo del cambio de agencia o de bahía (obligatorio si cambia)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  motivo?: string;
 
   @ApiPropertyOptional({ example: 'Pedro Ramírez' })
   @IsOptional()

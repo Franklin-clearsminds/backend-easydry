@@ -11,7 +11,8 @@ import { abrirEntorno, type Entorno } from '../../../test/integracion/entorno.js
  * Integración con la base real (sin mocks): informes de inspección y auditorías 5S.
  *
  * Mundo: región R1 con las agencias A y B, y región R2 con la agencia C. Usuarios con los roles oficiales ya sembrados:
- *  - APROBADOR (agencia A) y TECNICO (región R1): auditan.
+ *  - Un auditor de agencia (agencia A) y TECNICO (región R1): auditan. El APROBADOR ya no audita, así que el auditor de agencia se arma
+ *    con un SUPERVISOR limitado a la agencia y sin los permisos de administrar (ver `crearAuditorDeAgencia`).
  *  - SUPERVISOR (región R1) y ADMIN: auditan y además administran los borradores de otros y verifican acciones.
  *  - LIDER y LAVADOR (agencia A) y PULIDOR (agencia B): no auditan, solo ven resultados.
  */
@@ -28,13 +29,13 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
   const ag: Record<string, { id: string; nombre: string }> = {};
   const u: Record<string, any> = {};
 
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = new Date(Date.now() - 5 * 3600 * 1000).toISOString().slice(0, 10); // día de Ecuador, el que usa el servidor
 
   beforeAll(async () => {
     env = await abrirEntorno();
     crypto = new CryptoService({ get: (k: string) => process.env[k] } as never);
     sellos = new SellosService(env.prisma as never, crypto);
-    informes = new InformesInspeccionService(env.prisma as never, sellos, crypto);
+    informes = new InformesInspeccionService(env.prisma as never, sellos, crypto, undefined, env.notificaciones());
     a5s = new Auditoria5sService(env.prisma as never);
     const r1 = await env.region('r1');
     const r2 = await env.region('r2');
@@ -45,14 +46,18 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       const x = await env.usuario(clave, rol, opts);
       u[clave] = await env.actor(x.id);
     };
-    await crear('aprobador', 'APROBADOR', { agenciaId: ag.A.id });
+    // Auditor con ámbito de agencia (el rol oficial APROBADOR ya no audita): un supervisor acotado a la agencia A y sin permisos de administración.
+    const aud = await env.usuario('aprobador', 'SUPERVISOR', { agenciaId: ag.A.id });
+    const audActor = await env.actor(aud.id);
+    const SOLO_ADMIN = ['informes.administrar', 'informes.eliminar', 'inspecciones.verificar', 'inspecciones.eliminar'];
+    u.aprobador = { ...audActor, roleDetails: { ...audActor.roleDetails, ambito: 'AGENCIA', capacidades: audActor.roleDetails.capacidades.filter((c: string) => !SOLO_ADMIN.includes(c)) } };
     await crear('tecnico', 'TECNICO', { regionId: r1.id });
     await crear('supervisor', 'SUPERVISOR', { regionId: r1.id });
     await crear('admin', 'ADMIN');
     await crear('lider', 'LIDER', { agenciaId: ag.A.id });
     await crear('lavador', 'LAVADOR', { agenciaId: ag.A.id });
     await crear('pulidor', 'PULIDOR', { agenciaId: ag.B.id });
-    sello = await sellos.crear({ nombre: 'Carlos', apellido: `Mora ${env.marca}`, logo: PNG, password: PASS }, u.admin);
+    sello = await sellos.crear({ nombre: 'Carlos', apellido: `Mora ${env.marca}`, logo: PNG, password: PASS, agenciaIds: [ag.A.id] }, u.admin);
     env.rastrear('SelloJefeTaller', sello.id);
   });
 
@@ -149,10 +154,10 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
 
     it('el sello: una contraseña incorrecta no habilita; con la correcta queda validado con su nombre y logo', async () => {
       expect((await informes.detail(id, u.aprobador)).sello).toBeNull();
-      await expect(informes.validarSello({ informeId: id, selloId: sello.id, password: 'incorrecta' }, u.aprobador)).rejects.toThrow(/incorrecta/);
+      await expect(informes.validarSello({ informeId: id, password: 'incorrecta' }, u.aprobador)).rejects.toThrow(/incorrecta/);
       // Un borrador ajeno no se valida.
-      await expect(informes.validarSello({ informeId: id, selloId: sello.id, password: PASS }, u.tecnico)).rejects.toThrow();
-      const d = await informes.validarSello({ informeId: id, selloId: sello.id, password: PASS }, u.aprobador);
+      await expect(informes.validarSello({ informeId: id, password: PASS }, u.tecnico)).rejects.toThrow();
+      const d = await informes.validarSello({ informeId: id, password: PASS }, u.aprobador);
       expect(d.sello).toMatchObject({ id: sello.id, logo: PNG });
       expect(d.sello!.nombre).toContain('Carlos Mora');
       expect(d.historial.map((h: any) => h.accion)).toContain('SELLO_VALIDADO');
@@ -219,70 +224,82 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       const resp = await informes.firmar({ informeId: id, tipo: 'RESPONSABLE', nombre: '  ana   RUIZ ', imagen: PNG }, u.aprobador);
       expect(resp.firmas.find((f: any) => f.tipo === 'RESPONSABLE')).toMatchObject({ firmada: true, desactualizada: false, nombre: 'Ana Ruiz' });
 
-      // El jefe de taller: no se cambia por otro, y vuelve a validar su contraseña antes de firmar.
-      const otro = await sellos.crear({ nombre: 'Pedro', apellido: `Lara ${env.marca}`, password: PASS }, u.admin);
-      env.rastrear('SelloJefeTaller', otro.id);
-      await expect(informes.validarSello({ informeId: id, selloId: otro.id, password: PASS }, u.aprobador)).rejects.toThrow(/mismo jefe de taller/);
+      // El jefe de taller vuelve a validar su contraseña antes de firmar.
       await expect(informes.firmar({ informeId: id, tipo: 'JEFE_TALLER', imagen: PNG }, u.aprobador)).rejects.toThrow(/Primero valida/);
-      await informes.validarSello({ informeId: id, selloId: sello.id, password: PASS }, u.aprobador);
+      await informes.validarSello({ informeId: id, password: PASS }, u.aprobador);
       const jefe = await informes.firmar({ informeId: id, tipo: 'JEFE_TALLER', imagen: PNG }, u.aprobador);
       expect(jefe.firmas.filter((f: any) => f.firmada)).toHaveLength(2);
     });
 
-    it('si el jefe de taller no estuvo presente, no se pide su contraseña y el taller firma con el nombre escrito', async () => {
+    it('el sello sale de la agencia: no se elige y el informe lo muestra desde que se crea', async () => {
+      const x = await informes.create({ ...base(), calificacion: 'BUENO' }, u.aprobador);
+      rastrearInforme(x.id);
+      expect(x.selloAgencia).toMatchObject({ id: sello.id });
+      expect(x.selloAgencia!.nombre).toContain('Carlos Mora');
+    });
+
+    it('si el jefe de taller no estuvo, igual se pide la contraseña del sello, pero el nombre de quien firma es editable', async () => {
       const x = await informes.create({ ...base(), calificacion: 'BUENO', jefeTallerPresente: false }, u.aprobador);
       rastrearInforme(x.id);
       expect(x.jefeTallerPresente).toBe(false);
       expect(x.firmas.find((f: any) => f.tipo === 'JEFE_TALLER')).toMatchObject({ requerida: true, firmada: false });
-      await expect(informes.validarSello({ informeId: x.id, selloId: sello.id, password: PASS }, u.aprobador)).rejects.toThrow(/no estuvo presente/);
+      // Sin validar el sello no se puede firmar por el taller.
+      await expect(informes.firmar({ informeId: x.id, tipo: 'JEFE_TALLER', nombre: 'Mario Lopez', imagen: PNG }, u.aprobador)).rejects.toThrow(/Primero valida/);
+      await expect(informes.validarSello({ informeId: x.id, password: 'incorrecta' }, u.aprobador)).rejects.toThrow(/incorrecta/);
+      await informes.validarSello({ informeId: x.id, password: PASS }, u.aprobador);
       await expect(informes.firmar({ informeId: x.id, tipo: 'JEFE_TALLER', imagen: PNG }, u.aprobador)).rejects.toThrow(/nombre/);
       for (const [tipo, nombre] of [['RESPONSABLE', 'Ana Ruiz'], ['JEFE_TALLER', 'Mario Lopez'], ['LIDER_BAHIA', 'Luis Paz']]) {
         await informes.firmar({ informeId: x.id, tipo, nombre, imagen: PNG }, u.aprobador);
       }
+      // Quien reemplaza al jefe puede corregir el nombre al volver a firmar.
+      const corregido = await informes.firmar({ informeId: x.id, tipo: 'JEFE_TALLER', nombre: 'Mario López Díaz', imagen: PNG }, u.aprobador);
+      expect(corregido.firmas.find((f: any) => f.tipo === 'JEFE_TALLER')).toMatchObject({ firmada: true, nombre: 'Mario López Díaz' });
+      expect(corregido.sello!.nombre).toContain('Carlos Mora');
       const guardado = await informes.guardar(x.id, u.aprobador);
       expect(guardado.estado).toBe('GUARDADO');
-      expect(guardado.firmas.filter((f: any) => f.requerida && f.tipo !== 'RECEPCION').every((f: any) => f.firmada)).toBe(true);
     });
 
-    it('marcar al jefe como ausente descarta su sello y su firma, y volver a marcarlo presente exige validarlo otra vez', async () => {
+    it('cambiar a ausente descarta la firma del taller (cambia quién firma); no pide otro sello', async () => {
       const x = await informes.create({ ...base(), calificacion: 'BUENO' }, u.aprobador);
       rastrearInforme(x.id);
-      await informes.validarSello({ informeId: x.id, selloId: sello.id, password: PASS }, u.aprobador);
+      await informes.validarSello({ informeId: x.id, password: PASS }, u.aprobador);
       await informes.firmar({ informeId: x.id, tipo: 'JEFE_TALLER', imagen: PNG }, u.aprobador);
-      await informes.firmar({ informeId: x.id, tipo: 'RESPONSABLE', nombre: 'Ana Ruiz', imagen: PNG }, u.aprobador);
 
       const ausente = await informes.update({ ...base(), id: x.id, calificacion: 'BUENO', jefeTallerPresente: false }, u.aprobador);
-      expect(ausente.sello).toBeNull();
-      expect(ausente.firmas.find((f: any) => f.tipo === 'JEFE_TALLER')).toMatchObject({ requerida: true, firmada: false, desactualizada: false });
-      // Cambió lo que se firma: la del responsable debe repetirse.
-      expect(ausente.firmas.find((f: any) => f.tipo === 'RESPONSABLE')).toMatchObject({ firmada: false, desactualizada: true });
+      expect(ausente.sello!.validadoEn).toBeTruthy();
+      expect(ausente.firmas.find((f: any) => f.tipo === 'JEFE_TALLER')).toMatchObject({ requerida: true, firmada: false });
       expect(ausente.historial.map((h: any) => h.accion)).toContain('JEFE_AUSENTE');
-
-      const presente = await informes.update({ ...base(), id: x.id, calificacion: 'BUENO', jefeTallerPresente: true }, u.aprobador);
-      expect(presente.jefeTallerPresente).toBe(true);
-      expect(presente.sello).toBeNull();
-      await expect(informes.guardar(x.id, u.aprobador)).rejects.toThrow(/jefe de taller con su contraseña/);
     });
 
-    it('si el sello con que firmó el jefe ya no existe, lo puede validar otro sello con el mismo nombre, y no uno distinto', async () => {
-      const original = await sellos.crear({ nombre: 'Elena', apellido: `Soto ${env.marca}`, password: PASS }, u.admin);
-      env.rastrear('SelloJefeTaller', original.id);
+    it('una agencia sin sello no pide contraseña: el taller firma con nombre y firma, obligatorios', async () => {
+      const x = await informes.create({ ...base(), agenciaId: ag.B.id, calificacion: 'BUENO' }, u.admin);
+      rastrearInforme(x.id);
+      expect(x.selloAgencia).toBeNull();
+      await expect(informes.validarSello({ informeId: x.id, password: PASS }, u.admin)).rejects.toThrow(/no tiene sello/);
+      await expect(informes.firmar({ informeId: x.id, tipo: 'JEFE_TALLER', imagen: PNG }, u.admin)).rejects.toThrow(/nombre/);
+      for (const [tipo, nombre] of [['RESPONSABLE', 'Ana Ruiz'], ['JEFE_TALLER', 'Mario Lopez'], ['LIDER_BAHIA', 'Luis Paz']]) {
+        await informes.firmar({ informeId: x.id, tipo, nombre, imagen: PNG }, u.admin);
+      }
+      expect((await informes.guardar(x.id, u.admin)).estado).toBe('GUARDADO');
+    });
+
+    it('si cambia el sello de la agencia, el borrador toma el nuevo y descarta la validación y la firma del anterior', async () => {
       const x = await informes.create({ ...base(), calificacion: 'BUENO' }, u.aprobador);
       rastrearInforme(x.id);
-      await informes.validarSello({ informeId: x.id, selloId: original.id, password: PASS }, u.aprobador);
+      await informes.validarSello({ informeId: x.id, password: PASS }, u.aprobador);
       await informes.firmar({ informeId: x.id, tipo: 'JEFE_TALLER', imagen: PNG }, u.aprobador);
-      // El sello desaparece: el informe conserva el nombre pero pierde el enlace.
-      await env.prisma.selloJefeTaller.delete({ where: { id: original.id } });
-      const huerfano = await informes.detail(x.id, u.aprobador);
-      expect(huerfano.sello).toMatchObject({ id: null });
-      expect(huerfano.sello!.nombre).toContain('Elena Soto');
-
-      await expect(informes.validarSello({ informeId: x.id, selloId: sello.id, password: PASS }, u.aprobador)).rejects.toThrow(/mismo jefe de taller/);
-      const mismo = await sellos.crear({ nombre: 'elena', apellido: `soto ${env.marca}`, password: PASS }, u.admin);
-      env.rastrear('SelloJefeTaller', mismo.id);
-      const d = await informes.validarSello({ informeId: x.id, selloId: mismo.id, password: PASS }, u.aprobador);
-      expect(d.sello).toMatchObject({ id: mismo.id });
-      expect(d.sello!.validadoEn).toBeTruthy();
+      const otro = await sellos.crear({ nombre: 'Pedro', apellido: `Lara ${env.marca}`, password: PASS, agenciaIds: [ag.A.id] }, u.admin);
+      env.rastrear('SelloJefeTaller', otro.id);
+      // Una agencia tiene un solo sello: pasó al nuevo y el anterior ya no la tiene.
+      expect((await sellos.list()).find((v) => v.id === sello.id)!.agencias.map((a) => a.id)).not.toContain(ag.A.id);
+      const d = await informes.detail(x.id, u.aprobador);
+      expect(d.selloAgencia).toMatchObject({ id: otro.id });
+      expect(d.sello).toBeNull();
+      expect(d.firmas.find((f: any) => f.tipo === 'JEFE_TALLER')?.firmada).toBe(false);
+      await expect(informes.guardar(x.id, u.aprobador)).rejects.toThrow(/sello del jefe de taller con su contraseña/);
+      // Se devuelve la agencia al sello original para el resto de las pruebas.
+      await sellos.editar({ id: sello.id, agenciaIds: [ag.A.id] }, u.admin);
+      expect((await informes.detail(x.id, u.aprobador)).selloAgencia).toMatchObject({ id: sello.id });
     });
 
     it('no se guarda sin las firmas de responsable, taller y líder; la recepción no se firma aquí', async () => {
@@ -305,11 +322,28 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       await expect(informes.update({ ...base(), id }, u.aprobador)).rejects.toThrow(/ya está guardado/);
       await expect(informes.update({ ...base(), id }, u.supervisor)).rejects.toThrow(/ya está guardado/);
       await expect(informes.firmar({ informeId: id, tipo: 'RESPONSABLE', nombre: 'Otro', imagen: PNG }, u.aprobador)).rejects.toThrow(/guardado/);
-      await expect(informes.validarSello({ informeId: id, selloId: sello.id, password: PASS }, u.aprobador)).rejects.toThrow(/guardado/);
+      await expect(informes.validarSello({ informeId: id, password: PASS }, u.aprobador)).rejects.toThrow(/guardado/);
       await expect(informes.guardar(id, u.aprobador)).rejects.toThrow(/ya está guardado/);
       expect((informes as any).enviar).toBeUndefined();
       expect((informes as any).revisar).toBeUndefined();
       expect((informes as any).cerrar).toBeUndefined();
+    });
+
+    it('adjuntar usuarios: lo hacen quien elabora el informe y el Admin; no se notifica hasta la aprobación', async () => {
+      const opciones = await informes.opcionesAdjuntos();
+      expect(opciones.roles.length).toBeGreaterThan(0);
+      const encontrados = await informes.buscarAdjuntables({ agenciaId: ag.A.id });
+      expect(encontrados.map((x: any) => x.id)).toEqual(expect.arrayContaining([u.lider.id, u.lavador.id]));
+      expect(encontrados.map((x: any) => x.id)).not.toContain(u.pulidor.id);
+      await expect(informes.adjuntar({ informeId: id, userIds: [u.lider.id] }, u.tecnico)).rejects.toThrow();
+      const d = await informes.adjuntar({ informeId: id, userIds: [u.lider.id, u.lavador.id, u.lider.id] }, u.aprobador);
+      expect(d.adjuntos.map((a: any) => a.userId).sort()).toEqual([u.lider.id, u.lavador.id].sort());
+      expect(d.adjuntos.every((a: any) => a.notificadoEn === null)).toBe(true);
+      expect(d.permisos).toMatchObject({ puedeAdjuntar: true, puedeQuitarAdjuntos: true });
+      const sin = await informes.quitarAdjunto({ informeId: id, userId: u.lavador.id }, u.admin);
+      expect(sin.adjuntos.map((a: any) => a.userId)).toEqual([u.lider.id]);
+      await informes.adjuntar({ informeId: id, userIds: [u.lavador.id] }, u.admin);
+      expect(await env.prisma.notification.count({ where: { entidadId: id, tipo: 'INFORME_INSPECCION_APROBADO' } })).toBe(0);
     });
 
     it('un Admin o Super Admin aprueba el informe guardado firmando la recepción; nadie más', async () => {
@@ -332,6 +366,21 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       rastrearInforme(borrador.id);
       await expect(informes.aprobar({ informeId: borrador.id, imagen: PNG }, u.admin)).rejects.toThrow(/ya guardado/);
       expect((await informes.list({ pageSize: 50 } as never, u.admin)).items.find((i: any) => i.id === id)?.aprobado).toBe(true);
+    });
+
+    it('al aprobarse, cada adjunto recibe una sola notificación; ya aprobado solo un Admin agrega y a quien llega se le avisa al momento', async () => {
+      const cuenta = (userId: string) => env.prisma.notification.count({ where: { userId, entidadId: id, tipo: 'INFORME_INSPECCION_APROBADO' } });
+      expect(await cuenta(u.lider.id)).toBe(1);
+      expect(await cuenta(u.lavador.id)).toBe(1);
+      expect(await cuenta(u.supervisor.id)).toBe(0);
+      const d = await informes.detail(id, u.aprobador);
+      expect(d.adjuntos.every((a: any) => a.notificadoEn)).toBe(true);
+      expect(d.permisos).toMatchObject({ puedeAdjuntar: false, puedeQuitarAdjuntos: false });
+      await expect(informes.adjuntar({ informeId: id, userIds: [u.supervisor.id] }, u.aprobador)).rejects.toThrow(/Admin/);
+      await expect(informes.quitarAdjunto({ informeId: id, userId: u.lider.id }, u.admin)).rejects.toThrow(/no se reduce/);
+      await informes.adjuntar({ informeId: id, userIds: [u.supervisor.id, u.lider.id] }, u.admin);
+      expect(await cuenta(u.supervisor.id)).toBe(1);
+      expect(await cuenta(u.lider.id)).toBe(1);
     });
 
     it('el logo guardado en el informe no cambia aunque se cambie el sello después', async () => {
@@ -515,7 +564,7 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
       let idSiNo: string;
 
       it('elegir los tres crea tres auditorías con los mismos datos, cada una con su código y formato', async () => {
-        g = await a5s.create({ agenciaId: ag.A.id, area: 'SECADO', fecha: '2026-10-10', responsableAgencia: 'Ana', equipoPersona: 'Secadora 2', formatos: ['LISTA_20', 'PUNTOS_25', 'SI_NO_50'] }, u.aprobador);
+        g = await a5s.create({ agenciaId: ag.A.id, area: 'SECADO', responsableAgencia: 'Ana', equipoPersona: 'Secadora 2', formatos: ['LISTA_20', 'PUNTOS_25', 'SI_NO_50'] }, u.aprobador);
         expect(g.hermanas).toHaveLength(3);
         expect(g.hermanas.map((h: any) => h.formato).sort()).toEqual(['LISTA_20', 'PUNTOS_25', 'SI_NO_50']);
         expect(new Set(g.hermanas.map((h: any) => h.codigo)).size).toBe(3);
@@ -523,7 +572,7 @@ describe('auditorías (informes de inspección y 5S) — base real', () => {
         idPuntos = g.hermanas.find((h: any) => h.formato === 'PUNTOS_25').id;
         idSiNo = g.hermanas.find((h: any) => h.formato === 'SI_NO_50').id;
         const p = await a5s.detail(idPuntos, u.aprobador);
-        expect(p).toMatchObject({ formato: 'PUNTOS_25', responsableAgencia: 'Ana', equipoPersona: 'Secadora 2', area: 'SECADO', fecha: '2026-10-10' });
+        expect(p).toMatchObject({ formato: 'PUNTOS_25', responsableAgencia: 'Ana', equipoPersona: 'Secadora 2', area: 'SECADO', fecha: hoy });
         expect(p.criterios).toHaveLength(25);
         const s = await a5s.detail(idSiNo, u.aprobador);
         expect(s.criterios).toHaveLength(50);

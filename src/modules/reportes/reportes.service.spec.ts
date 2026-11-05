@@ -51,7 +51,7 @@ describe('catálogo según los módulos activos del rol', () => {
 
   it('SUPER_ADMIN ve todos los reportes', () => {
     const { servicio } = crear();
-    expect(servicio.catalogo(usuario('SUPER_ADMIN', 'GLOBAL', []))).toHaveLength(19);
+    expect(servicio.catalogo(usuario('SUPER_ADMIN', 'GLOBAL', []))).toHaveLength(18);
   });
 });
 
@@ -60,12 +60,12 @@ describe('generar', () => {
 
   it('rechaza un reporte de un módulo que el rol no tiene activo', async () => {
     const { servicio } = crear();
-    await expect(servicio.generar({ reporteId: 'servicios-generales', periodo: periodoAnio }, usuario('SUPERVISOR', 'REGION', PERMISOS_REPORTES))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: periodoAnio }, usuario('SUPERVISOR', 'REGION', PERMISOS_REPORTES))).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('un reporte de periodo exige elegir el periodo', async () => {
     const { servicio } = crear();
-    await expect(servicio.generar({ reporteId: 'servicios-generales' }, usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver'], { regionId: 'r1' }))).rejects.toBeInstanceOf(BadRequestException);
+    await expect(servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL' }, usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver'], { regionId: 'r1' }))).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('el kardex exige elegir el producto', async () => {
@@ -81,7 +81,7 @@ describe('generar', () => {
   it('las agencias se buscan siempre dentro del alcance del usuario, sin fiarse de los ids enviados', async () => {
     const { servicio, prisma } = crear();
     await servicio.generar(
-      { reporteId: 'servicios-generales', periodo: periodoAnio, agenciaIds: ['ag-de-otra-region'], regionId: 'r-ajena' },
+      { reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: periodoAnio, agenciaIds: ['ag-de-otra-region'], regionId: 'r-ajena' },
       usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver'], { regionId: 'r1' }),
     );
     const donde = prisma.agencia.findMany.mock.calls[0][0].where.AND;
@@ -92,7 +92,7 @@ describe('generar', () => {
 
   it('un usuario sin ámbito (le falta su agencia o región) no consulta ningún dato', async () => {
     const { servicio, prisma } = crear();
-    await servicio.generar({ reporteId: 'servicios-generales', periodo: periodoAnio }, usuario('LIDER', 'AGENCIA', [...PERMISOS_REPORTES, 'servicios.ver']));
+    await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: periodoAnio }, usuario('LIDER', 'AGENCIA', [...PERMISOS_REPORTES, 'servicios.ver']));
     expect(prisma.agencia.findMany.mock.calls[0][0].where.AND[0]).toEqual({ id: { in: [] } });
   });
 
@@ -108,7 +108,7 @@ describe('generar', () => {
       servicioDe('ag-a', '2026-03-05', 'APROBADO'),
       servicioDe('ag-b', '2026-02-02', 'FINALIZADO'),
     ]);
-    const r = await servicio.generar({ reporteId: 'servicios-generales', periodo: periodoAnio }, usuario('SUPER_ADMIN', 'GLOBAL', []));
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: periodoAnio }, usuario('SUPER_ADMIN', 'GLOBAL', []));
 
     expect(r.grupos.map((g) => g.titulo)).toEqual(['Agencia Norte', 'Agencia Sur']);
     const norte = r.grupos[0];
@@ -127,7 +127,7 @@ describe('generar', () => {
     prisma.servicioLavado.findMany.mockResolvedValue([
       { ordenTrabajoOT: 'OT-1', placa: 'ABC-123', marca: null, modelo: 'Rio', color: null, estado: 'FINALIZADO', precio: 25, observaciones: null, horaIngreso: new Date('2026-01-10T15:00:00Z'), horaSalida: null, bahia: { agenciaId: 'ag-a' }, catalogo: { nombre: 'Lavado' }, operador: null, operadoresAsignados: [] },
     ]);
-    const r = await servicio.generar({ reporteId: 'servicios-generales', periodo: periodoAnio }, usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver'], { regionId: 'r1' }));
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: periodoAnio }, usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver'], { regionId: 'r1' }));
     expect(r.columnas.map((c) => c.clave)).not.toContain('precio');
     expect(r.grupos[0].bloques[0].filas[0]).not.toHaveProperty('precio');
     expect(r.totales.map((t) => t.clave)).not.toContain('monto');
@@ -146,7 +146,7 @@ describe('aprobación de los servicios', () => {
       { ...base, estado: 'RECHAZADO', aprobadoPor: 'Ana Ríos' },
       { ...base, estado: 'FINALIZADO', aprobadoPor: null },
     ]);
-    const r = await servicio.generar({ reporteId: 'servicios-generales', periodo: periodoAnio }, admin);
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: periodoAnio }, admin);
     const filas = r.grupos[0].bloques[0].filas;
     expect(filas.map((f) => f.aprobado)).toEqual(['SI', 'NO', '']);
     expect(filas.map((f) => f.aprobadoPor)).toEqual(['Luis Mora', 'Ana Ríos', '']);
@@ -163,7 +163,7 @@ describe('aprobación de los servicios', () => {
       { entidadId: 's1', accion: 'APROBAR', usuarioNombre: 'Luis Mora' },
       { entidadId: 's2', accion: 'RECHAZAR', usuarioNombre: 'Ana Ríos' },
     ]);
-    const r = await servicio.generar({ reporteId: 'servicios-especiales', periodo: periodoAnio }, admin);
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'ESPECIAL', periodo: periodoAnio }, admin);
     const filas = r.grupos[0].bloques[0].filas;
     expect(filas.map((f) => [f.aprobado, f.aprobadoPor])).toEqual([['SI', 'Luis Mora'], ['NO', 'Ana Ríos'], ['', '']]);
   });
@@ -347,5 +347,113 @@ describe('bitácora de exportaciones', () => {
     await expect(servicio.bitacora(usuario('SUPERVISOR', 'REGION', ['roles.ver']))).rejects.toBeInstanceOf(ForbiddenException);
     await expect(servicio.bitacora(usuario('ADMIN', 'GLOBAL', ['roles.ver']))).resolves.toEqual([]);
     await expect(servicio.bitacora(usuario('SUPER_ADMIN', 'GLOBAL', []))).resolves.toEqual([]);
+  });
+});
+
+describe('reportes del aprobador: solo sus servicios y solo 30 días atrás', () => {
+  const aprobador = usuario('APROBADOR', 'AGENCIA', [...PERMISOS_REPORTES, 'servicios.ver', 'especiales.ver', 'catalogo.ver', 'precios.ver', 'agencias.ver'], { agenciaId: 'ag-a' });
+  const hoy = () => new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
+  const haceDias = (n: number) => new Date(Date.now() - 5 * 3_600_000 - n * 86_400_000).toISOString().slice(0, 10);
+
+  it('el catálogo solo trae los reportes de servicios generales y especiales', () => {
+    const { servicio } = crear();
+    expect(servicio.catalogo(aprobador).map((r) => r.id).sort()).toEqual(['servicios-lavado']);
+  });
+
+  it('no puede sacar otro reporte aunque su permiso lo permitiría (precios del catálogo)', async () => {
+    const { servicio } = crear();
+    await expect(servicio.generar({ reporteId: 'catalogo-precios' }, aprobador)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('un periodo que empieza hace más de 30 días se recorta a esos 30 días', async () => {
+    const { servicio } = crear();
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: { modo: 'RANGO', desde: haceDias(90), hasta: hoy() } }, aprobador);
+    expect(r.filtros.periodo).toContain('máximo 30 días');
+  });
+
+  it('un periodo que termina hace más de 30 días se rechaza', async () => {
+    const { servicio } = crear();
+    await expect(
+      servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: { modo: 'RANGO', desde: haceDias(90), hasta: haceDias(40) } }, aprobador),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('un periodo dentro de los últimos 30 días no se toca', async () => {
+    const { servicio } = crear();
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo: { modo: 'RANGO', desde: haceDias(10), hasta: hoy() } }, aprobador);
+    expect(r.filtros.periodo).not.toContain('máximo 30 días');
+  });
+});
+
+describe('servicios de lavado: generales, especiales o ambos', () => {
+  const periodo = { modo: 'ANIO_DE' as const, anio: 2026 };
+  const general = (fecha: string) => ({
+    ordenTrabajoOT: 'OT-G', placa: 'ABC-123', marca: 'Kia', modelo: 'H300', color: 'Rojo', estado: 'FINALIZADO', precio: 10, observaciones: null,
+    horaIngreso: new Date(`${fecha}T15:00:00Z`), horaSalida: null, bahia: { agenciaId: 'ag-a' }, catalogo: { nombre: 'Lavado' }, operador: { name: 'Juan', lastname: 'Paz' }, operadoresAsignados: [],
+  });
+  const especial = (fecha: string) => ({
+    id: 'se1', codigoSE: 'SE-1', ordenTrabajoOT: null, tipoServicio: 'Pulido', operadorId: 'pul1', placa: 'XYZ-987', marca: null, modelo: 'BUS', color: null, estado: 'Completado', precio: 30, agenciaId: 'ag-a',
+    observaciones: null, creadoPorNombre: 'Asesor Uno', fechaProgramada: new Date(`${fecha}T15:00:00Z`), createdAt: new Date(`${fecha}T15:00:00Z`), horaIngreso: null, fechaInicio: null, fechaFin: null,
+  });
+  const montar = () => {
+    const c = crear({ auditoriaDecision: { findMany: vi.fn().mockResolvedValue([]) }, user: { findMany: vi.fn().mockResolvedValue([{ id: 'pul1', name: 'Pedro', lastname: 'Ruiz' }]), findUnique: vi.fn().mockResolvedValue({ name: 'X', lastname: 'Y' }) } });
+    c.prisma.servicioLavado.findMany.mockResolvedValue([general('2026-03-05')]);
+    c.prisma.servicioEspecial.findMany.mockResolvedValue([especial('2026-03-02')]);
+    return c;
+  };
+  const ambos = usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver', 'especiales.ver', 'precios.ver'], { regionId: 'r1' });
+
+  it('«Ambos» junta los dos tipos en una sola lista por fecha, con el tipo y quien hizo cada servicio', async () => {
+    const { servicio } = montar();
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', periodo }, ambos);
+    expect(r.columnas.map((c) => c.clave)).toEqual(expect.arrayContaining(['tipo', 'lavador', 'asesor', 'precio']));
+    const filas = r.grupos[0].bloques.flatMap((b) => b.filas);
+    expect(filas.map((f) => [f.tipo, f.lavador, f.asesor])).toEqual([['Especial', 'Pedro Ruiz', 'Asesor Uno'], ['General', 'Juan Paz', '']]);
+    expect(r.totalFilas).toBe(2);
+    expect(r.filtros.extras).toContainEqual({ etiqueta: 'Servicios', valor: 'Generales y especiales' });
+  });
+
+  it('«Generales» y «Especiales» conservan sus columnas de siempre, sin las del otro tipo', async () => {
+    const { servicio } = montar();
+    const g = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo }, ambos);
+    expect(g.columnas.map((c) => c.clave)).toContain('lavador');
+    expect(g.columnas.map((c) => c.clave)).not.toContain('asesor');
+    expect(g.columnas.map((c) => c.clave)).not.toContain('tipo');
+    expect(g.totalFilas).toBe(1);
+    const e = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'ESPECIAL', periodo }, ambos);
+    expect(e.columnas.map((c) => c.clave)).toContain('asesor');
+    expect(e.columnas.map((c) => c.clave)).not.toContain('lavador');
+    expect(e.totalFilas).toBe(1);
+  });
+
+  it('sin elegir categoría usa la más amplia que el rol permite', async () => {
+    const { servicio } = montar();
+    expect((await servicio.generar({ reporteId: 'servicios-lavado', periodo }, ambos)).totalFilas).toBe(2);
+    const soloGenerales = usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver'], { regionId: 'r1' });
+    expect((await servicio.generar({ reporteId: 'servicios-lavado', periodo }, soloGenerales)).totalFilas).toBe(1);
+  });
+
+  it('con un solo permiso no puede sacar la otra categoría ni «Ambos», y el catálogo solo ofrece la suya', async () => {
+    const { servicio } = montar();
+    const soloEspeciales = usuario('COORD_SERVICIOS_ESPECIALES', 'REGION', [...PERMISOS_REPORTES, 'especiales.ver'], { regionId: 'r1' });
+    await expect(servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo }, soloEspeciales)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', periodo }, soloEspeciales)).rejects.toBeInstanceOf(ForbiddenException);
+    const catalogo = servicio.catalogo(soloEspeciales).find((r) => r.id === 'servicios-lavado')!;
+    expect(catalogo.categorias.map((c) => c.valor)).toEqual(['ESPECIAL']);
+    expect(servicio.catalogo(ambos).find((r) => r.id === 'servicios-lavado')!.categorias.map((c) => c.valor)).toEqual(['GENERAL', 'ESPECIAL', 'AMBOS']);
+  });
+
+  it('sin permiso de precios no salen la columna Precio ni el monto', async () => {
+    const { servicio } = montar();
+    const sinPrecios = usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver', 'especiales.ver'], { regionId: 'r1' });
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', periodo }, sinPrecios);
+    expect(r.columnas.map((c) => c.clave)).not.toContain('precio');
+    expect(r.totales.map((t) => t.clave)).not.toContain('monto');
+  });
+
+  it('con «Ambos», elegir un lavador deja solo los generales y elegir un pulidor solo los especiales', async () => {
+    const { servicio } = montar();
+    expect((await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', lavadorId: 'l1', periodo }, ambos)).grupos[0].bloques.flatMap((b) => b.filas).map((f) => f.tipo)).toEqual(['General']);
+    expect((await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', pulidorId: 'p1', periodo }, ambos)).grupos[0].bloques.flatMap((b) => b.filas).map((f) => f.tipo)).toEqual(['Especial']);
   });
 });

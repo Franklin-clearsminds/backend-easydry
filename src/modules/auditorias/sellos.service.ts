@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { compare as compararHash, hash as generarHash } from '@node-rs/bcrypt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
@@ -18,14 +18,17 @@ const texto = (s: string | undefined | null): string => String(s ?? '').trim();
  */
 @Injectable()
 export class SellosService {
+  private readonly logger = new Logger(SellosService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     /** El logo se guarda cifrado en la base. */
     private readonly crypto: CryptoService,
   ) {}
 
-  private aSello(s: { id: string; nombre: string; apellido: string; logo: string | null; estado: number; bloqueadoHasta: Date | null; createdAt: Date; updatedAt: Date }) {
+  private aSello(s: { id: string; nombre: string; apellido: string; logo: string | null; estado: number; bloqueadoHasta: Date | null; createdAt: Date; updatedAt: Date; agencias?: { id: string; codigo: string; nombre: string }[] }) {
     return {
+      agencias: (s.agencias ?? []).map((a) => ({ id: a.id, codigo: a.codigo, nombre: a.nombre })),
       id: s.id,
       nombre: s.nombre,
       apellido: s.apellido,
@@ -39,18 +42,40 @@ export class SellosService {
 
   /** Todos los sellos, con su logo, para la pantalla de configuración. Nunca devuelve el hash de la contraseña. */
   async list() {
-    const sellos = await this.prisma.selloJefeTaller.findMany({ orderBy: [{ estado: 'desc' }, { nombre: 'asc' }, { apellido: 'asc' }] });
+    const sellos = await this.prisma.selloJefeTaller.findMany({
+      orderBy: [{ estado: 'desc' }, { nombre: 'asc' }, { apellido: 'asc' }],
+      include: { agencias: { select: { id: true, codigo: true, nombre: true }, orderBy: { nombre: 'asc' } } },
+    });
     return sellos.map((s) => this.aSello(s));
   }
 
-  /** Sellos activos para elegir al calificar un informe: solo el nombre, sin logo ni nada de la contraseña. */
-  async opciones() {
-    const sellos = await this.prisma.selloJefeTaller.findMany({
+  /** Agencias activas con el sello que tienen hoy, para asignarlas desde la pantalla de sellos. */
+  async agenciasAsignables() {
+    const agencias = await this.prisma.agencia.findMany({
       where: { estado: 1 },
-      orderBy: [{ nombre: 'asc' }, { apellido: 'asc' }],
-      select: { id: true, nombre: true, apellido: true },
+      orderBy: { nombre: 'asc' },
+      select: { id: true, codigo: true, nombre: true, selloId: true },
     });
-    return sellos.map((s) => ({ id: s.id, nombre: s.nombre, apellido: s.apellido, nombreCompleto: `${s.nombre} ${s.apellido}`.trim() }));
+    return agencias;
+  }
+
+  /**
+   * Deja exactamente estas agencias con el sello. Una agencia tiene un solo sello, así que las que tenían otro pasan a este
+   * (queda en el registro del servidor); las que tenía este y ya no están quedan sin sello.
+   */
+  private async asignarAgencias(selloId: string, agenciaIds: string[], user?: any) {
+    const ids = [...new Set(agenciaIds)];
+    const existentes = await this.prisma.agencia.findMany({ where: { id: { in: ids } }, select: { id: true, nombre: true, selloId: true, sello: { select: { nombre: true, apellido: true } } } });
+    if (existentes.length !== ids.length) throw new BadRequestException('Alguna de las agencias no existe.');
+    await this.prisma.$transaction([
+      this.prisma.agencia.updateMany({ where: { selloId, id: { notIn: ids } }, data: { selloId: null } }),
+      this.prisma.agencia.updateMany({ where: { id: { in: ids } }, data: { selloId } }),
+    ]);
+    for (const a of existentes) {
+      if (a.selloId && a.selloId !== selloId) {
+        this.logger.log(`Agencia ${a.nombre}: el sello pasó de ${a.sello?.nombre} ${a.sello?.apellido} a ${selloId} (por ${user?.id ?? 'sistema'}).`);
+      }
+    }
   }
 
   async crear(dto: CrearSelloDto, user: any) {
@@ -63,10 +88,11 @@ export class SellosService {
     const creado = await this.prisma.selloJefeTaller.create({
       data: { nombre, apellido, logo, passwordHash: await generarHash(dto.password, { cost: 10 }), creadoPorId: user?.id ?? null },
     });
-    return this.aSello(creado);
+    if (dto.agenciaIds?.length) await this.asignarAgencias(creado.id, dto.agenciaIds, user);
+    return this.detalle(creado.id);
   }
 
-  async editar(dto: EditarSelloDto) {
+  async editar(dto: EditarSelloDto, user?: any) {
     const actual = await this.prisma.selloJefeTaller.findUnique({ where: { id: dto.id } });
     if (!actual) throw new NotFoundException('El sello no existe.');
     const nombre = dto.nombre !== undefined ? texto(dto.nombre) : actual.nombre;
@@ -83,8 +109,17 @@ export class SellosService {
       data.intentosFallidos = 0;
       data.bloqueadoHasta = null;
     }
-    const guardado = await this.prisma.selloJefeTaller.update({ where: { id: dto.id }, data });
-    return this.aSello(guardado);
+    await this.prisma.selloJefeTaller.update({ where: { id: dto.id }, data });
+    if (dto.agenciaIds !== undefined) await this.asignarAgencias(dto.id, dto.agenciaIds, user);
+    return this.detalle(dto.id);
+  }
+
+  private async detalle(id: string) {
+    const s = await this.prisma.selloJefeTaller.findUniqueOrThrow({
+      where: { id },
+      include: { agencias: { select: { id: true, codigo: true, nombre: true }, orderBy: { nombre: 'asc' } } },
+    });
+    return this.aSello(s);
   }
 
   /**

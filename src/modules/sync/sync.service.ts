@@ -368,7 +368,8 @@ export class SyncService {
 
             // Una OT general puede tener varios servicios (una fila por servicio): las filas
             // activas de la misma OT no son duplicados, salvo que repitan el mismo servicio.
-            const duplicateActive = await this.prisma.servicioLavado.findFirst({
+            // "S/P" (vehículo nuevo sin placa) no identifica a un vehículo: no hay duplicado por placa.
+            const duplicateActive = placa === 'S/P' ? null : await this.prisma.servicioLavado.findFirst({
               where: {
                 placa,
                 bahia: targetAgenciaId
@@ -573,6 +574,8 @@ export class SyncService {
                     create: operadoresAsignadosOT.map((id) => ({ operadorId: id })),
                   },
                   horaIngreso: sanitizedHoraIngreso,
+                  horaInicio:
+                    estadoInicial === ServiceStatus.EN_PROCESO ? sanitizedHoraIngreso : null,
                   horaSalida:
                     estadoFinal === ServiceStatus.FINALIZADO ? now : null,
                   fotoIngresoUrl:
@@ -1031,6 +1034,8 @@ export class SyncService {
               updateData.fechaInicio = new Date(mutData.fechaInicio);
             if (mutData.fechaFin)
               updateData.fechaFin = new Date(mutData.fechaFin);
+            else if (/^complet/i.test(String(mutData.estado || '')) && !existing.fechaFin)
+              updateData.fechaFin = now;
             if (mutData.evidencias) updateData.evidencias = mutData.evidencias;
             if (mutData.calificacionCalidad !== undefined)
               updateData.calificacionCalidad = Number(

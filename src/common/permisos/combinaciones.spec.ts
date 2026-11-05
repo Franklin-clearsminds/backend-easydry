@@ -42,6 +42,7 @@ const REQUISITOS: Record<string, string[]> = {
   'taller.mantenimientos.editar': ['mantenimientos.ver'],
   'taller.limpiezas.registrar': ['limpiezas.ver'],
   'taller.limpiezas.editar': ['limpiezas.ver'],
+  'taller.limpiezas.fotos': ['limpiezas.ver'],
   // Exportar limpìezas necesita ver el historial.
   'reportes.maquinaria.limpiezas': ['limpiezas.ver'],
 
@@ -66,6 +67,7 @@ const REQUISITOS: Record<string, string[]> = {
   'envios.confirmar': ['despachos.ver', 'despachos.recibir'],
   'envios.rechazar': ['despachos.ver', 'despachos.recibir'],
   'envios.faltantes': ['despachos.ver'],
+  'envios.aprobar': ['despachos.ver'],
 };
 
 const PAGINAS_ACTIVOS = ['maquinaria', 'taller', 'inventario', 'envios'];

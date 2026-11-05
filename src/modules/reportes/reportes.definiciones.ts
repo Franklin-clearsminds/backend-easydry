@@ -5,8 +5,9 @@
  */
 
 export type TipoColumna = 'texto' | 'numero' | 'dinero' | 'fecha' | 'hora' | 'marca';
-export type FiltroExtra = 'estado' | 'lavador' | 'pulidor' | 'producto' | 'ubicacion' | 'semaforo';
-export type PlantillaReporte = 'CONTROL_ESPECIAL' | 'CONTROL_GENERAL' | 'TABLA';
+export type FiltroExtra = 'estado' | 'lavador' | 'pulidor' | 'producto' | 'productoFiltro' | 'ubicacion' | 'semaforo' | 'categoria';
+export type CategoriaServicios = 'GENERAL' | 'ESPECIAL' | 'AMBOS';
+export type PlantillaReporte = 'SERVICIOS' | 'TABLA';
 export type ValorCelda = string | number | null;
 export type FilaReporte = Record<string, ValorCelda>;
 
@@ -81,6 +82,42 @@ const totalesServicios = (filas: FilaReporte[]): TotalReporte[] => [
   { clave: 'monto', etiqueta: 'Monto', valor: sumar(filas, 'precio'), tipo: 'dinero' },
 ];
 
+
+const ESTADOS_ESPECIAL: OpcionFiltro[] = [
+  { valor: 'Pendiente', etiqueta: 'Pendiente' },
+  { valor: 'En Proceso', etiqueta: 'En proceso' },
+  { valor: 'Completado', etiqueta: 'Completado' },
+  { valor: 'Cancelado', etiqueta: 'Cancelado' },
+];
+
+/**
+ * Columnas del reporte de servicios de lavado. Generales y especiales conservan las suyas de siempre; con «Ambos» se unen:
+ * se agrega el tipo, el responsable pasa a «Lavador / Pulidor» y el asesor queda vacío en los generales.
+ */
+export function columnasServicios(categoria: CategoriaServicios): ColumnaDef[] {
+  const comunes = (antes: ColumnaDef[], persona: ColumnaDef[]): ColumnaDef[] => [
+    ...antes,
+    col('ot', 'OT', 'texto', 11),
+    col('fecha', 'Fecha', 'fecha', 11),
+    col('horaIngreso', 'Ingreso', 'hora', 9.5),
+    col('horaSalida', 'Salida', 'hora', 9.5),
+    col('placa', 'Placa', 'texto', 11.5),
+    col('marca', 'Marca', 'texto', 11),
+    col('modelo', 'Modelo', 'texto', 10),
+    col('color', 'Color', 'texto', 8),
+    col('servicio', 'Tipo de servicio', 'texto', 13),
+    ...persona,
+    col('observacion', 'Observación', 'texto', 14),
+    col('realizado', 'Realizado', 'marca', 11),
+    col('aprobado', 'Aprobado', 'marca', 11),
+    col('aprobadoPor', 'Aprobado por', 'texto', 15),
+    col('precio', 'Precio', 'dinero', 9, { soloPrecios: true }),
+  ];
+  if (categoria === 'GENERAL') return comunes([], [col('lavador', 'Lavador', 'texto', 13)]);
+  if (categoria === 'ESPECIAL') return comunes([], [col('asesor', 'Asesor', 'texto', 13)]);
+  return comunes([col('tipo', 'Tipo', 'texto', 9)], [col('lavador', 'Lavador / Pulidor', 'texto', 14), col('asesor', 'Asesor', 'texto', 13)]);
+}
+
 export const REPORTES: readonly ReporteDef[] = [
   {
     id: 'agencias-listado',
@@ -108,14 +145,14 @@ export const REPORTES: readonly ReporteDef[] = [
   },
   {
     id: 'lavadores-listado',
-    nombre: 'Listado de lavadores',
+    nombre: 'Listado de lavadores y pulidores',
     modulo: 'Gestión de lavadores',
-    descripcion: 'Lavadores y su agencia, región y estado.',
+    descripcion: 'Lavadores y pulidores fijos con su agencia, bahía y estado. Se filtra por agencia y por pulidor.',
     permisos: ['operadores.ver'],
     periodo: false,
     agrupar: 'AGENCIA',
     plantilla: 'TABLA',
-    extras: [],
+    extras: ['pulidor'],
     columnas: [
       ORD,
       col('nombre', 'Nombre', 'texto', 22),
@@ -126,70 +163,17 @@ export const REPORTES: readonly ReporteDef[] = [
     totales: (f) => [cuenta(f), { clave: 'activos', etiqueta: 'Activos', valor: contar(f, 'estado', 'Activo'), tipo: 'numero' }],
   },
   {
-    id: 'servicios-generales',
-    nombre: 'Servicios generales',
+    id: 'servicios-lavado',
+    nombre: 'Servicios de lavado',
     modulo: 'Servicios de lavado',
-    descripcion: 'Control de servicios de lavado realizados en el periodo.',
-    permisos: ['servicios.ver'],
+    descripcion: 'Servicios generales, especiales o ambos del periodo, con su resumen por fecha, modelo y tipo de servicio.',
+    permisos: ['servicios.ver', 'especiales.ver'],
     periodo: true,
     agrupar: 'AGENCIA',
-    plantilla: 'CONTROL_GENERAL',
-    extras: ['estado', 'lavador'],
-    estados: ESTADOS_SERVICIO,
-    columnas: [
-      col('ot', 'OT', 'texto', 11),
-      col('fecha', 'Fecha', 'fecha', 11),
-      col('horaIngreso', 'Ingreso', 'hora', 9.5),
-      col('horaSalida', 'Salida', 'hora', 9.5),
-      col('placa', 'Placa', 'texto', 11.5),
-      col('marca', 'Marca', 'texto', 11),
-      col('modelo', 'Modelo', 'texto', 10),
-      col('color', 'Color', 'texto', 8),
-      col('servicio', 'Tipo de servicio', 'texto', 13),
-      col('lavador', 'Lavador', 'texto', 13),
-      col('observacion', 'Observación', 'texto', 14),
-      col('realizado', 'Realizado', 'marca', 11),
-      col('aprobado', 'Aprobado', 'marca', 11),
-      col('aprobadoPor', 'Aprobado por', 'texto', 15),
-      col('precio', 'Precio', 'dinero', 9, { soloPrecios: true }),
-      col('firma', 'Firma', 'texto', 9),
-    ],
-    totales: totalesServicios,
-  },
-  {
-    id: 'servicios-especiales',
-    nombre: 'Servicios especiales',
-    modulo: 'Servicios de lavado',
-    descripcion: 'Control de servicios especiales (pulido, cerámico, motor…) del periodo.',
-    permisos: ['especiales.ver'],
-    periodo: true,
-    agrupar: 'AGENCIA',
-    plantilla: 'CONTROL_ESPECIAL',
-    extras: ['estado', 'pulidor'],
-    estados: [
-      { valor: 'Pendiente', etiqueta: 'Pendiente' },
-      { valor: 'En Proceso', etiqueta: 'En proceso' },
-      { valor: 'Completado', etiqueta: 'Completado' },
-      { valor: 'Cancelado', etiqueta: 'Cancelado' },
-    ],
-    columnas: [
-      col('ot', 'OT', 'texto', 11),
-      col('fecha', 'Fecha', 'fecha', 11),
-      col('horaIngreso', 'Ingreso', 'hora', 9.5),
-      col('horaSalida', 'Salida', 'hora', 9.5),
-      col('placa', 'Placa', 'texto', 11.5),
-      col('marca', 'Marca', 'texto', 11),
-      col('modelo', 'Modelo', 'texto', 10),
-      col('color', 'Color', 'texto', 8),
-      col('servicio', 'Tipo de servicio', 'texto', 13),
-      col('asesor', 'Asesor', 'texto', 13),
-      col('observacion', 'Observación', 'texto', 14),
-      col('realizado', 'Realizado', 'marca', 11),
-      col('aprobado', 'Aprobado', 'marca', 11),
-      col('aprobadoPor', 'Aprobado por', 'texto', 15),
-      col('precio', 'Precio', 'dinero', 9, { soloPrecios: true }),
-      col('firma', 'Firma', 'texto', 9),
-    ],
+    plantilla: 'SERVICIOS',
+    extras: ['categoria', 'estado', 'lavador', 'pulidor'],
+    estados: [...ESTADOS_SERVICIO, ...ESTADOS_ESPECIAL.filter((e) => !ESTADOS_SERVICIO.some((g) => g.valor === e.valor))],
+    columnas: columnasServicios('AMBOS'),
     totales: totalesServicios,
   },
   {
@@ -316,7 +300,7 @@ export const REPORTES: readonly ReporteDef[] = [
     periodo: false,
     agrupar: 'UNICO',
     plantilla: 'TABLA',
-    extras: [],
+    extras: ['productoFiltro'],
     columnas: [
       ORD,
       col('sku', 'SKU', 'texto', 9),
@@ -339,7 +323,7 @@ export const REPORTES: readonly ReporteDef[] = [
     periodo: false,
     agrupar: 'AGENCIA',
     plantilla: 'TABLA',
-    extras: ['ubicacion'],
+    extras: ['productoFiltro', 'ubicacion'],
     columnas: [
       ORD,
       col('sku', 'SKU', 'texto', 9),
@@ -416,7 +400,7 @@ export const REPORTES: readonly ReporteDef[] = [
     periodo: true,
     agrupar: 'AGENCIA',
     plantilla: 'TABLA',
-    extras: [],
+    extras: ['productoFiltro'],
     columnas: [
       ORD,
       col('sku', 'SKU', 'texto', 9),
@@ -439,7 +423,7 @@ export const REPORTES: readonly ReporteDef[] = [
     periodo: true,
     agrupar: 'AGENCIA',
     plantilla: 'TABLA',
-    extras: [],
+    extras: ['productoFiltro'],
     columnas: [
       ORD,
       col('pulidor', 'Pulidor', 'texto', 20),

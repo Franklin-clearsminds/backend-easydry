@@ -1,4 +1,5 @@
 import { FUNCION, rolConFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
+import { HISTORIAL_APROBADOR_DIAS } from '../../common/permisos/historial-aprobador.js';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
 import { validarLavadoresDeLaOT } from './lavadores-bahia.js';
 import { validarAgregarServicioAOT } from './retoque.js';
@@ -116,6 +117,12 @@ export class OperacionesService {
     fechaHasta?: string;
     incluirResumen?: boolean;
   }, currentUser?: any) {
+    // El aprobador solo consulta el historial de los últimos 30 días (día de Ecuador, UTC-5): una fecha «desde» más antigua se sube a ese límite.
+    if (currentUser && tieneFuncion(currentUser, FUNCION.APROBADOR)) {
+      const limite = new Date(Date.now() - 5 * 3_600_000 - HISTORIAL_APROBADOR_DIAS * 86_400_000).toISOString().slice(0, 10);
+      const pedida = params?.fechaDesde?.slice(0, 10);
+      if (!pedida || pedida < limite) params = { ...(params ?? {}), fechaDesde: limite };
+    }
     const where: any = {
       deletedAt: null,
     };
@@ -1094,6 +1101,16 @@ export class OperacionesService {
       const valor = campo === 'placa' ? limpio.toUpperCase() : limpio;
       datosVehiculo[campo] = campo === 'marca' || campo === 'color' || campo === 'cliente' ? valor || null : valor;
       data[campo] = datosVehiculo[campo];
+    }
+
+    // La hora real de inicio se guarda una sola vez, cuando la OT pasa a En proceso (o se finaliza sin haber pasado por ahí).
+    if (
+      (updateDto.estado === ServiceStatus.EN_PROCESO || updateDto.estado === ServiceStatus.FINALIZADO) &&
+      !servicio.horaInicio &&
+      servicio.estado !== ServiceStatus.FINALIZADO &&
+      servicio.estado !== ServiceStatus.APROBADO
+    ) {
+      data.horaInicio = updateDto.estado === ServiceStatus.EN_PROCESO ? new Date() : servicio.horaIngreso;
     }
 
     if (updateDto.estado === ServiceStatus.FINALIZADO) {

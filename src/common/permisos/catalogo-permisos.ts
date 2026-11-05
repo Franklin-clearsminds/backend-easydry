@@ -104,6 +104,7 @@ export const CATALOGO_PERMISOS = [
   def('Maquinaria', 'maquinaria.evidencias', 'Subir evidencias de incidencias y mantenimiento', 'Adjuntar fotos, videos o documentos a una incidencia o mantenimiento.'),
   def('Maquinaria', 'limpiezas.evidencias', 'Subir evidencias de limpieza', 'Registrar fotos de limpieza de maquinaria. Este permiso es independiente de evidencias de servicios, incidencias y mantenimiento.'),
   def('Maquinaria', 'limpiezas.ver', 'Ver limpiezas de maquinaria', 'Auditoría de limpiezas registradas (fecha, quién y fotos) dentro de su ámbito.'),
+  def('Maquinaria', 'limpiezas.fotos', 'Ver fotos de limpieza', 'Abrir las fotos de evidencia de las limpiezas de maquinaria. Quien registra la limpieza (líder, backup, auxiliar, pulidor) no las ve: es de la supervisión.'),
   def('Maquinaria', 'limpiezas.editar', 'Editar o eliminar limpiezas', 'Corregir las observaciones o eliminar un registro de limpieza dentro de su ámbito.'),
 
   def('Auditorías', 'informes.ver', 'Ver informes de inspección', 'Listado y detalle de los informes de su ámbito. Quien no puede auditar solo ve los informes ya guardados de su agencia.'),

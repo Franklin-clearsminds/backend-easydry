@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 export const ESTADOS_INFORME = ['BORRADOR', 'GUARDADO'] as const;
 export type EstadoInforme = (typeof ESTADOS_INFORME)[number];
 
-export const TIPOS_INSPECCION = ['RUTINA', 'SEGUIMIENTO', 'EXTRAORDINARIA', 'CIERRE_MENSUAL', 'APERTURA_AGENCIA', 'CIERRE_AGENCIA', 'NOVEDADES'] as const;
+export const TIPOS_INSPECCION = ['RUTINA', 'SEGUIMIENTO', 'EXTRAORDINARIA', 'CIERRE_MENSUAL', 'APERTURA_AGENCIA', 'CIERRE_AGENCIA', 'NOVEDADES', 'MANTENIMIENTO_COMERCIAL', 'COLISION'] as const;
 export const CATEGORIAS_NOVEDAD = ['INFRAESTRUCTURA', 'MAQUINARIA', 'INSUMOS', 'LIMPIEZA', 'SEGURIDAD', 'OPERACION', 'PERSONAL', 'OTROS'] as const;
 export const PRIORIDADES = ['BAJA', 'MEDIA', 'ALTA', 'CRITICA'] as const;
 export const ESTADOS_NOVEDAD = ['ABIERTA', 'EN_SEGUIMIENTO', 'RESUELTA'] as const;
@@ -105,18 +105,17 @@ export function faltantesParaGuardar(i: {
   novedades: number;
   calificacion: string | null;
   selloValidado: boolean;
+  /** La agencia tiene sello de jefe de taller: su contraseña se exige siempre (esté o no el jefe en la visita). Sin sello no hay contraseña, pero el taller firma con nombre escrito. */
+  requiereSello?: boolean;
   /** Tipos de firma que ya tienen imagen. */
   firmadas: readonly string[];
-  /** El jefe de taller estuvo en la visita (por defecto sí). Si no, no se exige su contraseña, pero el taller sí firma con nombre escrito. */
-  jefePresente?: boolean;
 }): string[] {
   const faltan: string[] = [];
   if (!i.destinatarioNombre.trim()) faltan.push('el destinatario (PARA)');
   if (!i.asunto.trim()) faltan.push('el asunto');
   if (!i.desarrollo.trim() && i.novedades === 0) faltan.push('el desarrollo o al menos una novedad');
   if (!i.calificacion) faltan.push('la calificación del servicio');
-  const jefePresente = i.jefePresente !== false;
-  if (jefePresente && !i.selloValidado) faltan.push('el jefe de taller con su contraseña');
+  if (i.requiereSello && !i.selloValidado) faltan.push('el sello del jefe de taller con su contraseña');
   for (const f of FIRMAS_INFORME) {
     if (f.tipo === TIPO_FIRMA_RECEPCION) continue;
     if (!i.firmadas.includes(f.tipo)) faltan.push(`la firma de ${f.nombre.toLowerCase()}`);

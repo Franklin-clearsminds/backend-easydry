@@ -3,6 +3,9 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 import {
+  AdjuntarUsuariosDto,
+  BuscarAdjuntablesDto,
+  QuitarAdjuntoDto,
   GuardarInformeDto,
   IdInformeDto,
   ListInformesDto,
@@ -10,7 +13,6 @@ import {
   SeguimientoPlanDto,
 } from './dto/informes.dto.js';
 import { AprobarInformeDto, FirmarInformeDto, ValidarSelloDto } from './dto/sellos.dto.js';
-import { SellosService } from './sellos.service.js';
 import { InformesInspeccionService } from './informes.service.js';
 
 @ApiTags('Auditorías — Informes de inspección (100% POST)')
@@ -19,7 +21,6 @@ import { InformesInspeccionService } from './informes.service.js';
 export class InformesInspeccionController {
   constructor(
     private readonly informes: InformesInspeccionService,
-    private readonly sellos: SellosService,
   ) {}
 
   @Permiso('informes.ver')
@@ -86,18 +87,42 @@ export class InformesInspeccionController {
     return this.informes.update(dto, user);
   }
 
-  @Permiso('informes.firmar')
-  @Post('sellos/opciones')
+  @Permiso('informes.crear')
+  @Post('adjuntos/opciones')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Jefes de taller activos para elegir al calificar (solo nombre, sin logo ni contraseña)' })
-  opcionesSellos() {
-    return this.sellos.opciones();
+  @ApiOperation({ summary: 'Regiones, clientes, agencias y roles para filtrar a quién adjuntar un informe' })
+  opcionesAdjuntos() {
+    return this.informes.opcionesAdjuntos();
+  }
+
+  @Permiso('informes.crear')
+  @Post('adjuntos/buscar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Buscar usuarios activos (cualquier rol) a quienes adjuntar un informe' })
+  buscarAdjuntables(@Body() dto: BuscarAdjuntablesDto) {
+    return this.informes.buscarAdjuntables(dto);
+  }
+
+  @Permiso('informes.crear')
+  @Post('adjuntos/agregar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Adjuntar usuarios a un informe: reciben una notificación cuando se aprueba' })
+  adjuntar(@Body() dto: AdjuntarUsuariosDto, @CurrentUser() user: any) {
+    return this.informes.adjuntar(dto, user);
+  }
+
+  @Permiso('informes.crear')
+  @Post('adjuntos/quitar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Quitar un adjunto de un informe que aún no está aprobado' })
+  quitarAdjunto(@Body() dto: QuitarAdjuntoDto, @CurrentUser() user: any) {
+    return this.informes.quitarAdjunto(dto, user);
   }
 
   @Permiso('informes.firmar')
   @Post('sello/validar')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Validar con su contraseña al jefe de taller del informe (habilita la sección de firmas)' })
+  @ApiOperation({ summary: 'Validar con su contraseña el sello de la agencia del informe (habilita la sección de firmas)' })
   validarSello(@Body() dto: ValidarSelloDto, @CurrentUser() user: any) {
     return this.informes.validarSello(dto, user);
   }

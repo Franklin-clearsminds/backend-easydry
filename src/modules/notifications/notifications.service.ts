@@ -76,9 +76,29 @@ export class NotificationsService {
    * usuario y la emite por WebSocket a la web. Nunca lanza: una falla de notificación no debe romper
    * el flujo de negocio que la dispara.
    */
+  /**
+   * Quita a quien tiene su rol sin la página «Notificaciones» activa: si el rol no la tiene, no ve la campanita y tampoco recibe avisos.
+   * Los roles sin páginas guardadas (antiguos) y el Super Admin siempre las reciben; un id que no se encuentra se conserva.
+   */
+  private async conNotificacionesActivas(ids: string[]): Promise<string[]> {
+    const usuarios = await this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, role: { select: { namerol: true, capacidades: true } } } });
+    if (!Array.isArray(usuarios)) return ids;
+    const sin = new Set(
+      usuarios
+        .filter((u) => {
+          const caps = u.role?.capacidades ?? [];
+          return u.role?.namerol !== 'SUPER_ADMIN' && caps.some((c: string) => c.startsWith('pagina.')) && !caps.includes('pagina.notificaciones');
+        })
+        .map((u) => u.id),
+    );
+    return ids.filter((id) => !sin.has(id));
+  }
+
   async notificarUsuarios(userIds: string[], title: string, body: string, data?: Record<string, any>, opts?: NotificarOpts) {
     try {
-      const ids = [...new Set(userIds.filter(Boolean))];
+      const todos = [...new Set(userIds.filter(Boolean))];
+      if (!todos.length) return;
+      const ids = await this.conNotificacionesActivas(todos);
       if (!ids.length) return;
 
       const devices = await this.prisma.syncDevice.findMany({

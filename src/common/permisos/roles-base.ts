@@ -40,12 +40,12 @@ const LECTURA_COMERCIAL: CodigoPermiso[] = p(
 );
 
 /**
- * Roles que no ven precios ni costos. El Coordinador Comercial sí los ve (en su región); el Jefe Comercial no. El líder de agencia
+ * Roles que no ven precios ni costos. Los coordinadores (en su región) y el Jefe Comercial sí los ven. El líder de agencia
  * (y su reemplazo BACKUP y el auxiliar, que copian sus permisos) trabaja con cantidades: nunca ve dinero.
  */
-const ROLES_SIN_PRECIOS = ['JEFE_COMERCIAL', 'LAVADOR', 'LIDER', 'BACKUP', 'AUXILIAR'];
-/** Roles comerciales que ven bodegas y agencias pero no el stock de los kits. */
-const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
+const ROLES_SIN_PRECIOS = ['LAVADOR', 'LIDER', 'BACKUP', 'AUXILIAR'];
+/** Roles que ven inventario pero no el stock de los kits (hoy ninguno: los comerciales y los coordinadores también lo ven). */
+const ROLES_SIN_KITS: string[] = [];
 
 /**
  * Auditorías. Pueden auditar (crear informes de inspección, firmarlos y verlos dentro de su ámbito) todos los roles menos el líder
@@ -53,6 +53,8 @@ const ROLES_SIN_KITS = ['COORD_COMERCIAL', 'JEFE_COMERCIAL'];
  * Editar y eliminar los borradores de otros, y verificar las acciones correctivas, es de quien administra: ADMIN, SUPER_ADMIN y SUPERVISOR.
  */
 const ROLES_SOLO_VEN_AUDITORIA = ['LIDER', 'BACKUP', 'AUXILIAR', 'LAVADOR', 'PULIDOR'];
+/** El aprobador solo aprueba servicios: no tiene informes de inspección ni auditorías 5S. */
+const ROLES_SIN_AUDITORIA = ['APROBADOR'];
 const ROLES_REVISAN_INFORMES = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR'];
 const CAPACIDADES_AUDITOR: CodigoPermiso[] = p(
   'informes.ver',
@@ -113,12 +115,11 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'SUPERVISOR',
     descripcion:
-      'Supervisor regional: controla agencias, bahías, operadores e inventario de su región, aprueba donde no hay aprobador y gestiona sus usuarios Backup.',
+      'Supervisor regional: controla agencias, bahías, operadores e inventario de su región, aprueba donde no hay aprobador y consulta (solo lectura) los usuarios de su región, sin los asistentes de mantenimiento.',
     ambito: 'REGION',
     capacidades: p(
       ...LECTURA_RED,
       'roles.ver',
-      'backup.gestionar',
       'dashboard.ver',
       'productividad.ver',
       'reportes.ver',
@@ -142,6 +143,7 @@ export const ROLES_BASE: RolBase[] = [
       'maquinaria.evidencias',
       'limpiezas.ver',
       'limpiezas.editar',
+      'limpiezas.fotos',
       'evidencias.subir',
       'sync.usar',
     ),
@@ -149,7 +151,7 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'JEFE_COMERCIAL',
     descripcion:
-      'Jefe comercial: visibilidad comercial nacional (solo lectura, sin precios), retos, productividad y reportes.',
+      'Jefe comercial: visibilidad comercial nacional (solo lectura, con precios), retos, productividad y reportes.',
     ambito: 'GLOBAL',
     capacidades: p(
       ...LECTURA_RED,
@@ -206,6 +208,9 @@ export const ROLES_BASE: RolBase[] = [
       'especiales.ver',
       'especiales.anular',
       'retos.ver',
+      // Reporte de sus servicios, solo en PDF (el servidor lo limita a servicios y a los últimos 30 días).
+      'reportes.ver',
+      'reportes.pdf',
       'sync.usar',
     ),
   },
@@ -247,6 +252,7 @@ export const ROLES_BASE: RolBase[] = [
       'dashboard.ver',
       'productividad.ver',
       'reportes.ver',
+      'inventario.ver',
       'especiales.ver',
       'especiales.crear',
       'especiales.asignar',
@@ -275,6 +281,7 @@ export const ROLES_BASE: RolBase[] = [
       'evidencias.ver',
       'dashboard.ver',
       'especiales.ver',
+      'especiales.crear',
       'especiales.operar',
       'especiales.finalizar',
       'recetas.ver',
@@ -302,6 +309,7 @@ export const ROLES_BASE: RolBase[] = [
     ambito: 'REGION',
     capacidades: p(
       'agencias.ver',
+      'catalogo.ver',
       'usuarios.ver',
       'evidencias.ver',
       'dashboard.ver',
@@ -311,6 +319,7 @@ export const ROLES_BASE: RolBase[] = [
       'maquinaria.trazabilidad',
       'incidentes.ver',
       'incidentes.resolver',
+      'inventario.ver',
       'mantenimientos.ver',
       'mantenimientos.ejecutar',
       'maquinaria.evidencias',
@@ -323,7 +332,7 @@ export const ROLES_BASE: RolBase[] = [
   {
     namerol: 'TECNICO',
     descripcion:
-      'Técnico de maquinaria: trabaja en la región que tiene asignada y ejecuta y cierra las órdenes de mantenimiento que le asignan.',
+      'Asistente de mantenimiento: trabaja en la región que tiene asignada y ejecuta y cierra las órdenes de mantenimiento que le asignan.',
     ambito: 'REGION',
     capacidades: p(
       'dashboard.ver',
@@ -363,6 +372,7 @@ export const ROLES_BASE: RolBase[] = [
       'alertas.atender',
       'maquinaria.ver',
       'limpiezas.ver',
+      'operadores.ver',
       'sync.usar',
     ),
   },
@@ -394,6 +404,7 @@ export const ROLES_BASE: RolBase[] = [
 
 // Auditorías: los roles que auditan reciben el paquete de auditor; el líder, el lavador y el pulidor solo ven su resultado.
 for (const rol of ROLES_BASE) {
+  if (ROLES_SIN_AUDITORIA.includes(rol.namerol)) continue;
   const extra = ROLES_SOLO_VEN_AUDITORIA.includes(rol.namerol)
     ? CAPACIDADES_VER_AUDITORIA
     : [...CAPACIDADES_AUDITOR, ...(ROLES_REVISAN_INFORMES.includes(rol.namerol) ? CAPACIDADES_REVISOR : [])];
@@ -411,6 +422,8 @@ for (const rol of ROLES_BASE) {
 }
 // Y cada rol oficial trae también sus páginas, sub-páginas y acciones equivalentes (sin perder ningún permiso clásico).
 for (const rol of ROLES_BASE) rol.capacidades = capacidadesConPaginas(rol.capacidades, rol.namerol) as CodigoPermiso[];
+// El aprobador saca el reporte de sus servicios solo en PDF: la página de reportes le trae Excel, que se le quita.
+for (const rol of ROLES_BASE) if (rol.namerol === 'APROBADOR') rol.capacidades = rol.capacidades.filter((c) => c !== 'reportes.excel');
 
 export const NOMBRES_ROLES_BASE: readonly string[] = ROLES_BASE.map(
   (r) => r.namerol,

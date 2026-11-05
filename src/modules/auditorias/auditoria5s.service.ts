@@ -469,7 +469,8 @@ export class Auditoria5sService {
   async create(dto: GuardarAuditoria5sDto, user: any) {
     const agencia = await this.agenciaEnAlcance(dto.agenciaId, user);
     const formatos = [...new Set((dto.formatos?.length ? dto.formatos : ['LISTA_20']) as FormatoId[])];
-    const fecha = texto(dto.fecha) || hoyEcuador().toISOString().slice(0, 10);
+    // La fecha es siempre el día en que se crea la auditoría: no se elige.
+    const fecha = hoyEcuador().toISOString().slice(0, 10);
     const grupoId = randomUUID();
     const ids: string[] = [];
     for (const formatoId of formatos) {
@@ -522,7 +523,6 @@ export class Auditoria5sService {
       const datosVisita = {
         agenciaId,
         ...(dto.area ? { area: dto.area } : {}),
-        ...(dto.fecha ? { fecha: fechaDia(dto.fecha)! } : {}),
         ...(dto.responsableAgencia !== undefined ? { responsableAgencia: texto(dto.responsableAgencia) } : {}),
         ...(dto.equipoPersona !== undefined ? { equipoPersona: texto(dto.equipoPersona) } : {}),
       };

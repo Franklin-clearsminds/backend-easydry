@@ -12,6 +12,7 @@ import { PAGINAS } from './catalogo-paginas.js';
  */
 export const PERMISOS_POR_MODULO: Readonly<Record<string, readonly CodigoPermiso[] | null>> = {
   dashboard: ['dashboard.ver'],
+  // Sin páginas guardadas la ve todo rol; con páginas, solo si la página «Notificaciones» está activa en el rol.
   notificaciones: null,
   // «Agencias & Mapa Red» es una sola pantalla: el mapa es una pestaña suya (antes tenía su propio módulo, 'mapa-operativo').
   agencias: ['agencias.consultar', 'mapa.ver', 'bahias.asignar', 'agencias.crear', 'agencias.transferir', 'regiones.transferir', 'agencias.editar', 'agencias.estado', 'regiones.gestionar', 'clientes.gestionar', 'agencias.precios.gestionar'],
@@ -42,7 +43,7 @@ export function modulosDeCapacidades(capacidades: readonly string[] | null | und
   // Con páginas guardadas, el menú sale de las páginas activas (más las pantallas de cuenta).
   if ([...propias].some((c) => c.startsWith('pagina.'))) {
     const activas = new Set(PAGINAS.filter((p) => propias.has(p.codigo) && p.modulo !== null).map((p) => p.modulo as string));
-    return MODULOS_NAVEGACION.filter((m) => PERMISOS_POR_MODULO[m] === null || activas.has(m));
+    return MODULOS_NAVEGACION.filter((m) => m === 'perfil' || activas.has(m));
   }
   return MODULOS_NAVEGACION.filter((m) => {
     const requeridos = PERMISOS_POR_MODULO[m];

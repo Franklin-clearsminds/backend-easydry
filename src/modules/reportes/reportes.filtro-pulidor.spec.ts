@@ -23,7 +23,7 @@ describe('reporte de servicios especiales por pulidor (base real)', () => {
   const corridas: string[] = [];
   const periodo = { modo: 'RANGO' as const, desde: '2019-01-01', hasta: '2019-12-31' };
   const AHORA = new Date('2020-10-15T12:00:00Z');
-  const dto = (extra: Record<string, unknown> = {}) => ({ reporteId: 'servicios-especiales', agenciaIds: [ids.ag1, ids.ag2], periodo, ...extra }) as any;
+  const dto = (extra: Record<string, unknown> = {}) => ({ reporteId: 'servicios-lavado', categoria: 'ESPECIAL', agenciaIds: [ids.ag1, ids.ag2], periodo, ...extra }) as any;
   const placas = (r: any): string[] => r.grupos.flatMap((g: any) => g.bloques.flatMap((b: any) => b.filas.map((f: any) => f.placa))).sort();
 
   beforeAll(async () => {
@@ -56,8 +56,8 @@ describe('reporte de servicios especiales por pulidor (base real)', () => {
   });
 
   it('el reporte declara el filtro de pulidor y el catálogo lo ofrece', () => {
-    expect(REPORTES.find((r) => r.id === 'servicios-especiales')!.extras).toContain('pulidor');
-    expect(new ReportesService(env.prisma as never).catalogo(actor).find((r: any) => r.id === 'servicios-especiales')!.extras).toContain('pulidor');
+    expect(REPORTES.find((r) => r.id === 'servicios-lavado')!.extras).toContain('pulidor');
+    expect(new ReportesService(env.prisma as never).catalogo(actor).find((r: any) => r.id === 'servicios-lavado')!.extras).toContain('pulidor');
   });
 
   it('sin el filtro salen todos; con él, los del pulidor como responsable o como asignado', async () => {

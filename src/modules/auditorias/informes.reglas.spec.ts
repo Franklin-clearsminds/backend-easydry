@@ -86,19 +86,21 @@ describe('numeración y guardado', () => {
     expect(faltantesParaGuardar({ ...completo, desarrollo: '', novedades: 2 })).toEqual([]);
     expect(faltantesParaGuardar({ ...completo, desarrollo: '', novedades: 0 })).toHaveLength(1);
     expect(faltantesParaGuardar({ ...completo, calificacion: null })).toHaveLength(1);
-    expect(faltantesParaGuardar({ ...completo, selloValidado: false })).toEqual(['el jefe de taller con su contraseña']);
+    expect(faltantesParaGuardar({ ...completo, requiereSello: true, selloValidado: false })).toEqual(['el sello del jefe de taller con su contraseña']);
     expect(faltantesParaGuardar({ ...completo, firmadas: ['RESPONSABLE', 'JEFE_TALLER'] })).toEqual(['la firma de líder de bahía']);
-    expect(faltantesParaGuardar({ asunto: ' ', destinatarioNombre: '', desarrollo: '', novedades: 0, calificacion: null, selloValidado: false, firmadas: [] })).toHaveLength(8);
+    expect(faltantesParaGuardar({ asunto: ' ', destinatarioNombre: '', desarrollo: '', novedades: 0, calificacion: null, selloValidado: false, requiereSello: true, firmadas: [] })).toHaveLength(8);
     // La recepción no se firma al guardar: la firma un Admin o Super Admin al aprobar.
     expect(faltantesParaGuardar({ ...completo, firmadas: ['RESPONSABLE', 'JEFE_TALLER', 'LIDER_BAHIA'] })).toEqual([]);
   });
 
-  it('si el jefe de taller no estuvo, no se exige su contraseña, pero el taller sí firma con nombre escrito', () => {
-    const sinJefe = { ...completo, jefePresente: false, selloValidado: false, firmadas: ['RESPONSABLE', 'JEFE_TALLER', 'LIDER_BAHIA'] };
-    expect(faltantesParaGuardar(sinJefe)).toEqual([]);
-    expect(faltantesParaGuardar({ ...sinJefe, firmadas: ['RESPONSABLE'] })).toEqual(['la firma de taller', 'la firma de líder de bahía']);
-    // Si estuvo, sigue pidiéndose todo.
-    expect(faltantesParaGuardar({ ...sinJefe, jefePresente: true })).toEqual(['el jefe de taller con su contraseña']);
+  it('con sello en la agencia se exige su contraseña siempre; sin sello solo la firma con nombre', () => {
+    const conSello = { ...completo, requiereSello: true };
+    expect(faltantesParaGuardar(conSello)).toEqual([]);
+    expect(faltantesParaGuardar({ ...conSello, selloValidado: false })).toEqual(['el sello del jefe de taller con su contraseña']);
+    // Sin sello (agencia sin sello asignado) no hay contraseña, pero el taller sí firma.
+    const sinSello = { ...completo, requiereSello: false, selloValidado: false, firmadas: ['RESPONSABLE', 'JEFE_TALLER', 'LIDER_BAHIA'] };
+    expect(faltantesParaGuardar(sinSello)).toEqual([]);
+    expect(faltantesParaGuardar({ ...sinSello, firmadas: ['RESPONSABLE', 'LIDER_BAHIA'] })).toEqual(['la firma de taller']);
   });
 
   it('solo acepta imágenes en data URL de tamaño razonable', () => {

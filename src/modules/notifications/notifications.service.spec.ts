@@ -236,3 +236,17 @@ describe('NotificationsService', () => {
     });
   });
 });
+
+describe('roles sin la página Notificaciones', () => {
+  it('no se les guarda ni se les emite la notificación, y al resto sí', async () => {
+    const { service, prisma, gateway } = build();
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'sin', role: { namerol: 'X', capacidades: ['pagina.dashboard'] } },
+      { id: 'con', role: { namerol: 'Y', capacidades: ['pagina.dashboard', 'pagina.notificaciones'] } },
+      { id: 'viejo', role: { namerol: 'Z', capacidades: ['dashboard.ver'] } },
+    ]);
+    await service.notificarUsuarios(['sin', 'con', 'viejo'], 'T', 'B', undefined, { tipo: 'STOCK_CRITICO' });
+    expect(prisma.notification.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({ userId: 'con' }), expect.objectContaining({ userId: 'viejo' })] });
+    expect(gateway.emitToUsers).toHaveBeenCalledWith(['con', 'viejo'], 'notification:new', expect.anything());
+  });
+});

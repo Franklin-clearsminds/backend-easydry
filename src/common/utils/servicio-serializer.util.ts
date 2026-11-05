@@ -68,6 +68,10 @@ export function serializeServicioLavado(s: any): any {
     ? (s.horaIngreso instanceof Date ? s.horaIngreso.toISOString() : String(s.horaIngreso))
     : (s.createdAt instanceof Date ? s.createdAt.toISOString() : new Date().toISOString());
 
+  const fechaInicioStr = s.horaInicio
+    ? (s.horaInicio instanceof Date ? s.horaInicio.toISOString() : String(s.horaInicio))
+    : null;
+
   const fechaSalidaStr = s.horaSalida
     ? (s.horaSalida instanceof Date ? s.horaSalida.toISOString() : String(s.horaSalida))
     : (s.estado === 'FINALIZADO' || s.estado === 'APROBADO' ? new Date().toISOString() : null);
@@ -129,6 +133,7 @@ export function serializeServicioLavado(s: any): any {
     // Tiempos y Fechas
     fecha: fechaIngresoStr.split('T')[0],
     horaIngreso: fechaIngresoStr,
+    horaInicio: fechaInicioStr,
     horaSalida: fechaSalidaStr,
     duracionMinutos,
     duracionFormateada,

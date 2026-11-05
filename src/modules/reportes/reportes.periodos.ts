@@ -28,6 +28,9 @@ export interface RangoResuelto {
 
 export type DivisionPeriodo = 'MES' | 'SEMANA' | 'DIA' | 'UNICO';
 
+/** Cómo pidió el usuario repartir el reporte; sin elegir se usa la que corresponde al tamaño del rango. */
+export const DIVISIONES_ELEGIBLES = ['UNICO', 'DIA', 'SEMANA', 'MES'] as const;
+
 export interface BloquePeriodo {
   clave: string;
   etiqueta: string;
@@ -41,12 +44,12 @@ const DIA_MS = 86_400_000;
 const OFFSET_EC_MS = 5 * 3_600_000;
 const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Mayor tamaño de un rango (en días) que se reparte por semanas; más allá se reparte por meses. */
-const MAX_DIAS_POR_SEMANAS = 62;
+/** Mayor tamaño de un rango (en días) que se entrega sin repartir; más allá se reparte por meses. */
+const MAX_DIAS_SIN_DIVIDIR = 62;
 
 const aUtc = (iso: string): number => Date.parse(`${iso}T12:00:00Z`);
 const deUtc = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
-const sumarDias = (iso: string, dias: number): string => deUtc(aUtc(iso) + dias * DIA_MS);
+export const sumarDias = (iso: string, dias: number): string => deUtc(aUtc(iso) + dias * DIA_MS);
 const diasEntre = (desde: string, hasta: string): number => Math.round((aUtc(hasta) - aUtc(desde)) / DIA_MS) + 1;
 const pad = (n: number): string => String(n).padStart(2, '0');
 
@@ -147,22 +150,22 @@ export function resolverRango(filtro: FiltroPeriodo, ahora: Date = new Date()): 
   }
 }
 
-/** Cómo se reparte un rango: año (y rangos largos) en meses, mes en semanas, semana en días y un solo día sin dividir. */
+/** Cómo se reparte un rango: año (y rangos largos) en meses, una semana o menos en días; un mes o un solo día sin dividir (nunca por semanas). */
 export function divisionDe(rango: Pick<RangoResuelto, 'desde' | 'hasta'>): DivisionPeriodo {
   const dias = diasEntre(rango.desde, rango.hasta);
   if (dias <= 1) return 'UNICO';
   if (dias <= 7) return 'DIA';
-  if (dias <= MAX_DIAS_POR_SEMANAS) return 'SEMANA';
+  if (dias <= MAX_DIAS_SIN_DIVIDIR) return 'UNICO';
   return 'MES';
 }
 
 /** Bloques consecutivos que cubren el rango completo (los extremos quedan recortados al rango pedido). */
-export function dividirRango(rango: Pick<RangoResuelto, 'desde' | 'hasta'>): { division: DivisionPeriodo; bloques: BloquePeriodo[] } {
-  const division = divisionDe(rango);
+export function dividirRango(rango: Pick<RangoResuelto, 'desde' | 'hasta'>, elegida?: DivisionPeriodo): { division: DivisionPeriodo; bloques: BloquePeriodo[] } {
+  const division = elegida ?? divisionDe(rango);
   const bloques: BloquePeriodo[] = [];
 
   if (division === 'UNICO') {
-    bloques.push({ clave: rango.desde, etiqueta: etiquetaDia(rango.desde), desde: rango.desde, hasta: rango.hasta });
+    bloques.push({ clave: rango.desde, etiqueta: etiquetaRango(rango.desde, rango.hasta), desde: rango.desde, hasta: rango.hasta });
   } else if (division === 'DIA') {
     for (let d = rango.desde; d <= rango.hasta; d = sumarDias(d, 1)) {
       const nombre = DIAS[new Date(aUtc(d)).getUTCDay()];

@@ -135,9 +135,11 @@ export class StorageController {
     if (CLAVE_MAQUINARIA.test(key)) {
       // Cada carpeta de la máquina la ve quien tiene el permiso de esa pantalla: la foto y la ficha técnica
       // (perfil) son parte de ver la máquina; las demás, de incidentes, mantenimientos o limpiezas.
-      const permisosMaquinaria = ['maquinaria.trazabilidad', 'mantenimientos.ver'];
+      // Las fotos de limpieza son solo de la supervisión: las abre únicamente quien tiene `limpiezas.fotos`
+      // (quien registra la limpieza no las ve, ni siquiera con trazabilidad o mantenimientos).
+      const esLimpieza = /\/limpiezas\//i.test(key);
+      const permisosMaquinaria = esLimpieza ? ['limpiezas.fotos'] : ['maquinaria.trazabilidad', 'mantenimientos.ver'];
       if (/\/perfil\//i.test(key)) permisosMaquinaria.push('maquinaria.ver');
-      else if (/\/limpiezas\//i.test(key)) permisosMaquinaria.push('limpiezas.ver');
       else if (/\/incidentes\//i.test(key)) permisosMaquinaria.push('incidentes.ver');
       if (!tieneAlgunPermiso(user, permisosMaquinaria)) {
         throw new ForbiddenException(
@@ -150,7 +152,7 @@ export class StorageController {
       }
     } else if (CLAVE_ENVIO.test(key)) {
       // Fotos de recepción, rechazo y resolución de un envío: quien ve envíos o los resuelve.
-      if (!tieneAlgunPermiso(user, ['despachos.ver', 'envios.confirmar', 'envios.rechazar', 'envios.faltantes'])) {
+      if (!tieneAlgunPermiso(user, ['despachos.ver', 'envios.crear', 'envios.confirmar', 'envios.rechazar', 'envios.faltantes', 'envios.aprobar'])) {
         throw new ForbiddenException('No tienes permiso para ver la evidencia de envíos.');
       }
     } else if (CLAVE_AUDITORIA.test(key)) {

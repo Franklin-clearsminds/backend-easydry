@@ -34,15 +34,15 @@ describe('pantallas derivadas de los permisos', () => {
     expect(m).not.toContain('usuarios');
   });
 
-  it('el coordinador de mantenimiento ve Inventario en cuanto se le da la página Inventario', () => {
-    const r = ROLES_BASE.find((x) => x.namerol === 'COORD_MANTENIMIENTO')!;
-    expect(pantallas('COORD_MANTENIMIENTO')).not.toContain('inventario');
-    expect(modulosDeCapacidades([...r.capacidades, 'pagina.inventario'], r.namerol)).toContain('inventario');
+  it('los coordinadores (servicios especiales, mantenimiento, comercial) y el jefe comercial ven Inventario', () => {
+    for (const rol of ['COORD_SERVICIOS_ESPECIALES', 'COORD_MANTENIMIENTO', 'COORD_COMERCIAL', 'JEFE_COMERCIAL']) {
+      expect(pantallas(rol), rol).toContain('inventario');
+    }
   });
 
   it('pantallas de los roles oficiales', () => {
-    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
-    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'maquinaria', 'taller-tecnico', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
+    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'reportes', 'perfil']);
+    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'maquinaria', 'taller-tecnico', 'inventario', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
     // El líder (y su reemplazo), el pulidor y el lavador solo consultan sus informes y auditorías 5S.
     for (const rol of ['LIDER', 'BACKUP', 'PULIDOR', 'LAVADOR']) {
       expect(pantallas(rol), rol).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));

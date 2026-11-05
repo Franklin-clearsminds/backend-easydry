@@ -47,7 +47,7 @@ describe('catálogo de permisos', () => {
 });
 
 describe('matriz acordada de permisos por rol', () => {
-  it('el coordinador es el único que crea servicios especiales', () => {
+  it('los administradores no crean servicios especiales para sí mismos (lo hacen el coordinador y el pulidor)', () => {
     expect(
       ROLES_BASE.find((r) => r.namerol === 'SUPER_ADMIN')!.capacidades,
     ).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'especiales.crear')));
@@ -67,7 +67,10 @@ describe('matriz acordada de permisos por rol', () => {
 
   it('auditar (hacer informes de inspección y auditorías 5S) lo pueden todos los roles menos líder, Backup, auxiliar, lavador y pulidor', () => {
     const noAudita = ['AUXILIAR', 'BACKUP', 'LAVADOR', 'LIDER', 'PULIDOR'];
-    const auditan = ROLES_BASE.map((r) => r.namerol).filter((n) => !noAudita.includes(n)).sort();
+    // El aprobador solo aprueba servicios: no tiene informes ni auditorías 5S.
+    const auditan = ROLES_BASE.map((r) => r.namerol).filter((n) => !noAudita.includes(n) && n !== 'APROBADOR').sort();
+    const caps0 = ROLES_BASE.find((r) => r.namerol === 'APROBADOR')!.capacidades;
+    expect(caps0.filter((c) => /^(informes|inspecciones|auditorias)\./.test(c))).toEqual([]);
     expect(rolesCon('informes.crear')).toEqual(auditan);
     expect(rolesCon('inspecciones.crear')).toEqual(auditan);
     expect(rolesCon('informes.firmar')).toEqual(auditan);
@@ -100,7 +103,7 @@ describe('matriz acordada de permisos por rol', () => {
 
     expect(backup.capacidades).toEqual(lider.capacidades);
     expect(backup.ambito).toBe('AGENCIA');
-    expect(supervisor.capacidades).toContain('backup.gestionar');
+    expect(supervisor.capacidades).not.toContain('backup.gestionar'); // solo consulta usuarios
     expect(supervisor.capacidades).not.toContain('usuarios.gestionar');
   });
 
@@ -152,7 +155,7 @@ describe('matriz acordada de permisos por rol', () => {
     ]);
   });
 
-  it('servicios especiales: el coordinador crea, reasigna y anula; el pulidor opera', () => {
+  it('servicios especiales: el coordinador crea, reasigna y anula; el pulidor crea las suyas y las opera', () => {
     expect(rolesCon('especiales.reasignar')).toEqual([
       'ADMIN',
       'COORD_SERVICIOS_ESPECIALES',
@@ -171,6 +174,7 @@ describe('matriz acordada de permisos por rol', () => {
     ]);
     expect(rolesCon('especiales.crear')).toEqual([
       'COORD_SERVICIOS_ESPECIALES',
+      'PULIDOR',
     ]);
   });
 
@@ -349,17 +353,18 @@ describe('matriz acordada de permisos por rol', () => {
         'SUPERVISOR',
         'SUPER_ADMIN',
       ];
-      expect(rolesCon('reportes.ver')).toEqual(acordados);
+      // El aprobador saca solo el PDF de sus servicios (el servidor lo limita a esos reportes y a 30 días).
+      expect(rolesCon('reportes.ver')).toEqual([...acordados, 'APROBADOR'].sort());
       // Exportar sale con el mismo acceso: nadie exporta sin poder ver el reporte.
       expect(rolesCon('reportes.excel')).toEqual(acordados);
-      expect(rolesCon('reportes.pdf')).toEqual(acordados);
+      expect(rolesCon('reportes.pdf')).toEqual([...acordados, 'APROBADOR'].sort());
     });
 
     it('el supervisor y el coordinador de servicios especiales sacan los reportes de los módulos que tienen activos', () => {
       expect(rolesCon('reportes.ver')).toEqual(expect.arrayContaining(['SUPERVISOR', 'COORD_SERVICIOS_ESPECIALES']));
-      expect(reportesDe('COORD_SERVICIOS_ESPECIALES')).toContain('servicios-especiales');
-      expect(reportesDe('COORD_SERVICIOS_ESPECIALES')).not.toContain('insumos-inventario'); // no tiene el módulo de inventario
-      expect(reportesDe('SUPERVISOR')).toEqual(expect.arrayContaining(['servicios-generales', 'servicios-especiales', 'insumos-inventario']));
+      expect(reportesDe('COORD_SERVICIOS_ESPECIALES')).toContain('servicios-lavado');
+      expect(reportesDe('COORD_SERVICIOS_ESPECIALES')).toContain('insumos-inventario'); // ve el inventario (solo lectura, de su región)
+      expect(reportesDe('SUPERVISOR')).toEqual(expect.arrayContaining(['servicios-lavado', 'insumos-inventario']));
     });
 
     it('todos los que sacan reportes también crean informes de inspección y auditorías 5S, y ven esos reportes', () => {
@@ -392,9 +397,7 @@ describe('matriz acordada de permisos por rol', () => {
       );
       for (const id of [
         'agencias-listado',
-        'lavadores-listado',
-        'servicios-generales',
-        'servicios-especiales',
+        'servicios-lavado',
         'maquinaria-asignada',
         'incidentes',
         'mantenimientos',
@@ -403,28 +406,25 @@ describe('matriz acordada de permisos por rol', () => {
       }
     });
 
-    it('el coordinador de bodega no ve los reportes de servicios, lavadores ni agencias', () => {
+    it('el coordinador de bodega ve el listado de lavadores y pulidores, pero no los reportes de servicios ni de agencias', () => {
       const vistos = reportesDe('COORD_BODEGA');
       expect(vistos).toEqual(
-        expect.arrayContaining(['insumos-inventario', 'stock-ubicacion', 'kardex']),
+        expect.arrayContaining(['insumos-inventario', 'stock-ubicacion', 'kardex', 'lavadores-listado']),
       );
       for (const id of [
         'agencias-listado',
-        'lavadores-listado',
-        'servicios-generales',
-        'servicios-especiales',
+        'servicios-lavado',
       ]) {
         expect(vistos).not.toContain(id);
       }
     });
 
-    it('el jefe comercial no ve el reporte de precios (no tiene permiso de precios)', () => {
-      expect(reportesDe('JEFE_COMERCIAL')).not.toContain('catalogo-precios');
+    it('el jefe comercial ve el reporte de precios (tiene permiso de precios)', () => {
+      expect(reportesDe('JEFE_COMERCIAL')).toContain('catalogo-precios');
     });
 
-    it('los roles operativos (aprobador, líder, pulidor, técnico…) no sacan reportes', () => {
+    it('los roles operativos (líder, pulidor, técnico…) no sacan reportes', () => {
       for (const n of [
-        'APROBADOR',
         'LIDER',
         'BACKUP',
         'AUXILIAR',

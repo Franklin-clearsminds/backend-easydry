@@ -55,6 +55,7 @@ import {
 } from './dto/bahias.dto.js';
 import {
   AsignarUsuarioAgenciaDto,
+  ListHistorialCambiosAgenciaDto,
   ListUsuariosAgenciaDto,
   ToggleEstadoUsuarioDto,
   UpdateUsuarioDto,
@@ -336,6 +337,14 @@ export class AgenciasController {
   }
 
   @Permiso('agencias.ver')
+  @Post('usuarios/historial-agencia')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Historial de cambios de agencia (fecha y hora, de dónde a dónde, quién y por qué) del personal del alcance' })
+  async historialCambiosAgencia(@Body() dto: ListHistorialCambiosAgenciaDto, @CurrentUser() user: any) {
+    return this.agenciasService.listHistorialCambiosAgencia(dto, user);
+  }
+
+  @Permiso('agencias.ver')
   @Post('bahias/historial-asignaciones')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar historial de asignaciones de operadores por bahía o por operador' })
@@ -375,7 +384,7 @@ export class AgenciasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Asignar o reasignar usuario a una agencia o región (SUPER_ADMIN, ADMIN)' })
   async asignarUsuario(@Body() dto: AsignarUsuarioAgenciaDto, @CurrentUser() user: any) {
-    return this.agenciasService.asignarUsuario(dto);
+    return this.agenciasService.asignarUsuario(dto, user);
   }
 
   @Permiso('usuarios.ver')

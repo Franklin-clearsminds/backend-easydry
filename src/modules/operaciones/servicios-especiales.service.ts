@@ -195,6 +195,10 @@ export class ServiciosEspecialesService {
       tiempoTotalSeg: tiempoTotalCalculado,
       tiempoTotalFormateado: formatSeconds(tiempoTotalCalculado),
       creadoPorNombre: item.creadoPorNombre || null,
+      // La registró el propio pulidor que la atiende: su hora de registro es la de inicio (cuando ya sube la evidencia), no la de
+      // creación. Si la creó un coordinador u otro, el registro es la creación y el inicio se ve aparte.
+      creadoPorOperador: this._creadaPorOperador(item),
+      registradoEn: (this._creadaPorOperador(item) && item.fechaInicio ? item.fechaInicio : item.createdAt) ?? null,
       historialPausas: Array.isArray(item.historialPausas)
         ? item.historialPausas
         : [],
@@ -442,6 +446,15 @@ export class ServiciosEspecialesService {
     }
 
     return respuesta;
+  }
+
+  private _creadaPorOperador(item: any): boolean {
+    if (!item?.creadoPorId) return false;
+    const asignados: string[] = Array.isArray(item.operadoresAsignados)
+      ? item.operadoresAsignados.map((x: any) => x.operadorId)
+      : [];
+    if (item.operadorId) asignados.push(item.operadorId);
+    return asignados.includes(item.creadoPorId);
   }
 
   async findOneRaw(id: string) {
@@ -1920,6 +1933,8 @@ export class ServiciosEspecialesService {
     const data: any = {
       estado: 'Completado',
       fechaFin,
+      // Si se completa sin haberla iniciado, la hora de inicio no queda vacía (se ve como «Aún no inicia» en una OT terminada).
+      ...(item.fechaInicio ? {} : { fechaInicio: fechaFin }),
       tiempoPausaTotalSeg: tiempoPausaTotal,
       tiempoEfectivoSeg,
       fechaUltimaPausa: null,
