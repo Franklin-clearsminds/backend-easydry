@@ -130,7 +130,7 @@ npx prisma db seed
 ```
 `SEED_ACTUALIZAR_ROLES=SI` restablece los permisos de los roles oficiales a los de `prisma/data/roles.json` (los permisos tal como están en «Roles y permisos»); `SEED_RESET=SI` **vacía toda la base** (en producción exige además `SEED_CONFIRMAR_PRODUCCION=SI`).
 
-Los demás usuarios (lavadores, pulidores, líderes, aprobadores, etc.) se cargan con el importador del Excel `DATOS AGENCIAS.xlsx` (`pnpm run prisma:import-agencias`, ver [USUARIOS-DEMO.md](../USUARIOS-DEMO.md)) o se crean desde el módulo **Usuarios** de la web.
+El resto del personal (lavadores y pulidores), las agencias, los servicios y la maquinaria se cargan con un solo script desde los cinco Excel de la raíz del repositorio (`pnpm run prisma:cargar-excels`, ver [USUARIOS-DEMO.md](../USUARIOS-DEMO.md)) o se crean desde el módulo **Usuarios** de la web.
 
 #### C. Crear una nueva migración (Durante el desarrollo de nuevas entidades)
 Cuando agregues o modifiques modelos en `prisma/schema.prisma`:
