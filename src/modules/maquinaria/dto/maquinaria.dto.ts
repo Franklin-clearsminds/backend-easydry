@@ -72,6 +72,13 @@ export class UpdateMaquinariaDto {
   @IsNotEmpty()
   id: string;
 
+  @ApiPropertyOptional({ description: 'Código nuevo de la máquina. Solo se puede cambiar mientras no tenga fotos, ficha técnica ni evidencias guardadas (esos archivos viven en la carpeta del código).' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(40)
+  codigo?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

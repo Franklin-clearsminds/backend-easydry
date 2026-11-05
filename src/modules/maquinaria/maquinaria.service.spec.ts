@@ -405,6 +405,48 @@ describe('MaquinariaService — reglas de trazabilidad', () => {
     });
   });
 
+  describe('cambio de código', () => {
+    const conConteos = (prisma: Record<string, any>, evInc = 0, evMant = 0, limp = 0) => {
+      prisma.evidenciaIncidente = { count: vi.fn().mockResolvedValue(evInc) };
+      prisma.evidenciaMantenimiento = { count: vi.fn().mockResolvedValue(evMant) };
+      prisma.limpiezaMaquinaria.count.mockResolvedValue(limp);
+    };
+
+    it('cambia el código provisional de una máquina sin archivos y lo deja en la línea de tiempo', async () => {
+      const { service, prisma, tx } = build();
+      prisma.maquinaria.findUniqueOrThrow.mockResolvedValue({ ...maquina(), codigo: 'SIN-COD-001', fotoUrl: null, fichaTecnicaUrl: null });
+      prisma.maquinaria.findUnique.mockImplementation(async ({ where }: any) => (where.codigo === 'A047' ? null : maquina()));
+      conConteos(prisma);
+      await service.update({ id: 'm1', codigo: ' a047 ' } as never, admin);
+      expect(tx.maquinaria.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ codigo: 'A047' }) }));
+    });
+
+    it('rechaza un código que ya usa otra máquina', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUniqueOrThrow.mockResolvedValue({ ...maquina(), codigo: 'SIN-COD-001', fotoUrl: null, fichaTecnicaUrl: null });
+      prisma.maquinaria.findUnique.mockImplementation(async ({ where }: any) => (where.codigo === 'A001' ? { id: 'otra' } : maquina()));
+      conConteos(prisma);
+      await expect(service.update({ id: 'm1', codigo: 'A001' } as never, admin)).rejects.toThrow(/Ya existe un equipo/);
+    });
+
+    it('no deja cambiar el código si la máquina ya tiene foto, ficha o evidencias', async () => {
+      for (const caso of [{ foto: 'x.jpg' }, { ficha: 'y.jpg' }, { evInc: 1 }, { evMant: 2 }, { limp: 1 }]) {
+        const { service, prisma } = build();
+        prisma.maquinaria.findUniqueOrThrow.mockResolvedValue({ ...maquina(), codigo: 'SIN-COD-001', fotoUrl: caso.foto ?? null, fichaTecnicaUrl: caso.ficha ?? null });
+        prisma.maquinaria.findUnique.mockImplementation(async ({ where }: any) => (where.codigo === 'A050' ? null : maquina()));
+        conConteos(prisma, caso.evInc ?? 0, caso.evMant ?? 0, caso.limp ?? 0);
+        await expect(service.update({ id: 'm1', codigo: 'A050' } as never, admin)).rejects.toThrow(/no se puede cambiar/);
+      }
+    });
+
+    it('un código igual al actual no cuenta como cambio', async () => {
+      const { service, prisma } = build();
+      prisma.maquinaria.findUniqueOrThrow.mockResolvedValue({ ...maquina(), codigo: 'A001', fotoUrl: null, fichaTecnicaUrl: null });
+      const r = await service.update({ id: 'm1', codigo: 'a001' } as never, admin);
+      expect(r).toMatchObject({ sinCambios: true });
+    });
+  });
+
   describe('alcance regional', () => {
     it('un coordinador no puede mover una máquina de otra región', async () => {
       const { service, prisma } = build();

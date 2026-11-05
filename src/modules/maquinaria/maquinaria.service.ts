@@ -717,8 +717,19 @@ export class MaquinariaService {
       await this.verificarImagenPerfil(existing.codigo, dto.fichaTecnicaUrl, 'ficha-tecnica');
     }
 
-    const { id, agenciaId: _a, bahiaId: _b, ...cambiosDto } = dto;
+    const { id, agenciaId: _a, bahiaId: _b, codigo: codigoPedido, ...cambiosDto } = dto;
     const cambios = this.diff(actual as unknown as Record<string, unknown>, cambiosDto, MaquinariaService.CAMPOS_EDITABLES);
+    // El código se puede corregir (por ejemplo el provisional «SIN-COD-001» de la carga de Excel) mientras no haya archivos en su carpeta.
+    let codigoNuevo: string | null = null;
+    if (codigoPedido !== undefined) {
+      const c = codigoPedido.trim().toUpperCase().replace(/\s+/g, '-');
+      if (!c) throw new BadRequestException('El código no puede quedar vacío.');
+      if (c !== actual.codigo) {
+        await this.validarCambioDeCodigo(actual, c);
+        codigoNuevo = c;
+        cambios.codigo = { antes: actual.codigo, despues: c };
+      }
+    }
     if (!Object.keys(cambios).length) {
       return { success: true, data: actual, sinCambios: true };
     }
@@ -737,8 +748,10 @@ export class MaquinariaService {
 
     const data: Prisma.MaquinariaUpdateInput = {};
     for (const campo of Object.keys(cambios)) {
+      if (campo === 'codigo') continue;
       (data as Record<string, unknown>)[campo] = (cambiosDto as Record<string, unknown>)[campo];
     }
+    if (codigoNuevo) data.codigo = codigoNuevo;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.maquinaria.update({
@@ -754,6 +767,23 @@ export class MaquinariaService {
     });
 
     return { success: true, data: updated };
+  }
+
+  /**
+   * Un código nuevo debe ser único y la máquina no puede tener fotos, ficha técnica ni evidencias: esos archivos se guardan en la
+   * carpeta del código y cambiarlo los dejaría huérfanos.
+   */
+  private async validarCambioDeCodigo(m: { id: string; codigo: string; fotoUrl: string | null; fichaTecnicaUrl: string | null }, nuevo: string) {
+    const repetido = await this.prisma.maquinaria.findUnique({ where: { codigo: nuevo }, select: { id: true } });
+    if (repetido) throw new ConflictException(`Ya existe un equipo con el código ${nuevo}.`);
+    const [evIncidentes, evMantenimientos, limpiezas] = await Promise.all([
+      this.prisma.evidenciaIncidente.count({ where: { incidente: { maquinariaId: m.id } } }),
+      this.prisma.evidenciaMantenimiento.count({ where: { mantenimiento: { maquinariaId: m.id } } }),
+      this.prisma.limpiezaMaquinaria.count({ where: { maquinariaId: m.id, NOT: { fotos: { isEmpty: true } } } }),
+    ]);
+    if (m.fotoUrl || m.fichaTecnicaUrl || evIncidentes || evMantenimientos || limpiezas) {
+      throw new ConflictException(`La máquina ${m.codigo} ya tiene fotos, ficha técnica o evidencias guardadas con ese código: no se puede cambiar.`);
+    }
   }
 
   /** Activar / desactivar (desactivar equivale a dar de baja). Siempre queda quién, cuándo y por qué. */
