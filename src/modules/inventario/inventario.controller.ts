@@ -1,7 +1,7 @@
 import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
 import { tienePermiso } from '../../common/permisos/capacidades.js';
 import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ForbiddenException, UseInterceptors } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { InventarioService } from './inventario.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
@@ -188,6 +188,7 @@ export class InventarioController {
   @Post('stock/resumen')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Dashboard rápido: totales de stock, bajo mínimo y alertas pendientes' })
+  @ApiBody({ required: false, schema: { type: 'object', properties: { agenciaId: { type: 'string', description: 'Agencia (alias: sucursalId)' }, sucursalId: { type: 'string', description: 'Alias de agenciaId' }, pulidorId: { type: 'string', description: 'Ver el stock en custodia de este pulidor' } } } })
   async resumenStock(@Body() body: { agenciaId?: string; sucursalId?: string; pulidorId?: string }, @CurrentUser() user: any) {
     const agenciaId = await this.inventarioService.agenciaEnAlcance(user, body.agenciaId || body.sucursalId);
     const pulidorId = body.pulidorId ? await this.inventarioService.pulidorEnAlcance(user, body.pulidorId) : undefined;
@@ -348,6 +349,7 @@ export class InventarioController {
   @Post('despachos/faltantes/list')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Faltantes de envíos recibidos de forma parcial, por resolver por la bodega de origen' })
+  @ApiBody({ required: false, schema: { type: 'object', properties: { estado: { type: 'string', enum: ['PENDIENTE', 'RESUELTO'], default: 'PENDIENTE' } } } })
   async listFaltantes(@Body() dto: { estado?: string }, @CurrentUser() user: any) {
     return this.inventarioService.listFaltantesDespacho(dto, user);
   }
@@ -356,6 +358,7 @@ export class InventarioController {
   @Post('despachos/faltantes/resolver')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Devolver al stock o dar de baja lo que no llegó en un envío' })
+  @ApiBody({ schema: { type: 'object', required: ['id', 'resolucion'], properties: { id: { type: 'string', description: 'ID del faltante' }, resolucion: { type: 'string', enum: ['ENTREGADO', 'DEVOLVER', 'BAJA'] }, observacion: { type: 'string' }, evidencias: { type: 'array', items: { type: 'string' }, description: 'Claves de fotos de evidencia' } } } })
   async resolverFaltante(@Body() dto: { id: string; resolucion: 'ENTREGADO' | 'DEVOLVER' | 'BAJA'; observacion?: string; evidencias?: string[] }, @CurrentUser() user: any) {
     return this.inventarioService.resolverFaltanteDespacho(dto, user);
   }
@@ -372,6 +375,7 @@ export class InventarioController {
   @Post('despachos/agencia/pendientes')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar despachos pendientes de confirmación para una agencia (LIDER_OPERADOR / LIDER_AGENCIA)' })
+  @ApiBody({ required: false, schema: { type: 'object', properties: { agenciaId: { type: 'string', description: 'Agencia (alias: sucursalId)' }, sucursalId: { type: 'string', description: 'Alias de agenciaId' } } } })
   async obtenerDespachosPendientesAgencia(
     @Body() dto: { agenciaId?: string; sucursalId?: string },
     @CurrentUser() user: any,

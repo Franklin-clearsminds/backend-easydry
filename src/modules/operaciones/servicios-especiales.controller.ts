@@ -1,6 +1,6 @@
 import { OcultarPreciosInterceptor } from '../../common/interceptors/ocultar-precios.interceptor.js';
 import { Controller, Post, Body, HttpCode, HttpStatus, UseInterceptors } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { ServiciosEspecialesService } from './servicios-especiales.service.js';
 import {
   QueryServicioEspecialDto,
@@ -36,6 +36,7 @@ export class ServiciosEspecialesController {
   @Post('detail')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Detalle de un servicio especial por ID o clientUuid' })
+  @ApiBody({ schema: { type: 'object', required: ['id'], properties: { id: { type: 'string', description: 'ID o clientUuid del servicio especial' } } } })
   @ApiResponse({ status: 200, description: 'Detalle completo' })
   async detail(@Body() body: { id: string }, @CurrentUser() user: any) {
     return this.service.findOne(body.id, user);
@@ -45,6 +46,7 @@ export class ServiciosEspecialesController {
   @Post('historial')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Registro de decisiones de un servicio especial: quién lo anuló y por qué' })
+  @ApiBody({ schema: { type: 'object', required: ['id'], properties: { id: { type: 'string', description: 'ID o clientUuid del servicio especial' } } } })
   async historial(@Body() body: { id: string }, @CurrentUser() user: any) {
     return this.service.historialDecisiones(body.id, user);
   }
@@ -148,6 +150,7 @@ export class ServiciosEspecialesController {
   @Post('pulidores')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar pulidores activos por región o sucursal' })
+  @ApiBody({ required: false, schema: { type: 'object', properties: { regionId: { type: 'string', description: 'Filtrar por región' }, agenciaId: { type: 'string', description: 'Filtrar por agencia' } } } })
   @ApiResponse({ status: 200, description: 'Lista de pulidores zonales o de sucursal' })
   async pulidores(
     @Body() body: { regionId?: string; agenciaId?: string },
@@ -169,6 +172,7 @@ export class ServiciosEspecialesController {
   @Post('stock-pulidor')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Consultar existencias de químicos en custodia del pulidor' })
+  @ApiBody({ required: false, schema: { type: 'object', properties: { pulidorId: { type: 'string', description: 'Pulidor a consultar; si falta y quien llama es pulidor, se usa él mismo' } } } })
   @ApiResponse({ status: 200, description: 'Inventario personal del pulidor' })
   async stockPulidor(@Body() body: { pulidorId?: string }, @CurrentUser() user: any) {
     let pulidorId = body?.pulidorId ? String(body.pulidorId).trim() : '';

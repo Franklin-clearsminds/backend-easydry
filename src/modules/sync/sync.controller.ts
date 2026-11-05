@@ -1,5 +1,5 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, Headers } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { SyncService } from './sync.service.js';
 import { exigirPermisoSubida } from '../storage/upload-permissions.js';
 import type { GenerateUploadTicketDto } from '../storage/storage.service.js';
@@ -7,6 +7,7 @@ import { SyncPushDto, ReplayDlqDto, QueryPendingMediaDto } from './dto/sync-push
 import { SyncPullQueryDto } from './dto/sync-pull.dto.js';
 import { RegisterPushTokenDto } from './dto/sync-device.dto.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
+import { ConfirmarMediaDocDto, UploadTicketDocDto } from '../storage/storage.docs.js';
 
 import { Permiso, Publico } from '../../common/permisos/permisos.decorators.js';
 @ApiTags('Sincronización Offline Móvil')
@@ -68,6 +69,7 @@ export class SyncController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Genera ticket/URL prefirmada para subida binaria desacoplada de fotos (S3/Cloud)' })
+  @ApiBody({ type: UploadTicketDocDto })
   @ApiResponse({ status: 200, description: 'Ticket con URL de subida directa sin saturar JSON' })
   async getMediaTicket(
     @Body()
@@ -101,7 +103,9 @@ export class SyncController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Confirma la subida de foto y la asocia a la orden de trabajo' })
+  @ApiBody({ type: ConfirmarMediaDocDto })
   @ApiResponse({ status: 200, description: 'Foto vinculada con éxito' })
+  @ApiResponse({ status: 400, description: 'El archivo no corresponde al bucket administrado por EasyDry' })
   async confirmMediaUpload(
     @Body() body: {
       clientUuid: string;
@@ -142,6 +146,7 @@ export class SyncController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Listar mutaciones aisladas en la Dead-Letter Queue (Poison Pills)' })
+  @ApiBody({ required: false, schema: { type: 'object', properties: { resuelto: { type: 'boolean', description: 'true = ya resueltos; false = pendientes; omitido = todos' } } } })
   @ApiResponse({ status: 200, description: 'Lista de fallos de sincronización para soporte técnico' })
   async listDlq(@Body() body: { resuelto?: boolean }, @CurrentUser() user: any) {
     return this.syncService.listDeadLetterQueue(body?.resuelto, user);
@@ -152,6 +157,7 @@ export class SyncController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Marcar mutación de DLQ como resuelta' })
+  @ApiBody({ schema: { type: 'object', required: ['id'], properties: { id: { type: 'string', description: 'ID del registro de la DLQ' }, resuelto: { type: 'boolean', default: true, description: 'false reabre el registro' } } } })
   @ApiResponse({ status: 200, description: 'Registro actualizado' })
   async resolveDlq(@Body() body: { id: string; resuelto?: boolean }, @CurrentUser() user: any) {
     return this.syncService.resolveDeadLetterItem(body.id, body.resuelto !== false, user);

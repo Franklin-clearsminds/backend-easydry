@@ -443,7 +443,7 @@ export class EjecutarMantenimientoDto {
   @IsString()
   fechaFin?: string;
 
-  @ApiProperty({ description: 'Costo del mantenimiento. Obligatorio (se valida en el servicio).' })
+  @ApiPropertyOptional({ description: 'Costo del mantenimiento. Obligatorio al ejecutarlo (se valida en el servicio, no en el esquema).' })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()

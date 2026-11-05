@@ -106,13 +106,47 @@ async function bootstrap() {
   const swaggerActivo = process.env.NODE_ENV !== 'production' || process.env.SWAGGER_ENABLED === 'true';
   if (swaggerActivo) {
     const config = new DocumentBuilder()
-      .setTitle('EasyDry Enterprise API (100% POST & Body Encrypted)')
-      .setDescription('Backend central Node.js / NestJS con PostgreSQL, arquitectura 100% POST y cifrado simétrico AES-256-CBC en el cuerpo')
+      .setTitle('EasyDry Enterprise API')
+      .setDescription(
+        [
+          'Backend central Node.js / NestJS con PostgreSQL. Todas las rutas cuelgan de `/api/v1`.',
+          '',
+          '**Convenciones**',
+          '- Casi todas las operaciones son `POST` con los parámetros en el cuerpo JSON (así no quedan en la URL). Las únicas excepciones son `GET /storage/presigned-url` y `GET /storage/file`.',
+          '- Autenticación: `Authorization: Bearer <accessToken>` (botón *Authorize*). Rutas públicas: `auth/login`, `auth/refresh`, `auth/logout`, `sync/ping` y `GET /storage/file`.',
+          '- Navegador web: enviar `X-Client: web`; el refresh token viaja en una cookie HttpOnly y no en el cuerpo. La app móvil lo recibe y lo envía en el cuerpo.',
+          '- Cifrado opcional (AES-256-CBC): un cuerpo `{ "data": "<iv>:<cifrado>" }` se descifra solo, y la respuesta vuelve cifrada (`{ "data": ... }` con cabecera `x-encrypted: true`). También se puede pedir la respuesta cifrada con `x-encrypted: true` o `x-force-encrypted-response: true`. Sin esas marcas, el cuerpo va en claro. `storage/upload` (multipart) no se cifra.',
+          '- Errores de validación: `400` con `message` (lista de campos). Sin sesión: `401`. Sin permiso: `403`. Límite de peticiones excedido: `429`.',
+          '- Los permisos exigidos por cada ruta se aplican en el servidor según el rol del usuario.',
+        ].join('\n'),
+      )
       .setVersion('2.0')
       .addBearerAuth()
       .build();
 
     const document = SwaggerModule.createDocument(app, config);
+
+    // Errores que cualquier ruta puede devolver (guard de sesión/permisos, validación y límite de peticiones):
+    // se añaden a cada operación que no los documente, para no repetirlos en los ~260 controladores.
+    const erroresComunes: Record<string, string> = {
+      '400': 'Datos inválidos: `message` lista los campos que fallaron la validación',
+      '401': 'Sin sesión o token vencido',
+      '403': 'El rol del usuario no tiene el permiso requerido o el recurso está fuera de su alcance',
+      '429': 'Demasiadas peticiones: espera antes de reintentar',
+    };
+    for (const rutas of Object.values(document.paths ?? {})) {
+      for (const operacion of Object.values(rutas) as any[]) {
+        if (!operacion?.responses) continue;
+        const protegida = Array.isArray(operacion.security) && operacion.security.length > 0;
+        const conCuerpo = !!operacion.requestBody || (operacion.parameters ?? []).length > 0;
+        for (const [codigo, descripcion] of Object.entries(erroresComunes)) {
+          if (operacion.responses[codigo]) continue;
+          if ((codigo === '401' || codigo === '403') && !protegida) continue;
+          if (codigo === '400' && !conCuerpo) continue;
+          operacion.responses[codigo] = { description: descripcion };
+        }
+      }
+    }
     SwaggerModule.setup('api/docs', app, document);
   }
 

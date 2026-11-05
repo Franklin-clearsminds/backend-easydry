@@ -15,10 +15,14 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiOperation,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { UploadTicketDocDto } from './storage.docs.js';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { StorageService } from './storage.service.js';
@@ -59,7 +63,10 @@ export class StorageController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Genera un ticket de subida S3' })
-  @ApiResponse({ status: 200, description: 'Ticket de subida generado' })
+  @ApiBody({ type: UploadTicketDocDto })
+  @ApiResponse({ status: 200, description: 'Ticket de subida generado (ticketId, key, uploadUrl, publicUrl, headers, expiresInSeconds)' })
+  @ApiResponse({ status: 400, description: 'Tipo de evidencia o categoría no soportados' })
+  @ApiResponse({ status: 403, description: 'Sin permiso para subir esta categoría de evidencia' })
   async getUploadTicket(
     @Body() dto: GenerateUploadTicketDto,
     @CurrentUser() user: any,
@@ -90,7 +97,31 @@ export class StorageController {
   @ApiOperation({
     summary:
       'Sube un archivo a S3 a través del backend (evita CORS del navegador)',
+    description:
+      'Petición multipart/form-data: el archivo va en el campo `file` (máx. 20 MB) y el resto de campos del ticket van como campos de formulario. Este endpoint no admite cuerpo cifrado.',
   })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file', 'type'],
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'Archivo de evidencia (máx. 20 MB)' },
+        type: { type: 'string', description: 'Tipo de evidencia (ver /storage/ticket)' },
+        category: { type: 'string' },
+        clientUuid: { type: 'string' },
+        agenciaId: { type: 'string' },
+        servicioId: { type: 'string' },
+        maquinariaId: { type: 'string' },
+        incidenteId: { type: 'string' },
+        mantenimientoId: { type: 'string' },
+        fileName: { type: 'string' },
+        contentType: { type: 'string' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Archivo subido; devuelve key y publicUrl' })
+  @ApiResponse({ status: 400, description: 'El archivo de evidencia es obligatorio o el tipo no es válido' })
   async uploadFile(
     @UploadedFile() file: { buffer?: Buffer; mimetype?: string } | undefined,
     @Body() dto: GenerateUploadTicketDto,
@@ -125,7 +156,12 @@ export class StorageController {
   @ApiOperation({
     summary:
       'Obtiene la URL prefirmada temporal para visualizar o reproducir un archivo (requiere sesión)',
+    description: 'Excepción a la regla «todo es POST»: es un GET porque el navegador lo usa para pintar evidencias. La URL devuelta vale 1 hora.',
   })
+  @ApiQuery({ name: 'key', required: true, description: 'Clave S3 del archivo (o su URL completa)' })
+  @ApiResponse({ status: 200, description: 'URL temporal de lectura', schema: { type: 'object', properties: { url: { type: 'string' } } } })
+  @ApiResponse({ status: 400, description: 'Falta el parámetro key' })
+  @ApiResponse({ status: 403, description: 'Sin permiso o fuera de alcance para esa evidencia' })
   async getPresignedUrl(
     @Query('key') rawKey: string,
     @CurrentUser() user: any,
@@ -194,7 +230,13 @@ export class StorageController {
   @ApiOperation({
     summary:
       'Redirige a una URL temporal solo para avatares e imágenes del catálogo de insumos; el resto de archivos es privado (usa presigned-url)',
+    description: 'Público (sin sesión) para poder usarse en etiquetas <img>. Excepción a la regla «todo es POST».',
   })
+  @ApiQuery({ name: 'key', required: true, description: 'Clave S3 del avatar o de la imagen del catálogo de insumos' })
+  @ApiResponse({ status: 302, description: 'Redirección a la URL temporal del archivo' })
+  @ApiResponse({ status: 400, description: 'Falta el parámetro key' })
+  @ApiResponse({ status: 403, description: 'El archivo es privado: usa /storage/presigned-url' })
+  @ApiResponse({ status: 404, description: 'Archivo no encontrado' })
   async getFile(
     @Query('key') rawKey: string,
     @Res() res: Response,

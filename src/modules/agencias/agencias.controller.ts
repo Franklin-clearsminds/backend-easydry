@@ -14,7 +14,7 @@ import {
   HttpCode,
   HttpStatus,
   ForbiddenException, UseInterceptors } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { AgenciasService } from './agencias.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 
@@ -357,6 +357,7 @@ export class AgenciasController {
   @Post('bahias/listar-operadores')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Listar operadores activos asignados a una bahía' })
+  @ApiBody({ schema: { type: 'object', required: ['bahiaId'], properties: { bahiaId: { type: 'string', description: 'ID de la bahía' } } } })
   @ApiResponse({ status: 200, description: 'Listado de operadores activos de la bahía' })
   async listarOperadoresBahia(@Body() body: { bahiaId: string }, @CurrentUser() user: any) {
     return this.agenciasService.listarOperadoresDeBahia(body.bahiaId, user);

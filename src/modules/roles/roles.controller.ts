@@ -1,5 +1,5 @@
 import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { RolesService } from './roles.service.js';
 import { CreateRoleDto } from './dto/create-role.dto.js';
 import { UpdateRoleDto } from './dto/update-role.dto.js';
@@ -74,6 +74,7 @@ export class RolesController {
   @Post('delete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar o desactivar un rol por ID (POST Seguro)' })
+  @ApiBody({ schema: { type: 'object', required: ['id'], properties: { id: { type: 'string', description: 'ID del registro (rol)' } } } })
   @ApiResponse({ status: 200, description: 'Rol eliminado exitosamente' })
   @ApiResponse({ status: 404, description: 'Rol no encontrado' })
   async delete(@Body() body: { id: string }, @CurrentUser() user: any) {
