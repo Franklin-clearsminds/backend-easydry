@@ -119,6 +119,8 @@ export const PAGINAS: readonly PaginaDef[] = [
       // Una sola casilla para el personal: con ella se ve la lista completa, con cédula, correo y teléfono.
       accion('agencias.personal.ver', 'Ver personal completo de la agencia (con cédula, correo y teléfono)', ['usuarios.ver', 'datos.cedula.ver', 'datos.contacto.ver'], { migrarSi: ['usuarios.ver'] }),
       accion('agencias.precios.fijar', 'Fijar precios por agencia', ['agencias.precios.gestionar']),
+      // RRHH: la ubicación de la agencia es la referencia con la que se valida la timbrada de su personal.
+      accion('agencias.agencias.ubicacion', 'Configurar ubicación y radio de timbrada', ['rrhh.ubicaciones.gestionar'], { migrarSi: ['rrhh.ubicaciones.gestionar'] }),
       PRECIOS,
     ], ['agencias.consultar', 'agencias.crear', 'agencias.editar', 'agencias.estado', 'bahias.editar', 'agencias.precios.gestionar']),
     sub('agencias', 'regiones', 'Regiones', [], [
@@ -268,6 +270,7 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('inventario.bodegas.gestionar', 'Crear o editar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.bodegas.estado', 'Activar o desactivar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.bodegas.eliminar', 'Eliminar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
+      accion('inventario.bodegas.ubicacion', 'Configurar ubicación y radio de timbrada', ['rrhh.ubicaciones.gestionar'], { grupo: 'Catálogo' }),
       REAJUSTAR_STOCK,
       DESPACHAR_INSUMOS,
     ], ['inventario.ver']),
@@ -326,6 +329,17 @@ export const PAGINAS: readonly PaginaDef[] = [
   // Configuración de los sellos de los jefes de taller (marca de agua y contraseña de la firma). Solo Admin y Super Admin.
   pagina('sellos', 'Configuración de Sellos', '/configuracion-sellos', 'configuracion/sellos', [], [], [
     accion('sellos.gestionar', 'Crear y editar sellos de jefes de taller', ['sellos.gestionar']),
+  ]),
+
+  // RRHH: cada pantalla tiene su parte propia (lo mío) y la del equipo. Todos los roles menos ADMIN y SUPER_ADMIN timbran y reciben tareas.
+  pagina('rrhh-tareas', 'Tareas del personal', '/rrhh/tareas', 'rrhh/tareas', [], [
+    sub('rrhh-tareas', 'mis', 'Mis tareas', ['rrhh.tareas.propias'], []),
+    sub('rrhh-tareas', 'asignadas', 'Tareas asignadas', ['rrhh.tareas.asignar'], []),
+  ]),
+
+  pagina('rrhh-timbradas', 'Timbradas', '/rrhh/timbradas', 'rrhh/timbradas', [], [
+    sub('rrhh-timbradas', 'marcar', 'Timbrar', ['rrhh.timbrar'], []),
+    sub('rrhh-timbradas', 'equipo', 'Timbradas del equipo', ['rrhh.timbradas.ver'], []),
   ]),
 
   pagina('usuarios', 'Usuarios y Roles', '/usuarios', 'usuarios', [], [

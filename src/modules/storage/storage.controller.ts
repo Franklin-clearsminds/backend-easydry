@@ -47,6 +47,11 @@ const CLAVE_AGENCIA = /^(?:thumbs\/|view\/)?agencias\/([^/]+)\//i;
 const CLAVE_ENVIO = /^(thumbs\/|view\/)?inventario\/envios\//i;
 /** Evidencias de auditorías: `agencias/<agencia>/auditorias/<informes|5s>/<id>/…`. */
 const CLAVE_AUDITORIA = /^(?:thumbs\/|view\/)?agencias\/[^/]+\/auditorias\//i;
+/** Fotos de timbrada y adjuntos de tareas de RRHH: `rrhh/<timbradas|tareas>/<usuario>/…`. Privadas: las ve su dueño o quien corresponde. */
+const CLAVE_RRHH = /^(?:thumbs\/|view\/)?rrhh\//i;
+/** Tipos de archivo de RRHH: la carpeta lleva el id de quien sube, que sale de la sesión y no del cliente. */
+const TIPOS_RRHH = ['FOTO_TIMBRADA', 'FOTO_TAREA', 'VIDEO_TAREA', 'DOCUMENTO_TAREA'];
+const esSubidaRrhh = (dto: GenerateUploadTicketDto) => dto.category === 'RRHH' || TIPOS_RRHH.includes(String(dto.type || '').toUpperCase());
 const CLAVE_MAQUINARIA =/^(thumbs\/|view\/)?(agencias\/)?maquinaria\//i;
 
 @ApiTags('Almacenamiento S3')
@@ -70,6 +75,7 @@ export class StorageController {
       dto.clientUuid = userId;
     } else {
       exigirPermisoSubida(user, dto);
+      if (esSubidaRrhh(dto)) dto.userId = userId;
     }
     if (dto.category === 'SERVICIOS_ESPECIALES') {
       await this.storageService.asegurarPuedeSubirEvidenciaEspecial(
@@ -105,6 +111,7 @@ export class StorageController {
       dto.clientUuid = userId;
     } else {
       exigirPermisoSubida(user, dto);
+      if (esSubidaRrhh(dto)) dto.userId = userId;
     }
     if (dto.category === 'SERVICIOS_ESPECIALES') {
       await this.storageService.asegurarPuedeSubirEvidenciaEspecial(
@@ -163,6 +170,10 @@ export class StorageController {
       const agencia = CLAVE_AGENCIA.exec(key);
       if (agencia && !(await this.storageService.agenciaSegmentoEnAlcance(user, agencia[1]))) {
         throw new ForbiddenException('Esta evidencia pertenece a una agencia fuera de tu alcance.');
+      }
+    } else if (CLAVE_RRHH.test(key)) {
+      if (!(await this.storageService.puedeVerClaveRrhh(user, key))) {
+        throw new ForbiddenException('No tienes permiso para ver este archivo de RRHH.');
       }
     } else if (CLAVE_PUBLICA.test(key)) {
       // avatares e imágenes de catálogo: cualquier usuario con sesión

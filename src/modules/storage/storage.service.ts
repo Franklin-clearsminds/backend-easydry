@@ -31,6 +31,8 @@ import {
 
 import { resolverAlcance } from '../../common/permisos/alcance.js';
 import { FUNCION, tieneFuncion } from '../../common/permisos/funciones.js';
+import { tienePermiso } from '../../common/permisos/capacidades.js';
+import { personaEnAlcance } from '../rrhh/rrhh.reglas.js';
 /** Resultado de verificar un archivo ya subido a S3. */
 export interface InspectedEvidence {
   key: string;
@@ -53,6 +55,7 @@ export type StorageCategory =
   | 'CATALOGO_INSUMOS'
   | 'INVENTARIO_ENVIOS'
   | 'AUDITORIAS'
+  | 'RRHH'
   | 'PERFIL_USUARIO';
 
 export type MediaEvidenceType =
@@ -78,6 +81,10 @@ export type MediaEvidenceType =
   | 'FOTO_INGRESO_INVENTARIO'
   | 'FOTO_ENVIO'
   | 'FOTO_AUDITORIA'
+  | 'FOTO_TIMBRADA'
+  | 'FOTO_TAREA'
+  | 'VIDEO_TAREA'
+  | 'DOCUMENTO_TAREA'
   | 'FOTO_PERFIL';
 
 export interface GenerateUploadTicketDto {
@@ -141,6 +148,10 @@ const ALLOWED_TYPES = new Set<MediaEvidenceType>([
   'FOTO_INGRESO_INVENTARIO',
   'FOTO_ENVIO',
   'FOTO_AUDITORIA',
+  'FOTO_TIMBRADA',
+  'FOTO_TAREA',
+  'VIDEO_TAREA',
+  'DOCUMENTO_TAREA',
   'FOTO_PERFIL',
 ]);
 
@@ -366,6 +377,7 @@ export class StorageService implements OnModuleInit {
     const isDocument =
       type === 'DOCUMENTO' ||
       type === 'DOCUMENTO_INCIDENTE' ||
+      type === 'DOCUMENTO_TAREA' ||
       type === 'PDF_CIERRE';
     const requestedExtension = String(dto.fileName || '')
       .toLowerCase()
@@ -405,6 +417,13 @@ export class StorageService implements OnModuleInit {
         key: `usuarios/${userId}/perfil/avatar.jpg`,
         contentType: 'image/jpeg',
       };
+    } else if (category === 'RRHH' || type === 'FOTO_TIMBRADA' || type === 'FOTO_TAREA' || type === 'VIDEO_TAREA' || type === 'DOCUMENTO_TAREA') {
+      // RRHH: la carpeta lleva el id de quien sube (el controlador lo fija desde la sesión). Las fotos de timbrada se agrupan por mes.
+      const dueno = this.safeSegment(dto.userId, 'sin-usuario');
+      key =
+        type === 'FOTO_TIMBRADA'
+          ? `rrhh/timbradas/${dueno}/${new Date().toISOString().slice(0, 7)}/${filename}`
+          : `rrhh/tareas/${dueno}/${filename}`;
     } else if (category === 'AUDITORIAS' || type === 'FOTO_AUDITORIA') {
       // Evidencias de informes de inspección y de auditorías 5S: agencias/{agencia}/auditorias/{informes|5s}/{id}/
       const modulo = dto.auditoriaTipo === '5s' ? '5s' : 'informes';
@@ -756,7 +775,7 @@ export class StorageService implements OnModuleInit {
    */
   public async inspectEvidence(
     rawUrl: string,
-    expected?: { prefix: string },
+    expected?: { prefix: string; /** Los adjuntos de RRHH no tienen el límite de duración de las evidencias de maquinaria. */ sinLimiteDuracion?: boolean },
   ): Promise<InspectedEvidence> {
     await this.ensureBucketRegion();
     const key = this.keyFromUrl(rawUrl);
@@ -799,7 +818,7 @@ export class StorageService implements OnModuleInit {
     }
 
     let durationSeconds: number | undefined;
-    if (detected.kind === 'VIDEO') {
+    if (detected.kind === 'VIDEO' && !expected?.sinLimiteDuracion) {
       const seconds = await this.readVideoDurationSeconds(key, size);
       const error = videoDurationError(seconds);
       if (error) throw new BadRequestException(error);
@@ -1132,6 +1151,40 @@ export class StorageService implements OnModuleInit {
     return false;
   }
 
+  /**
+   * ¿Puede el usuario ver este archivo de RRHH (`rrhh/timbradas/<usuario>/…` o `rrhh/tareas/<usuario>/…`)?
+   *  - Su dueño (quien lo subió) siempre.
+   *  - Fotos de timbrada: quien tiene `rrhh.timbradas.ver` y la persona fotografiada está en su alcance.
+   *  - Adjuntos de tarea: el responsable y quien asignó la tarea, el administrador, o quien asigna tareas dentro de su alcance.
+   */
+  public async puedeVerClaveRrhh(user: any, key: string): Promise<boolean> {
+    const limpia = String(key || '').replace(/^(?:thumbs|view)\//i, '');
+    const m = /^rrhh\/(timbradas|tareas)\/([^/]+)\//i.exec(limpia);
+    if (!m) return false;
+    const yo = String(user?.id ?? '').toLowerCase();
+    if (!yo) return false;
+    if (m[2].toLowerCase() === yo) return true;
+    if (!this.prisma) return false;
+    const alcance = resolverAlcance(user);
+    const ambito = { select: { agenciaId: true, regionId: true, agencia: { select: { regionId: true } }, bodega: { select: { regionId: true } } } } as const;
+
+    if (m[1].toLowerCase() === 'timbradas') {
+      if (!tienePermiso(user, 'rrhh.timbradas.ver')) return false;
+      const dueno = await this.prisma.user.findFirst({ where: { id: { equals: m[2], mode: 'insensitive' } }, ...ambito });
+      return !!dueno && personaEnAlcance(alcance, dueno);
+    }
+
+    const adjunto = await this.prisma.tareaAdjunto.findFirst({
+      where: { key: limpia },
+      select: { tarea: { select: { asignadoAId: true, asignadoPorId: true, asignadoA: ambito } } },
+    });
+    if (!adjunto) return false;
+    const { tarea } = adjunto;
+    if (tarea.asignadoAId.toLowerCase() === yo || tarea.asignadoPorId.toLowerCase() === yo) return true;
+    if (tieneFuncion(user, FUNCION.ADMINISTRADOR)) return true;
+    return tienePermiso(user, 'rrhh.tareas.asignar') && personaEnAlcance(alcance, tarea.asignadoA);
+  }
+
   private safeSegment(value: string | undefined, fallback: string): string {
     const normalized = String(value || fallback)
       .trim()
@@ -1145,6 +1198,7 @@ export class StorageService implements OnModuleInit {
     if (type === 'FOTO_PERFIL') return 'PERFIL_USUARIO';
     if (type === 'FOTO_ENVIO') return 'INVENTARIO_ENVIOS';
     if (type === 'FOTO_AUDITORIA') return 'AUDITORIAS';
+    if (type === 'FOTO_TIMBRADA' || type === 'FOTO_TAREA' || type === 'VIDEO_TAREA' || type === 'DOCUMENTO_TAREA') return 'RRHH';
     if (
       type === 'IMAGEN_PRODUCTO' ||
       type === 'FOTO_AJUSTE_INVENTARIO' ||
@@ -1174,6 +1228,7 @@ export class StorageService implements OnModuleInit {
     if (category === 'PERFIL_USUARIO' && type === 'FOTO_PERFIL') return;
     if (category === 'INVENTARIO_ENVIOS' && type === 'FOTO_ENVIO') return;
     if (category === 'AUDITORIAS' && type === 'FOTO_AUDITORIA') return;
+    if (category === 'RRHH' && (type === 'FOTO_TIMBRADA' || type === 'FOTO_TAREA' || type === 'VIDEO_TAREA' || type === 'DOCUMENTO_TAREA')) return;
     if (
       category === 'CATALOGO_INSUMOS' &&
       (type === 'IMAGEN_PRODUCTO' ||

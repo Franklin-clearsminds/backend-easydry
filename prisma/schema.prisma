@@ -149,6 +149,9 @@ model User {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
+  timbradas                      Timbrada[]
+  tareasRrhhRecibidas            TareaRrhh[]                  @relation("TareaAsignadoA")
+  tareasRrhhAsignadas            TareaRrhh[]                  @relation("TareaAsignadoPor")
   serviciosAtendidos             ServicioLavado[]
   serviciosLavadoAsignados       ServicioLavadoOperador[]
   stockPersonal                  StockUbicacion[]
@@ -235,6 +238,12 @@ model Agencia {
 
   /// OPERATIVA | TALLER_NACIONAL | TALLER_REGIONAL
   tipoUbicacion String @default("OPERATIVA")
+
+  /// Ubicación de la agencia para validar las timbradas de RRHH (null = sin configurar).
+  latitud        Float?
+  longitud       Float?
+  /// Distancia máxima, en metros, a la que se acepta una timbrada del personal de esta agencia.
+  radioTimbradaM Int    @default(100)
 
   bahias                       Bahia[]
   usuarios                     User[]
@@ -783,6 +792,10 @@ model Bodega {
   regionId         String?
   region           Region?    @relation(fields: [regionId], references: [id])
   porcentajeAlerta Int        @default(20)
+  /// Ubicación de la bodega para validar las timbradas de RRHH (null = sin configurar).
+  latitud          Float?
+  longitud         Float?
+  radioTimbradaM   Int        @default(100)
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
 
@@ -1035,6 +1048,14 @@ enum TipoNotificacion {
   DESPACHO_FALTANTE
   ARCHIVADO_FALLIDO
   INFORME_INSPECCION_APROBADO
+  TAREA_ASIGNADA
+  TAREA_COMPLETADA
+  TAREA_REVISADA
+  TAREA_DEVUELTA
+  TAREA_CANCELADA
+  TAREA_REASIGNADA
+  TAREA_VENCIDA
+  UBICACION_FALTANTE
 }
 
 model Notification {
@@ -1822,6 +1843,8 @@ model InformeNovedad {
   estadoSeguimiento String            @default("ABIERTA")
   registradaEn      DateTime          @default(now())
   orden             Int               @default(0)
+  /// Quién recibe la tarea de RRHH que nace de esta novedad al guardar el informe (opcional). La tarea creada queda en `tareas_rrhh.novedadId`.
+  responsableId     String?
 
   @@index([informeId])
 }
@@ -2114,4 +2137,148 @@ model ArchivadoCandado {
   hasta       DateTime
 
   @@map("archivado_candado")
+}
+
+
+// =========================================================================
+// RRHH — UBICACIONES, TIMBRADAS Y TAREAS DEL PERSONAL
+// Las timbradas son un registro de solo anexar (nadie las edita ni las borra). La hora la pone el servidor.
+// =========================================================================
+enum TipoTimbrada {
+  ENTRADA
+  SALIDA
+}
+
+enum EstadoTarea {
+  PENDIENTE
+  COMPLETADA
+  REVISADA
+  CANCELADA
+}
+
+model Timbrada {
+  id              String       @id @default(uuid())
+  userId          String
+  user            User         @relation(fields: [userId], references: [id])
+  tipo            TipoTimbrada
+  /// Día de la marca en hora de Ecuador (America/Guayaquil): con `userId` y `tipo` es único (una entrada y una salida por día).
+  fechaDia        DateTime     @db.Date
+  /// Hora del servidor al recibir la marca.
+  marcadaEn       DateTime     @default(now())
+  /// Hora que decía el dispositivo, solo para auditar la diferencia.
+  horaDispositivo DateTime?
+  /// WEB | APP
+  origen          String       @default("WEB")
+  /// Clave en S3 de la foto de cámara.
+  fotoKey         String
+  latitud         Float?
+  longitud        Float?
+  /// Precisión del GPS en metros, tal como la reportó el dispositivo.
+  precisionM      Float?
+  /// VERIFICADA (dentro del radio de su agencia o bodega) | SIN_VERIFICAR (rol de solo foto) | SIN_REFERENCIA (su agencia o bodega aún no tiene ubicación)
+  verificacion    String
+  /// Dónde se timbró (cuando se verificó contra un sitio).
+  agenciaId       String?
+  bodegaId        String?
+  regionId        String?
+  distanciaM      Float?
+  /// Radio vigente en el momento de la marca (el radio de la agencia puede cambiar después).
+  radioM          Int?
+  createdAt       DateTime     @default(now())
+
+  @@unique([userId, fechaDia, tipo])
+  @@index([fechaDia])
+  @@index([userId, fechaDia])
+  @@index([agenciaId, fechaDia])
+  @@index([bodegaId, fechaDia])
+  @@map("timbradas")
+}
+
+model TareaRrhh {
+  id                String      @id @default(uuid())
+  numero            Int         @default(autoincrement())
+  titulo            String
+  descripcion       String      @default("")
+  fechaLimite       DateTime?
+  estado            EstadoTarea @default(PENDIENTE)
+  asignadoAId       String
+  asignadoA         User        @relation("TareaAsignadoA", fields: [asignadoAId], references: [id])
+  asignadoPorId     String
+  asignadoPor       User        @relation("TareaAsignadoPor", fields: [asignadoPorId], references: [id])
+  /// Agencia y región del responsable al asignar: sirven para el ámbito y para particionar el archivo.
+  agenciaId         String?
+  regionId          String?
+  respuesta         String?
+  completadaEn      DateTime?
+  revisadaEn        DateTime?
+  revisadaPorId     String?
+  canceladaEn       DateTime?
+  motivoCancelacion String?
+  /// Cuándo se avisó que venció (para avisar una sola vez).
+  vencidaAvisadaEn  DateTime?
+  /// Origen: informe de inspección y novedad que la generó.
+  informeId         String?
+  novedadId         String?     @unique
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  adjuntos  TareaAdjunto[]
+  historial TareaHistorial[]
+
+  @@index([asignadoAId, estado])
+  @@index([asignadoPorId])
+  @@index([agenciaId])
+  @@index([regionId])
+  @@index([estado, fechaLimite])
+  @@index([createdAt])
+  @@map("tareas_rrhh")
+}
+
+model TareaAdjunto {
+  id          String    @id @default(uuid())
+  tareaId     String
+  tarea       TareaRrhh @relation(fields: [tareaId], references: [id], onDelete: Cascade)
+  /// ASIGNACION (lo que adjunta quien asigna) | RESPUESTA (la evidencia del responsable)
+  etapa       String
+  key         String
+  nombre      String
+  mime        String
+  tamanioBytes Int
+  /// IMAGEN | VIDEO | DOCUMENTO
+  tipo        String
+  subidoPorId String
+  createdAt   DateTime  @default(now())
+
+  @@index([tareaId])
+  @@map("tareas_rrhh_adjuntos")
+}
+
+model TareaHistorial {
+  id        String    @id @default(uuid())
+  tareaId   String
+  tarea     TareaRrhh @relation(fields: [tareaId], references: [id], onDelete: Cascade)
+  /// ASIGNADA | COMPLETADA | REVISADA | DEVUELTA | CANCELADA | REASIGNADA
+  accion    String
+  actorId   String
+  detalle   String?
+  createdAt DateTime  @default(now())
+
+  @@index([tareaId])
+  @@map("tareas_rrhh_historial")
+}
+
+/// Quién cambió la ubicación o el radio de una agencia o bodega, y de qué a qué.
+model UbicacionCambio {
+  id          String   @id @default(uuid())
+  /// AGENCIA | BODEGA
+  sitioTipo   String
+  sitioId     String
+  sitioNombre String
+  antes       Json?
+  despues     Json?
+  actorId     String
+  createdAt   DateTime @default(now())
+
+  @@index([sitioTipo, sitioId])
+  @@map("ubicacion_cambios")
 }

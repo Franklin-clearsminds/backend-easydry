@@ -420,6 +420,22 @@ for (const rol of ROLES_BASE) {
   if (rol.capacidades.includes('inventario.ver') && !ROLES_SIN_KITS.includes(rol.namerol)) extra.push('inventario.kits.ver');
   rol.capacidades = [...new Set([...rol.capacidades, ...extra])];
 }
+// RRHH: todos los roles menos ADMIN y SUPER_ADMIN timbran y reciben tareas. Asignan tareas y ven las timbradas del equipo (dentro de su
+// ámbito) los administradores, el supervisor, los coordinadores y el líder. Solo ADMIN y SUPER_ADMIN configuran las ubicaciones.
+const ROLES_NO_TIMBRAN = ['SUPER_ADMIN', 'ADMIN'];
+// El BACKUP reemplaza al líder y el AUXILIAR copia sus permisos (lavador con las capacidades del líder): heredan los suyos.
+const ROLES_ASIGNAN_TAREAS = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'COORD_COMERCIAL', 'COORD_SERVICIOS_ESPECIALES', 'COORD_MANTENIMIENTO', 'COORD_BODEGA', 'LIDER', 'BACKUP', 'AUXILIAR'];
+const ROLES_CONFIGURAN_UBICACION = ['SUPER_ADMIN', 'ADMIN'];
+const CAPACIDADES_RRHH_PROPIAS: CodigoPermiso[] = p('rrhh.timbrar', 'rrhh.tareas.propias');
+for (const rol of ROLES_BASE) {
+  const quitar = ROLES_NO_TIMBRAN.includes(rol.namerol) ? CAPACIDADES_RRHH_PROPIAS : [];
+  const extra: CodigoPermiso[] = [
+    ...(ROLES_NO_TIMBRAN.includes(rol.namerol) ? [] : CAPACIDADES_RRHH_PROPIAS),
+    ...(ROLES_ASIGNAN_TAREAS.includes(rol.namerol) ? p('rrhh.tareas.asignar', 'rrhh.timbradas.ver') : []),
+    ...(ROLES_CONFIGURAN_UBICACION.includes(rol.namerol) ? p('rrhh.ubicaciones.gestionar') : []),
+  ];
+  rol.capacidades = [...new Set([...rol.capacidades.filter((c) => !quitar.includes(c)), ...extra])];
+}
 // Y cada rol oficial trae también sus páginas, sub-páginas y acciones equivalentes (sin perder ningún permiso clásico).
 for (const rol of ROLES_BASE) rol.capacidades = capacidadesConPaginas(rol.capacidades, rol.namerol) as CodigoPermiso[];
 // El aprobador saca el reporte de sus servicios solo en PDF: la página de reportes le trae Excel, que se le quita.

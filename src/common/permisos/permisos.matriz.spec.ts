@@ -23,6 +23,9 @@ const usuario = (namerol: string) => {
   };
 };
 
+/** ADMIN y SUPER_ADMIN no timbran ni reciben tareas. */
+const NO_TIMBRAN: string[] = ['rrhh.timbrar', 'rrhh.tareas.propias'];
+
 describe('catálogo de permisos', () => {
   it('no repite códigos y todos siguen el formato modulo.accion', () => {
     expect(new Set(CODIGOS_PERMISOS).size).toBe(CODIGOS_PERMISOS.length);
@@ -50,9 +53,9 @@ describe('matriz acordada de permisos por rol', () => {
   it('los administradores no crean servicios especiales para sí mismos (lo hacen el coordinador y el pulidor)', () => {
     expect(
       ROLES_BASE.find((r) => r.namerol === 'SUPER_ADMIN')!.capacidades,
-    ).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'especiales.crear')));
+    ).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'especiales.crear' && !NO_TIMBRAN.includes(c))));
     const admin = ROLES_BASE.find((r) => r.namerol === 'ADMIN')!.capacidades;
-    expect(admin).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'roles.gestionar' && c !== 'especiales.crear')));
+    expect(admin).toEqual(expect.arrayContaining(CODIGOS_PERMISOS.filter((c) => c !== 'roles.gestionar' && c !== 'especiales.crear' && !NO_TIMBRAN.includes(c))));
     expect(admin).not.toContain('roles.gestionar');
     // El admin no crea OT especiales para sí mismo (eso es del pulidor), pero sí las asigna y reasigna a otros pulidores.
     expect(admin).not.toContain('especiales.crear');
@@ -60,9 +63,19 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('roles.gestionar')).toEqual(['SUPER_ADMIN']);
   });
 
-  it('el lavador no opera la plataforma: su único permiso es ver sus resultados de auditoría', () => {
+  it('el lavador no opera la plataforma: solo ve sus resultados de auditoría, timbra y recibe tareas', () => {
     const permisos = CODIGOS_PERMISOS.filter((c) => tienePermiso(usuario('LAVADOR'), c));
-    expect(permisos.sort()).toEqual(['informes.ver', 'inspecciones.ver']);
+    expect(permisos.sort()).toEqual(['informes.ver', 'inspecciones.ver', 'rrhh.tareas.propias', 'rrhh.timbrar']);
+  });
+
+  it('RRHH: todos timbran y reciben tareas menos ADMIN y SUPER_ADMIN; asignan solo los acordados; las ubicaciones, solo los administradores', () => {
+    const todos = ROLES_BASE.map((r) => r.namerol);
+    expect(rolesCon('rrhh.timbrar').sort()).toEqual(todos.filter((n) => !['ADMIN', 'SUPER_ADMIN'].includes(n)).sort());
+    expect(rolesCon('rrhh.tareas.propias').sort()).toEqual(rolesCon('rrhh.timbrar').sort());
+    const asignan = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'COORD_COMERCIAL', 'COORD_SERVICIOS_ESPECIALES', 'COORD_MANTENIMIENTO', 'COORD_BODEGA', 'LIDER', 'BACKUP', 'AUXILIAR'].sort();
+    expect(rolesCon('rrhh.tareas.asignar').sort()).toEqual(asignan);
+    expect(rolesCon('rrhh.timbradas.ver').sort()).toEqual(asignan);
+    expect(rolesCon('rrhh.ubicaciones.gestionar').sort()).toEqual(['ADMIN', 'SUPER_ADMIN']);
   });
 
   it('auditar (hacer informes de inspección y auditorías 5S) lo pueden todos los roles menos líder, Backup, auxiliar, lavador y pulidor', () => {

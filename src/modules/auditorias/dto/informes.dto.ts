@@ -43,7 +43,10 @@ export class NovedadDto {
   @IsOptional() @IsString() @MaxLength(TEXTO_LARGO) descripcion?: string;
   @IsOptional() @IsIn(CATEGORIAS_NOVEDAD) categoria?: string;
   @IsOptional() @IsString() @MaxLength(120) area?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) @MaxLength(600, { each: true }) fotos?: string[];}
+  @IsOptional() @IsArray() @ArrayMaxSize(12) @IsString({ each: true }) @MaxLength(600, { each: true }) fotos?: string[];
+  /** Opcional: quien recibe una tarea de RRHH con esta novedad al guardar el informe. Sin responsable no hay tarea. */
+  @IsOptional() @IsUUID() responsableId?: string;
+}
 
 export class ActividadDto {
   @IsOptional() @IsUUID() id?: string;

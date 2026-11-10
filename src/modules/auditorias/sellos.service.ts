@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { compare as compararHash, hash as generarHash } from '@node-rs/bcrypt';
+import bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { exigirPasswordSegura } from '../../common/utils/password-politica.js';
 import { CryptoService } from '../../common/crypto/crypto.service.js';
@@ -86,7 +86,7 @@ export class SellosService {
     const logo = this.crypto.protegerEnReposo(this.validarLogo(dto.logo));
     await this.exigirNombreLibre(nombre, apellido);
     const creado = await this.prisma.selloJefeTaller.create({
-      data: { nombre, apellido, logo, passwordHash: await generarHash(dto.password, { cost: 10 }), creadoPorId: user?.id ?? null },
+      data: { nombre, apellido, logo, passwordHash: await bcrypt.hash(dto.password, 10), creadoPorId: user?.id ?? null },
     });
     if (dto.agenciaIds?.length) await this.asignarAgencias(creado.id, dto.agenciaIds, user);
     return this.detalle(creado.id);
@@ -104,7 +104,7 @@ export class SellosService {
     if (dto.estado !== undefined) data.estado = dto.estado;
     if (dto.password) {
       exigirPasswordSegura(dto.password);
-      data.passwordHash = await generarHash(dto.password, { cost: 10 });
+      data.passwordHash = await bcrypt.hash(dto.password, 10);
       // Con una contraseña nueva se levanta el bloqueo por intentos fallidos.
       data.intentosFallidos = 0;
       data.bloqueadoHasta = null;
@@ -133,7 +133,7 @@ export class SellosService {
       const minutos = Math.max(1, Math.ceil((sello.bloqueadoHasta.getTime() - Date.now()) / 60000));
       throw new ForbiddenException(`Demasiados intentos con contraseña incorrecta. Vuelve a intentarlo en ${minutos} min.`);
     }
-    if (!(await compararHash(String(password ?? ''), sello.passwordHash))) {
+    if (!(await bcrypt.compare(String(password ?? ''), sello.passwordHash))) {
       const intentos = sello.intentosFallidos + 1;
       const bloquea = intentos >= INTENTOS_MAXIMOS;
       await this.prisma.selloJefeTaller.update({

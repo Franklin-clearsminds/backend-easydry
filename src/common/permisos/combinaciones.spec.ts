@@ -55,6 +55,7 @@ const REQUISITOS: Record<string, string[]> = {
   'inventario.bodegas.gestionar': ['inventario.ver'],
   'inventario.bodegas.estado': ['inventario.ver'],
   'inventario.bodegas.eliminar': ['inventario.ver'],
+  'inventario.bodegas.ubicacion': ['inventario.ver'],
   // Las alertas se leen con la sección; crear o atender es la casilla.
   'inventario.alertas.crear': ['alertas.ver', 'inventario.ver'],
   'inventario.alertas.atender': ['alertas.ver', 'inventario.ver'],

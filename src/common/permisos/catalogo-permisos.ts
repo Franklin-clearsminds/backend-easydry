@@ -121,6 +121,12 @@ export const CATALOGO_PERMISOS = [
   def('Auditorías', 'inspecciones.eliminar', 'Eliminar auditorías 5S en borrador', 'Eliminar (con registro) una auditoría 5S que aún no se guardó.'),
   def('Auditorías', 'sellos.gestionar', 'Configurar sellos de jefes de taller', 'Crear y editar los sellos de los jefes de taller (nombre, apellido, logo y contraseña) que se usan al calificar y firmar los informes de inspección. Solo Admin y Super Admin.'),
 
+  def('RRHH', 'rrhh.timbrar', 'Timbrar entrada y salida', 'Marcar la entrada y la salida con foto de cámara y ubicación, y ver el historial propio. No lo tienen ADMIN ni SUPER_ADMIN.'),
+  def('RRHH', 'rrhh.timbradas.ver', 'Ver timbradas del equipo', 'Consultar las timbradas, con foto y distancia, de las personas de su ámbito.'),
+  def('RRHH', 'rrhh.tareas.propias', 'Recibir y completar tareas', 'Ver las tareas que le asignaron y completarlas con respuesta y evidencia. No lo tienen ADMIN ni SUPER_ADMIN.'),
+  def('RRHH', 'rrhh.tareas.asignar', 'Asignar y revisar tareas', 'Asignar tareas a personas de su ámbito, y revisar, devolver, cancelar o reasignar las que asignó.'),
+  def('RRHH', 'rrhh.ubicaciones.gestionar', 'Configurar ubicación de agencias y bodegas', 'Fijar la ubicación y el radio de timbrada de cada agencia y bodega.'),
+
   def('Sistema', 'sync.usar', 'Usar la sincronización de la app', 'Sincronizar datos de la app móvil y registrar el dispositivo.'),
   def('Sistema', 'sync.dlq.gestionar', 'Gestionar errores de sincronización', 'Ver, resolver y reintentar los errores de todos los usuarios.'),
   def('Sistema', 'evidencias.subir', 'Subir evidencias de servicios', 'Subir fotos y videos de órdenes de servicios generales y especiales.'),

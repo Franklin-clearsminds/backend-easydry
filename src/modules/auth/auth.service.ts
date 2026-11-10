@@ -6,7 +6,6 @@ import { secretoObligatorio } from '../../common/config/secretos.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcryptjs';
-import { compare as compararHash, hash as generarHash } from '@node-rs/bcrypt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
@@ -38,10 +37,10 @@ export class AuthService {
    * aparece en el celular solo si el módulo está marcado para la app Y el rol tiene su permiso (`modulosDeRol`).
    */
   private async infoApp(role: { namerol?: string | null; capacidades?: string[] | null } | null | undefined) {
-    // Entra a la app quien sincroniza (sync.usar) o, sin operar, solo consulta los resultados de auditoría (líder, lavador, pulidor).
+    // Entra a la app quien sincroniza (sync.usar) o, sin operar, solo consulta los resultados de auditoría (líder, lavador, pulidor) o timbra (RRHH).
     const puedeUsarApp =
       role?.namerol === 'SUPER_ADMIN' ||
-      !!role?.capacidades?.some((c) => c === 'sync.usar' || c === 'informes.ver' || c === 'inspecciones.ver' || c === 'sistema.app.retos');
+      !!role?.capacidades?.some((c) => c === 'sync.usar' || c === 'informes.ver' || c === 'inspecciones.ver' || c === 'sistema.app.retos' || c === 'rrhh.timbrar');
     // Los retos del celular los da la casilla «Ver retos en la app móvil» (sistema.app.retos), no el módulo web de Productividad.
     const verRetosEnApp = !!role?.capacidades?.includes('sistema.app.retos');
     const pantallas = modulosDeRol(role);
@@ -166,13 +165,13 @@ export class AuthService {
     }
     const actual = dto.passwordActual ?? '';
     const nueva = (dto.passwordNueva ?? '').trim();
-    if (!(await compararHash(actual, user.passwordHash))) {
+    if (!(await bcrypt.compare(actual, user.passwordHash))) {
       throw new BadRequestException('La contraseña actual no es correcta.');
     }
     if (nueva === actual) throw new BadRequestException('La nueva contraseña debe ser distinta de la actual.');
     exigirPasswordSegura(nueva, user.email);
 
-    const passwordHash = await generarHash(nueva, { cost: 10 });
+    const passwordHash = await bcrypt.hash(nueva, 10);
     await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
     await this.revocarSesionesDeUsuario(user.id);
     try {
@@ -250,7 +249,7 @@ export class AuthService {
 
     // Siempre se calcula un bcrypt, exista o no el correo: así el tiempo de respuesta no revela qué cuentas existen.
     // Es el de la librería nativa: corre fuera del hilo principal, así varios inicios de sesión a la vez no se frenan entre sí.
-    const isMatch = await compararHash(password, user?.passwordHash ?? HASH_SIN_USUARIO);
+    const isMatch = await bcrypt.compare(password, user?.passwordHash ?? HASH_SIN_USUARIO);
     if (!user || !isMatch) {
       await this.registrarFallo(email);
       throw new UnauthorizedException('Credenciales inválidas');

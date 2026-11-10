@@ -1,3 +1,4 @@
+import { TareasService } from '../rrhh/tareas.service.js';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -75,6 +76,8 @@ export class InformesInspeccionService {
     @Optional() private readonly cache?: CacheService,
     /** Avisa a los usuarios adjuntos cuando el informe se aprueba. */
     @Optional() private readonly notifications?: NotificationsService,
+    /** Crea las tareas de RRHH de las novedades que tienen responsable, al guardar el informe. */
+    @Optional() private readonly tareas?: TareasService,
   ) {}
 
   // ───────────────────────── Alcance y permisos sobre un informe ─────────────────────────
@@ -506,6 +509,7 @@ export class InformesInspeccionService {
         categoria: n.categoria,
         area: n.area,
         fotos: n.fotos ?? [],
+        responsableId: n.responsableId ?? null,
         registradaEn: n.registradaEn.toISOString(),
       })),
       actividades: i.actividades.map((a: any) => ({
@@ -668,7 +672,7 @@ export class InformesInspeccionService {
   }
 
   private async sincronizarNovedades(tx: Tx, informeId: string, items: NovedadDto[]) {
-    const existentes = new Map((await tx.informeNovedad.findMany({ where: { informeId }, select: { id: true, titulo: true, descripcion: true, categoria: true, area: true, fotos: true, orden: true } })).map((x) => [x.id, x]));
+    const existentes = new Map((await tx.informeNovedad.findMany({ where: { informeId }, select: { id: true, titulo: true, descripcion: true, categoria: true, area: true, fotos: true, orden: true, responsableId: true } })).map((x) => [x.id, x]));
     const conservar = items.filter((i) => i.id && existentes.has(i.id)).map((i) => i.id as string);
     if (conservar.length !== existentes.size) await tx.informeNovedad.deleteMany({ where: { informeId, id: { notIn: conservar } } });
     const nuevas: Prisma.InformeNovedadUncheckedCreateInput[] = [];
@@ -680,6 +684,7 @@ export class InformesInspeccionService {
         area: texto(n.area),
         fotos: lista(n.fotos),
         orden,
+        responsableId: n.responsableId ?? null,
       };
       const previa = n.id ? existentes.get(n.id) : undefined;
       // Solo se escribe lo que cambió (guardar sin cambios no toca la base) y lo nuevo entra en una sola consulta.
@@ -755,7 +760,25 @@ export class InformesInspeccionService {
       firmadas: (informe.firmas ?? []).filter((f: any) => f.imagen && f.vigente !== false).map((f: any) => f.tipo),
     });
     if (faltan.length) throw new BadRequestException(`Antes de guardar el informe completa: ${faltan.join(', ')}.`);
-    await this.cambiarEstado(informe, 'GUARDADO', user, 'GUARDADO', 'Informe firmado y guardado de forma definitiva.', { guardadoEn: new Date() });
+    // Las novedades con responsable se vuelven tareas de RRHH en la misma transacción que guarda el informe. Si algún responsable
+    // no es válido (inactivo, fuera de tu alcance) el informe no se guarda y se avisa antes de tocar nada.
+    const conResponsable = (informe.novedades ?? []).filter((n: any) => n.responsableId);
+    for (const responsableId of new Set(conResponsable.map((n: any) => n.responsableId as string))) {
+      await this.tareas?.validarResponsable(user, responsableId);
+    }
+    const creadas: string[] = [];
+    await this.cambiarEstado(informe, 'GUARDADO', user, 'GUARDADO', 'Informe firmado y guardado de forma definitiva.', { guardadoEn: new Date() }, async (tx) => {
+      for (const n of conResponsable) {
+        const t = await this.tareas?.crearDesdeNovedad({ informeId: informe.id, novedadId: n.id, titulo: n.titulo, descripcion: n.descripcion, asignadoAId: n.responsableId as string }, user, tx);
+        if (t?.id) creadas.push(t.id);
+      }
+    });
+    // Los avisos van después de guardar: un fallo al avisar no deshace el informe.
+    try {
+      await this.tareas?.avisarTareasDeInforme(creadas, { id: informe.id, numero: informe.numero }, user);
+    } catch {
+      // El aviso es un extra.
+    }
     return this.detail(id, user);
   }
 
@@ -901,12 +924,15 @@ export class InformesInspeccionService {
     accion: string,
     detalle: string,
     extra: Prisma.InformeInspeccionUncheckedUpdateInput = {},
+    /** Trabajo extra que debe confirmarse o deshacerse junto con el cambio de estado. */
+    enTransaccion?: (tx: Tx) => Promise<void>,
   ) {
     if (!puedePasarA(informe.estado, nuevo)) throw new ConflictException(`Un informe ${informe.estado} no puede pasar a ${nuevo}.`);
     await this.prisma.$transaction(async (tx) => {
       const r = await tx.informeInspeccion.updateMany({ where: { id: informe.id, estado: informe.estado }, data: { estado: nuevo, ...extra } as Prisma.InformeInspeccionUpdateManyMutationInput });
       if (r.count === 0) throw new ConflictException('El informe cambió mientras lo procesabas. Actualiza e inténtalo de nuevo.');
       await this.registrar(tx, informe.id, user, accion, informe.estado, nuevo, detalle);
+      await enTransaccion?.(tx);
     });
   }
 

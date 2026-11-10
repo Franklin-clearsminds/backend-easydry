@@ -166,8 +166,8 @@ describe('migración de roles existentes', () => {
 
   it('cada rol oficial conserva exactamente las pantallas que tenía', () => {
     const esperadas: Record<string, string[]> = {
-      APROBADOR: ['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'reportes', 'perfil'],
-      COORD_MANTENIMIENTO: ['dashboard', 'notificaciones', 'configuracion/servicios', 'maquinaria', 'taller-tecnico', 'inventario', 'informes-inspeccion', 'auditorias-5s', 'perfil'],
+      APROBADOR: ['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'reportes', 'rrhh/tareas', 'rrhh/timbradas', 'perfil'],
+      COORD_MANTENIMIENTO: ['dashboard', 'notificaciones', 'configuracion/servicios', 'maquinaria', 'taller-tecnico', 'inventario', 'informes-inspeccion', 'auditorias-5s', 'rrhh/tareas', 'rrhh/timbradas', 'perfil'],
     };
     for (const [rol, pantallas] of Object.entries(esperadas)) {
       const r = ROLES_BASE.find((x) => x.namerol === rol)!;

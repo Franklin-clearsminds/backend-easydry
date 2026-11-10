@@ -21,6 +21,18 @@ export function exigirPermisoSubida(user: any, dto: Pick<GenerateUploadTicketDto
     return;
   }
 
+  // RRHH: la foto de la timbrada la sube quien puede timbrar; los adjuntos de una tarea, quien la recibe o quien la asigna.
+  if (dto.type === 'FOTO_TIMBRADA') {
+    if (!tienePermiso(user, 'rrhh.timbrar')) throw new ForbiddenException('Tu rol no puede timbrar.');
+    return;
+  }
+  if (dto.type === 'FOTO_TAREA' || dto.type === 'VIDEO_TAREA' || dto.type === 'DOCUMENTO_TAREA' || dto.category === 'RRHH') {
+    if (!tieneAlgunPermiso(user, ['rrhh.tareas.propias', 'rrhh.tareas.asignar'])) {
+      throw new ForbiddenException('Tu rol no puede adjuntar archivos a tareas.');
+    }
+    return;
+  }
+
   // Evidencias de auditorías: quien hace informes o auditorías 5S, o da seguimiento a sus planes y acciones correctivas.
   if (dto.type === 'FOTO_AUDITORIA' || dto.category === 'AUDITORIAS') {
     if (!tieneAlgunPermiso(user, ['informes.crear', 'informes.seguimiento', 'inspecciones.crear', 'inspecciones.acciones'])) {

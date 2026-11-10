@@ -29,6 +29,7 @@ import { RetosModule } from './modules/retos/retos.module.js';
 import { AuditoriasModule } from './modules/auditorias/auditorias.module.js';
 import { ReportesModule } from './modules/reportes/reportes.module.js';
 import { ArchivadoModule } from './modules/archivado/archivado.module.js';
+import { RrhhModule } from './modules/rrhh/rrhh.module.js';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { ArchivadoModule } from './modules/archivado/archivado.module.js';
     AuditoriasModule,
     ReportesModule,
     ArchivadoModule,
+    RrhhModule,
   ],
   providers: [
     {

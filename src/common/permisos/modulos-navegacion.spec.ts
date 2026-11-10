@@ -20,7 +20,7 @@ describe('pantallas derivadas de los permisos', () => {
   });
 
   it('el lavador solo ve sus resultados de auditoría (informes y 5S), sus notificaciones y su perfil', () => {
-    expect(pantallas('LAVADOR')).toEqual(['notificaciones', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
+    expect(pantallas('LAVADOR')).toEqual(['notificaciones', 'informes-inspeccion', 'auditorias-5s', 'rrhh/tareas', 'rrhh/timbradas', 'perfil']);
   });
 
   it('SUPER_ADMIN ve todas las pantallas aunque sus permisos guardados estén vacíos', () => {
@@ -41,8 +41,8 @@ describe('pantallas derivadas de los permisos', () => {
   });
 
   it('pantallas de los roles oficiales', () => {
-    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'reportes', 'perfil']);
-    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'maquinaria', 'taller-tecnico', 'inventario', 'informes-inspeccion', 'auditorias-5s', 'perfil']);
+    expect(pantallas('APROBADOR')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'servicios', 'aprobaciones', 'reportes', 'rrhh/tareas', 'rrhh/timbradas', 'perfil']);
+    expect(pantallas('COORD_MANTENIMIENTO')).toEqual(['dashboard', 'notificaciones', 'configuracion/servicios', 'maquinaria', 'taller-tecnico', 'inventario', 'informes-inspeccion', 'auditorias-5s', 'rrhh/tareas', 'rrhh/timbradas', 'perfil']);
     // El líder (y su reemplazo), el pulidor y el lavador solo consultan sus informes y auditorías 5S.
     for (const rol of ['LIDER', 'BACKUP', 'PULIDOR', 'LAVADOR']) {
       expect(pantallas(rol), rol).toEqual(expect.arrayContaining(['informes-inspeccion', 'auditorias-5s']));
@@ -51,6 +51,10 @@ describe('pantallas derivadas de los permisos', () => {
     // Reportes operativos: administradores, supervisor, coordinadores (bodega, comercial, servicios especiales), asistente de bodega y jefe comercial.
     for (const rol of ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'COORD_BODEGA', 'ASISTENTE_BODEGA', 'COORD_COMERCIAL', 'COORD_SERVICIOS_ESPECIALES', 'JEFE_COMERCIAL']) {
       expect(pantallas(rol), rol).toContain('reportes');
+    }
+    // RRHH: todos timbran y reciben tareas, salvo ADMIN y SUPER_ADMIN (que ven las pantallas para asignar y revisar).
+    for (const rol of ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'LIDER', 'BACKUP', 'LAVADOR', 'PULIDOR', 'TECNICO', 'ASISTENTE_BODEGA', 'APROBADOR']) {
+      expect(pantallas(rol), rol).toEqual(expect.arrayContaining(['rrhh/tareas', 'rrhh/timbradas']));
     }
     expect(pantallas('LIDER')).not.toContain('mapa-operativo');
     expect(pantallas('LIDER')).toContain('operadores');
