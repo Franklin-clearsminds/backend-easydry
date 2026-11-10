@@ -403,14 +403,11 @@ describe('servicios de lavado: generales, especiales o ambos', () => {
   };
   const ambos = usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver', 'especiales.ver', 'precios.ver'], { regionId: 'r1' });
 
-  it('«Ambos» junta los dos tipos en una sola lista por fecha, con el tipo y quien hizo cada servicio', async () => {
+  it('«Ambos» ya no existe: generales y especiales se sacan por separado', async () => {
     const { servicio } = montar();
-    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', periodo }, ambos);
-    expect(r.columnas.map((c) => c.clave)).toEqual(expect.arrayContaining(['tipo', 'lavador', 'asesor', 'precio']));
-    const filas = r.grupos[0].bloques.flatMap((b) => b.filas);
-    expect(filas.map((f) => [f.tipo, f.lavador, f.asesor])).toEqual([['Especial', 'Pedro Ruiz', 'Asesor Uno'], ['General', 'Juan Paz', '']]);
-    expect(r.totalFilas).toBe(2);
-    expect(r.filtros.extras).toContainEqual({ etiqueta: 'Servicios', valor: 'Generales y especiales' });
+    await expect(servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS' as any, periodo }, ambos)).rejects.toBeInstanceOf(ForbiddenException);
+    const e = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'ESPECIAL', periodo }, ambos);
+    expect(e.filtros.extras).toContainEqual({ etiqueta: 'Servicios', valor: 'Especiales' });
   });
 
   it('«Generales» y «Especiales» conservan sus columnas de siempre, sin las del otro tipo', async () => {
@@ -426,9 +423,9 @@ describe('servicios de lavado: generales, especiales o ambos', () => {
     expect(e.totalFilas).toBe(1);
   });
 
-  it('sin elegir categoría usa la más amplia que el rol permite', async () => {
+  it('sin elegir categoría usa la primera que el rol permite', async () => {
     const { servicio } = montar();
-    expect((await servicio.generar({ reporteId: 'servicios-lavado', periodo }, ambos)).totalFilas).toBe(2);
+    expect((await servicio.generar({ reporteId: 'servicios-lavado', periodo }, ambos)).totalFilas).toBe(1);
     const soloGenerales = usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver'], { regionId: 'r1' });
     expect((await servicio.generar({ reporteId: 'servicios-lavado', periodo }, soloGenerales)).totalFilas).toBe(1);
   });
@@ -440,20 +437,14 @@ describe('servicios de lavado: generales, especiales o ambos', () => {
     await expect(servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', periodo }, soloEspeciales)).rejects.toBeInstanceOf(ForbiddenException);
     const catalogo = servicio.catalogo(soloEspeciales).find((r) => r.id === 'servicios-lavado')!;
     expect(catalogo.categorias.map((c) => c.valor)).toEqual(['ESPECIAL']);
-    expect(servicio.catalogo(ambos).find((r) => r.id === 'servicios-lavado')!.categorias.map((c) => c.valor)).toEqual(['GENERAL', 'ESPECIAL', 'AMBOS']);
+    expect(servicio.catalogo(ambos).find((r) => r.id === 'servicios-lavado')!.categorias.map((c) => c.valor)).toEqual(['GENERAL', 'ESPECIAL']);
   });
 
   it('sin permiso de precios no salen la columna Precio ni el monto', async () => {
     const { servicio } = montar();
     const sinPrecios = usuario('SUPERVISOR', 'REGION', [...PERMISOS_REPORTES, 'servicios.ver', 'especiales.ver'], { regionId: 'r1' });
-    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', periodo }, sinPrecios);
+    const r = await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'GENERAL', periodo }, sinPrecios);
     expect(r.columnas.map((c) => c.clave)).not.toContain('precio');
     expect(r.totales.map((t) => t.clave)).not.toContain('monto');
-  });
-
-  it('con «Ambos», elegir un lavador deja solo los generales y elegir un pulidor solo los especiales', async () => {
-    const { servicio } = montar();
-    expect((await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', lavadorId: 'l1', periodo }, ambos)).grupos[0].bloques.flatMap((b) => b.filas).map((f) => f.tipo)).toEqual(['General']);
-    expect((await servicio.generar({ reporteId: 'servicios-lavado', categoria: 'AMBOS', pulidorId: 'p1', periodo }, ambos)).grupos[0].bloques.flatMap((b) => b.filas).map((f) => f.tipo)).toEqual(['Especial']);
   });
 });

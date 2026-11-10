@@ -6,7 +6,7 @@
 
 export type TipoColumna = 'texto' | 'numero' | 'dinero' | 'fecha' | 'hora' | 'marca';
 export type FiltroExtra = 'estado' | 'lavador' | 'pulidor' | 'producto' | 'productoFiltro' | 'ubicacion' | 'semaforo' | 'categoria';
-export type CategoriaServicios = 'GENERAL' | 'ESPECIAL' | 'AMBOS';
+export type CategoriaServicios = 'GENERAL' | 'ESPECIAL';
 export type PlantillaReporte = 'SERVICIOS' | 'TABLA';
 export type ValorCelda = string | number | null;
 export type FilaReporte = Record<string, ValorCelda>;
@@ -91,12 +91,11 @@ const ESTADOS_ESPECIAL: OpcionFiltro[] = [
 ];
 
 /**
- * Columnas del reporte de servicios de lavado. Generales y especiales conservan las suyas de siempre; con «Ambos» se unen:
- * se agrega el tipo, el responsable pasa a «Lavador / Pulidor» y el asesor queda vacío en los generales.
+ * Columnas del reporte de servicios de lavado. Generales y especiales se sacan por separado y cada uno lleva solo las suyas
+ * (lavador en los generales, asesor en los especiales).
  */
 export function columnasServicios(categoria: CategoriaServicios): ColumnaDef[] {
-  const comunes = (antes: ColumnaDef[], persona: ColumnaDef[]): ColumnaDef[] => [
-    ...antes,
+  const comunes = (persona: ColumnaDef[]): ColumnaDef[] => [
     col('ot', 'OT', 'texto', 11),
     col('fecha', 'Fecha', 'fecha', 11),
     col('horaIngreso', 'Ingreso', 'hora', 9.5),
@@ -113,9 +112,7 @@ export function columnasServicios(categoria: CategoriaServicios): ColumnaDef[] {
     col('aprobadoPor', 'Aprobado por', 'texto', 15),
     col('precio', 'Precio', 'dinero', 9, { soloPrecios: true }),
   ];
-  if (categoria === 'GENERAL') return comunes([], [col('lavador', 'Lavador', 'texto', 13)]);
-  if (categoria === 'ESPECIAL') return comunes([], [col('asesor', 'Asesor', 'texto', 13)]);
-  return comunes([col('tipo', 'Tipo', 'texto', 9)], [col('lavador', 'Lavador / Pulidor', 'texto', 14), col('asesor', 'Asesor', 'texto', 13)]);
+  return categoria === 'GENERAL' ? comunes([col('lavador', 'Lavador', 'texto', 13)]) : comunes([col('asesor', 'Asesor', 'texto', 13)]);
 }
 
 export const REPORTES: readonly ReporteDef[] = [
@@ -173,7 +170,7 @@ export const REPORTES: readonly ReporteDef[] = [
     plantilla: 'SERVICIOS',
     extras: ['categoria', 'estado', 'lavador', 'pulidor'],
     estados: [...ESTADOS_SERVICIO, ...ESTADOS_ESPECIAL.filter((e) => !ESTADOS_SERVICIO.some((g) => g.valor === e.valor))],
-    columnas: columnasServicios('AMBOS'),
+    columnas: columnasServicios('GENERAL'),
     totales: totalesServicios,
   },
   {

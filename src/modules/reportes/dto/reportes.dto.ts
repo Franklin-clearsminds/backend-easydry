@@ -98,10 +98,10 @@ export class GenerarReporteDto {
   @IsIn(['UNICO', 'DIA', 'SEMANA', 'MES'])
   division?: 'UNICO' | 'DIA' | 'SEMANA' | 'MES';
 
-  @ApiPropertyOptional({ enum: ['GENERAL', 'ESPECIAL', 'AMBOS'], description: 'Servicios de lavado: generales, especiales o ambos' })
+  @ApiPropertyOptional({ enum: ['GENERAL', 'ESPECIAL'], description: 'Servicios de lavado: generales o especiales (se sacan por separado)' })
   @IsOptional()
-  @IsIn(['GENERAL', 'ESPECIAL', 'AMBOS'])
-  categoria?: 'GENERAL' | 'ESPECIAL' | 'AMBOS';
+  @IsIn(['GENERAL', 'ESPECIAL'])
+  categoria?: 'GENERAL' | 'ESPECIAL';
 
   @ApiPropertyOptional({ enum: ['VERDE', 'AMARILLO', 'ROJO'], description: 'Semáforo (auditorías 5S)' })
   @IsOptional()

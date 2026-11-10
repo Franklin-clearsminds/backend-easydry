@@ -170,22 +170,21 @@ export class ReportesService {
     }));
   }
 
-  /** Categorías de servicios que el usuario puede sacar: generales con `servicios.ver`, especiales con `especiales.ver`; «Ambos» con los dos. */
+  /** Categorías de servicios que el usuario puede sacar: generales con `servicios.ver`, especiales con `especiales.ver`; cada una se saca por separado. */
   private categoriasPermitidas(user: any): { valor: CategoriaServicios; etiqueta: string }[] {
     const general = tienePermiso(user, 'servicios.ver');
     const especial = tienePermiso(user, 'especiales.ver');
     const salida: { valor: CategoriaServicios; etiqueta: string }[] = [];
     if (general) salida.push({ valor: 'GENERAL', etiqueta: 'Generales' });
     if (especial) salida.push({ valor: 'ESPECIAL', etiqueta: 'Especiales' });
-    if (general && especial) salida.push({ valor: 'AMBOS', etiqueta: 'Generales y especiales' });
     return salida;
   }
 
   private categoriaPorDefecto(permitidas: { valor: CategoriaServicios }[]): CategoriaServicios {
-    return permitidas.some((c) => c.valor === 'AMBOS') ? 'AMBOS' : (permitidas[0]?.valor ?? 'GENERAL');
+    return permitidas[0]?.valor ?? 'GENERAL';
   }
 
-  /** Categoría elegida, validada contra los permisos; sin elegir, la más amplia que le corresponde. */
+  /** Categoría elegida, validada contra los permisos; sin elegir, la primera que le corresponde. */
   private categoriaDe(def: ReporteDef, dto: GenerarReporteDto, user: any): CategoriaServicios | undefined {
     if (def.id !== 'servicios-lavado') return undefined;
     const permitidas = this.categoriasPermitidas(user);
@@ -195,7 +194,7 @@ export class ReportesService {
   }
 
   private columnasDe(def: ReporteDef, categoria: CategoriaServicios | undefined, verPrecios: boolean) {
-    return def.id === 'servicios-lavado' ? columnasServicios(categoria ?? 'AMBOS').filter((c) => verPrecios || !c.soloPrecios) : columnasVisibles(def, verPrecios);
+    return def.id === 'servicios-lavado' ? columnasServicios(categoria ?? 'GENERAL').filter((c) => verPrecios || !c.soloPrecios) : columnasVisibles(def, verPrecios);
   }
 
   // ---------------------------------------------------------------------------------------------------------------------
@@ -332,7 +331,7 @@ export class ReportesService {
 
   private validarFiltros(def: ReporteDef, dto: GenerarReporteDto): void {
     if (def.id === 'servicios-lavado') {
-      // Cada categoría tiene sus propios estados: con «Ambos» el filtro se aplica a la que lo reconoce.
+      // Cada categoría tiene sus propios estados.
       if (dto.estado && !def.estados!.some((e) => e.valor === dto.estado)) throw new BadRequestException('El estado elegido no es válido para este reporte.');
       return;
     }
@@ -476,7 +475,7 @@ export class ReportesService {
     const nombres = (xs: string[]) => (xs.length ? xs.join(', ') : 'Todas');
     const extras: { etiqueta: string; valor: string }[] = [];
     if (dto.estado) extras.push({ etiqueta: 'Estado', valor: def.estados?.find((e) => e.valor === dto.estado)?.etiqueta ?? dto.estado });
-    if (dto.categoria && def.extras.includes('categoria')) extras.push({ etiqueta: 'Servicios', valor: { GENERAL: 'Generales', ESPECIAL: 'Especiales', AMBOS: 'Generales y especiales' }[dto.categoria] });
+    if (dto.categoria && def.extras.includes('categoria')) extras.push({ etiqueta: 'Servicios', valor: { GENERAL: 'Generales', ESPECIAL: 'Especiales' }[dto.categoria] });
     if (dto.ubicacion) extras.push({ etiqueta: 'Ubicación', valor: UBICACIONES_STOCK.find((u) => u.valor === dto.ubicacion)?.etiqueta ?? dto.ubicacion });
     if (dto.semaforo) extras.push({ etiqueta: 'Semáforo', valor: SEMAFORO_ETIQUETA[dto.semaforo] });
     return {
@@ -532,26 +531,9 @@ export class ReportesService {
     }));
   }
 
-  /** Generales, especiales o ambos, en un solo listado ordenado por fecha. */
+  /** Generales o especiales (se sacan por separado, cada uno con sus columnas). */
   private async serviciosLavado(ctx: Ctx): Promise<Bruta[]> {
-    const { dto } = ctx;
-    const categoria = dto.categoria ?? 'AMBOS';
-    const ESTADOS_GENERAL = ['EN_ESPERA', 'EN_PROCESO', 'FINALIZADO', 'APROBADO', 'RECHAZADO', 'CANCELADO'];
-    const ESTADOS_ESPECIAL = ['Pendiente', 'En Proceso', 'Completado', 'Cancelado'];
-    const ambos = categoria === 'AMBOS';
-    // Con «Ambos», elegir un lavador deja solo generales y elegir un pulidor solo especiales.
-    const conGenerales = categoria !== 'ESPECIAL' && !(ambos && dto.pulidorId && !dto.lavadorId) && (!dto.estado || ESTADOS_GENERAL.includes(dto.estado));
-    const conEspeciales = categoria !== 'GENERAL' && !(ambos && dto.lavadorId && !dto.pulidorId) && (!dto.estado || ESTADOS_ESPECIAL.includes(dto.estado));
-    const [generales, especiales] = await Promise.all([
-      conGenerales ? this.serviciosGenerales(ctx) : [],
-      conEspeciales ? this.serviciosEspeciales(ctx) : [],
-    ]);
-    if (!ambos) return categoria === 'GENERAL' ? generales : especiales;
-    const todas: Bruta[] = [
-      ...generales.map((b) => ({ ...b, fila: { ...b.fila, tipo: 'General', asesor: '' } })),
-      ...especiales.map((b) => ({ ...b, fila: { ...b.fila, tipo: 'Especial', lavador: b.fila.pulidor ?? '' } })),
-    ];
-    return todas.sort((a, b) => String(a.fecha ?? '').localeCompare(String(b.fecha ?? '')) || String(a.fila.horaIngreso ?? '').localeCompare(String(b.fila.horaIngreso ?? '')));
+    return (ctx.dto.categoria ?? 'GENERAL') === 'GENERAL' ? this.serviciosGenerales(ctx) : this.serviciosEspeciales(ctx);
   }
 
   private async serviciosGenerales(ctx: Ctx): Promise<Bruta[]> {
