@@ -121,6 +121,10 @@ model User {
   lastname     String
   /// Celular de 10 dígitos (09XXXXXXXX). Obligatorio para líderes y visible en la tabla de usuarios.
   telefono     String?
+  /// Cédula de identidad (10 dígitos). Única; solo la ven quienes tienen el permiso `datos.cedula.ver`.
+  cedula       String? @unique
+  /// Ciudad de residencia o de trabajo de la persona (texto libre).
+  ciudad       String?
   roleId       String
   role         Role   @relation(fields: [roleId], references: [id])
 

@@ -2394,6 +2394,12 @@ export class AgenciasService {
     };
   }
 
+  /** La cédula es única: no se puede repetir en otro usuario. */
+  private async asegurarCedulaLibre(cedula: string, exceptoUserId?: string) {
+    const otro = await this.prisma.user.findFirst({ where: { cedula, ...(exceptoUserId ? { id: { not: exceptoUserId } } : {}) }, select: { id: true } });
+    if (otro) throw new ConflictException(`Ya existe un usuario con la cédula "${cedula}"`);
+  }
+
   async updateUsuario(dto: UpdateUsuarioDto, actor?: any) {
     const user = await this.prisma.user.findUnique({ where: { id: dto.id }, include: { role: true, agencia: { select: { regionId: true } }, bodega: { select: { regionId: true } } } });
     if (!user) {
@@ -2659,12 +2665,21 @@ export class AgenciasService {
       telefonoActualizado = normalizarCelularEc(dto.telefono) || null;
     }
 
+    // Cédula (única) y ciudad: vacío las quita.
+    let cedulaActualizada: string | null | undefined;
+    if (dto.cedula !== undefined) {
+      cedulaActualizada = dto.cedula.trim() || null;
+      if (cedulaActualizada) await this.asegurarCedulaLibre(cedulaActualizada, user.id);
+    }
+
     const updatedUser = await this.prisma.user.update({
       where: { id: dto.id },
       data: {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.lastname !== undefined && { lastname: dto.lastname }),
         ...(telefonoActualizado !== undefined && { telefono: telefonoActualizado }),
+        ...(cedulaActualizada !== undefined && { cedula: cedulaActualizada }),
+        ...(dto.ciudad !== undefined && { ciudad: dto.ciudad.trim() || null }),
         ...(dto.email !== undefined && { email: dto.email.toLowerCase().trim() }),
         ...(dto.estado !== undefined && { estado: dto.estado }),
         ...(roleIdToSet !== undefined && { roleId: roleIdToSet }),
@@ -2970,12 +2985,16 @@ export class AgenciasService {
 
     // Celular de 10 dígitos; opcional para todos los roles.
     const telefonoNuevo = normalizarCelularEc(dto.telefono);
+    const cedulaNueva = dto.cedula?.trim() || null;
+    if (cedulaNueva) await this.asegurarCedulaLibre(cedulaNueva);
 
     const newUser = await this.prisma.user.create({
       data: {
         name: dto.name,
         lastname: dto.lastname || '',
         telefono: telefonoNuevo || null,
+        cedula: cedulaNueva,
+        ciudad: dto.ciudad?.trim() || null,
         email: emailNorm,
         passwordHash,
         roleId: roleIdToSet,
@@ -3070,6 +3089,8 @@ export class AgenciasService {
       select: {
         id: true,
         email: true,
+        cedula: true,
+        ciudad: true,
         name: true,
         lastname: true,
         estado: true,
@@ -3190,7 +3211,8 @@ export class AgenciasService {
     return {
       id: u.id,
       nombre: fullName || u.name,
-      cedula: cedula,
+      cedula: u.cedula || cedula,
+      ciudad: u.ciudad ?? '',
       telefono: u.telefono ?? '',
       rol: u.role?.namerol || 'LAVADOR',
       sucursal: u.agencia?.nombre || 'Sin Agencia',
@@ -3562,6 +3584,8 @@ const SELECT_USUARIO_LISTA = {
   id: true,
   email: true,
   telefono: true,
+  cedula: true,
+  ciudad: true,
   name: true,
   lastname: true,
   estado: true,

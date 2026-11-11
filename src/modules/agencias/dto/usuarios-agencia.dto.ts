@@ -189,6 +189,18 @@ export class UpdateUsuarioDto {
   @MaxLength(20)
   telefono?: string;
 
+  @ApiPropertyOptional({ example: '1723456789', description: 'Cédula de 10 dígitos. Única. Vacío la quita.' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^(\d{10})?$/, { message: 'La cédula debe tener 10 dígitos' })
+  cedula?: string;
+
+  @ApiPropertyOptional({ example: 'Quito', description: 'Ciudad de la persona. Vacío la quita.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  ciudad?: string;
+
   @ApiPropertyOptional({ example: 'carlos@easydry.com' })
   @IsOptional()
   @IsString()
@@ -270,6 +282,18 @@ export class CreateUsuarioDto {
   @IsString()
   @MaxLength(20)
   telefono?: string;
+
+  @ApiPropertyOptional({ example: '1723456789', description: 'Cédula de 10 dígitos. Única. Vacío la quita.' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^(\d{10})?$/, { message: 'La cédula debe tener 10 dígitos' })
+  cedula?: string;
+
+  @ApiPropertyOptional({ example: 'Quito', description: 'Ciudad de la persona. Vacío la quita.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  ciudad?: string;
 
   @ApiProperty({ example: 'carlos@easydry.com' })
   @IsString()
