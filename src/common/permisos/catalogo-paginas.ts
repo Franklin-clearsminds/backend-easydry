@@ -120,7 +120,7 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('agencias.personal.ver', 'Ver personal completo de la agencia (con cédula, correo y teléfono)', ['usuarios.ver', 'datos.cedula.ver', 'datos.contacto.ver'], { migrarSi: ['usuarios.ver'] }),
       accion('agencias.precios.fijar', 'Fijar precios por agencia', ['agencias.precios.gestionar']),
       // RRHH: la ubicación de la agencia es la referencia con la que se valida la timbrada de su personal.
-      accion('agencias.agencias.ubicacion', 'Configurar ubicación y radio de timbrada', ['rrhh.ubicaciones.gestionar'], { migrarSi: ['rrhh.ubicaciones.gestionar'] }),
+      accion('agencias.agencias.ubicacion', 'Configurar ubicación de timbrada', ['rrhh.ubicaciones.gestionar'], { migrarSi: ['rrhh.ubicaciones.gestionar'] }),
       PRECIOS,
     ], ['agencias.consultar', 'agencias.crear', 'agencias.editar', 'agencias.estado', 'bahias.editar', 'agencias.precios.gestionar']),
     sub('agencias', 'regiones', 'Regiones', [], [
@@ -270,7 +270,7 @@ export const PAGINAS: readonly PaginaDef[] = [
       accion('inventario.bodegas.gestionar', 'Crear o editar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.bodegas.estado', 'Activar o desactivar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
       accion('inventario.bodegas.eliminar', 'Eliminar bodega', ['bodegas.gestionar'], { grupo: 'Catálogo' }),
-      accion('inventario.bodegas.ubicacion', 'Configurar ubicación y radio de timbrada', ['rrhh.ubicaciones.gestionar'], { grupo: 'Catálogo' }),
+      accion('inventario.bodegas.ubicacion', 'Configurar ubicación de timbrada', ['rrhh.ubicaciones.gestionar'], { grupo: 'Catálogo' }),
       REAJUSTAR_STOCK,
       DESPACHAR_INSUMOS,
     ], ['inventario.ver']),
@@ -340,6 +340,11 @@ export const PAGINAS: readonly PaginaDef[] = [
   pagina('rrhh-timbradas', 'Timbradas', '/rrhh/timbradas', 'rrhh/timbradas', [], [
     sub('rrhh-timbradas', 'marcar', 'Timbrar', ['rrhh.timbrar'], []),
     sub('rrhh-timbradas', 'equipo', 'Timbradas del equipo', ['rrhh.timbradas.ver'], []),
+    // Quien ve las timbradas del equipo ve también su horario; solo ADMIN y SUPER_ADMIN lo editan.
+    sub('rrhh-timbradas', 'horarios', 'Horarios del personal', ['rrhh.timbradas.ver'], [
+      accion('rrhh-timbradas.horarios.editar', 'Editar el horario de una persona', ['rrhh.horarios.gestionar']),
+      accion('rrhh-timbradas.horarios.ajustes', 'Configurar tolerancia y ventana de timbrada', ['rrhh.horarios.gestionar']),
+    ]),
   ]),
 
   pagina('usuarios', 'Usuarios y Roles', '/usuarios', 'usuarios', [], [

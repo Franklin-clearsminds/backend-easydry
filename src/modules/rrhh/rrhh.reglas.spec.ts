@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HORA_CORTE,
   PRECISION_MAX_M,
   coordenadasValidas,
   diaComoFecha,
@@ -10,7 +9,6 @@ import {
   horasTrabajadas,
   personaEnAlcance,
   tareaVencida,
-  tipoPorHora,
   whereUsuariosEnAlcance,
   type SitioReferencia,
 } from './rrhh.reglas.js';
@@ -65,18 +63,6 @@ describe('día y hora en Ecuador', () => {
   });
 });
 
-describe('tipo de marca por hora', () => {
-  it('antes de las 12:00 es Entrada y desde las 12:00 es Salida', () => {
-    expect(HORA_CORTE).toBe(12);
-    expect(tipoPorHora(0)).toBe('ENTRADA');
-    expect(tipoPorHora(8)).toBe('ENTRADA');
-    expect(tipoPorHora(11)).toBe('ENTRADA');
-    expect(tipoPorHora(12)).toBe('SALIDA');
-    expect(tipoPorHora(17)).toBe('SALIDA');
-    expect(tipoPorHora(23)).toBe('SALIDA');
-  });
-});
-
 describe('horasTrabajadas', () => {
   it('calcula la diferencia entre entrada y salida', () => {
     expect(horasTrabajadas(new Date('2026-11-09T13:00:00Z'), new Date('2026-11-09T22:30:00Z'))).toBe(9.5);
@@ -89,20 +75,20 @@ describe('horasTrabajadas', () => {
 });
 
 describe('evaluarUbicacion', () => {
-  it('sin agencia ni bodega asignada solo se pide la foto: no rechaza aunque no haya GPS', () => {
-    const r = evaluarUbicacion([], {});
-    expect(r).toMatchObject({ ok: true, verificacion: 'SIN_VERIFICAR', sitio: null });
+  it('sin agencia ni bodega asignada no se puede timbrar, haya o no GPS', () => {
+    expect(evaluarUbicacion([], {})).toMatchObject({ ok: false, motivo: 'SIN_SITIO', mensaje: expect.stringContaining('una agencia asignada') });
+    expect(evaluarUbicacion([], { ...aMetros(0), precisionM: 5 }, 'APP', 'BODEGA')).toMatchObject({ ok: false, motivo: 'SIN_SITIO', mensaje: expect.stringContaining('una bodega asignada') });
   });
 
-  it('sin agencia ni bodega no exige precisión ni mira la distancia', () => {
-    expect(evaluarUbicacion([], { ...aMetros(50_000), precisionM: 5000 })).toMatchObject({ ok: true, verificacion: 'SIN_VERIFICAR' });
-  });
-
-  it('con el sitio sin ubicación guardada se acepta solo con foto, marcada sin referencia', () => {
+  it('con el sitio sin ubicación guardada tampoco se puede timbrar, y se devuelve el sitio para avisar a los administradores', () => {
     const s = sitio({ latitud: null, longitud: null });
-    const r = evaluarUbicacion([s], {});
-    expect(r).toMatchObject({ ok: true, verificacion: 'SIN_REFERENCIA' });
-    expect(r.ok && r.sitioSinUbicacion).toEqual([s]);
+    const r = evaluarUbicacion([s], { ...aMetros(0), precisionM: 5 });
+    expect(r).toMatchObject({ ok: false, motivo: 'SIN_REFERENCIA', mensaje: expect.stringContaining('aún no tiene su ubicación configurada') });
+    expect(!r.ok && r.sitioSinUbicacion).toEqual([expect.objectContaining({ id: s.id })]);
+  });
+
+  it('en «cualquier agencia», si ninguna tiene ubicación guardada no se puede timbrar', () => {
+    expect(evaluarUbicacion([], { ...aMetros(0), precisionM: 5 }, 'WEB', 'CUALQUIER_AGENCIA')).toMatchObject({ ok: false, motivo: 'SIN_REFERENCIA' });
   });
 
   it('dentro del radio es válida y devuelve la distancia', () => {
@@ -123,17 +109,19 @@ describe('evaluarUbicacion', () => {
     if (!lejos.ok) expect(lejos.mensaje).toMatch(/Estás a 101 m de Quito Norte.*100 m o menos/);
   });
 
-  it('el radio es fijo por canal: 100 m en la app y 200 m en la web, sin importar el guardado en el sitio', () => {
+  it('el radio es de 100 m en la app y en la web, sin importar el guardado en el sitio', () => {
     const s = sitio({ radioM: 30 });
-    expect(evaluarUbicacion([s], { ...aMetros(90), precisionM: 10 }, 'APP').ok).toBe(true);
-    expect(evaluarUbicacion([s], { ...aMetros(150), precisionM: 10 }, 'APP')).toMatchObject({ ok: false, motivo: 'LEJOS' });
-    expect(evaluarUbicacion([s], { ...aMetros(150), precisionM: 10 }, 'WEB').ok).toBe(true);
-    expect(evaluarUbicacion([s], { ...aMetros(250), precisionM: 10 }, 'WEB')).toMatchObject({ ok: false, motivo: 'LEJOS' });
+    for (const canal of ['APP', 'WEB'] as const) {
+      expect(evaluarUbicacion([s], { ...aMetros(90), precisionM: 10 }, canal).ok).toBe(true);
+      expect(evaluarUbicacion([s], { ...aMetros(150), precisionM: 10 }, canal)).toMatchObject({ ok: false, motivo: 'LEJOS' });
+    }
   });
 
-  it('en la web la precisión aceptada llega a 240 m', () => {
-    expect(evaluarUbicacion([sitio()], { ...aMetros(10), precisionM: 240 }, 'WEB').ok).toBe(true);
-    expect(evaluarUbicacion([sitio()], { ...aMetros(10), precisionM: 241 }, 'WEB')).toMatchObject({ ok: false, motivo: 'PRECISION' });
+  it('la precisión aceptada llega a 120 m en los dos canales', () => {
+    for (const canal of ['APP', 'WEB'] as const) {
+      expect(evaluarUbicacion([sitio()], { ...aMetros(10), precisionM: 120 }, canal).ok).toBe(true);
+      expect(evaluarUbicacion([sitio()], { ...aMetros(10), precisionM: 121 }, canal)).toMatchObject({ ok: false, motivo: 'PRECISION' });
+    }
   });
 
   it('sin coordenadas se pide activar la ubicación', () => {
@@ -163,7 +151,7 @@ describe('evaluarUbicacion', () => {
     const sinUbicacion = sitio({ tipo: 'BODEGA', id: 'b1', latitud: null, longitud: null });
     const r = evaluarUbicacion([sitio(), sinUbicacion], { ...aMetros(10), precisionM: 10 });
     expect(r.ok && r.verificacion).toBe('VERIFICADA');
-    expect(r.ok && r.sitioSinUbicacion.map((s) => s.id)).toEqual(['b1']);
+    expect(r.ok && r.sitio.id).toBe('a1');
     // y lejos del que sí la tiene, se rechaza
     expect(evaluarUbicacion([sitio(), sinUbicacion], { ...aMetros(900), precisionM: 10 }).ok).toBe(false);
   });

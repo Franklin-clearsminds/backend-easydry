@@ -269,7 +269,11 @@
       "pagina.rrhh-tareas",
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "rrhh.horarios.gestionar",
+      "rrhh-timbradas.horarios.editar",
+      "rrhh-timbradas.horarios.ajustes",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -606,7 +610,8 @@
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
       "pagina.rrhh-timbradas.marcar",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -747,7 +752,8 @@
       "rrhh.tareas.asignar",
       "rrhh.timbradas.ver",
       "pagina.rrhh-tareas.asignadas",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -882,7 +888,8 @@
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
       "pagina.rrhh-timbradas.marcar",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -1020,7 +1027,8 @@
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
       "pagina.rrhh-timbradas.marcar",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1138,7 +1146,8 @@
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
       "pagina.rrhh-timbradas.marcar",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1272,7 +1281,8 @@
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
       "pagina.rrhh-timbradas.marcar",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -1595,7 +1605,8 @@
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
       "pagina.rrhh-timbradas.marcar",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": false,
@@ -2015,7 +2026,11 @@
       "pagina.rrhh-tareas",
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "rrhh.horarios.gestionar",
+      "rrhh-timbradas.horarios.editar",
+      "rrhh-timbradas.horarios.ajustes",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": true,
@@ -2183,7 +2198,8 @@
       "pagina.rrhh-tareas.asignadas",
       "pagina.rrhh-timbradas",
       "pagina.rrhh-timbradas.marcar",
-      "pagina.rrhh-timbradas.equipo"
+      "pagina.rrhh-timbradas.equipo",
+      "pagina.rrhh-timbradas.horarios"
     ],
     "acciones": {
       "verTodasSucursales": false,

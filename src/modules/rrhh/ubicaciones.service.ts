@@ -53,7 +53,7 @@ export class UbicacionesService {
     return this.actualizar(dto.sitioTipo, dto.sitioId, user, { latitud: dto.latitud, longitud: dto.longitud, radioM: RADIO_POR_DEFECTO_M });
   }
 
-  /** Quita la ubicación (el radio vuelve al valor por defecto): hasta que se configure otra, el personal timbra solo con foto. */
+  /** Quita la ubicación (el radio vuelve al valor por defecto): hasta que se configure otra, el personal de ese sitio no puede timbrar. */
   async quitar(dto: QuitarUbicacionDto, user: any): Promise<SitioConUbicacion> {
     return this.actualizar(dto.sitioTipo, dto.sitioId, user, { latitud: null, longitud: null, radioM: RADIO_POR_DEFECTO_M });
   }

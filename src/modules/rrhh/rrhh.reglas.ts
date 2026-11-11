@@ -1,19 +1,17 @@
 import { SIN_RESULTADOS, type Alcance } from '../../common/permisos/alcance.js';
 
 /**
- * Reglas puras de RRHH (sin base de datos): distancia, tipo de marca, día en Ecuador y qué sitio valida la timbrada.
+ * Reglas puras de RRHH (sin base de datos): distancia, día en Ecuador y qué sitio valida la timbrada (el tipo de marca lo decide el horario, en rrhh.horarios).
  * Las pruebas las cubren una por una; los servicios solo las aplican.
  */
 
 /** Zona horaria de las marcas: la hora y el día son siempre los de Ecuador, sin importar el reloj del dispositivo. */
 export const ZONA_HORARIA = 'America/Guayaquil';
-/** Antes de esta hora la marca es Entrada; desde ella, Salida. */
-export const HORA_CORTE = 12;
 
 export const RADIO_POR_DEFECTO_M = 100;
 /** Distancia máxima al sitio para timbrar: fija por canal (el GPS del navegador es menos preciso que el del celular). */
 export const RADIO_APP_M = 100;
-export const RADIO_WEB_M = 200;
+export const RADIO_WEB_M = 100;
 export type OrigenTimbrada = 'APP' | 'WEB';
 export const radioPorOrigen = (origen: OrigenTimbrada): number => (origen === 'WEB' ? RADIO_WEB_M : RADIO_APP_M);
 /** Peor precisión de GPS que se acepta: el radio del canal más 20 %. Una lectura más vaga se rechaza. */
@@ -24,6 +22,7 @@ export const MAX_ADJUNTOS = 5;
 export const MAX_BYTES_ADJUNTO = 10 * 1024 * 1024;
 
 export type TipoMarca = 'ENTRADA' | 'SALIDA';
+/** Las marcas nuevas siempre quedan VERIFICADAS; las otras dos solo existen en marcas antiguas, de cuando se podía timbrar solo con foto. */
 export type Verificacion = 'VERIFICADA' | 'SIN_VERIFICAR' | 'SIN_REFERENCIA';
 
 export interface Punto {
@@ -68,11 +67,6 @@ export function fechaEnEcuador(instante: Date): FechaEcuador {
 /** El día `AAAA-MM-DD` como fecha a medianoche UTC (como se guarda una columna `@db.Date`). */
 export const diaComoFecha = (dia: string): Date => new Date(`${dia}T00:00:00.000Z`);
 
-/** Antes de las 12:00 es Entrada; desde las 12:00, Salida. */
-export function tipoPorHora(hora: number): TipoMarca {
-  return hora < HORA_CORTE ? 'ENTRADA' : 'SALIDA';
-}
-
 export function horasTrabajadas(entrada: Date | null | undefined, salida: Date | null | undefined): number | null {
   if (!entrada || !salida) return null;
   const horas = (salida.getTime() - entrada.getTime()) / 3_600_000;
@@ -89,9 +83,12 @@ export interface SitioReferencia {
   radioM: number;
 }
 
+/** Contra qué sitio se valida cada rol: su bodega, su agencia asignada o cualquier agencia con ubicación guardada. */
+export type ModoTimbrada = 'BODEGA' | 'AGENCIA_ASIGNADA' | 'CUALQUIER_AGENCIA';
+
 export type ResultadoUbicacion =
-  | { ok: true; verificacion: Verificacion; sitio: SitioReferencia | null; distanciaM: number | null; radioM: number | null; sitioSinUbicacion: SitioReferencia[] }
-  | { ok: false; motivo: 'FALTA_UBICACION' | 'PRECISION' | 'LEJOS'; mensaje: string };
+  | { ok: true; verificacion: 'VERIFICADA'; sitio: SitioReferencia; distanciaM: number; radioM: number }
+  | { ok: false; motivo: 'SIN_SITIO' | 'SIN_REFERENCIA' | 'FALTA_UBICACION' | 'PRECISION' | 'LEJOS'; mensaje: string; sitioSinUbicacion?: SitioReferencia[] };
 
 export interface LecturaGps {
   latitud?: number | null;
@@ -100,22 +97,39 @@ export interface LecturaGps {
 }
 
 /**
- * Decide si una marca es válida según dónde está la persona.
- *  - Sin agencia ni bodega asignada: solo foto (`SIN_VERIFICAR`); la ubicación que mande el dispositivo se guarda, pero no rechaza.
- *  - Con sitio asignado pero ninguno con ubicación guardada: se acepta solo con foto (`SIN_REFERENCIA`) y se avisa al admin.
- *  - Con sitio y ubicación: hace falta una lectura de GPS con la precisión del canal o mejor, y estar a menos del radio del canal
- *    (100 m en la app, 200 m en la web) de alguno de sus sitios.
+ * Por qué no hay contra qué validar la ubicación (o null si hay al menos un sitio con ubicación guardada). Sin referencia no se puede
+ * timbrar: no existe la opción de «solo foto».
  */
-export function evaluarUbicacion(sitiosGuardados: SitioReferencia[], lectura: LecturaGps, origen: OrigenTimbrada = 'APP'): ResultadoUbicacion {
+export function sinReferencia(sitios: readonly SitioReferencia[], modo: ModoTimbrada = 'AGENCIA_ASIGNADA'):
+  | { motivo: 'SIN_SITIO' | 'SIN_REFERENCIA'; mensaje: string; sitioSinUbicacion: SitioReferencia[] }
+  | null {
+  const conUbicacion = sitios.filter((s) => s.latitud != null && s.longitud != null);
+  if (conUbicacion.length > 0) return null;
+  if (sitios.length === 0) {
+    if (modo === 'CUALQUIER_AGENCIA') {
+      return { motivo: 'SIN_REFERENCIA', mensaje: 'Aún no hay agencias con ubicación configurada, así que no se puede validar tu timbrada. Avisa a un administrador.', sitioSinUbicacion: [] };
+    }
+    const sitio = modo === 'BODEGA' ? 'una bodega' : 'una agencia';
+    return { motivo: 'SIN_SITIO', mensaje: `No tienes ${sitio} asignada, así que no se puede validar tu ubicación para timbrar. Pide a un administrador que te la asigne.`, sitioSinUbicacion: [] };
+  }
+  return {
+    motivo: 'SIN_REFERENCIA',
+    mensaje: `${sitios[0].nombre} aún no tiene su ubicación configurada, así que no se puede validar tu timbrada. Se avisó a los administradores.`,
+    sitioSinUbicacion: [...sitios],
+  };
+}
+
+/**
+ * Decide si una marca es válida según dónde está la persona. Hay que estar dentro del radio del canal (100 m, tanto en la app como en la web)
+ * de uno de sus sitios, con una lectura de GPS de la precisión del canal o mejor. Si no hay sitio asignado, o ninguno tiene ubicación
+ * guardada, tampoco se puede timbrar.
+ */
+export function evaluarUbicacion(sitiosGuardados: SitioReferencia[], lectura: LecturaGps, origen: OrigenTimbrada = 'APP', modo: ModoTimbrada = 'AGENCIA_ASIGNADA'): ResultadoUbicacion {
   const radio = radioPorOrigen(origen);
   const sitios = sitiosGuardados.map((s) => ({ ...s, radioM: radio }));
-  if (sitios.length === 0) return { ok: true, verificacion: 'SIN_VERIFICAR', sitio: null, distanciaM: null, radioM: null, sitioSinUbicacion: [] };
-
+  const sin = sinReferencia(sitios, modo);
+  if (sin) return { ok: false, ...sin };
   const conUbicacion = sitios.filter((s) => s.latitud != null && s.longitud != null);
-  const sinUbicacion = sitios.filter((s) => s.latitud == null || s.longitud == null);
-  if (conUbicacion.length === 0) {
-    return { ok: true, verificacion: 'SIN_REFERENCIA', sitio: sitios[0], distanciaM: null, radioM: null, sitioSinUbicacion: sinUbicacion };
-  }
 
   if (!coordenadasValidas(lectura.latitud, lectura.longitud)) {
     return { ok: false, motivo: 'FALTA_UBICACION', mensaje: 'No se recibió tu ubicación. Activa el GPS y permite el acceso a la ubicación para timbrar.' };
@@ -136,7 +150,7 @@ export function evaluarUbicacion(sitiosGuardados: SitioReferencia[], lectura: Le
   // Vale la marca si está dentro del radio de alguno; si no, se informa del más cercano.
   const dentro = medidos.find((m) => m.distanciaM <= m.sitio.radioM);
   if (dentro) {
-    return { ok: true, verificacion: 'VERIFICADA', sitio: dentro.sitio, distanciaM: Math.round(dentro.distanciaM * 10) / 10, radioM: dentro.sitio.radioM, sitioSinUbicacion: sinUbicacion };
+    return { ok: true, verificacion: 'VERIFICADA', sitio: dentro.sitio, distanciaM: Math.round(dentro.distanciaM * 10) / 10, radioM: dentro.sitio.radioM };
   }
   const cerca = medidos[0];
   return {

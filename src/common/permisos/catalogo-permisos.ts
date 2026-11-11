@@ -125,7 +125,8 @@ export const CATALOGO_PERMISOS = [
   def('RRHH', 'rrhh.timbradas.ver', 'Ver timbradas del equipo', 'Consultar las timbradas, con foto y distancia, de las personas de su ámbito.'),
   def('RRHH', 'rrhh.tareas.propias', 'Recibir y completar tareas', 'Ver las tareas que le asignaron y completarlas con respuesta y evidencia. No lo tienen ADMIN ni SUPER_ADMIN.'),
   def('RRHH', 'rrhh.tareas.asignar', 'Asignar y revisar tareas', 'Asignar tareas a personas de su ámbito, y revisar, devolver, cancelar o reasignar las que asignó.'),
-  def('RRHH', 'rrhh.ubicaciones.gestionar', 'Configurar ubicación de agencias y bodegas', 'Fijar la ubicación y el radio de timbrada de cada agencia y bodega.'),
+  def('RRHH', 'rrhh.ubicaciones.gestionar', 'Configurar ubicación de agencias y bodegas', 'Fijar la ubicación de cada agencia y bodega contra la que se valida la timbrada (el radio es fijo por canal).'),
+  def('RRHH', 'rrhh.horarios.gestionar', 'Editar horarios y ajustes de timbrada', 'Editar el horario semanal de cada persona y la tolerancia y la ventana de timbrada. Cada cambio rige desde mañana, exige un motivo y queda en el historial. Solo ADMIN y SUPER_ADMIN.'),
 
   def('Sistema', 'sync.usar', 'Usar la sincronización de la app', 'Sincronizar datos de la app móvil y registrar el dispositivo.'),
   def('Sistema', 'sync.dlq.gestionar', 'Gestionar errores de sincronización', 'Ver, resolver y reintentar los errores de todos los usuarios.'),

@@ -4,14 +4,18 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Permiso } from '../../common/permisos/permisos.decorators.js';
 import { TimbradasService } from './timbradas.service.js';
 import { TareasService } from './tareas.service.js';
+import { HorariosService } from './horarios.service.js';
 import { UbicacionesService } from './ubicaciones.service.js';
 import {
   CancelarTareaDto,
   CompletarTareaDto,
   ConsultarTimbradasDto,
   CrearTareaDto,
+  EditarAjusteDto,
+  EditarHorarioDto,
   EstadoTimbradaDto,
   GuardarUbicacionDto,
+  HorarioPersonaDto,
   ListarTareasDto,
   QuitarUbicacionDto,
   ReasignarTareaDto,
@@ -23,6 +27,10 @@ import {
 /** La ubicación se configura desde Agencias (casilla de la agencia) o desde Inventario > Bodegas (casilla de la bodega); ambas otorgan el permiso base. */
 const PERMISOS_UBICACION = ['rrhh.ubicaciones.gestionar', 'agencias.agencias.ubicacion', 'inventario.bodegas.ubicacion'];
 
+/** Editar horarios y ajustes: el permiso base o la casilla de la pantalla de Timbradas (ambas otorgan lo mismo). */
+const PERMISOS_EDITAR_HORARIO = ['rrhh.horarios.gestionar', 'rrhh-timbradas.horarios.editar'];
+const PERMISOS_AJUSTE_HORARIO = ['rrhh.horarios.gestionar', 'rrhh-timbradas.horarios.ajustes'];
+
 @ApiTags('RRHH')
 @ApiBearerAuth()
 @Controller('rrhh')
@@ -31,6 +39,7 @@ export class RrhhController {
     private readonly timbradas: TimbradasService,
     private readonly tareas: TareasService,
     private readonly ubicaciones: UbicacionesService,
+    private readonly horarios: HorariosService,
   ) {}
 
   // ───────────────────────── Ubicaciones ─────────────────────────
@@ -38,7 +47,7 @@ export class RrhhController {
   @Permiso(...PERMISOS_UBICACION)
   @Post('ubicaciones/list')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Agencias y bodegas con su ubicación y radio de timbrada' })
+  @ApiOperation({ summary: 'Agencias y bodegas con su ubicación' })
   listarUbicaciones(@CurrentUser() user: any) {
     return this.ubicaciones.listar(user);
   }
@@ -91,6 +100,64 @@ export class RrhhController {
   @ApiOperation({ summary: 'Timbradas de las personas de mi alcance' })
   timbradasEquipo(@Body() dto: ConsultarTimbradasDto, @CurrentUser() user: any) {
     return this.timbradas.equipo(dto, user);
+  }
+
+  // ───────────────────────── Horarios ─────────────────────────
+
+  @Permiso('rrhh.timbrar')
+  @Post('horarios/mio')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mi horario semanal y el ajuste general de timbradas' })
+  miHorario(@CurrentUser() user: any) {
+    return this.horarios.mio(user);
+  }
+
+  @Permiso('rrhh.timbradas.ver')
+  @Post('horarios/equipo')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Horarios de las personas de mi alcance' })
+  horariosEquipo(@CurrentUser() user: any) {
+    return this.horarios.equipo(user);
+  }
+
+  @Permiso('rrhh.timbradas.ver')
+  @Post('horarios/historial')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Historial de cambios del horario de una persona' })
+  historialHorario(@Body() dto: HorarioPersonaDto, @CurrentUser() user: any) {
+    return this.horarios.historial(dto.userId, user);
+  }
+
+  @Permiso(...PERMISOS_EDITAR_HORARIO)
+  @Post('horarios/editar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Editar el horario de una persona (rige desde mañana)' })
+  editarHorario(@Body() dto: EditarHorarioDto, @CurrentUser() user: any) {
+    return this.horarios.editar(dto, user);
+  }
+
+  @Permiso('rrhh.timbrar', 'rrhh.timbradas.ver')
+  @Post('horarios/ajustes')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Tolerancia y ventana de timbrada vigentes' })
+  ajustesHorario() {
+    return this.horarios.ajusteVista();
+  }
+
+  @Permiso(...PERMISOS_AJUSTE_HORARIO)
+  @Post('horarios/ajustes/historial')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Historial de cambios de la tolerancia y la ventana' })
+  historialAjustes() {
+    return this.horarios.historialAjustes();
+  }
+
+  @Permiso(...PERMISOS_AJUSTE_HORARIO)
+  @Post('horarios/ajustes/editar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Cambiar la tolerancia y la ventana de timbrada (rige desde mañana)' })
+  editarAjuste(@Body() dto: EditarAjusteDto, @CurrentUser() user: any) {
+    return this.horarios.editarAjuste(dto, user);
   }
 
   // ───────────────────────── Tareas ─────────────────────────

@@ -76,6 +76,7 @@ describe('matriz acordada de permisos por rol', () => {
     expect(rolesCon('rrhh.tareas.asignar').sort()).toEqual(asignan);
     expect(rolesCon('rrhh.timbradas.ver').sort()).toEqual(asignan);
     expect(rolesCon('rrhh.ubicaciones.gestionar').sort()).toEqual(['ADMIN', 'SUPER_ADMIN']);
+    expect(rolesCon('rrhh.horarios.gestionar').sort()).toEqual(['ADMIN', 'SUPER_ADMIN']);
   });
 
   it('auditar (hacer informes de inspección y auditorías 5S) lo pueden todos los roles menos líder, Backup, auxiliar, lavador y pulidor', () => {

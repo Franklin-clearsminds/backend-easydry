@@ -426,6 +426,7 @@ const ROLES_NO_TIMBRAN = ['SUPER_ADMIN', 'ADMIN'];
 // El BACKUP reemplaza al líder y el AUXILIAR copia sus permisos (lavador con las capacidades del líder): heredan los suyos.
 const ROLES_ASIGNAN_TAREAS = ['SUPER_ADMIN', 'ADMIN', 'SUPERVISOR', 'COORD_COMERCIAL', 'COORD_SERVICIOS_ESPECIALES', 'COORD_MANTENIMIENTO', 'COORD_BODEGA', 'LIDER', 'BACKUP', 'AUXILIAR'];
 const ROLES_CONFIGURAN_UBICACION = ['SUPER_ADMIN', 'ADMIN'];
+const ROLES_EDITAN_HORARIOS = ['SUPER_ADMIN', 'ADMIN'];
 const CAPACIDADES_RRHH_PROPIAS: CodigoPermiso[] = p('rrhh.timbrar', 'rrhh.tareas.propias');
 for (const rol of ROLES_BASE) {
   const quitar = ROLES_NO_TIMBRAN.includes(rol.namerol) ? CAPACIDADES_RRHH_PROPIAS : [];
@@ -433,6 +434,7 @@ for (const rol of ROLES_BASE) {
     ...(ROLES_NO_TIMBRAN.includes(rol.namerol) ? [] : CAPACIDADES_RRHH_PROPIAS),
     ...(ROLES_ASIGNAN_TAREAS.includes(rol.namerol) ? p('rrhh.tareas.asignar', 'rrhh.timbradas.ver') : []),
     ...(ROLES_CONFIGURAN_UBICACION.includes(rol.namerol) ? p('rrhh.ubicaciones.gestionar') : []),
+    ...(ROLES_EDITAN_HORARIOS.includes(rol.namerol) ? p('rrhh.horarios.gestionar') : []),
   ];
   rol.capacidades = [...new Set([...rol.capacidades.filter((c) => !quitar.includes(c)), ...extra])];
 }

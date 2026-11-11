@@ -150,6 +150,7 @@ model User {
   updatedAt           DateTime  @updatedAt
 
   timbradas                      Timbrada[]
+  horariosPersona                HorarioPersona[]
   tareasRrhhRecibidas            TareaRrhh[]                  @relation("TareaAsignadoA")
   tareasRrhhAsignadas            TareaRrhh[]                  @relation("TareaAsignadoPor")
   serviciosAtendidos             ServicioLavado[]
@@ -1056,6 +1057,7 @@ enum TipoNotificacion {
   TAREA_REASIGNADA
   TAREA_VENCIDA
   UBICACION_FALTANTE
+  HORARIO_INCIDENCIA
 }
 
 model Notification {
@@ -2192,6 +2194,38 @@ model Timbrada {
   @@index([agenciaId, fechaDia])
   @@index([bodegaId, fechaDia])
   @@map("timbradas")
+}
+
+/// Versión del horario semanal de una persona. Inmutable: un cambio crea otra versión que rige desde `vigenteDesde` (nunca antes de mañana),
+/// y los días pasados se evalúan con la versión que regía ese día. Sin versiones, rige el horario por defecto (08:00 a 15:00 los 7 días).
+model HorarioPersona {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  vigenteDesde DateTime @db.Date
+  /// 7 elementos (lunes a domingo): { trabaja: boolean, entrada: "HH:mm", salida: "HH:mm" }
+  dias         Json
+  motivo       String
+  actorId      String
+  createdAt    DateTime @default(now())
+
+  @@index([userId, vigenteDesde])
+  @@map("horarios_persona")
+}
+
+/// Versión del ajuste general de timbradas (tolerancia de puntualidad y ventana de timbrada). Inmutable y con fecha de inicio, como el horario.
+/// La primera versión la crea la migración con la fecha de activación: los días anteriores quedan «sin horario» y no se evalúan.
+model AjusteHorario {
+  id            String   @id @default(uuid())
+  vigenteDesde  DateTime @db.Date
+  toleranciaMin Int
+  ventanaMin    Int
+  motivo        String
+  actorId       String
+  createdAt     DateTime @default(now())
+
+  @@index([vigenteDesde])
+  @@map("ajustes_horario")
 }
 
 model TareaRrhh {

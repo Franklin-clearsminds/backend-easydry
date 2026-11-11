@@ -15,6 +15,8 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
+  ArrayMinSize,
   ValidateNested,
 } from 'class-validator';
 import { MAX_ADJUNTOS } from '../rrhh.reglas.js';
@@ -42,7 +44,7 @@ export class GuardarUbicacionDto {
   @Max(180)
   longitud!: number;
 
-  /** Ya no se configura: el radio es fijo por canal (100 m en la app, 200 m en la web). Se acepta por compatibilidad y se ignora. */
+  /** Ya no se configura: el radio es fijo por canal (100 m, tanto en la app como en la web). Se acepta por compatibilidad y se ignora. */
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -115,6 +117,60 @@ export class ConsultarTimbradasDto {
   @IsOptional()
   @IsUUID()
   userId?: string;
+}
+
+// ───────────────────────── Horarios ─────────────────────────
+
+const HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export class DiaHorarioDto {
+  @IsBoolean()
+  trabaja!: boolean;
+
+  @Matches(HORA, { message: 'entrada debe ser HH:mm' })
+  entrada!: string;
+
+  @Matches(HORA, { message: 'salida debe ser HH:mm' })
+  salida!: string;
+}
+
+/** Quién: la persona de la que se pide el horario o su historial. */
+export class HorarioPersonaDto {
+  @IsUUID()
+  userId!: string;
+}
+
+export class EditarHorarioDto {
+  @IsUUID()
+  userId!: string;
+
+  /** Siete elementos, de lunes a domingo. */
+  @IsArray()
+  @ArrayMinSize(7)
+  @ArrayMaxSize(7)
+  @ValidateNested({ each: true })
+  @Type(() => DiaHorarioDto)
+  dias!: DiaHorarioDto[];
+
+  @IsString()
+  @MinLength(5)
+  @MaxLength(300)
+  motivo!: string;
+}
+
+export class EditarAjusteDto {
+  @Type(() => Number)
+  @IsInt()
+  toleranciaMin!: number;
+
+  @Type(() => Number)
+  @IsInt()
+  ventanaMin!: number;
+
+  @IsString()
+  @MinLength(5)
+  @MaxLength(300)
+  motivo!: string;
 }
 
 // ───────────────────────── Tareas ─────────────────────────

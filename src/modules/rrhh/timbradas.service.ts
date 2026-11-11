@@ -2,17 +2,20 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { PrismaService } from '../prisma/prisma.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { HorariosService } from './horarios.service.js';
 import { resolverAlcance } from '../../common/permisos/alcance.js';
 import { FUNCION, tieneAlgunaFuncion, tieneFuncion } from '../../common/permisos/funciones.js';
 import type { ConsultarTimbradasDto, RegistrarTimbradaDto } from './dto/rrhh.dto.js';
+import { resolverMarca } from './rrhh.horarios.js';
 import {
   diaComoFecha,
   evaluarUbicacion,
   fechaEnEcuador,
   precisionMaxPorOrigen,
   radioPorOrigen,
-  tipoPorHora,
   whereUsuariosEnAlcance,
+  sinReferencia,
+  type ModoTimbrada,
   type OrigenTimbrada,
   type SitioReferencia,
 } from './rrhh.reglas.js';
@@ -24,11 +27,9 @@ const FILAS_MAXIMAS = 5000;
 
 const dia = (d: Date) => d.toISOString().slice(0, 10);
 
-type ModoTimbrada = 'BODEGA' | 'AGENCIA_ASIGNADA' | 'CUALQUIER_AGENCIA';
-
 /**
- * Timbradas del personal. La hora y el día los pone el servidor (Ecuador); antes de las 12:00 es Entrada y desde las 12:00,
- * Salida; una de cada una por día. La foto es siempre de cámara. El personal de bodega debe estar dentro del radio de su bodega;
+ * Timbradas del personal. La hora y el día los pone el servidor (Ecuador). Si la marca es Entrada o Salida lo decide el horario de la
+ * persona (la hora a la que cae más cerca, dentro de la ventana); fuera de las ventanas o en un día libre no se deja timbrar. Una de cada una por día. La foto es siempre de cámara. El personal de bodega debe estar dentro del radio de su bodega;
  * lavadores, auxiliares, líderes y backup, dentro del de su agencia; los demás roles, dentro del de cualquier agencia con ubicación.
  * Una marca no se edita ni se borra.
  */
@@ -40,6 +41,7 @@ export class TimbradasService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly notifications: NotificationsService,
+    private readonly horarios: HorariosService,
   ) {}
 
   /** Los administradores no timbran. */
@@ -75,7 +77,7 @@ export class TimbradasService {
       const a = await this.prisma.agencia.findUnique({ where: { id: user.agenciaId }, select: campos });
       return a ? [aSitio(a, 'AGENCIA')] : [];
     }
-    // Cualquier agencia: solo cuentan las activas con ubicación guardada; si ninguna la tiene, se timbra solo con foto.
+    // Cualquier agencia: solo cuentan las activas con ubicación guardada; si ninguna la tiene, no se puede timbrar.
     const agencias = await this.prisma.agencia.findMany({ where: { estado: 1, latitud: { not: null }, longitud: { not: null } }, select: campos });
     return agencias.map((a) => aSitio(a, 'AGENCIA'));
   }
@@ -86,18 +88,31 @@ export class TimbradasService {
     const ahora = new Date();
     const f = fechaEnEcuador(ahora);
     const modo = this.modoDe(user);
-    const [sitios, marcas] = await Promise.all([
+    const [sitios, marcas, hoy] = await Promise.all([
       this.sitiosDe(user, modo),
       this.prisma.timbrada.findMany({ where: { userId: String(user.id), fechaDia: diaComoFecha(f.dia) }, orderBy: { marcadaEn: 'asc' } }),
+      this.horarios.resumenHoy(String(user.id), ahora),
     ]);
-    const conUbicacion = sitios.filter((s) => s.latitud != null && s.longitud != null);
+    // Qué marca correspondería ahora según el horario: null si hoy es día libre o está fuera de las ventanas.
+    const siguiente = resolverMarca(hoy.horario, hoy.ajuste, f.hora * 60 + f.minuto, {
+      entrada: marcas.some((m) => m.tipo === 'ENTRADA'),
+      salida: marcas.some((m) => m.tipo === 'SALIDA'),
+    });
+    // Sin una agencia o bodega con ubicación contra la cual validar tampoco se puede timbrar.
+    const sinRef = sinReferencia(sitios, modo);
     return {
       ahora: ahora.toISOString(),
       dia: f.dia,
-      tipoActual: tipoPorHora(f.hora),
+      tipoActual: siguiente.ok ? siguiente.tipo : null,
+      puedeTimbrar: siguiente.ok && !sinRef,
+      motivoBloqueo: siguiente.ok ? (sinRef?.mensaje ?? null) : siguiente.mensaje,
+      horario: { trabaja: hoy.horario.trabaja, entrada: hoy.horario.entrada, salida: hoy.horario.salida },
+      ventanas: hoy.ventanas,
+      toleranciaMin: hoy.ajuste.toleranciaMin,
+      ventanaMin: hoy.ajuste.ventanaMin,
       marcasHoy: marcas.map((m) => ({ id: m.id, tipo: m.tipo, marcadaEn: m.marcadaEn, verificacion: m.verificacion, distanciaM: m.distanciaM })),
-      // Hay que mandar la ubicación solo si tiene un sitio asignado con ubicación guardada; si no, basta la foto.
-      exigeUbicacion: conUbicacion.length > 0,
+      // La ubicación se exige siempre: hay que estar dentro del radio de un sitio permitido.
+      exigeUbicacion: true,
       precisionMaxM: precisionMaxPorOrigen(origen),
       modo,
       radioM: radioPorOrigen(origen),
@@ -111,11 +126,20 @@ export class TimbradasService {
     const userId = String(user.id);
     const ahora = new Date();
     const f = fechaEnEcuador(ahora);
-    const tipo = tipoPorHora(f.hora);
     const fechaDia = diaComoFecha(f.dia);
 
-    const previa = await this.prisma.timbrada.findUnique({ where: { userId_fechaDia_tipo: { userId, fechaDia, tipo } }, select: { id: true } });
-    if (previa) throw new ConflictException(tipo === 'ENTRADA' ? 'Ya registraste tu entrada de hoy.' : 'Ya registraste tu salida de hoy.');
+    // Entrada o Salida lo decide el horario: la hora del horario a la que cae más cerca, dentro de la ventana. Fuera de ella no se deja timbrar.
+    const [contexto, previas] = await Promise.all([
+      this.horarios.contextoDe(userId, f.dia),
+      this.prisma.timbrada.findMany({ where: { userId, fechaDia }, select: { tipo: true } }),
+    ]);
+    const ya = { entrada: previas.some((m) => m.tipo === 'ENTRADA'), salida: previas.some((m) => m.tipo === 'SALIDA') };
+    const resolucion = resolverMarca(contexto.dia, contexto.ajuste, f.hora * 60 + f.minuto, ya);
+    if (!resolucion.ok) {
+      const Excepcion = resolucion.motivo === 'YA_REGISTRADA' ? ConflictException : BadRequestException;
+      throw new Excepcion({ message: resolucion.mensaje, codigo: resolucion.motivo });
+    }
+    const tipo = resolucion.tipo;
 
     // La foto debe ser una imagen subida por esta misma persona y no haberse usado en otra marca.
     const foto = await this.storage.inspectEvidence(dto.fotoUrl, { prefix: `rrhh/timbradas/${userId}/` });
@@ -125,10 +149,14 @@ export class TimbradasService {
     }
 
     const sitios = await this.sitiosDe(user);
-    const evaluacion = evaluarUbicacion(sitios, { latitud: dto.latitud, longitud: dto.longitud, precisionM: dto.precisionM }, dto.origen);
-    if (!evaluacion.ok) throw new BadRequestException({ message: evaluacion.mensaje, codigo: evaluacion.motivo });
+    const evaluacion = evaluarUbicacion(sitios, { latitud: dto.latitud, longitud: dto.longitud, precisionM: dto.precisionM }, dto.origen, this.modoDe(user));
+    if (!evaluacion.ok) {
+      // Un sitio sin ubicación es algo que un administrador debe arreglar: se le avisa una vez por sitio y por día.
+      if (evaluacion.motivo === 'SIN_REFERENCIA' && evaluacion.sitioSinUbicacion?.length) void this.avisarUbicacionFaltante(evaluacion.sitioSinUbicacion, f.dia);
+      throw new BadRequestException({ message: evaluacion.mensaje, codigo: evaluacion.motivo });
+    }
 
-    const regionId = evaluacion.sitio?.regionId ?? user.regionId ?? user.agencia?.regionId ?? user.bodega?.regionId ?? null;
+    const regionId = evaluacion.sitio.regionId ?? user.regionId ?? user.agencia?.regionId ?? user.bodega?.regionId ?? null;
     let creada;
     try {
       creada = await this.prisma.timbrada.create({
@@ -140,13 +168,12 @@ export class TimbradasService {
           horaDispositivo: dto.horaDispositivo ? new Date(dto.horaDispositivo) : null,
           origen: dto.origen,
           fotoKey: foto.key,
-          // Aunque el rol sea de solo foto, la ubicación que mande el dispositivo se guarda para auditar.
           latitud: dto.latitud ?? null,
           longitud: dto.longitud ?? null,
           precisionM: dto.precisionM ?? null,
           verificacion: evaluacion.verificacion,
-          agenciaId: evaluacion.verificacion === 'VERIFICADA' && evaluacion.sitio?.tipo === 'AGENCIA' ? evaluacion.sitio.id : null,
-          bodegaId: evaluacion.verificacion === 'VERIFICADA' && evaluacion.sitio?.tipo === 'BODEGA' ? evaluacion.sitio.id : null,
+          agenciaId: evaluacion.sitio.tipo === 'AGENCIA' ? evaluacion.sitio.id : null,
+          bodegaId: evaluacion.sitio.tipo === 'BODEGA' ? evaluacion.sitio.id : null,
           regionId,
           distanciaM: evaluacion.distanciaM,
           radioM: evaluacion.radioM,
@@ -157,7 +184,8 @@ export class TimbradasService {
       throw e;
     }
 
-    if (evaluacion.verificacion === 'SIN_REFERENCIA') void this.avisarUbicacionFaltante(evaluacion.sitioSinUbicacion, f.dia);
+    // Una salida sin entrada se acepta, pero el día queda incompleto: se avisa a la persona y a los administradores.
+    if (tipo === 'SALIDA' && !ya.entrada) void this.horarios.avisarSalidaSinEntrada(userId, f.dia);
 
     return {
       id: creada.id,
@@ -166,13 +194,8 @@ export class TimbradasService {
       verificacion: creada.verificacion,
       distanciaM: creada.distanciaM,
       radioM: creada.radioM,
-      sitio: evaluacion.sitio ? { tipo: evaluacion.sitio.tipo, nombre: evaluacion.sitio.nombre } : null,
-      mensaje:
-        evaluacion.verificacion === 'VERIFICADA'
-          ? `${tipo === 'ENTRADA' ? 'Entrada' : 'Salida'} registrada a ${Math.round(evaluacion.distanciaM ?? 0)} m de ${evaluacion.sitio?.nombre}.`
-          : evaluacion.verificacion === 'SIN_REFERENCIA'
-            ? `${tipo === 'ENTRADA' ? 'Entrada' : 'Salida'} registrada solo con foto: tu sitio aún no tiene ubicación configurada.`
-            : `${tipo === 'ENTRADA' ? 'Entrada' : 'Salida'} registrada.`,
+      sitio: { tipo: evaluacion.sitio.tipo, nombre: evaluacion.sitio.nombre },
+      mensaje: `${tipo === 'ENTRADA' ? 'Entrada' : 'Salida'} registrada a ${Math.round(evaluacion.distanciaM)} m de ${evaluacion.sitio.nombre}.`,
     };
   }
 
@@ -220,7 +243,9 @@ export class TimbradasService {
       orderBy: [{ fechaDia: 'desc' }, { marcadaEn: 'asc' }],
       take: FILAS_MAXIMAS,
     });
-    return this.presentar(filas, new Map([[String(user.id), { id: String(user.id), nombre: user.nombre ?? `${user.name ?? ''} ${user.lastname ?? ''}`.trim(), rol: user.roleDetails?.namerol ?? '' }]]));
+    const presentadas = await this.presentar(filas, new Map([[String(user.id), { id: String(user.id), nombre: user.nombre ?? `${user.name ?? ''} ${user.lastname ?? ''}`.trim(), rol: user.roleDetails?.namerol ?? '' }]]));
+    const evaluacion = await this.horarios.evaluar([{ id: String(user.id), createdAt: user.createdAt ? new Date(user.createdAt) : new Date(0) }], desde, hasta, filas);
+    return { ...presentadas, evaluacion };
   }
 
   /** Timbradas de las personas dentro del alcance de quien consulta. */
@@ -229,9 +254,9 @@ export class TimbradasService {
     const alcance = resolverAlcance(user);
     const personas = await this.prisma.user.findMany({
       where: { ...(whereUsuariosEnAlcance(alcance) as object), ...(dto.userId ? { id: dto.userId } : {}) },
-      select: { id: true, name: true, lastname: true, role: { select: { namerol: true } } },
+      select: { id: true, name: true, lastname: true, createdAt: true, role: { select: { namerol: true, capacidades: true } } },
     });
-    if (!personas.length) return { filas: [], personas: [] };
+    if (!personas.length) return { filas: [], personas: [], evaluacion: [] };
     const filas = await this.prisma.timbrada.findMany({
       where: { userId: { in: personas.map((p) => p.id) }, fechaDia: { gte: desde, lte: hasta } },
       orderBy: [{ fechaDia: 'desc' }, { marcadaEn: 'asc' }],
@@ -239,7 +264,9 @@ export class TimbradasService {
     });
     const mapa = new Map(personas.map((p) => [p.id, { id: p.id, nombre: `${p.name} ${p.lastname}`.trim(), rol: p.role?.namerol ?? '' }]));
     const resultado = await this.presentar(filas, mapa);
-    return { ...resultado, personas: [...mapa.values()].sort((a, b) => a.nombre.localeCompare(b.nombre)) };
+    // Solo se evalúa a quien timbra (los administradores no tienen horario).
+    const evaluacion = await this.horarios.evaluar(personas.filter((p) => p.role?.capacidades?.includes('rrhh.timbrar')).map((p) => ({ id: p.id, createdAt: p.createdAt })), desde, hasta, filas);
+    return { ...resultado, personas: [...mapa.values()].sort((a, b) => a.nombre.localeCompare(b.nombre)), evaluacion };
   }
 
   private async presentar(filas: any[], personas: Map<string, { id: string; nombre: string; rol: string }>) {
