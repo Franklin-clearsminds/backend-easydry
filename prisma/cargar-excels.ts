@@ -1,26 +1,29 @@
 /**
- * Carga a la base LOCAL, en una sola corrida, la información de los 5 Excel que están en la raíz del repositorio:
+ * Carga a la base LOCAL, en una sola corrida, la información de los 6 Excel que están en la raíz del repositorio:
  *
- *   DATOS AGENCIAS.xlsx                          → clientes (marcas), agencias y bahías. De ahí no se toma nada más.
- *   INFORMACIÓN SISTEMA EASYDRY.xlsx             → insumos con su unidad de medida, servicios, recetas, precios por cliente y el
- *                                                  personal (usuarios).
+ *   DATOS AGENCIAS.xlsx                          → clientes (marcas), agencias y bahías. Sus operarios solo se comparan con el listado.
+ *   INFORMACIÓN SISTEMA EASYDRY.xlsx             → insumos con su unidad de medida, servicios, recetas y precios por cliente.
+ *   LISTADO DE PERSONAL EASYDRY.xlsx             → personal (usuarios): cédula, cargo (= rol), región, agencia, ciudad, teléfono y correo.
  *   MAQUINARIAS EASYDRY 2026 ACTUALIZADO.xlsx    → maquinaria de la Costa, con su agencia y bahía.
  *   QUITO LOGISTICA 2026.xlsx                    → maquinaria de la Sierra.
  *   MAQUINARIA SERVICIOS ESPECIALES QUITO 2026.xlsx → pulidoras y rotorbitales de los pulidores, con su fecha de entrega.
  *
  * Reglas (acordadas con el producto):
- *  - Las regiones Sierra y Costa se crean, pero TODAS las agencias quedan en la Sierra por ahora.
+ *  - Las regiones Sierra y Costa se crean. Cada agencia va a la región que marca el listado de personal (la de su gente); las que no
+ *    tienen personal en el listado se deducen por su ciudad (tabla REGION_AGENCIA_SIN_PERSONAL) y, si no hay dato, quedan en la Sierra.
  *  - Cada agencia recibe los servicios de su cliente con el precio de ese cliente. Las columnas de precio sin cliente igual en
  *    DATOS AGENCIAS no se cargan (se asignan a mano). Los servicios sin ningún precio quedan Inactivos.
- *  - Todo el personal entra como LAVADOR con su correo y la contraseña de IMPORT_PASSWORD_INICIAL, sin agencia. Las personas de
- *    la hoja «SERVICIOS ESPECIALES» de DATOS AGENCIAS entran como PULIDOR (móvil, en la Sierra).
- *    Correos: el primero de una celda con varios; los de nomina@easydry.com.ec se generan a partir del nombre; un correo repetido
- *    recibe «100» antes del @.
+ *  - Personal: el rol sale del cargo (ver rolDeCargo). LAVADOR y LIDER llevan la agencia del listado y su región; los PULIDOR son móviles
+ *    (solo región); los de «Matriz» no llevan agencia; los roles globales no llevan región. Los administrativos sin rol operativo entran como
+ *    LAVADOR desactivados y sin agencia. Todos con la contraseña de IMPORT_PASSWORD_INICIAL. La cédula y la ciudad se guardan en el usuario.
+ *    Correos: el primero de una celda con varios; si no hay, se genera desde el nombre; un correo repetido recibe «100» antes del @.
+ *  - Se crea la bodega central «BODEGA MATRIZ» (el asistente de bodega queda sin bodega hasta que existan las regionales).
  *  - Maquinaria: se respetan los códigos que traen los Excel; los que no traen reciben «SIN-COD-001…» (el código se corrige
  *    después desde la edición de la máquina). Los lugares que no existen en DATOS AGENCIAS se crean como agencias sin cliente, en la
  *    Sierra. Todas quedan operativas; la fecha de entrega, el año, la factura y las observaciones van en la línea de tiempo.
  *
- * Se puede repetir: lo que ya existe se actualiza o se omite y lo que falta se crea. Termina con un informe de todo lo que revisar.
+ * Se puede repetir: lo que ya existe se actualiza o se omite y lo que falta se crea (el personal solo se crea: una persona que ya está,
+ * por cédula, se omite). Termina con un informe de todo lo que revisar.
  *
  * Uso:  IMPORT_PASSWORD_INICIAL='...' npm run prisma:cargar-excels [-- carpeta] [--dry-run]
  *   --dry-run  muestra lo que haría y el informe, sin escribir nada.
@@ -43,6 +46,7 @@ const CARPETA = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(
 const ARCHIVOS = {
   agencias: 'DATOS AGENCIAS.xlsx',
   info: 'INFORMACIÓN SISTEMA EASYDRY.xlsx',
+  personal: 'LISTADO DE PERSONAL EASYDRY.xlsx',
   costa: 'MAQUINARIAS EASYDRY 2026 ACTUALIZADO.xlsx',
   quito: 'QUITO LOGISTICA 2026.xlsx',
   especiales: 'MAQUINARIA SERVICIOS ESPECIALES QUITO 2026.xlsx',
@@ -363,18 +367,127 @@ function moda(valores: number[]): number {
 }
 
 // ═════════════════════════════════════════════════════════════════ 3. personal
-interface Persona { cedula: string; nombre: string; ciudad: string; telefono: string; correos: string[] }
+type NombreRegion = 'Sierra' | 'Costa';
+
+interface Persona {
+  cedula: string;
+  nombre: string;
+  cargo: string;
+  region: NombreRegion | '';
+  agencia: string;
+  ciudad: string;
+  telefono: string;
+  correos: string[];
+}
 
 const correoValido = (c: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c);
+/** «SANTO DOMINGO» → «Santo Domingo». */
+const titulo1 = (s: string) => s.toLowerCase().replace(/(^|\s)(\p{L})/gu, (_, sp, l) => sp + l.toUpperCase());
 
+/** Teléfono celular de Ecuador: el Excel pierde el 0 inicial (995088900 → 0995088900). Sin dato válido, vacío. */
+function telefonoNorm(t: string): string {
+  let d = String(t || '').replace(/\D/g, '');
+  if (d.length === 9 && d.startsWith('9')) d = `0${d}`;
+  return /^09\d{8}$/.test(d) ? d : '';
+}
+
+/** Hoja BASE del «LISTADO DE PERSONAL EASYDRY»: la fila de títulos va antes de los encabezados. */
 function leerPersonal(filas: string[][]): Persona[] {
+  const filaEnc = filas.findIndex((f) => f.some((c) => clave(c) === 'CEDULA'));
+  if (filaEnc < 0) throw new Error('En el listado de personal no encuentro la fila de encabezados (CEDULA, NOMBRES, REGION, CARGO...).');
+  const col = (nombre: string) => {
+    const i = filas[filaEnc].findIndex((c) => clave(c) === nombre);
+    if (i < 0) throw new Error(`En el listado de personal falta la columna «${nombre}».`);
+    return i;
+  };
+  const [cCedula, cNombre, cRegion, cCargo, cAgencia, cCiudad, cTel, cCorreo] = ['CEDULA', 'NOMBRES', 'REGION', 'CARGO', 'AGENCIA', 'CIUDAD', 'TELEFONO', 'CORREO ELECTRONICO'].map(col);
   const out: Persona[] = [];
+  for (let i = filaEnc + 1; i < filas.length; i++) {
+    const r = filas[i];
+    if (!r[cNombre]) continue;
+    // Una celda puede traer varios correos separados por «;», «,» o espacios: se conservan todos, en orden. «gmial.com» es una errata.
+    const correos = (r[cCorreo] || '').split(/[;,\s]+/).map((c) => c.trim().toLowerCase().replace(/@gmial\.com$/, '@gmail.com')).filter(Boolean);
+    const reg = clave(r[cRegion]);
+    out.push({
+      cedula: cedulaNorm(r[cCedula]),
+      nombre: r[cNombre],
+      cargo: r[cCargo],
+      region: reg === 'SIERRA' ? 'Sierra' : reg === 'COSTA' ? 'Costa' : '',
+      agencia: r[cAgencia],
+      ciudad: titulo1(r[cCiudad] || ''),
+      telefono: telefonoNorm(r[cTel]),
+      correos,
+    });
+  }
+  return out;
+}
+
+/** Roles que puede recibir una persona de la carga. */
+const ROLES_CARGA = ['LAVADOR', 'LIDER', 'PULIDOR', 'SUPERVISOR', 'COORD_MANTENIMIENTO', 'TECNICO', 'COORD_BODEGA', 'ASISTENTE_BODEGA', 'COORD_SERVICIOS_ESPECIALES', 'JEFE_COMERCIAL', 'SUPER_ADMIN'] as const;
+type RolCarga = (typeof ROLES_CARGA)[number];
+
+/** Roles con ámbito de región (necesitan región) y roles globales (no llevan región ni agencia). */
+const ROLES_REGION = new Set<RolCarga>(['PULIDOR', 'SUPERVISOR', 'COORD_MANTENIMIENTO', 'TECNICO', 'ASISTENTE_BODEGA', 'COORD_SERVICIOS_ESPECIALES']);
+const ROLES_GLOBALES = new Set<RolCarga>(['JEFE_COMERCIAL', 'COORD_BODEGA', 'SUPER_ADMIN']);
+
+/** La gerente administrativa financiera es la Super Admin de la operación. */
+const SUPER_ADMIN_CEDULA = '1003100920';
+/** Personas cuya región no es la de su columna del listado (decisión del producto). Guerrero: asistente de bodega de MATRIZ GYE. */
+const REGION_FORZADA: Record<string, NombreRegion> = { '1751580851': 'Costa' };
+/** Correos que el listado trae repetidos o mal: el de Kelvin Rosero es el que tenía la hoja PERSONAL anterior. */
+const CORREO_FIJO: Record<string, string> = { '0401829114': 'danny.a.magaly@gmail.com' };
+
+/** Cargo del listado → rol. null = cargo administrativo sin rol operativo (entra como LAVADOR desactivado, sin agencia). */
+function rolDeCargo(cargo: string): RolCarga | null {
+  const c = clave(cargo);
+  if (/^(LIDER ?\/ ?)?PULIDOR/.test(c)) return 'PULIDOR';
+  if (/^LIDER ?\/ ?LAVADOR/.test(c)) return 'LIDER';
+  if (/^LAVADOR/.test(c)) return 'LAVADOR';
+  if (/^COORDINADOR DE OPERACIONES/.test(c)) return 'SUPERVISOR';
+  if (/^COORDINADOR DE MTTO/.test(c)) return 'COORD_MANTENIMIENTO';
+  if (/^ASISTENTE DE MTTO/.test(c)) return 'TECNICO';
+  if (/^COORDINADOR DE BODEGA/.test(c)) return 'COORD_BODEGA';
+  if (/^ASISTENTE DE BODEGA/.test(c)) return 'ASISTENTE_BODEGA';
+  if (/^COORDINADOR DE SERVICIOS PREMI/.test(c)) return 'COORD_SERVICIOS_ESPECIALES';
+  if (/^JEFE NACIONAL DE VENTAS/.test(c)) return 'JEFE_COMERCIAL';
+  return null;
+}
+
+/** Nombres de agencia del listado que no son los de DATOS AGENCIAS (erratas y nombres cortos), ya confirmados. */
+const ALIAS_LISTADO: Record<string, string> = {
+  'IZUZU AMERICAS': 'ISUZU AMERICAS',
+  'IZUZU CUENCA': 'ISUZU CUENCA',
+  'SZK CUMBAYA': 'SUZUKI SZK CUMBAYA',
+  'MERCEDES BENZ': 'MERCEDES BENZ JTM',
+  'CHANGAN CJ': 'CHANGAN CARLOS JULIO',
+};
+/** Agencias que el listado usa y DATOS AGENCIAS no trae: se crean con el cliente de su marca (la de la agencia hermana) y 1 bahía. */
+const AGENCIAS_DEL_LISTADO = [
+  { nombre: 'CHANGAN CARLOS JULIO', hermana: 'CHANGAN GRANADOS' },
+  { nombre: 'CASABACA SANTO DOMINGO', hermana: 'CASABACA PANANORTE' },
+  { nombre: 'ISUZU CUENCA', hermana: 'ISUZU AMERICAS' },
+];
+/** Región de las agencias sin personal en el listado, deducida por la ciudad de su nombre o de sus agencias hermanas. Sin dato: Sierra. */
+const REGION_AGENCIA_SIN_PERSONAL: Record<string, NombreRegion> = {
+  'AMBACAR PORTOVIEJO': 'Costa', 'AMBACAR SALINAS': 'Costa', 'TOYOCOSTA MANTA': 'Costa', 'ORGU FORD SAMBORONDON': 'Costa', 'ORGU FORD ORGU MANTA': 'Costa',
+  'AMBACAR AMERICAS': 'Costa', 'ORGU FORD ORELLANA': 'Costa', 'ORGU FORD CJA': 'Costa', 'IOKARS CJA': 'Costa', 'OIKORSA CJA': 'Costa', 'CHANGAN CARLOS JULIO': 'Costa',
+  'ALVAREZ BARBA LABRADOR': 'Sierra', 'COMERCIAL HIDROBO CAYAMBE': 'Sierra', 'COMERCIAL HIDROBO MAZDA': 'Sierra', 'COMERCIAL HIDROBO NISSAN - RENAULT': 'Sierra',
+  'COMERCIAL HIDROBO CHERY': 'Sierra', 'ASSA CUMBAYA': 'Sierra', 'ASSA LOS CHILLOS': 'Sierra', 'ASSA AMBATO': 'Sierra', 'AMBACAR EL COCA': 'Sierra',
+};
+/** Agencias de esa tabla cuya región es una suposición (sin pista clara): se anotan en el informe. */
+const REGION_SUPUESTA = new Set(['AMBACAR GT']);
+
+/** Operarios de DATOS AGENCIAS (hoja SERVICIO LAVADOS): cédula → agencia. Solo se comparan con el listado. */
+function leerOperarios(filas: string[][]): Map<string, { nombre: string; agencia: string }> {
+  const out = new Map<string, { nombre: string; agencia: string }>();
+  let marca = '';
+  let agencia = '';
   for (let i = 1; i < filas.length; i++) {
     const r = filas[i];
-    if (!r[1]) continue;
-    // Una celda puede traer varios correos separados por «;», «,» o espacios: se conservan todos, en orden.
-    const correos = (r[5] || '').split(/[;,\s]+/).map((c) => c.trim().toLowerCase()).filter(Boolean);
-    out.push({ cedula: cedulaNorm(r[0]), nombre: r[1], ciudad: r[3], telefono: (r[4] || '').replace(/\D/g, ''), correos });
+    if (r[0]) marca = r[0];
+    if (r[1]) agencia = r[1];
+    const ced = cedulaNorm(r[3]);
+    if (ced && marca && agencia) out.set(ced, { nombre: r[4], agencia: nombreAgencia(marca, agencia) });
   }
   return out;
 }
@@ -510,6 +623,8 @@ interface AgenciaCtx {
   /** Número de bahía → id de la bahía (null en simulación). */
   bahias: Map<number, string | null>;
   creada: boolean;
+  /** Región de la agencia (id; simulado en --dry-run). */
+  regionId: string | null;
 }
 
 async function main() {
@@ -526,17 +641,47 @@ async function main() {
   const hEspeciales = hojaDe(libroAgencias, 'SERVICIOS ESPECIALES', ARCHIVOS.agencias);
   const hRecetas = hojaDe(libroInfo, 'INSUMOS POR SERVICIO', ARCHIVOS.info);
   const hPrecios = hojaDe(libroInfo, 'LISTA DE SERVICIOS Y PRECIOS', ARCHIVOS.info);
-  const hPersonal = hojaDe(libroInfo, 'PERSONAL', ARCHIVOS.info);
+  const libroPersonal = leerLibro(ruta('personal'));
+  const hBase = hojaDe(libroPersonal, 'BASE', ARCHIVOS.personal);
   const primera = (k: 'costa' | 'quito' | 'especiales') => [...leerLibro(ruta(k)).values()][0];
   const maqCosta = filasCosta(primera('costa'));
   const maqQuito = filasQuito(primera('quito'));
   const maqEspeciales = filasEspeciales(primera('especiales'));
 
   const agenciasExcel = leerAgencias(hLavados);
+  // Agencias que usa el listado de personal y DATOS AGENCIAS no trae: se crean con el cliente de su marca.
+  const agenciasDelListado: string[] = [];
+  for (const x of AGENCIAS_DEL_LISTADO) {
+    if (agenciasExcel.some((a) => clave(a.nombre) === clave(x.nombre))) continue;
+    const hermana = agenciasExcel.find((a) => clave(a.nombre) === clave(x.hermana));
+    if (!hermana) throw new Error(`No encuentro la agencia «${x.hermana}» para saber el cliente de «${x.nombre}».`);
+    agenciasExcel.push({ marca: hermana.marca, nombre: x.nombre, bahias: 1 });
+    agenciasDelListado.push(`${x.nombre} (cliente ${hermana.marca}, 1 bahía)`);
+  }
   const marcas = [...new Set(agenciasExcel.map((a) => a.marca))];
   const { servicios: deRecetas, insumos } = leerRecetas(hRecetas);
   const { clientes: colClientes, filas: filasPrecio } = leerPrecios(hPrecios);
-  const personal = leerPersonal(hPersonal);
+  const personal = leerPersonal(hBase);
+  const operarios = leerOperarios(hLavados);
+
+  // Región de cada agencia: la de su gente en el listado (lavadores y líderes); si no hay, la tabla por ciudad; sin dato, la Sierra.
+  const llaveAg = (n: string) => codigoClave(ALIAS_LISTADO[clave(n)] ?? n);
+  const esMatriz = (a: string) => /^MATRIZ/.test(clave(a));
+  const rolPersona = (p: Persona): RolCarga | null => (p.cedula === SUPER_ADMIN_CEDULA ? 'SUPER_ADMIN' : rolDeCargo(p.cargo));
+  const regionPorLlave = new Map<string, NombreRegion>();
+  const regionPorPulidor = new Map<string, NombreRegion>(); // segunda pista: los pulidores móviles también dicen de qué agencia son
+  const conflictosRegion: string[] = [];
+  for (const p of personal) {
+    const r = rolPersona(p);
+    if (r === 'PULIDOR' && p.region && !esMatriz(p.agencia) && !regionPorPulidor.has(llaveAg(p.agencia))) regionPorPulidor.set(llaveAg(p.agencia), p.region);
+    if ((r !== 'LAVADOR' && r !== 'LIDER') || !p.region || esMatriz(p.agencia)) continue;
+    const k = llaveAg(p.agencia);
+    const previa = regionPorLlave.get(k);
+    if (previa && previa !== p.region) conflictosRegion.push(`${p.agencia}: ${previa} y ${p.region}`);
+    else regionPorLlave.set(k, p.region);
+  }
+  const tablaRegion = new Map(Object.entries(REGION_AGENCIA_SIN_PERSONAL).map(([n, r]) => [codigoClave(n), r]));
+  const regionDeAgencia = (nombre: string): NombreRegion => regionPorLlave.get(codigoClave(nombre)) ?? regionPorPulidor.get(codigoClave(nombre)) ?? tablaRegion.get(codigoClave(nombre)) ?? 'Sierra';
   console.log(`   agencias: ${agenciasExcel.length} (${marcas.length} clientes) · servicios con receta: ${deRecetas.length} · insumos: ${insumos.size} · precios: ${filasPrecio.length} servicios, ${colClientes.filter(Boolean).length} columnas · personal: ${personal.length}`);
   console.log(`   maquinaria: ${maqCosta.length} Costa + ${maqQuito.length} Sierra + ${maqEspeciales.length} especiales`);
 
@@ -546,9 +691,9 @@ async function main() {
   const ML = unidades.get('ML');
   const UND = unidades.get('UND');
   if (!ML || !UND || !tipos.get('LIQUIDO') || !tipos.get('UNIDAD')) throw new Error('Faltan las unidades o los tipos de producto: corre primero el seed.');
-  const rolLavador = await prisma.role.findUnique({ where: { namerol: 'LAVADOR' } });
-  const rolPulidor = await prisma.role.findUnique({ where: { namerol: 'PULIDOR' } });
-  if (!rolLavador || !rolPulidor) throw new Error('No existen los roles LAVADOR y PULIDOR: corre primero el seed.');
+  const rolesBd = new Map((await prisma.role.findMany({ where: { namerol: { in: [...ROLES_CARGA] } } })).map((r) => [r.namerol, r]));
+  const rolesFaltan = ROLES_CARGA.filter((r) => !rolesBd.has(r));
+  if (rolesFaltan.length) throw new Error(`No existen los roles ${rolesFaltan.join(', ')}: corre primero el seed.`);
 
   // ============ 1. Regiones, clientes, agencias y bahías
   titulo('1. Regiones, clientes, agencias y bahías');
@@ -563,6 +708,7 @@ async function main() {
     regionIds.set(nombre, r.id);
   }
   const regionSierra = regionIds.get('Sierra')!;
+  const regionIdDe = (nombre: string) => regionIds.get(regionDeAgencia(nombre))!;
 
   const clienteIds = new Map<string, string>();
   for (const nombre of marcas) {
@@ -574,7 +720,7 @@ async function main() {
     clienteIds.set(clave(nombre), c.id);
   }
 
-  const existentes = await prisma.agencia.findMany({ select: { id: true, codigo: true, nombre: true, bahias: { select: { id: true, nombre: true, codigo: true } } } });
+  const existentes = await prisma.agencia.findMany({ select: { id: true, codigo: true, nombre: true, regionId: true, bahias: { select: { id: true, nombre: true, codigo: true } } } });
   const codigosUsados = new Set(existentes.map((a) => a.codigo));
   const agencias = new Map<string, AgenciaCtx>();
   for (const a of existentes) {
@@ -583,7 +729,7 @@ async function main() {
       const n = Number(/(\d+)/.exec(b.nombre)?.[1] ?? /-B(\d+)$/.exec(b.codigo)?.[1]);
       if (n) bahias.set(n, b.id);
     }
-    agencias.set(clave(a.nombre), { id: a.id, codigo: a.codigo, nombre: a.nombre, bahias, creada: false });
+    agencias.set(clave(a.nombre), { id: a.id, codigo: a.codigo, nombre: a.nombre, bahias, creada: false, regionId: a.regionId });
   }
   const codigoAgencia = (nombre: string) => {
     let code = `AGN-${slug(nombre, 20)}`;
@@ -618,18 +764,27 @@ async function main() {
       let id: string | null = null;
       if (!DRY) {
         id = (await prisma.agencia.create({
-          data: { codigo, nombre: a.nombre, region: 'Sierra', regionId: regionSierra, clienteId, numeroBahias, maxLavadoresPorBahia: 1, estado: 1, tieneServiciosEspeciales: false },
+          data: { codigo, nombre: a.nombre, region: regionDeAgencia(a.nombre), regionId: regionIdDe(a.nombre), clienteId, numeroBahias, maxLavadoresPorBahia: 1, estado: 1, tieneServiciosEspeciales: false },
         })).id;
       }
-      ag = { id, codigo, nombre: a.nombre, bahias: new Map(), creada: true };
+      ag = { id, codigo, nombre: a.nombre, bahias: new Map(), creada: true, regionId: regionIdDe(a.nombre) };
       agencias.set(clave(a.nombre), ag);
       agenciasNuevas++;
     } else if (!DRY && ag.id) {
-      await prisma.agencia.update({ where: { id: ag.id }, data: { region: 'Sierra', regionId: regionSierra, clienteId, numeroBahias, estado: 1 } });
+      await prisma.agencia.update({ where: { id: ag.id }, data: { region: regionDeAgencia(a.nombre), regionId: regionIdDe(a.nombre), clienteId, numeroBahias, estado: 1 } });
+      ag.regionId = regionIdDe(a.nombre);
     }
     await asegurarBahias(ag, numeroBahias);
   }
-  console.log(`   regiones: Sierra y Costa · clientes: ${marcas.length} · agencias: ${agenciasExcel.length} (${agenciasNuevas} nuevas, todas en la Sierra) · bahías: ${agenciasExcel.reduce((s, a) => s + Math.max(a.bahias, 1), 0)}`);
+  const enCosta = agenciasExcel.filter((a) => regionDeAgencia(a.nombre) === 'Costa').length;
+  console.log(`   regiones: Sierra y Costa · clientes: ${marcas.length} · agencias: ${agenciasExcel.length} (${agenciasNuevas} nuevas; ${agenciasExcel.length - enCosta} en la Sierra y ${enCosta} en la Costa) · bahías: ${agenciasExcel.reduce((s, a) => s + Math.max(a.bahias, 1), 0)}`);
+  if (agenciasDelListado.length) anotar('Agencias creadas porque el listado de personal las usa y DATOS AGENCIAS no las trae (confirma sus bahías)', agenciasDelListado.join('\n     '));
+  if (conflictosRegion.length) anotar('Agencias con personal de dos regiones en el listado (se tomó la primera)', conflictosRegion.join('\n     '));
+  const regionPorDeduccion = agenciasExcel.filter((a) => !regionPorLlave.has(codigoClave(a.nombre)));
+  if (regionPorDeduccion.length) {
+    anotar('Agencias sin lavadores ni líderes en el listado: región deducida por sus pulidores o por la ciudad del nombre (revisa las marcadas con «?», van a la Sierra por no haber pista)',
+      regionPorDeduccion.map((a) => `${a.nombre} → ${regionDeAgencia(a.nombre)}${(regionPorPulidor.has(codigoClave(a.nombre)) || tablaRegion.has(codigoClave(a.nombre))) && !REGION_SUPUESTA.has(a.nombre) ? '' : ' ?'}`).join('\n     '));
+  }
   const sinBahias = agenciasExcel.filter((a) => a.bahias < 1 && !PROSPECTO.test(a.marca)).map((a) => a.nombre);
   if (sinBahias.length) anotar('Agencias sin número de bahías en el Excel (se les creó 1)', sinBahias.join(' · '));
 
@@ -786,21 +941,32 @@ async function main() {
   // ============ 3. Personal
   titulo('3. Personal');
   const hash = await bcrypt.hash(password, 10);
+
+  // Bodega central: la crea la carga (si no, el sistema inventa también las regionales). Hoy el único dato de bodegas en los Excel es «BODEGA MATRIZ».
+  if (!DRY) {
+    await prisma.bodega.upsert({
+      where: { codigo: 'BOD-CENTRAL' },
+      create: { codigo: 'BOD-CENTRAL', nombre: 'BODEGA MATRIZ', ciudad: 'Quito', tipo: 'CENTRAL', esCentral: true, activa: true },
+      update: {},
+    });
+  }
+  console.log('   bodega central: BODEGA MATRIZ');
+
+  // Los pulidores salen del cargo del listado; la hoja «SERVICIOS ESPECIALES» de DATOS AGENCIAS solo sirve de control.
   const cedulasPulidor = new Map<string, string>();
   for (let i = 1; i < hEspeciales.length; i++) {
     const c = cedulaNorm(hEspeciales[i][1]);
     if (c) cedulasPulidor.set(c, hEspeciales[i][0]);
   }
-  const usuariosBd = await prisma.user.findMany({ select: { email: true } });
+  const usuariosBd = await prisma.user.findMany({ select: { id: true, email: true, cedula: true } });
   const correosUsados = new Set(usuariosBd.map((u) => u.email.toLowerCase()));
+  const usuarioPorCedula = new Map(usuariosBd.filter((u) => u.cedula).map((u) => [u.cedula as string, u.id]));
+  const agenciaPorLlave = new Map([...agencias.values()].map((a) => [codigoClave(a.nombre), a]));
   const pulidoresPlan: { id: string | null; palabras: string[]; nombre: string }[] = [];
-  let lavadores = 0;
-  let pulidores = 0;
-  let yaExistian = 0;
   const pulidoresEncontrados = new Set<string>();
   const correosAjustados: string[] = [];
 
-  /** Correo único para la persona: el primero de la celda; si es el genérico de nómina o ya lo usa otra persona, se ajusta. */
+  /** Correo único para la persona: el primero de la celda; si no hay uno propio o ya lo usa otra persona, se genera o se ajusta. */
   const correoPara = (p: Persona): string => {
     const { name, lastname } = separarNombre(p.nombre);
     const generado = () => {
@@ -810,7 +976,8 @@ async function main() {
       while (correosUsados.has(email)) email = `${base}${n++}@easydry.com.ec`;
       return email;
     };
-    const propio = p.correos.find((c) => correoValido(c) && c !== CORREO_GENERICO);
+    const fijo = CORREO_FIJO[p.cedula];
+    const propio = fijo ?? p.correos.find((c) => correoValido(c) && c !== CORREO_GENERICO);
     let email: string;
     if (!propio) {
       email = generado();
@@ -824,6 +991,8 @@ async function main() {
         while (correosUsados.has(nuevo)) nuevo = `${local}${++n}@${dominio}`;
         correosAjustados.push(`${p.nombre}: ${email} (repetido) → ${nuevo}`);
         email = nuevo;
+      } else if (fijo) {
+        correosAjustados.push(`${p.nombre}: la celda traía ${p.correos.join(' ; ')} → se usó ${email} (el de la hoja PERSONAL anterior)`);
       } else if (p.correos.length > 1) {
         correosAjustados.push(`${p.nombre}: la celda traía ${p.correos.join(' ; ')} → se usó ${email}`);
       }
@@ -832,14 +1001,55 @@ async function main() {
     return email;
   };
 
+  const desactivados: string[] = [];
+  const matrizSinAgencia: string[] = [];
+  const agenciaNoExiste: string[] = [];
+  const difAgencia: string[] = [];
+  const regionForzada: string[] = [];
+  const sinRegion: string[] = [];
+  const sinTelefonoLider: string[] = [];
+  const asistentesBodega: string[] = [];
+  const cedulasListado = new Set<string>();
+  const cuentaRoles = new Map<string, number>();
+  let personasCreadas = 0;
+  let yaExistian = 0;
+
   for (const p of personal) {
-    const esPulidor = !!p.cedula && cedulasPulidor.has(p.cedula);
+    cedulasListado.add(p.cedula);
+    const rolCargo = rolPersona(p);
+    const rol: RolCarga = rolCargo ?? 'LAVADOR'; // cargo administrativo sin rol operativo: LAVADOR desactivado, sin agencia
+    const activo = rolCargo !== null;
+    const esPulidor = rol === 'PULIDOR';
     const { name, lastname } = separarNombre(p.nombre);
+    const palabras = sinAcentos(`${name} ${lastname}`).toUpperCase().split(' ');
     if (esPulidor) pulidoresEncontrados.add(p.cedula);
-    const yaPorNombre = await prisma.user.findFirst({ where: { name, lastname }, select: { id: true } });
-    if (yaPorNombre) {
+    if (!activo) desactivados.push(`${p.nombre} (${p.cargo})`);
+
+    // Agencia: solo LAVADOR y LIDER activos. Los de «Matriz» y los pulidores móviles no llevan.
+    let agencia: AgenciaCtx | null = null;
+    if (activo && (rol === 'LAVADOR' || rol === 'LIDER')) {
+      if (esMatriz(p.agencia)) matrizSinAgencia.push(`${p.nombre} (${rol}, ${p.region || 'sin región'})`);
+      else {
+        agencia = agenciaPorLlave.get(llaveAg(p.agencia)) ?? null;
+        if (!agencia) agenciaNoExiste.push(`${p.nombre}: «${p.agencia}»`);
+      }
+    }
+    const op = operarios.get(p.cedula);
+    if (op && agencia && codigoClave(op.agencia) !== codigoClave(agencia.nombre)) difAgencia.push(`${p.nombre}: listado «${agencia.nombre}» · DATOS AGENCIAS «${op.agencia}»`);
+
+    // Región: los roles globales no llevan; con agencia, la de la agencia; si no, la de su columna del listado (o la acordada).
+    const regionNombre: NombreRegion | '' = REGION_FORZADA[p.cedula] ?? p.region;
+    if (REGION_FORZADA[p.cedula] && REGION_FORZADA[p.cedula] !== p.region) regionForzada.push(`${p.nombre}: el listado dice ${p.region || 'sin región'} → ${REGION_FORZADA[p.cedula]}`);
+    const regionId = ROLES_GLOBALES.has(rol) ? null : agencia ? agencia.regionId : regionNombre ? (regionIds.get(regionNombre) ?? null) : null;
+    if (ROLES_REGION.has(rol) && !regionId) sinRegion.push(`${p.nombre} (${rol})`);
+    if (rol === 'ASISTENTE_BODEGA') asistentesBodega.push(`${p.nombre} (región ${regionNombre || 'sin región'})`);
+    if (rol === 'LIDER' && !p.telefono) sinTelefonoLider.push(p.nombre);
+
+    // Una persona que ya está (misma cédula) no se toca.
+    const idYa = p.cedula ? usuarioPorCedula.get(p.cedula) : undefined;
+    if (idYa) {
       yaExistian++;
-      if (esPulidor) pulidoresPlan.push({ id: yaPorNombre.id, nombre: p.nombre, palabras: sinAcentos(`${name} ${lastname}`).toUpperCase().split(' ') });
+      if (esPulidor) pulidoresPlan.push({ id: idYa, nombre: p.nombre, palabras });
       continue;
     }
     const email = correoPara(p);
@@ -848,20 +1058,38 @@ async function main() {
       id = (await prisma.user.create({
         data: {
           email, name, lastname,
-          roleId: esPulidor ? rolPulidor.id : rolLavador.id,
-          passwordHash: hash, estado: 1,
-          telefono: /^09\d{8}$/.test(p.telefono) ? p.telefono : null,
-          ...(esPulidor ? { regionId: regionSierra, servicioIds: idsEspeciales as unknown as Prisma.InputJsonValue } : {}),
+          cedula: p.cedula || null,
+          ciudad: p.ciudad || null,
+          telefono: p.telefono || null,
+          roleId: rolesBd.get(rol)!.id,
+          passwordHash: hash,
+          estado: activo ? 1 : 0,
+          agenciaId: agencia?.id ?? null,
+          regionId,
+          ...(esPulidor ? { servicioIds: idsEspeciales as unknown as Prisma.InputJsonValue } : {}),
         },
       })).id;
     }
-    if (esPulidor) { pulidores++; pulidoresPlan.push({ id, nombre: p.nombre, palabras: sinAcentos(`${name} ${lastname}`).toUpperCase().split(' ') }); }
-    else lavadores++;
+    personasCreadas++;
+    cuentaRoles.set(rol, (cuentaRoles.get(rol) ?? 0) + 1);
+    if (esPulidor) pulidoresPlan.push({ id, nombre: p.nombre, palabras });
   }
-  console.log(`   ${personal.length} personas · ${lavadores} lavadores nuevos · ${pulidores} pulidores nuevos · ${yaExistian} ya existían`);
+  console.log(`   ${personal.length} personas en el listado · ${DRY ? 'se crearían' : 'creadas'} ${personasCreadas} (${[...cuentaRoles].map(([r, n]) => `${n} ${r}`).join(', ')}) · ${desactivados.length} desactivadas · ${yaExistian} ya existían`);
   if (correosAjustados.length) anotar('Correos generados o ajustados', correosAjustados.join('\n     '));
+  if (desactivados.length) anotar('Personas desactivadas: cargo administrativo sin rol operativo (entran como LAVADOR, sin agencia). Actívalas y cámbiales el rol cuando lo definas', desactivados.join('\n     '));
+  if (matrizSinAgencia.length) anotar('Lavadores o líderes de «Matriz» (sin agencia, solo región): ubícalos en su agencia', matrizSinAgencia.join('\n     '));
+  if (agenciaNoExiste.length) anotar('Personas cuya agencia del listado no existe en el sistema (quedaron sin agencia)', agenciaNoExiste.join('\n     '));
+  if (difAgencia.length) anotar('Agencia distinta entre el listado y DATOS AGENCIAS (se usó la del listado)', difAgencia.join('\n     '));
+  const operariosSinListado = [...operarios].filter(([c]) => !cedulasListado.has(c)).map(([c, o]) => `${o.nombre} (${c}) — ${o.agencia}`);
+  if (operariosSinListado.length) anotar('Operarios de DATOS AGENCIAS que no están en el listado de personal (no se cargaron)', operariosSinListado.join('\n     '));
+  if (regionForzada.length) anotar('Región distinta a la del listado (decisión del producto)', regionForzada.join('\n     '));
+  if (sinRegion.length) anotar('Personas con rol de ámbito región y SIN región (no verán nada)', sinRegion.join('\n     '));
+  if (asistentesBodega.length) anotar('Asistentes de bodega sin bodega: el sistema exige una bodega REGIONAL y solo existe la central. Si los editas en el panel, crea antes la bodega regional', asistentesBodega.join('\n     '));
+  if (sinTelefonoLider.length) anotar('Líderes sin teléfono en el listado (quedaron vacíos; el panel lo pedirá al editarlos)', sinTelefonoLider.join('\n     '));
   const pulidoresSinPersonal = [...cedulasPulidor].filter(([c]) => !pulidoresEncontrados.has(c)).map(([c, n]) => `${n} (${c})`);
-  if (pulidoresSinPersonal.length) anotar('Pulidores de «SERVICIOS ESPECIALES» que no están en PERSONAL (no se crearon: sin correo)', pulidoresSinPersonal.join(' · '));
+  if (pulidoresSinPersonal.length) anotar('Pulidores de «SERVICIOS ESPECIALES» que no están en el listado de personal (no se crearon: sin correo ni datos)', pulidoresSinPersonal.join(' · '));
+  const pulidoresSinHoja = personal.filter((p) => rolPersona(p) === 'PULIDOR' && !cedulasPulidor.has(p.cedula)).map((p) => p.nombre);
+  if (pulidoresSinHoja.length) anotar('Pulidores del listado que no están en «SERVICIOS ESPECIALES» de DATOS AGENCIAS', pulidoresSinHoja.join(' · '));
 
   // ============ 4. Maquinaria
   titulo('4. Maquinaria');
@@ -890,11 +1118,11 @@ async function main() {
     const k = clave(nombreFinal);
     let ag = agencias.get(k);
     if (!ag) {
-      // No existe en DATOS AGENCIAS: se crea como agencia nueva, sin cliente y en la Sierra.
+      // No existe en DATOS AGENCIAS: se crea como agencia nueva, sin cliente y con la región deducida (Sierra si no hay pista).
       const codigo = codigoAgencia(nombreExcel);
       let id: string | null = null;
-      if (!DRY) id = (await prisma.agencia.create({ data: { codigo, nombre: nombreFinal, region: 'Sierra', regionId: regionSierra, clienteId: null, numeroBahias: Math.max(1, bahiaNecesaria), maxLavadoresPorBahia: 1, estado: 1, tieneServiciosEspeciales: false } })).id;
-      ag = { id, codigo, nombre: nombreFinal, bahias: new Map(), creada: true };
+      if (!DRY) id = (await prisma.agencia.create({ data: { codigo, nombre: nombreFinal, region: regionDeAgencia(nombreFinal), regionId: regionIdDe(nombreFinal), clienteId: null, numeroBahias: Math.max(1, bahiaNecesaria), maxLavadoresPorBahia: 1, estado: 1, tieneServiciosEspeciales: false } })).id;
+      ag = { id, codigo, nombre: nombreFinal, bahias: new Map(), creada: true, regionId: regionIdDe(nombreFinal) };
       agencias.set(k, ag);
       agenciasNuevasPorMaquina.add(nombreFinal);
       await asegurarBahias(ag, Math.max(1, bahiaNecesaria));
@@ -955,7 +1183,7 @@ async function main() {
         });
         await tx.maquinariaEvento.create({
           data: {
-            maquinariaId: m.id, tipo: 'MAQUINA_CREADA', agenciaId: ag?.id ?? null, regionId: regionSierra, entidadId: m.id,
+            maquinariaId: m.id, tipo: 'MAQUINA_CREADA', agenciaId: ag?.id ?? null, regionId: ag?.regionId ?? regionSierra, entidadId: m.id,
             datos: { codigo: m.codigo, nombre: m.nombre, tipo: m.tipo, agencia: ag?.nombre ?? null, origen: 'Carga de Excel', archivo: f.origen, ...extra } as Prisma.InputJsonValue,
           },
         });
@@ -963,7 +1191,7 @@ async function main() {
           const entrega = typeof f.extra.fechaEntrega === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f.extra.fechaEntrega) ? new Date(`${f.extra.fechaEntrega}T12:00:00.000Z`) : undefined;
           await tx.maquinariaEvento.create({
             data: {
-              maquinariaId: m.id, tipo: 'OPERADOR_ASIGNADO', agenciaId: ag?.id ?? null, regionId: regionSierra, entidadId: m.id,
+              maquinariaId: m.id, tipo: 'OPERADOR_ASIGNADO', agenciaId: ag?.id ?? null, regionId: ag?.regionId ?? regionSierra, entidadId: m.id,
               datos: { anterior: null, nuevo: operadorId, origen: 'Carga de Excel', fechaEntrega: f.extra.fechaEntrega ?? null } as Prisma.InputJsonValue,
               ...(entrega ? { ocurridoEn: entrega } : {}),
             },
@@ -974,7 +1202,7 @@ async function main() {
     creadas++;
   }
   console.log(`   máquinas: ${todas.length} en los Excel · ${DRY ? 'se crearían' : 'creadas'} ${creadas} · ya estaban ${yaEstaban} · ${bahiasAgregadas} bahías agregadas por las máquinas`);
-  if (agenciasNuevasPorMaquina.size) anotar('Agencias creadas desde las hojas de maquinaria (sin cliente, en la Sierra): verifica si alguna es una duplicada', [...agenciasNuevasPorMaquina].join(' · '));
+  if (agenciasNuevasPorMaquina.size) anotar('Agencias creadas desde las hojas de maquinaria (sin cliente, en la Sierra salvo que su nombre indique otra región): verifica si alguna es una duplicada', [...agenciasNuevasPorMaquina].join(' · '));
   if (codigosInventados.length) anotar('Máquinas sin código en el Excel («SIN-COD»): edítalas desde Maquinaria', codigosInventados.join('\n     '));
   if (codigosChocan.length) anotar('Códigos repetidos entre archivos (la segunda quedó como SIN-COD)', codigosChocan.join('\n     '));
   if (sinAgencia.length) anotar('Máquinas cargadas SIN agencia (el Excel no dice un lugar): ubícalas con «transferir»', sinAgencia.join('\n     '));
