@@ -52,8 +52,9 @@ const ARCHIVOS = {
   especiales: 'MAQUINARIA SERVICIOS ESPECIALES QUITO 2026.xlsx',
 } as const;
 
-if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '')) {
-  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost).');
+// Por seguridad solo corre contra la base local. Cargar una base remota (p. ej. Render) exige pedirlo a propósito con CARGAR_EN_REMOTO=SI.
+if (!/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL ?? '') && process.env.CARGAR_EN_REMOTO !== 'SI') {
+  throw new Error('Este script solo corre contra la base local (DATABASE_URL debe apuntar a localhost). Para una base remota define CARGAR_EN_REMOTO=SI.');
 }
 
 const prisma = new PrismaClient();
