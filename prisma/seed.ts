@@ -29,7 +29,8 @@ const ROLES_SEED = JSON.parse(fs.readFileSync(RUTA_ROLES, 'utf8')) as RolSeed[];
  *
  * Variables de entorno:
  *   SEED_SUPERADMIN_EMAIL / SEED_SUPERADMIN_PASSWORD   cuenta Super Admin (ambas obligatorias)
- *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD             cuenta Admin (ambas obligatorias)
+ *   SEED_SUPERADMIN_NOMBRE / SEED_SUPERADMIN_APELLIDO  nombre de la cuenta Super Admin (opcionales; por defecto «Super Admin»)
+ *   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD             cuenta Admin (opcional: sin SEED_ADMIN_EMAIL no se crea)
  *   SEED_ACTUALIZAR_ROLES=SI     restablece los permisos de los roles oficiales a los de prisma/data/roles.json
  *   SEED_RESET=SI                VACÍA toda la base antes de sembrar (en producción exige además SEED_CONFIRMAR_PRODUCCION=SI)
  */
@@ -148,21 +149,26 @@ async function main() {
       rol: 'SUPER_ADMIN',
       email: credencial('SEED_SUPERADMIN_EMAIL').toLowerCase(),
       password: credencial('SEED_SUPERADMIN_PASSWORD'),
-      name: 'Super',
-      lastname: 'Admin',
+      name: credencial('SEED_SUPERADMIN_NOMBRE', 'Super'),
+      lastname: credencial('SEED_SUPERADMIN_APELLIDO', 'Admin'),
+      variablePassword: 'SEED_SUPERADMIN_PASSWORD',
     },
-    {
+  ];
+  // La cuenta Admin es opcional: sin SEED_ADMIN_EMAIL no se crea (los admins se pueden crear después desde el panel).
+  if (process.env.SEED_ADMIN_EMAIL?.trim()) {
+    cuentas.push({
       rol: 'ADMIN',
       email: credencial('SEED_ADMIN_EMAIL').toLowerCase(),
       password: credencial('SEED_ADMIN_PASSWORD'),
       name: 'Administrador',
       lastname: 'EasyDry',
-    },
-  ];
+      variablePassword: 'SEED_ADMIN_PASSWORD',
+    });
+  }
   // Las contraseñas de las cuentas de sistema cumplen la misma política que cualquier usuario (la del seed no es una excepción).
-  for (const [variable, c] of [['SEED_SUPERADMIN_PASSWORD', cuentas[0]], ['SEED_ADMIN_PASSWORD', cuentas[1]]] as const) {
+  for (const c of cuentas) {
     const motivo = motivoPasswordDebil(c.password, c.email);
-    if (motivo) throw new Error(`${variable} no cumple la política de contraseñas: ${motivo}`);
+    if (motivo) throw new Error(`${c.variablePassword} no cumple la política de contraseñas: ${motivo}`);
   }
   for (const c of cuentas) {
     const existe = await prisma.user.findUnique({ where: { email: c.email } });
