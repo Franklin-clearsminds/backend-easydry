@@ -1,0 +1,106 @@
+# API de EasyDry en Render (Blueprint): servicio web + PostgreSQL + Redis (Key Value), todo en Render.
+# Las imágenes y videos van a AWS S3 (el único servicio que queda fuera de Render).
+#
+# Antes de desplegar:
+#   1. Pon en CORS_ORIGIN el dominio exacto del panel (https, sin barra final).
+#   2. Rellena en el panel de Render las variables marcadas "sync: false" (bucket y claves IAM de S3, cuentas semilla).
+#   3. El dominio de ESTE servicio es el que va en NG_APP_API_BASE_URL y en la CSP del render.yaml del frontend.
+# Docker no hace falta: Render compila con Node y pnpm. El docker-compose.yml es solo para desarrollo local.
+
+databases:
+  - name: easydry-db
+    databaseName: easydry
+    user: easydry
+    plan: basic-1gb            # el plan gratuito caduca a los 30 días: no usarlo para datos reales
+    region: virginia           # misma región para DB, Redis y API (red privada); la más cercana a Ecuador y al bucket us-east-1
+    postgresMajorVersion: "17"
+    ipAllowList: []            # solo accesible desde dentro de Render; para conectarte desde tu PC, agrega tu IP aquí
+
+services:
+  # Caché compartida, límite de peticiones y sockets. Sin persistencia: si se reinicia, solo se recalcula.
+  - type: keyvalue
+    name: easydry-redis
+    plan: starter
+    region: virginia           # misma región para DB, Redis y API (red privada); la más cercana a Ecuador y al bucket us-east-1
+    maxmemoryPolicy: allkeys-lru   # al llenarse descarta lo menos usado, igual que el redis del docker-compose
+    ipAllowList: []
+
+  - type: web
+    name: easydry-api
+    runtime: node
+    region: virginia           # misma región para DB, Redis y API (red privada); la más cercana a Ecuador y al bucket us-east-1
+    plan: starter              # el plan gratuito se duerme a los 15 min: rompe los sockets y los cron
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm run build   # prisma generate + nest build (necesita devDependencies)
+    preDeployCommand: pnpm exec prisma migrate deploy                              # aplica las migraciones antes de cambiar de versión
+    startCommand: node dist/main.js
+    autoDeploy: false          # se despliega a mano (o al subir a main si lo cambias a true)
+    branch: main
+    # No hay endpoint de salud: Render solo comprueba que el puerto responda.
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"                 # puerto por defecto de Render; main.ts escucha en 0.0.0.0:$PORT
+      - key: TRUST_PROXY
+        value: "1"                     # Render pone un balanceador delante: el límite de intentos usa la IP real
+
+      # Base de datos y Redis: conexión interna de Render (no salen a internet).
+      - key: DATABASE_URL
+        fromDatabase:
+          name: easydry-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: easydry-redis
+          property: connectionString
+      - key: REDIS_PREFIX
+        value: easydry
+
+      # Secretos: Render los genera una vez y los conserva entre despliegues. Cada uno es distinto (el servidor lo exige).
+      # ¡No cambiar ENCRYPTION_KEY después de guardar datos! Los datos cifrados en la base dejarían de poder abrirse.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: JWT_ACCESS_EXPIRATION
+        value: 15m
+      - key: JWT_REFRESH_EXPIRATION
+        value: 15d
+
+      # Web y sesión. Si el panel y la API están en dominios principales distintos, la cookie necesita SameSite=none (exige HTTPS).
+      - key: CORS_ORIGIN
+        value: https://www.app.easydry.com   # CAMBIAR por el dominio real del panel
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: MAX_FILE_SIZE_MB
+        value: "35"
+
+      # AWS S3 (fuera de Render): el usuario IAM con la política mínima de ARQUITECTURA-AWS-S3.md.
+      - key: AWS_REGION
+        value: us-east-1                     # la región del bucket
+      - key: AWS_S3_BUCKET_NAME
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+
+      # Archivado a Parquet en S3: apagado hasta que se decida encenderlo (ver archivado.cron.ts).
+      # Para activarlo: ARCHIVADO_ACTIVO=true; primero en simulacro (informa sin borrar) y luego ARCHIVADO_SIMULACRO=false.
+      - key: ARCHIVADO_ACTIVO
+        value: "false"
+
+      # Solo se usan al correr el seed una vez (prisma db seed); se pueden borrar después.
+      - key: SEED_SUPERADMIN_EMAIL
+        sync: false
+      - key: SEED_SUPERADMIN_PASSWORD
+        sync: false
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
