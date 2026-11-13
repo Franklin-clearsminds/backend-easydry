@@ -1529,15 +1529,15 @@ this.federados.count('servicioLavado', {
     if (hayFiltro) where.bahia = { agencia: filtro };
     const seWhere: any = { estado: 'Completado', fechaFin: { gte: fechaDesde, lte: fechaHasta }, ...(hayFiltro ? { agencia: filtro } : {}) };
 
-    const personaSel = { select: { id: true, name: true, lastname: true, agencia: { select: { id: true, nombre: true, region: { select: { id: true, nombre: true } } } }, region: { select: { id: true, nombre: true } }, role: { select: { namerol: true, capacidades: true } } } };
+    const personaSel = { select: { id: true, name: true, lastname: true, agencia: { select: { id: true, nombre: true, regionRel: { select: { id: true, nombre: true } } } }, region: { select: { id: true, nombre: true } }, role: { select: { namerol: true, capacidades: true } } } };
     const [generales, especiales] = await Promise.all([
       this.federados.findMany('servicioLavado', {
         where,
-        select: { operadorId: true, precio: true, horaIngreso: true, horaSalida: true, operador: personaSel, bahia: { select: { agencia: { select: { id: true, nombre: true, region: { select: { id: true, nombre: true } } } } } } },
+        select: { operadorId: true, precio: true, horaIngreso: true, horaSalida: true, operador: personaSel, bahia: { select: { agencia: { select: { id: true, nombre: true, regionRel: { select: { id: true, nombre: true } } } } } } },
       }),
       this.federados.findMany('servicioEspecial', {
         where: seWhere,
-        select: { operadorId: true, precio: true, fechaInicio: true, fechaFin: true, operador: personaSel, agencia: { select: { id: true, nombre: true, region: { select: { id: true, nombre: true } } } }, region: { select: { id: true, nombre: true } } },
+        select: { operadorId: true, precio: true, fechaInicio: true, fechaFin: true, operador: personaSel, agencia: { select: { id: true, nombre: true, regionRel: { select: { id: true, nombre: true } } } }, region: { select: { id: true, nombre: true } } },
       }),
     ]);
 
@@ -1559,11 +1559,11 @@ this.federados.count('servicioLavado', {
     };
     for (const s of generales) {
       const ag = s.bahia?.agencia ?? s.operador?.agencia;
-      acumular(s, ag, ag?.region, s.horaSalida ? Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime()) / 60000)) : null, false);
+      acumular(s, ag, ag?.regionRel, s.horaSalida ? Math.max(0, Math.round((new Date(s.horaSalida).getTime() - new Date(s.horaIngreso).getTime()) / 60000)) : null, false);
     }
     for (const s of especiales) {
       const ag = s.agencia ?? s.operador?.agencia;
-      acumular(s, ag, ag?.region ?? s.region, s.fechaInicio && s.fechaFin ? Math.max(0, Math.round((new Date(s.fechaFin).getTime() - new Date(s.fechaInicio).getTime()) / 60000)) : null, true);
+      acumular(s, ag, ag?.regionRel ?? s.region, s.fechaInicio && s.fechaFin ? Math.max(0, Math.round((new Date(s.fechaFin).getTime() - new Date(s.fechaInicio).getTime()) / 60000)) : null, true);
     }
     const dinero = (n: number) => (verMonto ? Math.round(n * 100) / 100 : null);
     return {
