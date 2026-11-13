@@ -74,7 +74,7 @@ services:
 
       # Web y sesión. Si el panel y la API están en dominios principales distintos, la cookie necesita SameSite=none (exige HTTPS).
       - key: CORS_ORIGIN
-        value: https://www.app.easydry.com   # CAMBIAR por el dominio real del panel
+        value: https://sistemaeasydry.com.ec
       - key: COOKIE_SAMESITE
         value: none
       - key: MAX_FILE_SIZE_MB
